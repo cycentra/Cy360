@@ -11,11 +11,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+
       - name: Build React SPA
         run: cd portal && npm ci && npm run build
+
       - uses: actions/upload-artifact@v4
         with:
           name: portal-dist
@@ -28,6 +31,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+
     steps:
       - uses: actions/checkout@v4
 
@@ -42,24 +46,29 @@ jobs:
       - name: Package release bundle
         run: |
           mkdir -p cycentra-release/portal
-          # Portal built SPA
-          cp -r portal/dist/         cycentra-release/portal/dist/
-          cp    portal/server.cjs    cycentra-release/portal/
-          cp    portal/package.json  cycentra-release/portal/
-          # Backend source (no venv, no __pycache__, no .env)
-          rsync -a --exclude='venv/' --exclude='__pycache__/' \
-                   --exclude='*.pyc' --exclude='.env' --exclude='*.log' \
-                backend/ cycentra-release/backend/
-          # Shared assets and config
+
+          cp -r portal/dist/        cycentra-release/portal/dist/
+          cp    portal/server.cjs   cycentra-release/portal/
+          cp    portal/package.json cycentra-release/portal/
+
+          rsync -a \
+            --exclude='venv/' \
+            --exclude='__pycache__/' \
+            --exclude='*.pyc' \
+            --exclude='.env' \
+            --exclude='*.log' \
+            backend/ cycentra-release/backend/
+
           cp -r scripts/       cycentra-release/scripts/       2>/dev/null || true
           cp -r assets/        cycentra-release/assets/        2>/dev/null || true
           cp -r CYSIEM-Config/ cycentra-release/CYSIEM-Config/ 2>/dev/null || true
-          # Setup wizard and version stamp
+
           cp cycentra-setup.sh cycentra-release/
-          echo "IMAGE_TAG=${{ github.sha }}"       > cycentra-release/release.env
+          chmod +x cycentra-release/cycentra-setup.sh
+          echo "IMAGE_TAG=${{ github.sha }}"            > cycentra-release/release.env
           echo "BUILD_NUMBER=${{ github.run_number }}" >> cycentra-release/release.env
           cp VERSION cycentra-release/
-          chmod +x cycentra-release/cycentra-setup.sh
+
           tar -czf cycentra-release.tar.gz cycentra-release/
 
       - name: Create GitHub Release
@@ -69,15 +78,16 @@ jobs:
           name: "CyCentra 360 — Build ${{ github.run_number }}"
           body: |
             ## CyCentra 360 — Build ${{ github.run_number }}
+
             Commit: `${{ github.sha }}`
 
-            ### Install / Update on your server:
-```bash
-            curl -L https://github.com/cycentra/cycentra360/releases/latest/download/cycentra-release.tar.gz \
-              | tar -xz
-            cd cycentra-release
-            sudo bash cycentra-setup.sh
-```
+            ### Install / Update on your server
+
+            Download and run the setup wizard:
+
+                curl -L https://github.com/cycentra/cycentra360/releases/latest/download/cycentra-release.tar.gz | tar -xz
+                cd cycentra-release
+                sudo bash cycentra-setup.sh
           files: cycentra-release.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
