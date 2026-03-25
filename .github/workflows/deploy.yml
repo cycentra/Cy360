@@ -103,11 +103,12 @@ jobs:
           chmod +x cycentra-release/cycentra-setup.sh
           echo "${TAG}" > cycentra-release/VERSION
 
-          INDEX_URL="https://dl.cloudsmith.io/basic/${CS_TOKEN}/cycentra/cycentra360/python/simple/"
-          RAW_BASE="https://dl.cloudsmith.io/basic/${CS_TOKEN}/cycentra/cycentra360/raw/names"
+          # Cloudsmith raw file URL format: /basic/TOKEN/ORG/REPO/raw/files/FILENAME
+          CS_RAW_BASE="https://dl.cloudsmith.io/basic/${CS_TOKEN}/cycentra/cycentra360/raw/files"
+          CS_PY_INDEX="https://dl.cloudsmith.io/basic/${CS_TOKEN}/cycentra/cycentra360/python/simple/"
 
           printf '{\n  "version": "%s",\n  "ver_number": "%s",\n  "commit": "%s",\n  "build_number": "%s",\n  "packages": {\n    "cycentra_backend": {\n      "name": "cycentra-backend",\n      "version": "%s",\n      "index_url": "%s"\n    }\n  },\n  "raw_base": "%s"\n}\n' \
-            "$TAG" "$VER" "$SHA" "$BUILD" "$VER" "$INDEX_URL" "$RAW_BASE" \
+            "$TAG" "$VER" "$SHA" "$BUILD" "$VER" "$CS_PY_INDEX" "$CS_RAW_BASE" \
             > cycentra-release/manifest.json
 
           echo "=== manifest.json ===" && cat cycentra-release/manifest.json
@@ -124,36 +125,27 @@ jobs:
             echo "Pushing wheel: $wheel"
             cloudsmith push python cycentra/cycentra360 "$wheel" --api-key "$CLOUDSMITH_API_KEY"
           done
-          echo "Wheel published to Cloudsmith"
 
-      # Upload setup.sh and the full bundle as raw/generic packages to Cloudsmith.
-      # Customers download setup.sh from Cloudsmith — no GitHub auth needed.
-      # The entitlement token in the download URL is the same read-only token
-      # already embedded in manifest.json, so customers need only one token.
       - name: Publish raw files to Cloudsmith
         if: steps.version.outputs.is_release == 'true'
         env:
           CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
         run: |
-          VER=${{ steps.version.outputs.ver }}
-
           pip install cloudsmith-cli -q
 
-          # Upload setup.sh as a versioned raw package
           echo "Pushing cycentra-setup.sh ..."
           cloudsmith push raw cycentra/cycentra360 cycentra-setup.sh \
             --name "cycentra-setup.sh" \
-            --version "$VER" \
+            --version "${{ steps.version.outputs.ver }}" \
             --api-key "$CLOUDSMITH_API_KEY"
 
-          # Upload the full bundle as a versioned raw package
           echo "Pushing cycentra-release.tar.gz ..."
           cloudsmith push raw cycentra/cycentra360 cycentra-release.tar.gz \
             --name "cycentra-release.tar.gz" \
-            --version "$VER" \
+            --version "${{ steps.version.outputs.ver }}" \
             --api-key "$CLOUDSMITH_API_KEY"
 
-          echo "Raw files published to Cloudsmith"
+          echo "All files published to Cloudsmith"
 
       - name: Create GitHub Release
         if: steps.version.outputs.is_release == 'true'
@@ -168,19 +160,14 @@ jobs:
 
             **Commit:** `${{ github.sha }}`
 
-            ### Install on a fresh server
+            ### Customer install command
 
-            Download and run the setup wizard from Cloudsmith (no GitHub auth required):
+            Replace `ENTITLEMENT_TOKEN` with the token provided during onboarding:
 
-                curl -L "https://dl.cloudsmith.io/basic/ENTITLEMENT_TOKEN/cycentra/cycentra360/raw/names/cycentra-setup.sh/versions/${{ steps.version.outputs.ver }}/cycentra-setup.sh" -o cycentra-setup.sh
+                curl -L "https://dl.cloudsmith.io/basic/ENTITLEMENT_TOKEN/cycentra/cycentra360/raw/files/cycentra-setup.sh" -o cycentra-setup.sh
                 sudo bash cycentra-setup.sh
 
-            ### Always get latest
-
-                curl -L "https://dl.cloudsmith.io/basic/ENTITLEMENT_TOKEN/cycentra/cycentra360/raw/names/cycentra-setup.sh/versions/latest/cycentra-setup.sh" -o cycentra-setup.sh
-                sudo bash cycentra-setup.sh
-
-            ### Update an existing server
+            ### Update existing server
 
                 sudo bash cycentra-setup.sh --update
 
