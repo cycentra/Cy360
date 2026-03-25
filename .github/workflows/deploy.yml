@@ -53,13 +53,6 @@ jobs:
           python -m build --wheel --outdir ../../../dist/
           echo "Engine wheel: $(ls ../../../dist/cysiemstack*.whl)"
 
-      - name: Verify no accidental source files in wheels
-        run: |
-          for whl in dist/*.whl; do
-            echo "Contents of $whl:"
-            python3 -c "import zipfile; [print(f) for f in zipfile.ZipFile('$whl').namelist()]"
-          done
-
       - uses: actions/upload-artifact@v4
         with:
           name: python-wheels
@@ -96,32 +89,34 @@ jobs:
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
-            echo "tag=${TAG}"        >> $GITHUB_OUTPUT
-            echo "ver=${TAG#v}"      >> $GITHUB_OUTPUT
-            echo "is_release=true"   >> $GITHUB_OUTPUT
+            echo "tag=${TAG}"       >> $GITHUB_OUTPUT
+            echo "ver=${TAG#v}"     >> $GITHUB_OUTPUT
+            echo "is_release=true"  >> $GITHUB_OUTPUT
           else
             echo "tag=dev-${{ github.run_number }}" >> $GITHUB_OUTPUT
             echo "ver=0.0.${{ github.run_number }}"  >> $GITHUB_OUTPUT
             echo "is_release=false"                  >> $GITHUB_OUTPUT
           fi
 
-      # ── Push wheels to Cloudsmith (releases only) ───────────────────────────
       - name: Publish wheels to Cloudsmith
         if: steps.version.outputs.is_release == 'true'
         run: |
           pip install cloudsmith-cli -q
           for wheel in dist/*.whl; do
-            echo "Pushing $wheel to Cloudsmith ..."
+            echo "Pushing $wheel ..."
             cloudsmith push python cycentra/cycentra360 "$wheel" \
               --api-key "${{ secrets.CLOUDSMITH_API_KEY }}"
-            echo "Done: $wheel"
           done
 
-      # ── Build the minimal customer bundle ───────────────────────────────────
-      # Contains: setup.sh, portal HTML/JS/CSS, SQL schema, Wazuh config,
-      #           branding assets, manifest.json (version + Cloudsmith index URL)
-      # Does NOT contain: any .py source, requirements.txt, node_modules, .env
+      # ── The fix: pass the secret as an env var, reference it as $CS_TOKEN ──
+      # Never put ${{ secrets.* }} inside a heredoc — the YAML parser sees }}
+      # and breaks. Inject via env: at step level instead, then use $CS_TOKEN
+      # as a plain shell variable inside the heredoc.
       - name: Build customer release bundle
+        env:
+          CS_TOKEN: ${{ secrets.CLOUDSMITH_ENTITLEMENT_TOKEN }}
+          GIT_SHA:  ${{ github.sha }}
+          BUILD_NUM: ${{ github.run_number }}
         run: |
           TAG=${{ steps.version.outputs.tag }}
           VER=${{ steps.version.outputs.ver }}
@@ -133,75 +128,68 @@ jobs:
             cycentra-release/scripts \
             cycentra-release/assets
 
-          # 1. Portal: built SPA only — no source files
+          # Portal: built SPA only — no .jsx source
           cp -r portal/dist/ cycentra-release/portal/dist/
 
-          # 2. DB schema SQL (ships in bundle, not in wheel)
+          # DB schema SQL
           [[ -f backend/cysiemstack/postgres/init.sql ]] && \
             cp backend/cysiemstack/postgres/init.sql cycentra-release/db/
           [[ -d backend/cysiemstack/postgres/migrations ]] && \
             cp -r backend/cysiemstack/postgres/migrations/. \
                   cycentra-release/db/migrations/
 
-          # 3. Wazuh rules, decoders, ossec.conf
+          # Wazuh config
           [[ -d CYSIEM-Config ]] && \
             cp -r CYSIEM-Config/. cycentra-release/CYSIEM-Config/ || true
 
-          # 4. Branding scripts and assets
+          # Branding
           [[ -d scripts ]] && cp -r scripts/. cycentra-release/scripts/ || true
           [[ -d assets  ]] && cp -r assets/.  cycentra-release/assets/  || true
 
-          # 5. Setup wizard
+          # Setup wizard
           cp cycentra-setup.sh cycentra-release/
           chmod +x cycentra-release/cycentra-setup.sh
 
-          # 6. VERSION stamp
+          # VERSION stamp
           echo "${TAG}" > cycentra-release/VERSION
 
-          # 7. manifest.json — tells setup.sh which packages to pip-install
-          #    The entitlement token is embedded here so customers don't need
-          #    a Cloudsmith account. It is read-only (download only).
+          # manifest.json — uses $CS_TOKEN (shell var), not ${{ secrets.* }}
+          # This is the key fix: no GitHub expression syntax inside the heredoc
+          INDEX_URL="https://dl.cloudsmith.io/basic/${CS_TOKEN}/cycentra/cycentra360/python/simple/"
+
           cat > cycentra-release/manifest.json << MANIFEST
 {
   "version": "${TAG}",
   "ver_number": "${VER}",
-  "commit": "${{ github.sha }}",
-  "build_number": "${{ github.run_number }}",
+  "commit": "${GIT_SHA}",
+  "build_number": "${BUILD_NUM}",
   "packages": {
     "backend": {
       "name": "cycentra-backend",
       "version": "${VER}",
-      "index_url": "https://dl.cloudsmith.io/basic/${{ secrets.CLOUDSMITH_ENTITLEMENT_TOKEN }}/cycentra/cycentra360/python/simple/"
+      "index_url": "${INDEX_URL}"
     },
     "engine": {
       "name": "cysiemstack-engine",
       "version": "${VER}",
-      "index_url": "https://dl.cloudsmith.io/basic/${{ secrets.CLOUDSMITH_ENTITLEMENT_TOKEN }}/cycentra/cycentra360/python/simple/"
+      "index_url": "${INDEX_URL}"
     }
   }
 }
 MANIFEST
 
-          # 8. Verify no .py source files leaked into bundle
+          # Verify no Python source leaked into bundle
           PY_COUNT=$(find cycentra-release/ -name "*.py" | wc -l)
           echo "Python source files in bundle: ${PY_COUNT}"
-          if [[ $PY_COUNT -gt 0 ]]; then
-            echo "WARNING: Python files found in bundle:"
-            find cycentra-release/ -name "*.py"
-          fi
+          [[ $PY_COUNT -gt 0 ]] && find cycentra-release/ -name "*.py" || true
 
-          # 9. Show final bundle contents
-          echo "=== Final bundle layout ==="
+          # Show bundle layout
+          echo "=== Bundle contents ==="
           find cycentra-release/ -type f | sort
 
-          # 10. Create the tarball
           tar -czf cycentra-release.tar.gz cycentra-release/
           ls -lh cycentra-release.tar.gz
 
-      # ── Create GitHub Release ───────────────────────────────────────────────
-      # Release assets (cycentra-release.tar.gz and cycentra-setup.sh) are
-      # publicly downloadable by URL even though the repo is private.
-      # Source code remains private — only built artifacts are released.
       - name: Create GitHub Release
         if: steps.version.outputs.is_release == 'true'
         uses: softprops/action-gh-release@v2
@@ -215,29 +203,18 @@ MANIFEST
 
             **Commit:** `${{ github.sha }}`
 
-            ---
-
             ### Install on a fresh server
 
-            ```bash
-            curl -L https://github.com/cycentra/cycentra360/releases/latest/download/cycentra-setup.sh \
-              -o cycentra-setup.sh
-            sudo bash cycentra-setup.sh
-            ```
+                curl -L https://github.com/cycentra/cycentra360/releases/latest/download/cycentra-setup.sh -o cycentra-setup.sh
+                sudo bash cycentra-setup.sh
 
             ### Pin to this specific version
 
-            ```bash
-            curl -L https://github.com/cycentra/cycentra360/releases/download/${{ steps.version.outputs.tag }}/cycentra-setup.sh \
-              -o cycentra-setup.sh
-            CYCENTRA_VERSION=${{ steps.version.outputs.tag }} sudo bash cycentra-setup.sh
-            ```
+                CYCENTRA_VERSION=${{ steps.version.outputs.tag }} sudo bash cycentra-setup.sh
 
             ### Update an existing server
 
-            ```bash
-            sudo bash cycentra-setup.sh --update
-            ```
+                sudo bash cycentra-setup.sh --update
 
             ---
 
