@@ -96,11 +96,12 @@ BASE_DOMAIN  = os.environ.get("BASE_DOMAIN", "cycentra.com")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", f"https://cy360.{BASE_DOMAIN}")
 BASE_URL     = os.environ.get("BASE_URL",      f"https://cyscan.{BASE_DOMAIN}")
 
-import site as _site
-_SITE_PKG = Path(_site.getsitepackages()[0])
+
 SCANS_DIR     = Path("/var/log/cycentra/cy-asm/scans")
 ASM_LOGS      = Path("/var/log/cycentra/cy-asm/logs")
-ASM_DIR       = Path("/opt/cycentra/backend/cy-asm")
+#ASM_DIR       = Path("/opt/cycentra/backend/cy-asm")
+import site as _site
+_SITE_PKG = Path(_site.getsitepackages()[0])
 ASM_DIR       = _SITE_PKG / "cy_asm"
 
 MODULES_DIR   = Path("/opt/cycentra/modules")
