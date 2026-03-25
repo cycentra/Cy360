@@ -1,0 +1,41 @@
+# filebeat.yml.example
+# =====================
+# Drop this into /etc/filebeat/filebeat.yml on your Wazuh host.
+# Filebeat tails the Wazuh alerts JSON and pushes to the correlation engine Redis.
+#
+# Install Filebeat: https://www.elastic.co/guide/en/beats/filebeat/current/filebeat-installation-configuration.html
+# sudo systemctl enable --now filebeat
+
+filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - /var/ossec/logs/alerts/alerts.json
+    json.keys_under_root: true
+    json.overwrite_keys: true
+    json.add_error_key: true
+    # One alert per line in alerts.json
+    multiline.type: pattern
+    multiline.pattern: '^\{'
+    multiline.negate: true
+    multiline.match: after
+
+output.redis:
+  hosts: ["127.0.0.1:6380"]    # cysiemstack-redis port (6380, not 6379)
+  key: "cysiemstack:alerts:raw"
+  datatype: list
+  timeout: 5
+
+# If you already have a Filebeat output to Elasticsearch/OpenSearch for Wazuh Dashboard,
+# use the 'output.kafka' or add a second Filebeat instance.
+# Filebeat only supports one output — options:
+#   1. Run a second Filebeat instance (recommended, simple)
+#   2. Use Logstash as a fan-out between Elasticsearch and Redis
+#   3. Use the manual ingest endpoint: POST /api/siem/alerts/ingest (admin only)
+
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 3
