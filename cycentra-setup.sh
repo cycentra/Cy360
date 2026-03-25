@@ -122,6 +122,31 @@ apt-get install -y -qq \
     2>/dev/null
 success "System packages installed"
 
+# ── Docker install ─────────────────────────────────────────────────────────────
+if command -v docker >/dev/null 2>&1 && docker --version | grep -q "2[4-9]\.\|[3-9][0-9]\."; then
+    success "Docker already installed — $(docker --version)"
+else
+    info "Installing Docker ..."
+    for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
+        apt-get remove -y "$pkg" 2>/dev/null || true
+    done
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        -o /etc/apt/keyrings/docker.asc
+    chmod a+r /etc/apt/keyrings/docker.asc
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+        https://download.docker.com/linux/ubuntu \
+        $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+        | tee /etc/apt/sources.list.d/docker.list > /dev/null
+    apt-get update -y -qq
+    apt-get install -y -qq \
+        docker-ce docker-ce-cli containerd.io \
+        docker-buildx-plugin docker-compose-plugin
+    systemctl enable docker
+    systemctl start docker
+    success "Docker installed — $(docker --version)"
+fi
+
 # ── Step 2: PostgreSQL 16 ─────────────────────────────────────────────────────
 step_header "POSTGRESQL 16"
 
@@ -541,6 +566,12 @@ mkdir -p "$BRANDING_DIR" /tmp/cycentra-config
 [[ -d "$BUNDLE_DIR/scripts"       ]] && cp -r "$BUNDLE_DIR/scripts/."       "$BRANDING_DIR/scripts/"
 [[ -d "$BUNDLE_DIR/assets"        ]] && cp -r "$BUNDLE_DIR/assets/."        "$BRANDING_DIR/assets/"
 [[ -d "$BUNDLE_DIR/CYSIEM-Config" ]] && cp -r "$BUNDLE_DIR/CYSIEM-Config/." "/tmp/cycentra-config/"
+
+mkdir -p /var/log/cycentra/cy-asm/scans
+mkdir -p /var/log/cycentra/cy-asm/logs
+mkdir -p /var/log/cycentra/cy-asm/reports
+chmod -R 755 /var/log/cycentra/cy-asm
+success "ASM log directories created"
 
 # ── Step 12: Install cycentra-backend package (Flask + engine combined) ───────
 step_header "INSTALLING CYCENTRA-BACKEND PACKAGE"
