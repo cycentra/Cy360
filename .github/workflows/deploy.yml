@@ -9,64 +9,50 @@ on:
 
 jobs:
 
-  # ── Job 1: Build React SPA ──────────────────────────────────────────────────
   build-portal:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-
       - name: Build React SPA
         run: cd portal && npm ci && npm run build
-
       - uses: actions/upload-artifact@v4
         with:
           name: portal-dist
           path: portal/dist/
           retention-days: 1
 
-  # ── Job 2: Build Python wheels ──────────────────────────────────────────────
   build-wheels:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
       - name: Install build tool
         run: pip install build==1.2.1 -q
-
       - name: Build cycentra-backend wheel
         run: |
           cd backend
           python -m build --wheel --outdir ../dist/
-          echo "Backend wheel: $(ls ../dist/cycentra_backend*.whl)"
-
       - name: Build cysiemstack-engine wheel
         run: |
           cd backend/cysiemstack/correlation-engine
           python -m build --wheel --outdir ../../../dist/
-          echo "Engine wheel: $(ls ../../../dist/cysiemstack*.whl)"
-
       - uses: actions/upload-artifact@v4
         with:
           name: python-wheels
           path: dist/*.whl
           retention-days: 1
 
-  # ── Job 3: Publish ──────────────────────────────────────────────────────────
   publish:
     needs: [build-portal, build-wheels]
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
-
     steps:
       - uses: actions/checkout@v4
 
@@ -100,92 +86,47 @@ jobs:
 
       - name: Publish wheels to Cloudsmith
         if: steps.version.outputs.is_release == 'true'
+        env:
+          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
         run: |
           pip install cloudsmith-cli -q
           for wheel in dist/*.whl; do
             echo "Pushing $wheel ..."
-            cloudsmith push python cycentra/cycentra360 "$wheel" \
-              --api-key "${{ secrets.CLOUDSMITH_API_KEY }}"
+            cloudsmith push python cycentra/cycentra360 "$wheel" --api-key "$CLOUDSMITH_API_KEY"
           done
 
-      # ── The fix: pass the secret as an env var, reference it as $CS_TOKEN ──
-      # Never put ${{ secrets.* }} inside a heredoc — the YAML parser sees }}
-      # and breaks. Inject via env: at step level instead, then use $CS_TOKEN
-      # as a plain shell variable inside the heredoc.
       - name: Build customer release bundle
         env:
           CS_TOKEN: ${{ secrets.CLOUDSMITH_ENTITLEMENT_TOKEN }}
-          GIT_SHA:  ${{ github.sha }}
-          BUILD_NUM: ${{ github.run_number }}
         run: |
           TAG=${{ steps.version.outputs.tag }}
           VER=${{ steps.version.outputs.ver }}
+          SHA=${{ github.sha }}
+          BUILD=${{ github.run_number }}
 
-          mkdir -p \
-            cycentra-release/portal \
-            cycentra-release/db/migrations \
-            cycentra-release/CYSIEM-Config \
-            cycentra-release/scripts \
-            cycentra-release/assets
+          mkdir -p cycentra-release/portal cycentra-release/db/migrations cycentra-release/CYSIEM-Config cycentra-release/scripts cycentra-release/assets
 
-          # Portal: built SPA only — no .jsx source
           cp -r portal/dist/ cycentra-release/portal/dist/
 
-          # DB schema SQL
-          [[ -f backend/cysiemstack/postgres/init.sql ]] && \
-            cp backend/cysiemstack/postgres/init.sql cycentra-release/db/
-          [[ -d backend/cysiemstack/postgres/migrations ]] && \
-            cp -r backend/cysiemstack/postgres/migrations/. \
-                  cycentra-release/db/migrations/
-
-          # Wazuh config
-          [[ -d CYSIEM-Config ]] && \
-            cp -r CYSIEM-Config/. cycentra-release/CYSIEM-Config/ || true
-
-          # Branding
+          [[ -f backend/cysiemstack/postgres/init.sql ]] && cp backend/cysiemstack/postgres/init.sql cycentra-release/db/
+          [[ -d backend/cysiemstack/postgres/migrations ]] && cp -r backend/cysiemstack/postgres/migrations/. cycentra-release/db/migrations/
+          [[ -d CYSIEM-Config ]] && cp -r CYSIEM-Config/. cycentra-release/CYSIEM-Config/ || true
           [[ -d scripts ]] && cp -r scripts/. cycentra-release/scripts/ || true
           [[ -d assets  ]] && cp -r assets/.  cycentra-release/assets/  || true
 
-          # Setup wizard
           cp cycentra-setup.sh cycentra-release/
           chmod +x cycentra-release/cycentra-setup.sh
-
-          # VERSION stamp
           echo "${TAG}" > cycentra-release/VERSION
 
-          # manifest.json — uses $CS_TOKEN (shell var), not ${{ secrets.* }}
-          # This is the key fix: no GitHub expression syntax inside the heredoc
           INDEX_URL="https://dl.cloudsmith.io/basic/${CS_TOKEN}/cycentra/cycentra360/python/simple/"
 
-          cat > cycentra-release/manifest.json << MANIFEST
-{
-  "version": "${TAG}",
-  "ver_number": "${VER}",
-  "commit": "${GIT_SHA}",
-  "build_number": "${BUILD_NUM}",
-  "packages": {
-    "backend": {
-      "name": "cycentra-backend",
-      "version": "${VER}",
-      "index_url": "${INDEX_URL}"
-    },
-    "engine": {
-      "name": "cysiemstack-engine",
-      "version": "${VER}",
-      "index_url": "${INDEX_URL}"
-    }
-  }
-}
-MANIFEST
+          printf '{\n  "version": "%s",\n  "ver_number": "%s",\n  "commit": "%s",\n  "build_number": "%s",\n  "packages": {\n    "backend": {\n      "name": "cycentra-backend",\n      "version": "%s",\n      "index_url": "%s"\n    },\n    "engine": {\n      "name": "cysiemstack-engine",\n      "version": "%s",\n      "index_url": "%s"\n    }\n  }\n}\n' \
+            "$TAG" "$VER" "$SHA" "$BUILD" "$VER" "$INDEX_URL" "$VER" "$INDEX_URL" \
+            > cycentra-release/manifest.json
 
-          # Verify no Python source leaked into bundle
-          PY_COUNT=$(find cycentra-release/ -name "*.py" | wc -l)
-          echo "Python source files in bundle: ${PY_COUNT}"
-          [[ $PY_COUNT -gt 0 ]] && find cycentra-release/ -name "*.py" || true
-
-          # Show bundle layout
-          echo "=== Bundle contents ==="
-          find cycentra-release/ -type f | sort
+          echo "=== manifest.json ===" && cat cycentra-release/manifest.json
+          echo "=== Bundle contents ===" && find cycentra-release/ -type f | sort
+          echo "Python source files in bundle: $(find cycentra-release/ -name '*.py' | wc -l)"
 
           tar -czf cycentra-release.tar.gz cycentra-release/
           ls -lh cycentra-release.tar.gz
@@ -216,11 +157,7 @@ MANIFEST
 
                 sudo bash cycentra-setup.sh --update
 
-            ---
-
-            **Packages in this release:**
-            - `cycentra-backend==${{ steps.version.outputs.ver }}`
-            - `cysiemstack-engine==${{ steps.version.outputs.ver }}`
+            **Packages:** cycentra-backend==${{ steps.version.outputs.ver }} and cysiemstack-engine==${{ steps.version.outputs.ver }}
           files: |
             cycentra-release.tar.gz
             cycentra-setup.sh
