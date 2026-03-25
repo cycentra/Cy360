@@ -2,11 +2,14 @@ name: Build & Publish — CyCentra 360
 
 on:
   push:
+    tags: ['v*.*.*']
+  push:
     branches: [main]
   workflow_dispatch:
 
 jobs:
 
+  # ── Job 1: Build React SPA ──────────────────────────────────────────────────
   build-portal:
     runs-on: ubuntu-latest
     steps:
@@ -25,8 +28,47 @@ jobs:
           path: portal/dist/
           retention-days: 1
 
+  # ── Job 2: Build Python wheels ──────────────────────────────────────────────
+  build-wheels:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tool
+        run: pip install build==1.2.1 -q
+
+      - name: Build cycentra-backend wheel
+        run: |
+          cd backend
+          python -m build --wheel --outdir ../dist/
+          echo "Backend wheel: $(ls ../dist/cycentra_backend*.whl)"
+
+      - name: Build cysiemstack-engine wheel
+        run: |
+          cd backend/cysiemstack/correlation-engine
+          python -m build --wheel --outdir ../../../dist/
+          echo "Engine wheel: $(ls ../../../dist/cysiemstack*.whl)"
+
+      - name: Verify no accidental source files in wheels
+        run: |
+          for whl in dist/*.whl; do
+            echo "Contents of $whl:"
+            python3 -c "import zipfile; [print(f) for f in zipfile.ZipFile('$whl').namelist()]"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-wheels
+          path: dist/*.whl
+          retention-days: 1
+
+  # ── Job 3: Publish ──────────────────────────────────────────────────────────
   publish:
-    needs: build-portal
+    needs: [build-portal, build-wheels]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -40,54 +82,170 @@ jobs:
           name: portal-dist
           path: portal/dist/
 
-      - name: Stamp VERSION file
-        run: echo "${{ github.sha }}" > VERSION
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-wheels
+          path: dist/
 
-      - name: Package release bundle
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Resolve version
+        id: version
         run: |
-          mkdir -p cycentra-release/portal
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "tag=${TAG}"        >> $GITHUB_OUTPUT
+            echo "ver=${TAG#v}"      >> $GITHUB_OUTPUT
+            echo "is_release=true"   >> $GITHUB_OUTPUT
+          else
+            echo "tag=dev-${{ github.run_number }}" >> $GITHUB_OUTPUT
+            echo "ver=0.0.${{ github.run_number }}"  >> $GITHUB_OUTPUT
+            echo "is_release=false"                  >> $GITHUB_OUTPUT
+          fi
 
-          cp -r portal/dist/        cycentra-release/portal/dist/
-          cp    portal/server.cjs   cycentra-release/portal/
-          cp    portal/package.json cycentra-release/portal/
+      # ── Push wheels to Cloudsmith (releases only) ───────────────────────────
+      - name: Publish wheels to Cloudsmith
+        if: steps.version.outputs.is_release == 'true'
+        run: |
+          pip install cloudsmith-cli -q
+          for wheel in dist/*.whl; do
+            echo "Pushing $wheel to Cloudsmith ..."
+            cloudsmith push python cycentra/cycentra360 "$wheel" \
+              --api-key "${{ secrets.CLOUDSMITH_API_KEY }}"
+            echo "Done: $wheel"
+          done
 
-          rsync -a \
-            --exclude='venv/' \
-            --exclude='__pycache__/' \
-            --exclude='*.pyc' \
-            --exclude='.env' \
-            --exclude='*.log' \
-            backend/ cycentra-release/backend/
+      # ── Build the minimal customer bundle ───────────────────────────────────
+      # Contains: setup.sh, portal HTML/JS/CSS, SQL schema, Wazuh config,
+      #           branding assets, manifest.json (version + Cloudsmith index URL)
+      # Does NOT contain: any .py source, requirements.txt, node_modules, .env
+      - name: Build customer release bundle
+        run: |
+          TAG=${{ steps.version.outputs.tag }}
+          VER=${{ steps.version.outputs.ver }}
 
-          cp -r scripts/       cycentra-release/scripts/       2>/dev/null || true
-          cp -r assets/        cycentra-release/assets/        2>/dev/null || true
-          cp -r CYSIEM-Config/ cycentra-release/CYSIEM-Config/ 2>/dev/null || true
+          mkdir -p \
+            cycentra-release/portal \
+            cycentra-release/db/migrations \
+            cycentra-release/CYSIEM-Config \
+            cycentra-release/scripts \
+            cycentra-release/assets
 
+          # 1. Portal: built SPA only — no source files
+          cp -r portal/dist/ cycentra-release/portal/dist/
+
+          # 2. DB schema SQL (ships in bundle, not in wheel)
+          [[ -f backend/cysiemstack/postgres/init.sql ]] && \
+            cp backend/cysiemstack/postgres/init.sql cycentra-release/db/
+          [[ -d backend/cysiemstack/postgres/migrations ]] && \
+            cp -r backend/cysiemstack/postgres/migrations/. \
+                  cycentra-release/db/migrations/
+
+          # 3. Wazuh rules, decoders, ossec.conf
+          [[ -d CYSIEM-Config ]] && \
+            cp -r CYSIEM-Config/. cycentra-release/CYSIEM-Config/ || true
+
+          # 4. Branding scripts and assets
+          [[ -d scripts ]] && cp -r scripts/. cycentra-release/scripts/ || true
+          [[ -d assets  ]] && cp -r assets/.  cycentra-release/assets/  || true
+
+          # 5. Setup wizard
           cp cycentra-setup.sh cycentra-release/
           chmod +x cycentra-release/cycentra-setup.sh
-          echo "IMAGE_TAG=${{ github.sha }}"            > cycentra-release/release.env
-          echo "BUILD_NUMBER=${{ github.run_number }}" >> cycentra-release/release.env
-          cp VERSION cycentra-release/
 
+          # 6. VERSION stamp
+          echo "${TAG}" > cycentra-release/VERSION
+
+          # 7. manifest.json — tells setup.sh which packages to pip-install
+          #    The entitlement token is embedded here so customers don't need
+          #    a Cloudsmith account. It is read-only (download only).
+          cat > cycentra-release/manifest.json << MANIFEST
+{
+  "version": "${TAG}",
+  "ver_number": "${VER}",
+  "commit": "${{ github.sha }}",
+  "build_number": "${{ github.run_number }}",
+  "packages": {
+    "backend": {
+      "name": "cycentra-backend",
+      "version": "${VER}",
+      "index_url": "https://dl.cloudsmith.io/basic/${{ secrets.CLOUDSMITH_ENTITLEMENT_TOKEN }}/cycentra/cycentra360/python/simple/"
+    },
+    "engine": {
+      "name": "cysiemstack-engine",
+      "version": "${VER}",
+      "index_url": "https://dl.cloudsmith.io/basic/${{ secrets.CLOUDSMITH_ENTITLEMENT_TOKEN }}/cycentra/cycentra360/python/simple/"
+    }
+  }
+}
+MANIFEST
+
+          # 8. Verify no .py source files leaked into bundle
+          PY_COUNT=$(find cycentra-release/ -name "*.py" | wc -l)
+          echo "Python source files in bundle: ${PY_COUNT}"
+          if [[ $PY_COUNT -gt 0 ]]; then
+            echo "WARNING: Python files found in bundle:"
+            find cycentra-release/ -name "*.py"
+          fi
+
+          # 9. Show final bundle contents
+          echo "=== Final bundle layout ==="
+          find cycentra-release/ -type f | sort
+
+          # 10. Create the tarball
           tar -czf cycentra-release.tar.gz cycentra-release/
+          ls -lh cycentra-release.tar.gz
 
+      # ── Create GitHub Release ───────────────────────────────────────────────
+      # Release assets (cycentra-release.tar.gz and cycentra-setup.sh) are
+      # publicly downloadable by URL even though the repo is private.
+      # Source code remains private — only built artifacts are released.
       - name: Create GitHub Release
+        if: steps.version.outputs.is_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}
-          name: "CyCentra 360 — Build ${{ github.run_number }}"
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "CyCentra 360 ${{ steps.version.outputs.tag }}"
+          draft: false
+          prerelease: false
           body: |
-            ## CyCentra 360 — Build ${{ github.run_number }}
+            ## CyCentra 360 ${{ steps.version.outputs.tag }}
 
-            Commit: `${{ github.sha }}`
+            **Commit:** `${{ github.sha }}`
 
-            ### Install / Update on your server
+            ---
 
-            Download and run the setup wizard:
+            ### Install on a fresh server
 
-                curl -L https://github.com/cycentra/cycentra360/releases/latest/download/cycentra-release.tar.gz | tar -xz
-                cd cycentra-release
-                sudo bash cycentra-setup.sh
-          files: cycentra-release.tar.gz
+            ```bash
+            curl -L https://github.com/cycentra/cycentra360/releases/latest/download/cycentra-setup.sh \
+              -o cycentra-setup.sh
+            sudo bash cycentra-setup.sh
+            ```
+
+            ### Pin to this specific version
+
+            ```bash
+            curl -L https://github.com/cycentra/cycentra360/releases/download/${{ steps.version.outputs.tag }}/cycentra-setup.sh \
+              -o cycentra-setup.sh
+            CYCENTRA_VERSION=${{ steps.version.outputs.tag }} sudo bash cycentra-setup.sh
+            ```
+
+            ### Update an existing server
+
+            ```bash
+            sudo bash cycentra-setup.sh --update
+            ```
+
+            ---
+
+            **Packages in this release:**
+            - `cycentra-backend==${{ steps.version.outputs.ver }}`
+            - `cysiemstack-engine==${{ steps.version.outputs.ver }}`
+          files: |
+            cycentra-release.tar.gz
+            cycentra-setup.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
