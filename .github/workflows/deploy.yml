@@ -2,9 +2,8 @@ name: Build & Publish — CyCentra 360
 
 on:
   push:
-    tags: ['v*.*.*']
-  push:
     branches: [main]
+    tags: ['v*.*.*']
   workflow_dispatch:
 
 jobs:
@@ -75,9 +74,9 @@ jobs:
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
-            echo "tag=${TAG}"       >> $GITHUB_OUTPUT
-            echo "ver=${TAG#v}"     >> $GITHUB_OUTPUT
-            echo "is_release=true"  >> $GITHUB_OUTPUT
+            echo "tag=${TAG}"      >> $GITHUB_OUTPUT
+            echo "ver=${TAG#v}"    >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
           else
             echo "tag=dev-${{ github.run_number }}" >> $GITHUB_OUTPUT
             echo "ver=0.0.${{ github.run_number }}"  >> $GITHUB_OUTPUT
