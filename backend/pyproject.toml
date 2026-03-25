@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cycentra-backend"
+version = "1.0.0"
+description = "CyCentra 360 — Flask backend + CySIEMStack correlation engine"
+requires-python = ">=3.12"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+# Merges both requirements files — Flask deps + engine deps in one install
+dependencies = {file = ["requirements.txt", "cysiemstack/correlation-engine/requirements.txt"]}
+
+# Standalone .py files at the root of backend/ (not inside a package directory)
+# app.py is the Flask entry point
+# siem_proxy.py is the SIEM blueprint imported by app.py
+[tool.setuptools]
+py-modules = ["app", "siem_proxy"]
+
+# Python packages (directories) to include in the wheel
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "cy_asm*",
+    "cysiemstack*",
+]
+exclude = [
+    "venv*",
+    "*.egg-info",
+    "__pycache__*",
+    "tests*",
+    "docs*",
+]
+
+# Non-Python files that ship inside the wheel
+[tool.setuptools.package-data]
+"*" = ["*.json", "*.yaml", "*.yml", "*.html", "*.txt", "*.sql", "*.xml"]
