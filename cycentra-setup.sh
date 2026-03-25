@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 — Setup & Update Wizard v7.0
+# CyCentra 360 — Setup & Update Wizard v7.1
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -19,8 +19,8 @@
 #   apt repos          → PostgreSQL 16, Redis, nginx, certbot, python3
 #   packages.wazuh.com → Wazuh manager + indexer + dashboard
 #   GitHub Releases    → cycentra-release.tar.gz (portal, SQL, config, manifest)
-#   Cloudsmith         → cycentra-backend wheel, cysiemstack-engine wheel
-#   Let's Encrypt      → SSL certificates (via certbot)
+#   Cloudsmith         → cycentra-backend wheel (Flask + engine combined)
+#   Let's Encrypt      → SSL certificates via certbot
 # ═══════════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -43,7 +43,6 @@ success() { echo -e "${GREEN}  ✓ ${NC}$*"; }
 warn()    { echo -e "${YELLOW}  ⚠ ${NC}$*"; }
 error()   { echo -e "${RED}  ✗ ${NC}$*"; }
 divider() { echo -e "${DIM}  ────────────────────────────────────────────────${NC}"; }
-skip()    { echo -e "${DIM}  ↷ SKIP (--update mode): $*${NC}"; }
 
 ask() {
     local varname=$1 prompt=$2 default=${3:-}
@@ -75,7 +74,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 step=0
 step_header() {
     step=$((step+1))
-    echo -e "\n${BOLD}${CYAN}  ── $1${NC}"
+    echo -e "\n${BOLD}${CYAN}  ── STEP ${step}: $1${NC}"
     divider
 }
 
@@ -94,36 +93,36 @@ echo "  ╚██████╗   ██║   ╚██████╗███
 echo "   ╚═════╝   ╚═╝    ╚═════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝"
 echo -e "${NC}"
 echo -e "  ${BOLD}360° Security Operations Platform${NC}"
-echo -e "  ${DIM}Setup Wizard v7.0${NC}"
+echo -e "  ${DIM}Setup & Update Wizard — v7.1${NC}"
 echo ""; divider
 
 if [[ "$MODE" == "update" ]]; then
     echo -e "  ${YELLOW}MODE: UPDATE${NC} — skipping infrastructure, updating packages only"
 elif [[ "$MODE" == "infra" ]]; then
-    echo -e "  ${YELLOW}MODE: INFRA ONLY${NC} — installing infrastructure, skipping app packages"
+    echo -e "  ${YELLOW}MODE: INFRA ONLY${NC} — installing infrastructure only"
 else
     echo -e "  ${DIM}MODE: FULL INSTALL${NC} — infrastructure + application"
 fi
 divider; echo ""
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# INFRA BLOCK — skipped when running --update
+# INFRASTRUCTURE BLOCK — skipped when MODE=update
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if [[ "$MODE" != "update" ]]; then
 
-# ── System packages ───────────────────────────────────────────────────────────
+# ── Step 1: System packages ───────────────────────────────────────────────────
 step_header "SYSTEM DEPENDENCIES"
 apt-get update -y -qq
 apt-get install -y -qq \
     curl wget gnupg lsb-release ca-certificates jq \
-    python3.12-venv python3-pip \
+    python3 python3-pip \
     nmap whois rsync git openssl \
     nginx certbot python3-certbot-nginx \
     2>/dev/null
 success "System packages installed"
 
-# ── PostgreSQL 16 ─────────────────────────────────────────────────────────────
+# ── Step 2: PostgreSQL 16 ─────────────────────────────────────────────────────
 step_header "POSTGRESQL 16"
 
 if ! dpkg -l postgresql-16 2>/dev/null | grep -q "^ii"; then
@@ -141,7 +140,7 @@ else
     success "PostgreSQL 16 already installed"
 fi
 
-# Bind to port 5433 to avoid conflict with CyIRIS Docker postgres on :5432
+# Bind to :5433 to avoid conflict with CyIRIS Docker postgres on :5432
 PG_CONF=$(sudo -u postgres psql -t -c "SHOW config_file;" 2>/dev/null | tr -d ' ' || echo "")
 if [[ -n "$PG_CONF" && -f "$PG_CONF" ]]; then
     if grep -q "^port = 5432" "$PG_CONF" 2>/dev/null; then
@@ -180,7 +179,7 @@ sudo -u postgres psql -p 5433 \
 
 success "PostgreSQL: correlation DB ready on :5433"
 
-# ── Redis ─────────────────────────────────────────────────────────────────────
+# ── Step 3: Redis ─────────────────────────────────────────────────────────────
 step_header "REDIS"
 
 if ! dpkg -l redis-server 2>/dev/null | grep -q "^ii"; then
@@ -217,10 +216,10 @@ fi  # end INFRA block
 # APP BLOCK — runs in all modes
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# ── jq must be present for all modes ─────────────────────────────────────────
+# Ensure jq is present for all modes
 command -v jq >/dev/null 2>&1 || apt-get install -y -qq jq
 
-# Ensure CORR_DB_PASS is set in update mode (read from existing env)
+# In update mode read CORR_DB_PASS from existing env
 if [[ "$MODE" == "update" ]]; then
     CORR_DB_PASS=$(grep "^POSTGRES_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null \
         | cut -d= -f2 || true)
@@ -231,7 +230,7 @@ if [[ "$MODE" == "update" ]]; then
     fi
 fi
 
-# ── Download release bundle ───────────────────────────────────────────────────
+# ── Step 4: Download release bundle ──────────────────────────────────────────
 step_header "DOWNLOAD RELEASE BUNDLE"
 
 CYCENTRA_VERSION="${CYCENTRA_VERSION:-latest}"
@@ -255,22 +254,18 @@ else
     tar -xzf "$CYCENTRA_RELEASE_URL" -C /tmp/
 fi
 
-# Read manifest
 MANIFEST="$BUNDLE_DIR/manifest.json"
-[[ ! -f "$MANIFEST" ]] && { error "manifest.json not found — bundle may be corrupt"; exit 1; }
+[[ ! -f "$MANIFEST" ]] && { error "manifest.json not found in bundle"; exit 1; }
 
-BUNDLE_VERSION=$(jq -r '.version'                     "$MANIFEST")
-PKG_INDEX_URL=$(jq  -r '.packages.backend.index_url'  "$MANIFEST")
-BACKEND_PKG=$(jq    -r '.packages.backend.name'        "$MANIFEST")
-BACKEND_VER=$(jq    -r '.packages.backend.version'     "$MANIFEST")
-ENGINE_PKG=$(jq     -r '.packages.engine.name'         "$MANIFEST")
-ENGINE_VER=$(jq     -r '.packages.engine.version'      "$MANIFEST")
+BUNDLE_VERSION=$(jq -r '.version'                             "$MANIFEST")
+PKG_NAME=$(jq     -r '.packages.cycentra_backend.name'        "$MANIFEST")
+PKG_VER=$(jq      -r '.packages.cycentra_backend.version'     "$MANIFEST")
+INDEX_URL=$(jq    -r '.packages.cycentra_backend.index_url'   "$MANIFEST")
 
 success "Bundle version  : ${BUNDLE_VERSION}"
-info    "Backend package : ${BACKEND_PKG}==${BACKEND_VER}"
-info    "Engine package  : ${ENGINE_PKG}==${ENGINE_VER}"
+info    "Package         : ${PKG_NAME}==${PKG_VER}"
 
-# ── Interactive config (only on full install) ─────────────────────────────────
+# ── Step 5–9: Interactive config (full install only) ─────────────────────────
 if [[ "$MODE" == "full" ]]; then
 
     step_header "CLIENT INFORMATION"
@@ -278,27 +273,37 @@ if [[ "$MODE" == "full" ]]; then
     ask CLIENT_EMAIL "Primary admin email"        "admin@${CLIENT_NAME,,}.com"
     ask BASE_DOMAIN  "Base domain"                "${CLIENT_NAME,,}.com"
     echo ""
-    info "Subdomains: cy360 · cyscan · cysiem · cyiris · cysoar all on .${BASE_DOMAIN}"
+    info "Subdomains: cy360 · cyscan · cysiem · cyiris · cysoar  (all on .${BASE_DOMAIN})"
     echo ""
     if ! ask_yn "Are all subdomains pointing at this server in DNS?"; then
         SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
         warn "Add DNS A records: cy360 cyscan cysiem cyiris cysoar → ${SERVER_IP}"
-        ask_yn "Continue anyway?" "n" || exit 0
+        ask_yn "Continue anyway? (SSL will fail if DNS not ready)" "n" || exit 0
     fi
 
     INSTALL_CYSIEM=true; INSTALL_CYIRIS=true; INSTALL_CYSOAR=true
+    success "CySIEM selected"; success "CyIRIS selected"; success "CySOAR selected"
 
-    step_header "OAUTH / SSO"
+    step_header "OAUTH / SSO CONFIGURATION"
+    echo -e "  ${DIM}Portal login via Google or Microsoft.${NC}"; echo ""
     PS3="  Choose provider: "
     select OAUTH_PROVIDER in "Google" "Microsoft Azure AD" "Skip"; do
-        case $REPLY in 1) OAUTH_PROVIDER="google";    break;;
-                       2) OAUTH_PROVIDER="microsoft"; break;;
-                       3) OAUTH_PROVIDER="skip";      break;; esac
+        case $REPLY in
+            1) OAUTH_PROVIDER="google";    break;;
+            2) OAUTH_PROVIDER="microsoft"; break;;
+            3) OAUTH_PROVIDER="skip";      break;;
+        esac
     done
     OAUTH_CLIENT_ID=""; OAUTH_CLIENT_SECRET=""
     if [[ "$OAUTH_PROVIDER" != "skip" ]]; then
+        [[ "$OAUTH_PROVIDER" == "google" ]] \
+            && info "Redirect URI: https://cyscan.${BASE_DOMAIN}/auth/google/callback" \
+            || info "Redirect URI: https://cyscan.${BASE_DOMAIN}/auth/microsoft/callback"
+        echo ""
         ask OAUTH_CLIENT_ID "OAuth Client ID" ""
         ask_secret OAUTH_CLIENT_SECRET "OAuth Client Secret"
+    else
+        warn "OAuth skipped — configure later in /opt/cycentra/.env"
     fi
 
     step_header "AI ENRICHMENT (OPTIONAL)"
@@ -314,22 +319,24 @@ if [[ "$MODE" == "full" ]]; then
     done
     [[ "$AI_PROVIDER" != "none" && "$AI_PROVIDER" != "local" ]] \
         && ask AI_API_KEY "API Key for ${AI_PROVIDER}"
+    [[ "$AI_PROVIDER" == "local" ]] && ask AI_MODEL "Ollama model name" "mistral:7b"
 
-    step_header "SMTP (OPTIONAL)"
+    step_header "SMTP CONFIGURATION (OPTIONAL)"
     SMTP_HOST=""; SMTP_PORT=""; SMTP_USER=""; SMTP_PASS=""; SUPPORT_EMAIL=""
-    if ask_yn "Configure SMTP?" "n"; then
-        ask SMTP_HOST "SMTP hostname" "smtp.gmail.com"
-        ask SMTP_PORT "SMTP port"     "587"
-        ask SMTP_USER "SMTP username" ""
+    if ask_yn "Configure SMTP for support emails?" "n"; then
+        ask SMTP_HOST     "SMTP hostname"          "smtp.gmail.com"
+        ask SMTP_PORT     "SMTP port"              "587"
+        ask SMTP_USER     "SMTP username"          ""
         ask_secret SMTP_PASS "SMTP password"
-        ask SUPPORT_EMAIL "Support email" "support@${BASE_DOMAIN}"
+        ask SUPPORT_EMAIL "Support destination"    "support@${BASE_DOMAIN}"
+        success "SMTP configured → ${SUPPORT_EMAIL}"
     fi
 
     step_header "GENERATING SECRETS"
     _env="/opt/cycentra/.env"
     _get() { grep -m1 "^${1}=" "$_env" 2>/dev/null | cut -d= -f2- | tr -d '"' || true; }
     if [[ -f "$_env" ]]; then
-        info "Preserving existing session secrets ..."
+        info "Existing .env found — preserving session secrets"
         FLASK_SECRET=$(_get SECRET_KEY);   [[ -z "$FLASK_SECRET"   ]] && FLASK_SECRET=$(gen_secret)
         JWT_SECRET=$(_get JWT_SECRET);     [[ -z "$JWT_SECRET"     ]] && JWT_SECRET=$(gen_secret)
         IRIS_SECRET=$(_get IRIS_SECRET);   [[ -z "$IRIS_SECRET"    ]] && IRIS_SECRET=$(gen_secret)
@@ -344,19 +351,21 @@ if [[ "$MODE" == "full" ]]; then
     ADMIN_API_KEY=$(gen_secret)
     CYIRIS_OIDC_SECRET=$(gen_secret)
     CYSOAR_OIDC_SECRET=$(gen_secret)
-    success "Secrets ready"
+    success "All secrets ready"
 
     step_header "REVIEW & CONFIRM"
     echo -e "  ${DIM}Client  :${NC} ${WHITE}${CLIENT_NAME}${NC}"
+    echo -e "  ${DIM}Email   :${NC} ${WHITE}${CLIENT_EMAIL}${NC}"
     echo -e "  ${DIM}Domain  :${NC} ${WHITE}${BASE_DOMAIN}${NC}"
     echo -e "  ${DIM}OAuth   :${NC} ${WHITE}${OAUTH_PROVIDER}${NC}"
     echo -e "  ${DIM}AI      :${NC} ${WHITE}${AI_PROVIDER}${NC}"
+    echo -e "  ${DIM}SMTP    :${NC} ${WHITE}${SMTP_HOST:-not configured}${NC}"
     echo -e "  ${DIM}Version :${NC} ${WHITE}${BUNDLE_VERSION}${NC}"
     echo ""
-    ask_yn "Proceed?" || exit 0
+    ask_yn "Proceed with full installation?" || exit 0
 
 else
-    # Update mode — read existing values from .env
+    # Update mode — read existing config from .env
     info "Update mode — reading configuration from /opt/cycentra/.env ..."
     [[ ! -f /opt/cycentra/.env ]] && {
         error "/opt/cycentra/.env not found. Run full install first."
@@ -370,14 +379,14 @@ else
     success "Loaded existing configuration (domain: ${BASE_DOMAIN})"
 fi
 
-# ── Write env files (full install only — update preserves existing) ───────────
+# ── Step 10: Write .env files (full install only) ─────────────────────────────
 if [[ "$MODE" == "full" ]]; then
 
-    step_header "WRITING .env FILES"
+    step_header "WRITING CONFIGURATION FILES"
     mkdir -p /opt/cycentra && chmod 700 /opt/cycentra
 
     cat > /opt/cycentra/.env << ENVEOF
-# CyCentra 360 — generated by setup wizard v7.0
+# CyCentra 360 — generated by setup wizard v7.1
 # Version: ${BUNDLE_VERSION} | Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 BASE_DOMAIN=${BASE_DOMAIN}
@@ -431,14 +440,17 @@ SIEM_MISP_ENABLED=false
 ENVEOF
     chmod 600 /opt/cycentra/.env
     mkdir -p /root/cy-asm && cp /opt/cycentra/.env /root/cy-asm/.env
-    success ".env written"
+    success "Main .env written → /opt/cycentra/.env"
 
-    _LLM="${AI_PROVIDER:-none}"; [[ "$_LLM" == "none" ]] && _LLM_FLAG="false" || _LLM_FLAG="true"
+    _LLM_FLAG="false"
+    [[ "${AI_PROVIDER:-none}" != "none" ]] && _LLM_FLAG="true"
+
     _WAZUH_PASS=$(grep "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null \
         | cut -d= -f2 || echo "CHANGE_ME_after_wazuh_install")
 
     cat > /opt/cycentra/cysiemstack.env << SIEMEOF
-# CySIEMStack environment — set WAZUH_API_PASSWORD then restart cysiemstack-engine
+# CySIEMStack environment — set WAZUH_API_PASSWORD after Wazuh installs
+# then: systemctl restart cysiemstack-engine
 
 DATABASE_URL=postgresql+asyncpg://corruser:${CORR_DB_PASS}@127.0.0.1:5433/correlation
 POSTGRES_PASSWORD=${CORR_DB_PASS}
@@ -463,12 +475,13 @@ UEBA_ML_MIN_TRAIN_DAYS=7
 MISP_ENABLED=false
 SIEMEOF
     chmod 600 /opt/cycentra/cysiemstack.env
-    success "cysiemstack.env written"
+    success "cysiemstack.env written → /opt/cycentra/cysiemstack.env"
 
-fi  # end full-install env block
+fi  # end full env block
 
-# ── Deploy portal static files ────────────────────────────────────────────────
+# ── Step 11: Deploy portal static files ──────────────────────────────────────
 step_header "DEPLOYING PORTAL"
+
 PORTAL_DIR="/var/www/cycentra360"
 mkdir -p "$PORTAL_DIR"
 if [[ -d "$BUNDLE_DIR/portal/dist" ]]; then
@@ -478,55 +491,52 @@ else
     warn "portal/dist not in bundle"; ERRORS+=("Portal dist missing")
 fi
 
-# Deploy config assets
+# Deploy branding and config assets from bundle
 BRANDING_DIR="/opt/cycentra-branding"
 mkdir -p "$BRANDING_DIR" /tmp/cycentra-config
 [[ -d "$BUNDLE_DIR/scripts"       ]] && cp -r "$BUNDLE_DIR/scripts/."       "$BRANDING_DIR/scripts/"
 [[ -d "$BUNDLE_DIR/assets"        ]] && cp -r "$BUNDLE_DIR/assets/."        "$BRANDING_DIR/assets/"
 [[ -d "$BUNDLE_DIR/CYSIEM-Config" ]] && cp -r "$BUNDLE_DIR/CYSIEM-Config/." "/tmp/cycentra-config/"
 
-# ── Install Flask backend from Cloudsmith ─────────────────────────────────────
-step_header "INSTALLING FLASK BACKEND PACKAGE"
+# ── Step 12: Install cycentra-backend package (Flask + engine combined) ───────
+step_header "INSTALLING CYCENTRA-BACKEND PACKAGE"
 
-FLASK_VENV="/opt/cycentra/backend-venv"
-mkdir -p "$FLASK_VENV"
-[[ ! -d "$FLASK_VENV/lib" ]] && python3 -m venv "$FLASK_VENV"
+info "Installing ${PKG_NAME}==${PKG_VER} into system Python ..."
+info "Index: ${INDEX_URL}"
 
-info "pip install ${BACKEND_PKG}==${BACKEND_VER} ..."
-"$FLASK_VENV/bin/pip" install \
-    --index-url "$PKG_INDEX_URL" \
+# --break-system-packages required on Ubuntu 24.04 (PEP 668 externally-managed env)
+pip3 install \
+    --index-url "$INDEX_URL" \
     --extra-index-url https://pypi.org/simple/ \
-    "${BACKEND_PKG}==${BACKEND_VER}" \
-    --upgrade -q \
-    && success "Installed: ${BACKEND_PKG}==${BACKEND_VER}" \
-    || { error "Flask package install failed"; ERRORS+=("Flask install failed"); }
+    "${PKG_NAME}==${PKG_VER}" \
+    --upgrade \
+    --break-system-packages \
+    -q \
+    && success "Installed: ${PKG_NAME}==${PKG_VER}" \
+    || { error "Package install failed — check Cloudsmith token in manifest.json"; \
+         ERRORS+=("pip install failed"); }
 
-FLASK_SITE=$(find "$FLASK_VENV/lib" -type d -name "site-packages" | head -1)
-info "Installed to: ${FLASK_SITE}"
+# Locate installed files for systemd service definitions
+PYTHON_BIN=$(which python3)
+SITE_PKG=$(python3 -c "import site; print(site.getsitepackages()[0])")
+info "Site-packages: ${SITE_PKG}"
 
-# ── Install CySIEMStack engine from Cloudsmith ────────────────────────────────
-step_header "INSTALLING CYSIEMSTACK ENGINE PACKAGE"
+FLASK_APP="${SITE_PKG}/app.py"
+ENGINE_DIR="${SITE_PKG}/cysiemstack/correlation_engine"
 
-ENGINE_VENV="/opt/cycentra/engine-venv"
-mkdir -p "$ENGINE_VENV"
-[[ ! -d "$ENGINE_VENV/lib" ]] && python3 -m venv "$ENGINE_VENV"
+[[ -f "$FLASK_APP" ]] \
+    && success "Flask entry point: ${FLASK_APP}" \
+    || { error "app.py not found in ${SITE_PKG}"; ERRORS+=("app.py missing after install"); }
 
-info "pip install ${ENGINE_PKG}==${ENGINE_VER} ..."
-"$ENGINE_VENV/bin/pip" install \
-    --index-url "$PKG_INDEX_URL" \
-    --extra-index-url https://pypi.org/simple/ \
-    "${ENGINE_PKG}==${ENGINE_VER}" \
-    --upgrade -q \
-    && success "Installed: ${ENGINE_PKG}==${ENGINE_VER}" \
-    || { error "Engine package install failed"; ERRORS+=("Engine install failed"); }
+[[ -d "$ENGINE_DIR" ]] \
+    && success "Engine found: ${ENGINE_DIR}" \
+    || warn "Engine directory not found at ${ENGINE_DIR} — check package structure"
 
-ENGINE_SITE=$(find "$ENGINE_VENV/lib" -type d -name "site-packages" | head -1)
-info "Installed to: ${ENGINE_SITE}"
-
-# ── DB schema + migrations ────────────────────────────────────────────────────
+# ── Step 13: DB schema + migrations ──────────────────────────────────────────
 step_header "DATABASE SCHEMA & MIGRATIONS"
 
 if [[ -f "$BUNDLE_DIR/db/init.sql" ]]; then
+    info "Applying init.sql ..."
     PGPASSWORD="$CORR_DB_PASS" psql -h 127.0.0.1 -p 5433 \
         -U corruser -d correlation \
         -f "$BUNDLE_DIR/db/init.sql" -v ON_ERROR_STOP=0 -q 2>/dev/null || true
@@ -536,16 +546,19 @@ fi
 if [[ -d "$BUNDLE_DIR/db/migrations" ]]; then
     for sql in "$BUNDLE_DIR/db/migrations/"*.sql; do
         [[ -f "$sql" ]] || continue
+        info "Migration: $(basename $sql) ..."
         PGPASSWORD="$CORR_DB_PASS" psql -h 127.0.0.1 -p 5433 \
             -U corruser -d correlation \
             -f "$sql" -v ON_ERROR_STOP=0 -q 2>/dev/null \
-            && success "Migration: $(basename $sql)" \
+            && success "$(basename $sql) applied" \
             || warn    "$(basename $sql) had warnings (may already be applied)"
     done
 fi
 
-# ── Systemd services ──────────────────────────────────────────────────────────
+# ── Step 14: Systemd services ─────────────────────────────────────────────────
 step_header "SYSTEMD SERVICES"
+
+UVICORN_BIN=$(which uvicorn 2>/dev/null || echo "${PYTHON_BIN} -m uvicorn")
 
 cat > /etc/systemd/system/cycentra-backend.service << UNITEOF
 [Unit]
@@ -555,9 +568,9 @@ After=network.target postgresql.service redis-server.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=${FLASK_SITE}
+WorkingDirectory=${SITE_PKG}
 EnvironmentFile=/opt/cycentra/.env
-ExecStart=${FLASK_VENV}/bin/python3 ${FLASK_SITE}/app.py
+ExecStart=${PYTHON_BIN} ${FLASK_APP}
 Restart=always
 RestartSec=5
 StandardOutput=append:/opt/cycentra/flask.log
@@ -576,9 +589,9 @@ Wants=postgresql.service redis-server.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=${ENGINE_SITE}
+WorkingDirectory=${ENGINE_DIR}
 EnvironmentFile=/opt/cycentra/cysiemstack.env
-ExecStart=${ENGINE_VENV}/bin/uvicorn main:app --host 127.0.0.1 --port 8100 --workers 1 --log-level info
+ExecStart=${UVICORN_BIN} main:app --host 127.0.0.1 --port 8100 --workers 1 --log-level info
 Restart=always
 RestartSec=5
 StandardOutput=append:/opt/cycentra/engine.log
@@ -591,7 +604,7 @@ UNITEOF
 systemctl daemon-reload
 systemctl enable cycentra-backend cysiemstack-engine
 
-# Restart Flask
+# Start Flask backend
 pkill -f "python3.*app.py" 2>/dev/null || true
 sleep 1
 systemctl restart cycentra-backend
@@ -601,7 +614,7 @@ curl -s --max-time 5 http://127.0.0.1:5252/health 2>/dev/null | grep -q "ok" \
     || { warn "Flask not responding — check: journalctl -u cycentra-backend -n 30"; \
          ERRORS+=("Flask unhealthy"); }
 
-# Restart engine
+# Start correlation engine
 systemctl restart cysiemstack-engine
 ENGINE_UP=false
 for i in $(seq 1 12); do
@@ -613,19 +626,23 @@ done
     { warn "Engine timed out — check: journalctl -u cysiemstack-engine -n 30"; \
       ERRORS+=("Engine not responding"); }
 
-# ── nginx + SSL (full install only) ──────────────────────────────────────────
+# ── Step 15: nginx vhosts (full install only) ─────────────────────────────────
 if [[ "$MODE" == "full" ]]; then
 
-    step_header "NGINX & SSL"
+    step_header "NGINX VHOST CONFIGURATION"
 
     SSL_CONF="/etc/nginx/sites-available/cycentra-modules"
     SSL_CONF_BACKUP="${SSL_CONF}.ssl-pending"
 
     cat > "$SSL_CONF" << NGINXEOF
-# CyCentra 360 nginx — ${BASE_DOMAIN} — v7.0
+# CyCentra 360 nginx — generated by setup wizard v7.1 — ${BASE_DOMAIN}
 
-map \$http_upgrade \$connection_upgrade { default upgrade; '' close; }
+map \$http_upgrade \$connection_upgrade {
+    default upgrade;
+    ''      close;
+}
 
+# ── Portal ────────────────────────────────────────────────────────────────────
 server { listen 80; server_name cy360.${BASE_DOMAIN}; return 301 https://\$host\$request_uri; }
 server {
     listen 443 ssl http2; server_name cy360.${BASE_DOMAIN};
@@ -639,18 +656,21 @@ server {
     location /         { try_files \$uri \$uri/ /index.html; }
     location /assets/  { expires 1y; add_header Cache-Control "public, immutable"; }
     location = /index.html { add_header Cache-Control "no-cache, no-store, must-revalidate"; }
-    location /api/  { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; proxy_read_timeout 180s; }
-    location /auth/ { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; }
-    location /oidc/ { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; }
+    location /api/  { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; proxy_read_timeout 180s; }
+    location /auth/ { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; }
+    location /oidc/ { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; }
     location /cysoar/ {
         proxy_pass http://127.0.0.1:1880/;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection \$connection_upgrade;
         proxy_set_header Host \$host;
+        proxy_read_timeout 120s;
         proxy_buffering off;
     }
 }
+
+# ── Backend / OIDC IdP ────────────────────────────────────────────────────────
 server { listen 80; server_name cyscan.${BASE_DOMAIN}; return 301 https://\$host\$request_uri; }
 server {
     listen 443 ssl http2; server_name cyscan.${BASE_DOMAIN};
@@ -661,10 +681,10 @@ server {
     add_header Strict-Transport-Security "max-age=31536000" always;
     set \$cors_origin "";
     if (\$http_origin ~* "^https://(cy360|cysiem|cyiris|cysoar)\.${BASE_DOMAIN}\$") { set \$cors_origin \$http_origin; }
-    add_header Access-Control-Allow-Origin \$cors_origin always;
+    add_header Access-Control-Allow-Origin      \$cors_origin always;
     add_header Access-Control-Allow-Credentials "true" always;
-    add_header Access-Control-Allow-Methods "GET, POST, DELETE, OPTIONS" always;
-    add_header Access-Control-Allow-Headers "Content-Type, Authorization, X-CyCentra-AdminKey" always;
+    add_header Access-Control-Allow-Methods     "GET, POST, DELETE, OPTIONS" always;
+    add_header Access-Control-Allow-Headers     "Content-Type, Authorization, X-CyCentra-AdminKey" always;
     if (\$request_method = OPTIONS) { return 204; }
     location / {
         proxy_pass http://127.0.0.1:5252;
@@ -675,6 +695,8 @@ server {
         proxy_read_timeout 300;
     }
 }
+
+# ── CySIEM / Wazuh Dashboard ──────────────────────────────────────────────────
 server { listen 80; server_name cysiem.${BASE_DOMAIN}; return 301 https://\$host\$request_uri; }
 server {
     listen 443 ssl http2; server_name cysiem.${BASE_DOMAIN};
@@ -692,10 +714,13 @@ server {
         proxy_set_header Connection \$connection_upgrade;
         proxy_set_header Host \$host;
         proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 120;
         proxy_buffering off;
         proxy_cookie_flags ~ samesite=none secure;
     }
 }
+
+# ── CyIRIS / DFIR-IRIS ────────────────────────────────────────────────────────
 server { listen 80; server_name cyiris.${BASE_DOMAIN}; return 301 https://\$host\$request_uri; }
 server {
     listen 443 ssl http2; server_name cyiris.${BASE_DOMAIN};
@@ -713,8 +738,11 @@ server {
         proxy_pass http://127.0.0.1:4433;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-Proto https;
         proxy_read_timeout 300;
+        proxy_buffer_size 128k;
+        proxy_buffers 4 256k;
         proxy_cookie_flags ~ samesite=none secure;
     }
 }
@@ -722,14 +750,23 @@ NGINXEOF
 
     cp "$SSL_CONF" "$SSL_CONF_BACKUP"
 
-    # HTTP stub for certbot
+fi  # end full nginx block
+
+# ── Step 16: SSL certificates (full install only) ─────────────────────────────
+if [[ "$MODE" == "full" ]]; then
+
+    step_header "SSL CERTIFICATES"
+
+    # HTTP-only stub so nginx starts for ACME challenge
     cat > "$SSL_CONF" << 'STUBEOF'
 server {
-    listen 80; server_name _;
+    listen 80;
+    server_name _;
     location /.well-known/acme-challenge/ { root /var/www/html; }
-    location / { return 200 "setup"; add_header Content-Type text/plain; }
+    location / { return 200 "setup-in-progress"; add_header Content-Type text/plain; }
 }
 STUBEOF
+
     mkdir -p /var/www/html
     ln -sf /etc/nginx/sites-available/cycentra-modules \
            /etc/nginx/sites-enabled/cycentra-modules 2>/dev/null || true
@@ -739,104 +776,148 @@ STUBEOF
              success "nginx started (HTTP stub for certbot)"; } \
         || { error "nginx config invalid"; ERRORS+=("nginx failed"); }
 
-    [[ ! -f /etc/letsencrypt/options-ssl-nginx.conf ]] && \
+    if [[ ! -f /etc/letsencrypt/options-ssl-nginx.conf ]]; then
         curl -s https://raw.githubusercontent.com/certbot/certbot/master/certbot-nginx/certbot_nginx/_internal/tls_configs/options-ssl-nginx.conf \
-             -o /etc/letsencrypt/options-ssl-nginx.conf 2>/dev/null || true
+            -o /etc/letsencrypt/options-ssl-nginx.conf 2>/dev/null || true
+    fi
 
-    [[ ! -f /etc/letsencrypt/ssl-dhparams.pem ]] && {
+    if [[ ! -f /etc/letsencrypt/ssl-dhparams.pem ]]; then
+        info "Generating ssl-dhparams.pem in background (~30s) ..."
         openssl dhparam -out /etc/letsencrypt/ssl-dhparams.pem 2048 2>/dev/null &
         DHPARAM_PID=$!
-    }
+    fi
 
     certbot certonly --webroot -w /var/www/html --non-interactive --agree-tos \
         -m "$CLIENT_EMAIL" -d cy360.${BASE_DOMAIN} -d cyscan.${BASE_DOMAIN} 2>/dev/null \
-        && success "SSL: cy360, cyscan" || warn "Certbot failed — DNS may not be ready"
+        && success "SSL cert obtained (cy360, cyscan)" \
+        || warn "Certbot failed for base domains — DNS may not be ready yet"
 
-    for sub in cysiem cyiris cysoar; do
-        certbot certonly --webroot -w /var/www/html --non-interactive --agree-tos \
-            -m "$CLIENT_EMAIL" -d ${sub}.${BASE_DOMAIN} 2>/dev/null \
-            && success "SSL: ${sub}" || warn "Certbot failed for ${sub}"
-    done
+    certbot certonly --webroot -w /var/www/html --non-interactive --agree-tos \
+        -m "$CLIENT_EMAIL" -d cysiem.${BASE_DOMAIN} 2>/dev/null \
+        && success "CySIEM SSL cert obtained" || warn "Certbot failed for cysiem"
+
+    certbot certonly --webroot -w /var/www/html --non-interactive --agree-tos \
+        -m "$CLIENT_EMAIL" -d cyiris.${BASE_DOMAIN} 2>/dev/null \
+        && success "CyIRIS SSL cert obtained" || warn "Certbot failed for cyiris"
+
+    certbot certonly --webroot -w /var/www/html --non-interactive --agree-tos \
+        -m "$CLIENT_EMAIL" -d cysoar.${BASE_DOMAIN} 2>/dev/null \
+        && success "CySOAR SSL cert obtained" || warn "Certbot failed for cysoar"
 
     [[ -n "${DHPARAM_PID:-}" ]] && wait "$DHPARAM_PID" 2>/dev/null || true
+
+    # Restore full SSL nginx config now that certs exist
     cp "$SSL_CONF_BACKUP" "$SSL_CONF"
     nginx -t 2>/dev/null \
         && systemctl reload nginx && success "nginx reloaded with full SSL config" \
-        || { warn "nginx SSL pending — re-run after DNS resolves"; ERRORS+=("nginx SSL pending"); }
+        || { warn "nginx SSL config pending — re-run after DNS resolves"; \
+             ERRORS+=("nginx SSL pending"); }
 
-fi  # end full nginx/SSL block
+fi  # end SSL block
 
-# ── Wazuh (full install only) ─────────────────────────────────────────────────
+# ── Step 17: Wazuh install (full install only) ────────────────────────────────
 if [[ "$MODE" == "full" ]]; then
 
-    step_header "WAZUH / CySIEM"
+    step_header "WAZUH / CySIEM INSTALLATION"
+
     if dpkg -l 2>/dev/null | grep -q wazuh-manager; then
-        success "Wazuh already installed — ensuring services up"
+        success "Wazuh already installed — ensuring services are running"
         systemctl start wazuh-manager wazuh-indexer wazuh-dashboard 2>/dev/null || true
     else
-        info "Running Wazuh all-in-one installer (5–10 min) ..."
-        cd ~ && curl -sO https://packages.wazuh.com/4.14/wazuh-install.sh
-        bash wazuh-install.sh -a && success "Wazuh installed" && cd ~
+        info "Running Wazuh all-in-one installer (this takes 5–10 minutes) ..."
+        cd ~
+        curl -sO https://packages.wazuh.com/4.14/wazuh-install.sh
+        bash wazuh-install.sh -a
+        success "Wazuh installed"
+        cd ~
     fi
 
-    # Wazuh rules and config from bundle
+fi  # end Wazuh install block
+
+# ── Step 18: Wazuh rules, decoders, ossec.conf ────────────────────────────────
+if [[ -d "/var/ossec" ]]; then
+
+    step_header "WAZUH RULES & CONFIG"
+
     CONFIG_SRC="/tmp/cycentra-config"
-    if [[ -d "$CONFIG_SRC/rules" ]] && [[ -d /var/ossec ]]; then
-        cp "$CONFIG_SRC/rules/"*.xml    /var/ossec/etc/rules/    2>/dev/null || true
+    [[ -d "$CONFIG_SRC/rules" ]] && \
+        cp "$CONFIG_SRC/rules/"*.xml /var/ossec/etc/rules/ 2>/dev/null || true
+    [[ -d "$CONFIG_SRC/decoders" ]] && \
         cp "$CONFIG_SRC/decoders/"*.xml /var/ossec/etc/decoders/ 2>/dev/null || true
-        if [[ -f "$CONFIG_SRC/integrations/custom-llm.py" ]]; then
-            cp "$CONFIG_SRC/integrations/custom-llm.py" /var/ossec/integrations/
-            chmod 750 /var/ossec/integrations/custom-llm.py
-            chown root:wazuh /var/ossec/integrations/custom-llm.py
-        fi
-        [[ -f "$CONFIG_SRC/conf/ossec.conf" ]] && {
-            cp "$CONFIG_SRC/conf/ossec.conf" /var/ossec/etc/ossec.conf
-            chmod 660 /var/ossec/etc/ossec.conf
-            chown root:wazuh /var/ossec/etc/ossec.conf
-        }
-        /var/ossec/bin/wazuh-analysisd -t 2>/dev/null \
-            && success "Wazuh rules valid" \
-            || warn "wazuh-analysisd -t reported errors"
-        systemctl restart wazuh-manager && success "wazuh-manager restarted"
+
+    if [[ -f "$CONFIG_SRC/integrations/custom-llm.py" ]]; then
+        cp "$CONFIG_SRC/integrations/custom-llm.py" /var/ossec/integrations/
+        chmod 750 /var/ossec/integrations/custom-llm.py
+        chown root:wazuh /var/ossec/integrations/custom-llm.py
+        success "custom-llm.py deployed"
     fi
 
-    # Wazuh Dashboard bind to loopback
-    WAZUH_YML="/etc/wazuh-dashboard/opensearch_dashboards.yml"
-    if [[ -f "$WAZUH_YML" ]]; then
-        cp "$WAZUH_YML" "${WAZUH_YML}.bak-$(date +%Y%m%d)" 2>/dev/null || true
-        grep -q "^server.host:" "$WAZUH_YML" \
-            && sed -i 's|^server.host:.*|server.host: "127.0.0.1"|' "$WAZUH_YML" \
-            || echo 'server.host: "127.0.0.1"' >> "$WAZUH_YML"
-        grep -q "^server.port:" "$WAZUH_YML" \
-            && sed -i 's|^server.port:.*|server.port: 5601|' "$WAZUH_YML" \
-            || echo 'server.port: 5601' >> "$WAZUH_YML"
-        systemctl restart wazuh-dashboard 2>/dev/null || true
-        success "Wazuh Dashboard: 127.0.0.1:5601"
+    if [[ -f "$CONFIG_SRC/conf/ossec.conf" ]]; then
+        cp "$CONFIG_SRC/conf/ossec.conf" /var/ossec/etc/ossec.conf
+        chmod 660 /var/ossec/etc/ossec.conf
+        chown root:wazuh /var/ossec/etc/ossec.conf
+        success "ossec.conf deployed"
     fi
 
-fi  # end Wazuh block
+    /var/ossec/bin/wazuh-analysisd -t 2>/dev/null \
+        && success "Wazuh rules valid" \
+        || { warn "wazuh-analysisd -t reported errors"; ERRORS+=("Wazuh rules invalid"); }
 
-# ── Branding ──────────────────────────────────────────────────────────────────
-step_header "PLATFORM BRANDING"
+    systemctl restart wazuh-manager && success "wazuh-manager restarted"
+
+fi  # end Wazuh config block
+
+# ── Step 19: Wazuh Dashboard configuration ────────────────────────────────────
+WAZUH_YML="/etc/wazuh-dashboard/opensearch_dashboards.yml"
+if [[ -f "$WAZUH_YML" ]]; then
+
+    step_header "WAZUH DASHBOARD CONFIGURATION"
+
+    cp "$WAZUH_YML" "${WAZUH_YML}.backup-$(date +%Y%m%d)" 2>/dev/null || true
+    grep -q "^server.host:" "$WAZUH_YML" \
+        && sed -i 's|^server.host:.*|server.host: "127.0.0.1"|' "$WAZUH_YML" \
+        || echo 'server.host: "127.0.0.1"' >> "$WAZUH_YML"
+    grep -q "^server.port:" "$WAZUH_YML" \
+        && sed -i 's|^server.port:.*|server.port: 5601|' "$WAZUH_YML" \
+        || echo 'server.port: 5601' >> "$WAZUH_YML"
+    systemctl restart wazuh-dashboard 2>/dev/null || true
+    success "Wazuh Dashboard: host=127.0.0.1, port=5601"
+
+fi
+
+# ── Step 20: Platform branding (whitelabel) ───────────────────────────────────
+step_header "PLATFORM BRANDING (WHITELABEL)"
+
 for script in apply-favicons apply-logos enable-multitenancy apply-custom-branding apply-plugin-branding; do
     SPATH="$BRANDING_DIR/scripts/${script}.sh"
-    [[ -f "$SPATH" ]] && bash "$SPATH" && success "${script}.sh" || info "${script}.sh not in bundle"
+    if [[ -f "$SPATH" ]]; then
+        bash "$SPATH" \
+            && success "${script}.sh applied" \
+            || warn "${script}.sh returned non-zero — check output above"
+    else
+        info "${script}.sh not in bundle — skipping"
+    fi
 done
 
-# ── Inject domain into portal + RBAC + config.json ───────────────────────────
-step_header "PORTAL CONFIG & RBAC"
+# ── Step 21: Inject domain into portal index.html ────────────────────────────
+step_header "PORTAL DOMAIN INJECTION"
 
 PORTAL_INDEX="$PORTAL_DIR/index.html"
 if [[ -f "$PORTAL_INDEX" ]]; then
     sed -i '/window\.__CYCENTRA_DOMAIN__/d' "$PORTAL_INDEX"
     sed -i '/window\.__CYCENTRA_CLIENT__/d'  "$PORTAL_INDEX"
     sed -i "s|</head>|<script>window.__CYCENTRA_DOMAIN__='${BASE_DOMAIN}';window.__CYCENTRA_CLIENT__='${CLIENT_NAME}';</script></head>|" "$PORTAL_INDEX"
-    success "Domain injected: ${BASE_DOMAIN}"
+    success "Domain injected into portal → ${BASE_DOMAIN}"
 else
-    warn "index.html not found — re-run after portal deploys"
+    warn "portal/index.html not found — re-run after portal is deployed"
+    ERRORS+=("Portal index.html missing")
 fi
 
+# ── Step 22: RBAC + config.json ───────────────────────────────────────────────
 if [[ "$MODE" == "full" ]]; then
+
+    step_header "RBAC & CONFIG"
+
     cat > /opt/cycentra/rbac.json << RBACEOF
 { "${CLIENT_EMAIL}": { "role": "admin" } }
 RBACEOF
@@ -851,20 +932,27 @@ RBACEOF
   "generated":   "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 CFGJSON
+
+    success "RBAC and config.json written"
+
 fi
 
 mkdir -p /var/log/cycentra && touch /var/log/cycentra/auth.log
 chmod 644 /var/log/cycentra/auth.log
 
-# ── Cron ──────────────────────────────────────────────────────────────────────
-WORDLIST=$(find "$FLASK_SITE" -name "update_wordlist.py" 2>/dev/null | head -1)
+# ── Step 23: Cron jobs ────────────────────────────────────────────────────────
+step_header "CRON JOBS"
+
+WORDLIST=$(find "$SITE_PKG" -name "update_wordlist.py" 2>/dev/null | head -1 || true)
 if [[ -n "$WORDLIST" ]]; then
     ( crontab -l 2>/dev/null | grep -v "update_wordlist"
-      echo "0 0 * * * $FLASK_VENV/bin/python3 $WORDLIST >> /opt/cycentra/cron.log 2>&1" ) | crontab -
-    success "Cron: wordlist update registered"
+      echo "0 0 * * * ${PYTHON_BIN} ${WORDLIST} >> /opt/cycentra/cron.log 2>&1" ) | crontab -
+    success "Cron: ASM wordlist update registered (daily midnight)"
+else
+    info "update_wordlist.py not found — cron job skipped"
 fi
 
-# ── Health checks ─────────────────────────────────────────────────────────────
+# ── Step 24: Health checks ────────────────────────────────────────────────────
 step_header "HEALTH CHECKS"
 
 chk() {
@@ -875,33 +963,37 @@ chk() {
         || warn    "${label}: HTTP ${code} — ${url}"
 }
 
-echo ""; info "── Ports ──"
-_port_up 5252 && success "Flask   :5252" || warn "Flask   :5252 DOWN"
-_port_up 8100 && success "Engine  :8100" || warn "Engine  :8100 DOWN"
-_port_up 5433 && success "PG      :5433" || warn "PG      :5433 DOWN"
-_port_up 6379 && success "Redis   :6379" || warn "Redis   :6379 DOWN"
-_port_up 5601 && success "Wazuh   :5601" || warn "Wazuh   :5601 (install via portal)"
-_port_up 4433 && success "CyIRIS  :4433" || warn "CyIRIS  :4433 (install via portal)"
+echo ""; info "── Internal ports ──"
+_port_up 5252 && success "Flask backend   :5252 UP" || warn "Flask backend   :5252 DOWN"
+_port_up 8100 && success "SIEM engine     :8100 UP" || warn "SIEM engine     :8100 DOWN"
+_port_up 5433 && success "PostgreSQL      :5433 UP" || warn "PostgreSQL      :5433 DOWN"
+_port_up 6379 && success "Redis           :6379 UP" || warn "Redis           :6379 DOWN"
+_port_up 5601 && success "Wazuh Dashboard :5601 UP" || warn "Wazuh Dashboard :5601 DOWN (install via portal)"
+_port_up 4433 && success "CyIRIS          :4433 UP" || warn "CyIRIS          :4433 DOWN (install via portal)"
+_port_up 1880 && success "CySOAR          :1880 UP" || warn "CySOAR          :1880 DOWN (install via portal)"
 
-echo ""; info "── Services ──"
+echo ""; info "── Systemd services ──"
 for svc in cycentra-backend cysiemstack-engine postgresql redis-server nginx; do
     systemctl is-active "$svc" >/dev/null 2>&1 \
-        && success "$svc active" || warn "$svc inactive"
+        && success "${svc} active" \
+        || warn    "${svc} inactive"
 done
 
-echo ""; info "── HTTP ──"
+echo ""; info "── Internal HTTP ──"
 chk "Flask /health"  "http://127.0.0.1:5252/health"
 chk "Engine /health" "http://127.0.0.1:8100/health"
 
 if [[ "$MODE" == "full" ]]; then
-    echo ""; info "── HTTPS ──"
+    echo ""; info "── External HTTPS ──"
     chk "Portal"  "https://cy360.${BASE_DOMAIN}"
     chk "Backend" "https://cyscan.${BASE_DOMAIN}/health"
     chk "CySIEM"  "https://cysiem.${BASE_DOMAIN}"
+    chk "CyIRIS"  "https://cyiris.${BASE_DOMAIN}/api/v2/ping"
 fi
 
-# ── Cleanup ───────────────────────────────────────────────────────────────────
+# ── Step 25: Cleanup ──────────────────────────────────────────────────────────
 step_header "CLEANUP"
+
 rm -rf "$BUNDLE_DIR" /tmp/cycentra-release.tar.gz /tmp/cycentra-config
 rm -f ~/wazuh-install.sh ~/wazuh-install-files* 2>/dev/null || true
 success "Staging files removed"
@@ -910,29 +1002,90 @@ success "Staging files removed"
 echo ""; divider
 echo -e "\n  ${BOLD}${WHITE}CyCentra 360 — ${MODE^^} Complete${NC}\n"
 divider; echo ""
-echo -e "  ${CYAN}Version  ${NC}  ${BUNDLE_VERSION}"
-[[ "$MODE" == "full" ]] && {
-echo -e "  ${CYAN}Portal   ${NC}  https://cy360.${BASE_DOMAIN}"
-echo -e "  ${CYAN}Backend  ${NC}  https://cyscan.${BASE_DOMAIN}"
-echo -e "  ${CYAN}CySIEM   ${NC}  https://cysiem.${BASE_DOMAIN}"
-echo -e "  ${CYAN}CyIRIS   ${NC}  https://cyiris.${BASE_DOMAIN}"
-}
+echo -e "  ${CYAN}Version        ${NC}  ${BUNDLE_VERSION}"
+if [[ "$MODE" == "full" ]]; then
+    echo -e "  ${CYAN}Portal         ${NC}  https://cy360.${BASE_DOMAIN}"
+    echo -e "  ${CYAN}Backend API    ${NC}  https://cyscan.${BASE_DOMAIN}"
+    echo -e "  ${CYAN}CySIEM         ${NC}  https://cysiem.${BASE_DOMAIN}"
+    echo -e "  ${CYAN}CyIRIS         ${NC}  https://cyiris.${BASE_DOMAIN}"
+    echo -e "  ${CYAN}CySOAR         ${NC}  https://cysoar.${BASE_DOMAIN}"
+fi
 echo ""
 echo -e "  ${BOLD}Flask service  :${NC}  systemctl status cycentra-backend"
 echo -e "  ${BOLD}Engine service :${NC}  systemctl status cysiemstack-engine"
 echo -e "  ${BOLD}Flask log      :${NC}  /opt/cycentra/flask.log"
 echo -e "  ${BOLD}Engine log     :${NC}  /opt/cycentra/engine.log"
+echo -e "  ${BOLD}Main env       :${NC}  /opt/cycentra/.env"
+echo -e "  ${BOLD}SIEM env       :${NC}  /opt/cycentra/cysiemstack.env"
+echo -e "  ${BOLD}nginx config   :${NC}  /etc/nginx/sites-available/cycentra-modules"
 echo ""
+
+if [[ "$MODE" == "full" ]]; then
+    echo -e "  ${BOLD}Admin API key  :${NC}  ${WHITE}${ADMIN_API_KEY}${NC}"
+    echo -e "  ${BOLD}CyIRIS secret  :${NC}  ${WHITE}${CYIRIS_OIDC_SECRET}${NC}"
+    echo -e "  ${BOLD}CySOAR secret  :${NC}  ${WHITE}${CYSOAR_OIDC_SECRET}${NC}"
+    echo ""
+fi
+
 echo -e "  ${BOLD}${YELLOW}Next steps:${NC}"
 echo -e "  ${DIM}1. Set WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env${NC}"
 echo -e "  ${DIM}   then: systemctl restart cysiemstack-engine${NC}"
-echo -e "  ${DIM}2. Install CyIRIS/CySOAR via portal${NC}"
+echo -e "  ${DIM}2. Install CyIRIS / CySOAR via portal${NC}"
 echo -e "  ${DIM}3. To update: sudo bash cycentra-setup.sh --update${NC}"
 echo ""
 
+# Save summary file
+cat > /root/cycentra-setup-summary.txt << SUMEOF
+CyCentra 360 Setup Summary v7.1
+Generated : $(date)
+Version   : ${BUNDLE_VERSION}
+Mode      : ${MODE}
+═══════════════════════════════════
+Client : ${CLIENT_NAME}
+Domain : ${BASE_DOMAIN}
+Email  : ${CLIENT_EMAIL:-n/a}
+
+URLs:
+  Portal:   https://cy360.${BASE_DOMAIN}
+  Backend:  https://cyscan.${BASE_DOMAIN}
+  CySIEM:   https://cysiem.${BASE_DOMAIN}
+  CyIRIS:   https://cyiris.${BASE_DOMAIN}
+  CySOAR:   https://cysoar.${BASE_DOMAIN}
+
+Services:
+  Flask backend  : systemctl status cycentra-backend
+  SIEM engine    : systemctl status cysiemstack-engine
+  PostgreSQL     : systemctl status postgresql   (port 5433)
+  Redis          : systemctl status redis-server (port 6379)
+  nginx          : systemctl status nginx
+  Wazuh          : systemctl status wazuh-manager
+
+Paths:
+  Flask log    : /opt/cycentra/flask.log
+  Engine log   : /opt/cycentra/engine.log
+  Main env     : /opt/cycentra/.env
+  SIEM env     : /opt/cycentra/cysiemstack.env
+  RBAC         : /opt/cycentra/rbac.json
+  Portal files : /var/www/cycentra360
+  nginx config : /etc/nginx/sites-available/cycentra-modules
+  Branding     : /opt/cycentra-branding
+
+Next steps:
+  1. Set WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env
+     then: systemctl restart cysiemstack-engine
+  2. Install CyIRIS/CySOAR via portal
+  3. Update: sudo bash cycentra-setup.sh --update
+SUMEOF
+
+success "Summary saved → /root/cycentra-setup-summary.txt"
+
 if [[ ${#ERRORS[@]} -gt 0 ]]; then
+    echo ""
     warn "${#ERRORS[@]} item(s) need attention:"
     for e in "${ERRORS[@]}"; do echo -e "  ${YELLOW}⚠${NC} $e"; done
 fi
 
-echo ""; divider; echo ""
+echo ""; divider
+echo -e "  ${DIM}Re-run anytime: sudo bash cycentra-setup.sh${NC}"
+echo -e "  ${DIM}Update only:    sudo bash cycentra-setup.sh --update${NC}"
+echo ""
