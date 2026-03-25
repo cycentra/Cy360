@@ -233,13 +233,20 @@ fi
 # ── Step 4: Download release bundle ──────────────────────────────────────────
 step_header "DOWNLOAD RELEASE BUNDLE"
 
-CYCENTRA_VERSION="${CYCENTRA_VERSION:-latest}"
-if [[ "$CYCENTRA_VERSION" == "latest" ]]; then
-    _BASE="https://github.com/cycentra/cycentra360/releases/latest/download"
-else
-    _BASE="https://github.com/cycentra/cycentra360/releases/download/${CYCENTRA_VERSION}"
+CS_TOKEN="${CS_TOKEN:-}"
+if [[ -z "$CS_TOKEN" ]]; then
+    error "CS_TOKEN is not set. Run with: CS_TOKEN=your_token sudo -E bash cycentra-setup.sh"
+    exit 1
 fi
-CYCENTRA_RELEASE_URL="${CYCENTRA_RELEASE_URL:-${_BASE}/cycentra-release.tar.gz}"
+
+CYCENTRA_VERSION="${CYCENTRA_VERSION:-latest}"
+CS_BASE="https://dl.cloudsmith.io/${CS_TOKEN}/cycentra/cycentra360/raw/versions"
+
+if [[ "$CYCENTRA_VERSION" == "latest" ]]; then
+    CYCENTRA_RELEASE_URL="${CYCENTRA_RELEASE_URL:-${CS_BASE}/latest/cycentra-release.tar.gz}"
+else
+    CYCENTRA_RELEASE_URL="${CYCENTRA_RELEASE_URL:-${CS_BASE}/${CYCENTRA_VERSION}/cycentra-release.tar.gz}"
+fi
 
 BUNDLE_DIR="/tmp/cycentra-release"
 rm -rf "$BUNDLE_DIR" /tmp/cycentra-release.tar.gz
@@ -248,7 +255,7 @@ info "Downloading: ${CYCENTRA_RELEASE_URL}"
 if [[ "$CYCENTRA_RELEASE_URL" == http* ]]; then
     curl -fsSL "$CYCENTRA_RELEASE_URL" -o /tmp/cycentra-release.tar.gz \
         && success "Bundle downloaded" \
-        || { error "Download failed. Check CYCENTRA_RELEASE_URL."; exit 1; }
+        || { error "Download failed. Check CS_TOKEN and version."; exit 1; }
     tar -xzf /tmp/cycentra-release.tar.gz -C /tmp/
 else
     tar -xzf "$CYCENTRA_RELEASE_URL" -C /tmp/
@@ -264,7 +271,6 @@ INDEX_URL=$(jq    -r '.packages.cycentra_backend.index_url'   "$MANIFEST")
 
 success "Bundle version  : ${BUNDLE_VERSION}"
 info    "Package         : ${PKG_NAME}==${PKG_VER}"
-
 # ── Step 5–9: Interactive config (full install only) ─────────────────────────
 if [[ "$MODE" == "full" ]]; then
 

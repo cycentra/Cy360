@@ -164,7 +164,7 @@ jobs:
 
             Replace `ENTITLEMENT_TOKEN` with the token provided during onboarding:
 
-                curl -L "https://dl.cloudsmith.io/basic/ENTITLEMENT_TOKEN/cycentra/cycentra360/raw/files/cycentra-setup.sh" -o cycentra-setup.sh
+                curl -L "https://dl.cloudsmith.io/ENTITLEMENT_TOKEN/cycentra/cycentra360/raw/versions/VERSION/cycentra-setup.sh" -o cycentra-setup.sh
                 sudo bash cycentra-setup.sh
 
             ### Update existing server
