@@ -176,4 +176,4 @@ jobs:
             cycentra-release.tar.gz
             cycentra-setup.sh
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}git add .
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
