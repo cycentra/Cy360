@@ -230,7 +230,46 @@ if [[ "$MODE" == "update" ]]; then
     fi
 fi
 
-# ── Step 4: Download release bundle ──────────────────────────────────────────
+# ── Step 4: Wazuh install (full install only) ────────────────────────────────
+if [[ "$MODE" == "full" ]]; then
+
+    step_header "WAZUH / CySIEM INSTALLATION"
+
+    if dpkg -l 2>/dev/null | grep -q wazuh-manager; then
+        success "Wazuh already installed — ensuring services are running"
+        systemctl start wazuh-manager wazuh-indexer wazuh-dashboard 2>/dev/null || true
+    else
+        info "Running Wazuh all-in-one installer (this takes 5–10 minutes) ..."
+        cd ~
+        curl -sO https://packages.wazuh.com/4.14/wazuh-install.sh
+        bash wazuh-install.sh -a
+        success "Wazuh installed"
+        cd ~
+    fi
+
+fi  # end Wazuh install block
+
+
+# ── Step 4.1: Wazuh Dashboard configuration ────────────────────────────────────
+WAZUH_YML="/etc/wazuh-dashboard/opensearch_dashboards.yml"
+if [[ -f "$WAZUH_YML" ]]; then
+
+    step_header "WAZUH DASHBOARD CONFIGURATION"
+
+    cp "$WAZUH_YML" "${WAZUH_YML}.backup-$(date +%Y%m%d)" 2>/dev/null || true
+    grep -q "^server.host:" "$WAZUH_YML" \
+        && sed -i 's|^server.host:.*|server.host: "127.0.0.1"|' "$WAZUH_YML" \
+        || echo 'server.host: "127.0.0.1"' >> "$WAZUH_YML"
+    grep -q "^server.port:" "$WAZUH_YML" \
+        && sed -i 's|^server.port:.*|server.port: 5601|' "$WAZUH_YML" \
+        || echo 'server.port: 5601' >> "$WAZUH_YML"
+    systemctl restart wazuh-dashboard 2>/dev/null || true
+    success "Wazuh Dashboard: host=127.0.0.1, port=5601"
+
+fi
+
+
+# ── Step 5: Download release bundle ──────────────────────────────────────────
 step_header "DOWNLOAD RELEASE BUNDLE"
 
 CS_TOKEN="${CS_TOKEN:-}"
@@ -271,7 +310,7 @@ INDEX_URL=$(jq    -r '.packages.cycentra_backend.index_url'   "$MANIFEST")
 
 success "Bundle version  : ${BUNDLE_VERSION}"
 info    "Package         : ${PKG_NAME}==${PKG_VER}"
-# ── Step 5–9: Interactive config (full install only) ─────────────────────────
+# ── Step 6-9: Interactive config (full install only) ─────────────────────────
 if [[ "$MODE" == "full" ]]; then
 
     step_header "CLIENT INFORMATION"
@@ -806,10 +845,6 @@ STUBEOF
         -m "$CLIENT_EMAIL" -d cyiris.${BASE_DOMAIN} 2>/dev/null \
         && success "CyIRIS SSL cert obtained" || warn "Certbot failed for cyiris"
 
-    certbot certonly --webroot -w /var/www/html --non-interactive --agree-tos \
-        -m "$CLIENT_EMAIL" -d cysoar.${BASE_DOMAIN} 2>/dev/null \
-        && success "CySOAR SSL cert obtained" || warn "Certbot failed for cysoar"
-
     [[ -n "${DHPARAM_PID:-}" ]] && wait "$DHPARAM_PID" 2>/dev/null || true
 
     # Restore full SSL nginx config now that certs exist
@@ -820,25 +855,6 @@ STUBEOF
              ERRORS+=("nginx SSL pending"); }
 
 fi  # end SSL block
-
-# ── Step 17: Wazuh install (full install only) ────────────────────────────────
-if [[ "$MODE" == "full" ]]; then
-
-    step_header "WAZUH / CySIEM INSTALLATION"
-
-    if dpkg -l 2>/dev/null | grep -q wazuh-manager; then
-        success "Wazuh already installed — ensuring services are running"
-        systemctl start wazuh-manager wazuh-indexer wazuh-dashboard 2>/dev/null || true
-    else
-        info "Running Wazuh all-in-one installer (this takes 5–10 minutes) ..."
-        cd ~
-        curl -sO https://packages.wazuh.com/4.14/wazuh-install.sh
-        bash wazuh-install.sh -a
-        success "Wazuh installed"
-        cd ~
-    fi
-
-fi  # end Wazuh install block
 
 # ── Step 18: Wazuh rules, decoders, ossec.conf ────────────────────────────────
 if [[ -d "/var/ossec" ]]; then
@@ -872,24 +888,6 @@ if [[ -d "/var/ossec" ]]; then
     systemctl restart wazuh-manager && success "wazuh-manager restarted"
 
 fi  # end Wazuh config block
-
-# ── Step 19: Wazuh Dashboard configuration ────────────────────────────────────
-WAZUH_YML="/etc/wazuh-dashboard/opensearch_dashboards.yml"
-if [[ -f "$WAZUH_YML" ]]; then
-
-    step_header "WAZUH DASHBOARD CONFIGURATION"
-
-    cp "$WAZUH_YML" "${WAZUH_YML}.backup-$(date +%Y%m%d)" 2>/dev/null || true
-    grep -q "^server.host:" "$WAZUH_YML" \
-        && sed -i 's|^server.host:.*|server.host: "127.0.0.1"|' "$WAZUH_YML" \
-        || echo 'server.host: "127.0.0.1"' >> "$WAZUH_YML"
-    grep -q "^server.port:" "$WAZUH_YML" \
-        && sed -i 's|^server.port:.*|server.port: 5601|' "$WAZUH_YML" \
-        || echo 'server.port: 5601' >> "$WAZUH_YML"
-    systemctl restart wazuh-dashboard 2>/dev/null || true
-    success "Wazuh Dashboard: host=127.0.0.1, port=5601"
-
-fi
 
 # ── Step 20: Platform branding (whitelabel) ───────────────────────────────────
 step_header "PLATFORM BRANDING (WHITELABEL)"
