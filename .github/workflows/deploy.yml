@@ -23,7 +23,7 @@ jobs:
           path: portal/dist/
           retention-days: 1
 
-  build-wheels:
+  build-wheel:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,18 +36,15 @@ jobs:
         run: |
           cd backend
           python -m build --wheel --outdir ../dist/
-      - name: Build cysiemstack-engine wheel
-        run: |
-          cd backend/cysiemstack/correlation-engine
-          python -m build --wheel --outdir ../../../dist/
+          echo "Wheel: $(ls ../dist/*.whl)"
       - uses: actions/upload-artifact@v4
         with:
-          name: python-wheels
+          name: python-wheel
           path: dist/*.whl
           retention-days: 1
 
   publish:
-    needs: [build-portal, build-wheels]
+    needs: [build-portal, build-wheel]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -62,7 +59,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: python-wheels
+          name: python-wheel
           path: dist/
 
       - uses: actions/setup-python@v5
@@ -83,7 +80,7 @@ jobs:
             echo "is_release=false"                  >> $GITHUB_OUTPUT
           fi
 
-      - name: Publish wheels to Cloudsmith
+      - name: Publish wheel to Cloudsmith
         if: steps.version.outputs.is_release == 'true'
         env:
           CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
@@ -119,8 +116,8 @@ jobs:
 
           INDEX_URL="https://dl.cloudsmith.io/basic/${CS_TOKEN}/cycentra/cycentra360/python/simple/"
 
-          printf '{\n  "version": "%s",\n  "ver_number": "%s",\n  "commit": "%s",\n  "build_number": "%s",\n  "packages": {\n    "backend": {\n      "name": "cycentra-backend",\n      "version": "%s",\n      "index_url": "%s"\n    },\n    "engine": {\n      "name": "cysiemstack-engine",\n      "version": "%s",\n      "index_url": "%s"\n    }\n  }\n}\n' \
-            "$TAG" "$VER" "$SHA" "$BUILD" "$VER" "$INDEX_URL" "$VER" "$INDEX_URL" \
+          printf '{\n  "version": "%s",\n  "ver_number": "%s",\n  "commit": "%s",\n  "build_number": "%s",\n  "packages": {\n    "cycentra_backend": {\n      "name": "cycentra-backend",\n      "version": "%s",\n      "index_url": "%s"\n    }\n  }\n}\n' \
+            "$TAG" "$VER" "$SHA" "$BUILD" "$VER" "$INDEX_URL" \
             > cycentra-release/manifest.json
 
           echo "=== manifest.json ===" && cat cycentra-release/manifest.json
@@ -156,7 +153,7 @@ jobs:
 
                 sudo bash cycentra-setup.sh --update
 
-            **Packages:** cycentra-backend==${{ steps.version.outputs.ver }} and cysiemstack-engine==${{ steps.version.outputs.ver }}
+            **Package:** cycentra-backend==${{ steps.version.outputs.ver }}
           files: |
             cycentra-release.tar.gz
             cycentra-setup.sh
