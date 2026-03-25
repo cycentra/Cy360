@@ -36,7 +36,7 @@ jobs:
         run: |
           cd backend
           python -m build --wheel --outdir ../dist/
-          echo "Wheel: $(ls ../dist/*.whl)"
+          echo "Wheel built: $(ls ../dist/*.whl)"
       - uses: actions/upload-artifact@v4
         with:
           name: python-wheel
@@ -80,17 +80,6 @@ jobs:
             echo "is_release=false"                  >> $GITHUB_OUTPUT
           fi
 
-      - name: Publish wheel to Cloudsmith
-        if: steps.version.outputs.is_release == 'true'
-        env:
-          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
-        run: |
-          pip install cloudsmith-cli -q
-          for wheel in dist/*.whl; do
-            echo "Pushing $wheel ..."
-            cloudsmith push python cycentra/cycentra360 "$wheel" --api-key "$CLOUDSMITH_API_KEY"
-          done
-
       - name: Build customer release bundle
         env:
           CS_TOKEN: ${{ secrets.CLOUDSMITH_ENTITLEMENT_TOKEN }}
@@ -115,17 +104,56 @@ jobs:
           echo "${TAG}" > cycentra-release/VERSION
 
           INDEX_URL="https://dl.cloudsmith.io/basic/${CS_TOKEN}/cycentra/cycentra360/python/simple/"
+          RAW_BASE="https://dl.cloudsmith.io/basic/${CS_TOKEN}/cycentra/cycentra360/raw/names"
 
-          printf '{\n  "version": "%s",\n  "ver_number": "%s",\n  "commit": "%s",\n  "build_number": "%s",\n  "packages": {\n    "cycentra_backend": {\n      "name": "cycentra-backend",\n      "version": "%s",\n      "index_url": "%s"\n    }\n  }\n}\n' \
-            "$TAG" "$VER" "$SHA" "$BUILD" "$VER" "$INDEX_URL" \
+          printf '{\n  "version": "%s",\n  "ver_number": "%s",\n  "commit": "%s",\n  "build_number": "%s",\n  "packages": {\n    "cycentra_backend": {\n      "name": "cycentra-backend",\n      "version": "%s",\n      "index_url": "%s"\n    }\n  },\n  "raw_base": "%s"\n}\n' \
+            "$TAG" "$VER" "$SHA" "$BUILD" "$VER" "$INDEX_URL" "$RAW_BASE" \
             > cycentra-release/manifest.json
 
           echo "=== manifest.json ===" && cat cycentra-release/manifest.json
-          echo "=== Bundle contents ===" && find cycentra-release/ -type f | sort
-          echo "Python source files in bundle: $(find cycentra-release/ -name '*.py' | wc -l)"
-
           tar -czf cycentra-release.tar.gz cycentra-release/
           ls -lh cycentra-release.tar.gz
+
+      - name: Publish Python wheel to Cloudsmith
+        if: steps.version.outputs.is_release == 'true'
+        env:
+          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+        run: |
+          pip install cloudsmith-cli -q
+          for wheel in dist/*.whl; do
+            echo "Pushing wheel: $wheel"
+            cloudsmith push python cycentra/cycentra360 "$wheel" --api-key "$CLOUDSMITH_API_KEY"
+          done
+          echo "Wheel published to Cloudsmith"
+
+      # Upload setup.sh and the full bundle as raw/generic packages to Cloudsmith.
+      # Customers download setup.sh from Cloudsmith — no GitHub auth needed.
+      # The entitlement token in the download URL is the same read-only token
+      # already embedded in manifest.json, so customers need only one token.
+      - name: Publish raw files to Cloudsmith
+        if: steps.version.outputs.is_release == 'true'
+        env:
+          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+        run: |
+          VER=${{ steps.version.outputs.ver }}
+
+          pip install cloudsmith-cli -q
+
+          # Upload setup.sh as a versioned raw package
+          echo "Pushing cycentra-setup.sh ..."
+          cloudsmith push raw cycentra/cycentra360 cycentra-setup.sh \
+            --name "cycentra-setup.sh" \
+            --version "$VER" \
+            --api-key "$CLOUDSMITH_API_KEY"
+
+          # Upload the full bundle as a versioned raw package
+          echo "Pushing cycentra-release.tar.gz ..."
+          cloudsmith push raw cycentra/cycentra360 cycentra-release.tar.gz \
+            --name "cycentra-release.tar.gz" \
+            --version "$VER" \
+            --api-key "$CLOUDSMITH_API_KEY"
+
+          echo "Raw files published to Cloudsmith"
 
       - name: Create GitHub Release
         if: steps.version.outputs.is_release == 'true'
@@ -142,12 +170,15 @@ jobs:
 
             ### Install on a fresh server
 
-                curl -L https://github.com/cycentra/cycentra360/releases/latest/download/cycentra-setup.sh -o cycentra-setup.sh
+            Download and run the setup wizard from Cloudsmith (no GitHub auth required):
+
+                curl -L "https://dl.cloudsmith.io/basic/ENTITLEMENT_TOKEN/cycentra/cycentra360/raw/names/cycentra-setup.sh/versions/${{ steps.version.outputs.ver }}/cycentra-setup.sh" -o cycentra-setup.sh
                 sudo bash cycentra-setup.sh
 
-            ### Pin to this specific version
+            ### Always get latest
 
-                CYCENTRA_VERSION=${{ steps.version.outputs.tag }} sudo bash cycentra-setup.sh
+                curl -L "https://dl.cloudsmith.io/basic/ENTITLEMENT_TOKEN/cycentra/cycentra360/raw/names/cycentra-setup.sh/versions/latest/cycentra-setup.sh" -o cycentra-setup.sh
+                sudo bash cycentra-setup.sh
 
             ### Update an existing server
 
