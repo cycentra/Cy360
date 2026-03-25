@@ -498,7 +498,6 @@ ENVEOF
 # then: systemctl restart cysiemstack-engine
 
 DATABASE_URL=postgresql+asyncpg://corruser:${CORR_DB_PASS}@127.0.0.1:5433/correlation
-POSTGRES_PASSWORD=${CORR_DB_PASS}
 REDIS_URL=redis://127.0.0.1:6379/0
 REDIS_ALERT_KEY=cysiemstack:alerts:raw
 
@@ -556,6 +555,7 @@ pip3 install \
     "${PKG_NAME}==${PKG_VER}" \
     --upgrade \
     --break-system-packages \
+    --ignore-installed \
     -q \
     && success "Installed: ${PKG_NAME}==${PKG_VER}" \
     || { error "Package install failed — check Cloudsmith token in manifest.json"; \

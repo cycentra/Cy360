@@ -11,7 +11,7 @@ dynamic = ["dependencies"]
 
 [tool.setuptools.dynamic]
 # Merges both requirements files — Flask deps + engine deps in one install
-dependencies = {file = ["requirements.txt", "cysiemstack/correlation-engine/requirements.txt"]}
+dependencies = {file = ["requirements.txt", "cysiemstack/correlation_engine/requirements.txt"]}
 
 # Standalone .py files at the root of backend/ (not inside a package directory)
 # app.py is the Flask entry point
