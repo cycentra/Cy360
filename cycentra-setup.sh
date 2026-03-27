@@ -509,8 +509,8 @@ SIEM_LLM_ENABLED=true
 SIEM_MISP_ENABLED=false
 ENVEOF
     chmod 600 /opt/cycentra/.env
-    mkdir -p /root/cy-asm && cp /opt/cycentra/.env /root/cy-asm/.env
-    success "Main .env written → /opt/cycentra/.env"
+   # mkdir -p /root/cy-asm && cp /opt/cycentra/.env /root/cy-asm/.env
+   # success "Main .env written → /opt/cycentra/.env"
 
     _LLM_FLAG="false"
     [[ "${AI_PROVIDER:-none}" != "none" ]] && _LLM_FLAG="true"
@@ -784,7 +784,8 @@ server {
     add_header X-Frame-Options "" always;
     add_header Content-Security-Policy "frame-ancestors 'self' https://cy360.${BASE_DOMAIN}" always;
     location / {
-        proxy_pass http://127.0.0.1:5601;
+        proxy_pass https://127.0.0.1:5601;
+        proxy_ssl_verify off;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection \$connection_upgrade;

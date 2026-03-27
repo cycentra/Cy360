@@ -290,8 +290,8 @@ services:
       POSTGRES_ADMIN_USER: iris
       POSTGRES_ADMIN_PASSWORD: "${{POSTGRES_PASSWORD:-iris_pg_pass}}"
       IRIS_SECRET_KEY: "${{IRIS_SECRET_KEY:-change_in_production}}"
-      IRIS_ADMIN_EMAIL: "${{IRIS_ADM_EMAIL:-admin@cycentra.com}}"
-      IRIS_ADMIN_PASSWORD: "${{IRIS_ADM_PASSWORD:-CyIRIS@CHANGE}}"
+      IRIS_ADM_EMAIL: "${{IRIS_ADM_EMAIL:-admin@cycentra.com}}"
+      IRIS_ADM_PASSWORD: "${{IRIS_ADM_PASSWORD}}"
       OIDC_ENABLED: "true"
       OIDC_ISSUER: "${{CYCENTRA_PORTAL_URL}}/oidc"
       OIDC_CLIENT_ID: "cyiris"
@@ -447,13 +447,18 @@ def _install_module_async(module_id, compose_yaml, env_vars):
             # Build a complete .env for cyiris — the compose template needs these
             # exact var names. cycentra-setup.sh may use legacy names (IRIS_SECRET,
             # IRIS_DB_PASS) so we resolve both old and new names with fallbacks.
+            _iris_adm_password = os.environ.get("IRIS_ADM_PASSWORD")
+            if not _iris_adm_password:
+                log("ERROR: IRIS_ADM_PASSWORD not set in /opt/cycentra/env — aborting install")
+                raise ValueError("IRIS_ADM_PASSWORD is required in master .env")
+
             cyiris_env = {
-                "POSTGRES_PASSWORD":  os.environ.get("POSTGRES_PASSWORD", os.environ.get("IRIS_DB_PASS", "iris_pg_pass")),
-                "IRIS_SECRET_KEY":    os.environ.get("IRIS_SECRET_KEY", os.environ.get("IRIS_SECRET", "change_in_production")),
-                "CYIRIS_OIDC_SECRET": os.environ.get("CYIRIS_OIDC_SECRET", ""),
-                "CYCENTRA_PORTAL_URL":os.environ.get("CYCENTRA_PORTAL_URL", os.environ.get("FRONTEND_URL", "")),
-                "IRIS_ADM_EMAIL":     os.environ.get("IRIS_ADM_EMAIL", os.environ.get("CLIENT_EMAIL", "admin@cycentra.com")),
-                "IRIS_ADM_PASSWORD":  os.environ.get("IRIS_ADM_PASSWORD", "CyIRIS@CHANGE"),
+                "POSTGRES_PASSWORD":   os.environ.get("POSTGRES_PASSWORD") or os.environ.get("IRIS_DB_PASS", ""),
+                "IRIS_SECRET_KEY":     os.environ.get("IRIS_SECRET_KEY") or os.environ.get("IRIS_SECRET", ""),
+                "CYIRIS_OIDC_SECRET":  os.environ.get("CYIRIS_OIDC_SECRET", ""),
+                "CYCENTRA_PORTAL_URL": os.environ.get("CYCENTRA_PORTAL_URL") or os.environ.get("FRONTEND_URL", ""),
+                "IRIS_ADM_EMAIL":      os.environ.get("IRIS_ADM_EMAIL", "admin@cycentra.com"),
+                "IRIS_ADM_PASSWORD":   _iris_adm_password,   # ← from master .env only
             }
             cyiris_env.update(env_vars)   # UI-passed overrides win — NOW this works because keys match
             env_path.write_text("\n".join(f"{k}={v}" for k, v in cyiris_env.items()))
@@ -668,8 +673,11 @@ def _install_module_async(module_id, compose_yaml, env_vars):
 
             if iris_ready:
                 admin_email    = cyiris_env.get("IRIS_ADM_EMAIL", "admin@cycentra.com")
-                admin_password = cyiris_env.get("IRIS_ADM_PASSWORD", "CyIRIS@CHANGE")
-
+                admin_password = cyiris_env.get("IRIS_ADM_PASSWORD")
+                if not admin_password:
+                    log("ERROR: IRIS_ADM_PASSWORD missing — cannot set admin credentials")
+                    return
+                
                 # Generate password hash inside the app container (has werkzeug)
                 safe_password = admin_password.replace("'", "\\'").replace('"', '\\"')
                 rc_h, hash_out, hash_err = run(
@@ -683,16 +691,15 @@ def _install_module_async(module_id, compose_yaml, env_vars):
                     # Update both email and password for the administrator account
                     rc_db, _, db_err = run(
                         f'docker exec {db_container} psql -U iris -d iris_db -c '
-                        f'"UPDATE \\"User\\" SET password=\'{pw_hash}\', email=\'{admin_email}\' '
+                        f'"UPDATE \\"user\\" SET password=\'{pw_hash}\''
                         f'WHERE login=\'administrator\';"',
                         timeout=15
                     )
                     if rc_db == 0:
-                        log(f"CyIRIS: credentials set — username: administrator | email: {admin_email}")
-                        log(f"CyIRIS: login at https://cyiris.{os.environ.get('BASE_DOMAIN', 'cycentra.com')}")
+                        log(f"CyIRIS: password forced via DB — username: administrator")
                     else:
-                        log(f"CyIRIS: WARNING — DB update failed: {db_err}")
-                        log(f"CyIRIS: use the password from container logs: docker compose logs cyiris | grep 'password >>>'")
+                        log(f"CyIRIS: ERROR — DB update failed. SQL error: {db_err}")
+                        log(f"CyIRIS: FALLBACK — use password from logs: docker compose logs cyiris | grep 'admin'")
                 else:
                     log(f"CyIRIS: WARNING — could not generate password hash: {hash_err}")
                     log(f"CyIRIS: use the password from container logs: docker compose logs cyiris | grep 'password >>>'")
