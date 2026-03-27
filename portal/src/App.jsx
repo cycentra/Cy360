@@ -1742,7 +1742,7 @@ function InstallForm({ mod, onInstall, onCancel }) {
       (mod.configFields||[]).map(f => (
         <div key={f.key} style={{ marginBottom:14 }}>
           <label style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", letterSpacing:"1px", textTransform:"uppercase", display:"block", marginBottom:6 }}>{f.label}{f.readonly ? " [READ-ONLY]" : ""}</label>
-          <input type={f.type||"text"} value={config[f.key]||""} onChange={e=>f.readonly?null:update(f.key,e.target.value)} readOnly={f.readonly||false}
+          <input type={f.type||"text"} value={config[f.key]||""} onChange={e=>update(f.key,e.target.value)} readOnly={false}
             style={{ width:"100%", background:f.readonly?"rgba(255,255,255,0.02)":"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)",
               color:f.readonly?"rgba(255,255,255,0.35)":"white", padding:"10px 14px", borderRadius:4, fontSize:13, fontFamily:"monospace", outline:"none", boxSizing:"border-box", cursor:f.readonly?"not-allowed":"text" }}/>
           {f.help && <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, marginTop:4 }}>{f.help}</div>}
