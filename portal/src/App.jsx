@@ -2061,7 +2061,7 @@ function PlatformPage({ installedModules, onInstall, onUninstall }) {
                   </div>
                   <div style={{ color:"rgba(255,255,255,0.5)", fontSize:12, lineHeight:1.6, marginBottom:14 }}>{mod.description}</div>
                   <div style={{ display:"flex", gap:5, flexWrap:"wrap", marginBottom:14 }}>
-                    {(mod.features||[]).map(f=>(
+                    {(mod.features||[]).map(feat=>(
                       <span key={f} style={{ background:"rgba(255,255,255,0.05)", color:"rgba(255,255,255,0.4)", border:"1px solid rgba(255,255,255,0.08)",
                         fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2 }}>{f}</span>
                     ))}
@@ -2117,7 +2117,7 @@ function PlatformPage({ installedModules, onInstall, onUninstall }) {
                     </div>
 
                     <div style={{ display:"flex", gap:5, flexWrap:"wrap", marginBottom:14 }}>
-                      {(mod.features||[]).map(f=>(
+                      {(mod.features||[]).map(feat=>(
                         <span key={f} style={{ background:"rgba(255,255,255,0.05)", color:"rgba(255,255,255,0.4)", border:"1px solid rgba(255,255,255,0.08)",
                           fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2 }}>{f}</span>
                       ))}
