@@ -259,11 +259,10 @@ volumes:
   cyiris_db:`,
     defaultConfig: {
       IRIS_ADM_PASSWORD:      "CyIRIS@" + Math.random().toString(36).slice(2,8).toUpperCase(),
-      IRIS_ADM_EMAIL:        "admin@cycentra.local",
-      dbPassword:         "DB@"      + Math.random().toString(36).slice(2,8).toUpperCase(),
-      rabbitmqPassword:   "RMQ@"     + Math.random().toString(36).slice(2,8).toUpperCase(),
-      secretKey:          Array.from({length:32}, () => Math.random().toString(36)[2]).join(""),
-      cyirisOidcSecret:   Array.from({length:24}, () => Math.random().toString(36)[2]).join(""),
+      dbPassword:             "DB@"      + Math.random().toString(36).slice(2,8).toUpperCase(),
+      rabbitmqPassword:       "RMQ@"     + Math.random().toString(36).slice(2,8).toUpperCase(),
+      secretKey:              Array.from({length:32}, () => Math.random().toString(36)[2]).join(""),
+      cyirisOidcSecret:       Array.from({length:24}, () => Math.random().toString(36)[2]).join(""),
     },
     configFields: [
       { key: "IRIS_ADM_PASSWORD", label: "Admin Password", type: "password", help: "Fallback admin password" },

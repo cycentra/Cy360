@@ -290,7 +290,6 @@ services:
       POSTGRES_ADMIN_USER: iris
       POSTGRES_ADMIN_PASSWORD: "${{POSTGRES_PASSWORD:-iris_pg_pass}}"
       IRIS_SECRET_KEY: "${{IRIS_SECRET_KEY:-change_in_production}}"
-      IRIS_ADM_EMAIL: "${{IRIS_ADM_EMAIL:-admin@cycentra.com}}"
       IRIS_ADM_PASSWORD: "${{IRIS_ADM_PASSWORD}}"
       OIDC_ENABLED: "true"
       OIDC_ISSUER: "${{CYCENTRA_PORTAL_URL}}/oidc"
@@ -443,32 +442,57 @@ def _install_module_async(module_id, compose_yaml, env_vars):
         log(f"Written docker-compose.yml")
 
         env_path = module_dir / ".env"
-        if module_id == "cyiris":
-            # Build a complete .env for cyiris — the compose template needs these
-            # exact var names. cycentra-setup.sh may use legacy names (IRIS_SECRET,
-            # IRIS_DB_PASS) so we resolve both old and new names with fallbacks.
-            _iris_adm_password = os.environ.get("IRIS_ADM_PASSWORD")
-            if not _iris_adm_password:
-                log("ERROR: IRIS_ADM_PASSWORD not set in /opt/cycentra/env — aborting install")
-                raise ValueError("IRIS_ADM_PASSWORD is required in master .env")
 
+        # ── CyIRIS pre-start setup ────────────────────────────────────────
+        if module_id == "cyiris":
+
+            # 1. Resolve password — UI input wins over master .env
+            _ui_password     = (env_vars.get("IRIS_ADM_PASSWORD") or "").strip()
+            _master_password = (os.environ.get("IRIS_ADM_PASSWORD") or "").strip()
+            _final_password  = _ui_password or _master_password
+
+            if not _final_password:
+                log("ERROR: IRIS_ADM_PASSWORD not set in UI or /opt/cycentra/.env — aborting")
+                state = load_state()
+                state[module_id] = {"status": "failed", "error": "IRIS_ADM_PASSWORD missing"}
+                save_state(state)
+                return
+
+            if _ui_password:
+                log("CyIRIS: using password entered in UI")
+            else:
+                log("CyIRIS: no UI password — using password from master .env")
+
+            # 2. Build module .env
             cyiris_env = {
                 "POSTGRES_PASSWORD":   os.environ.get("POSTGRES_PASSWORD") or os.environ.get("IRIS_DB_PASS", ""),
                 "IRIS_SECRET_KEY":     os.environ.get("IRIS_SECRET_KEY") or os.environ.get("IRIS_SECRET", ""),
                 "CYIRIS_OIDC_SECRET":  os.environ.get("CYIRIS_OIDC_SECRET", ""),
                 "CYCENTRA_PORTAL_URL": os.environ.get("CYCENTRA_PORTAL_URL") or os.environ.get("FRONTEND_URL", ""),
-                "IRIS_ADM_EMAIL":      os.environ.get("IRIS_ADM_EMAIL", "admin@cycentra.com"),
-                "IRIS_ADM_PASSWORD":   _iris_adm_password,   # ← from master .env only
+                "IRIS_ADM_PASSWORD":   _final_password,
             }
-            cyiris_env.update(env_vars)   # UI-passed overrides win — NOW this works because keys match
+            env_vars.pop("IRIS_ADM_PASSWORD", None)
+            cyiris_env.update(env_vars)
             env_path.write_text("\n".join(f"{k}={v}" for k, v in cyiris_env.items()))
             log(f"Created cyiris .env with {len(cyiris_env)} variables")
-        else:
+
+            # 3. Write pgcrypto init script
+            init_dir = module_dir / "db-init"
+            init_dir.mkdir(parents=True, exist_ok=True)
+            (init_dir / "01-pgcrypto.sql").write_text(
+                "CREATE EXTENSION IF NOT EXISTS pgcrypto;\n")
+            compose_text = compose_path.read_text().replace(
+                "- cyiris_db_init:/docker-entrypoint-initdb.d",
+                f"- {init_dir}:/docker-entrypoint-initdb.d"
+            )
+            compose_path.write_text(compose_text)
+            log("pgcrypto init script written")
+
+        # ── CySOAR pre-start cleanup ──────────────────────────────────────
+        elif module_id == "cysoar":
             env_path.write_text("\n".join(f"{k}={v}" for k, v in env_vars.items()))
             log(f"Created .env with {len(env_vars)} variables")
 
-        # CySOAR: clean old volumes that may have stale httpStatic config
-        if module_id == "cysoar":
             log("CySOAR pre-install cleanup — removing stale containers and volumes")
             run("docker compose down -v", cwd=str(module_dir), timeout=60)
             rc, containers_out, _ = run("docker ps -aq --filter 'name=cysoar'", timeout=10)
@@ -485,20 +509,17 @@ def _install_module_async(module_id, compose_yaml, env_vars):
                     log(f"Removed volume {vol}" if rc2 == 0 else f"Could not remove {vol}")
             log("CySOAR pre-install cleanup complete")
 
-        if module_id == "cyiris":
-            init_dir = module_dir / "db-init"
-            init_dir.mkdir(parents=True, exist_ok=True)
-            (init_dir / "01-pgcrypto.sql").write_text(
-                "CREATE EXTENSION IF NOT EXISTS pgcrypto;\n")
-            compose_text = compose_path.read_text().replace(
-                "- cyiris_db_init:/docker-entrypoint-initdb.d",
-                f"- {init_dir}:/docker-entrypoint-initdb.d"
-            )
-            compose_path.write_text(compose_text)
-            log("pgcrypto init script written")
+        # ── All other modules ─────────────────────────────────────────────
+        else:
+            env_path.write_text("\n".join(f"{k}={v}" for k, v in env_vars.items()))
+            log(f"Created .env with {len(env_vars)} variables")
 
+        # ── Pull and start (all modules) ──────────────────────────────────
         log("Pulling Docker images...")
-        rc, out, err = run("docker compose pull", cwd=str(module_dir), timeout=600)
+        rc, out, err = run(
+            "docker compose --env-file .env pull",
+            cwd=str(module_dir), timeout=600
+        )
         if rc != 0:
             log(f"ERROR pulling images: {err}")
             state = load_state()
@@ -508,7 +529,7 @@ def _install_module_async(module_id, compose_yaml, env_vars):
             return
 
         log("Starting containers...")
-        rc, out, err = run("docker compose up -d", cwd=str(module_dir), timeout=120)
+        rc, out, err = run("docker compose --env-file .env up -d", cwd=str(module_dir))
         if rc != 0:
             log(f"ERROR starting containers: {err}")
             state = load_state()
@@ -672,7 +693,6 @@ def _install_module_async(module_id, compose_yaml, env_vars):
                 log(f"CyIRIS: waiting for app... ({attempt+1}/18)")
 
             if iris_ready:
-                admin_email    = cyiris_env.get("IRIS_ADM_EMAIL", "admin@cycentra.com")
                 admin_password = cyiris_env.get("IRIS_ADM_PASSWORD")
                 if not admin_password:
                     log("ERROR: IRIS_ADM_PASSWORD missing — cannot set admin credentials")
@@ -691,7 +711,7 @@ def _install_module_async(module_id, compose_yaml, env_vars):
                     # Update both email and password for the administrator account
                     rc_db, _, db_err = run(
                         f'docker exec {db_container} psql -U iris -d iris_db -c '
-                        f'"UPDATE \\"user\\" SET password=\'{pw_hash}\''
+                        f'"UPDATE \\"user\\" SET password=\'{pw_hash}\' '
                         f'WHERE login=\'administrator\';"',
                         timeout=15
                     )
