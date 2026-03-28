@@ -7,7 +7,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { siemApi, siemFetch } from "./siemApi";
 import { SiemEngineStatus } from "./SiemEngineStatus";
-import { RISK_CONFIG, STATUS_CONFIG } from "../App";
+import { RISK_CONFIG, STATUS_CONFIG } from "../core/constants";
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 

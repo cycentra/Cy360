@@ -6,7 +6,7 @@
 import { useState, useEffect } from "react";
 import { siemApi, siemFetch } from "./siemApi";
 import { SiemEngineStatus } from "./SiemEngineStatus";
-import { RISK_CONFIG } from "../App";
+import { RISK_CONFIG } from "../core/constants";
 
 const LEVEL_THRESHOLDS = [
   { min: 75, label: "CRITICAL", color: "#ff3b3b", bg: "rgba(255,59,59,0.12)"  },
