@@ -1,13 +1,13 @@
 /**
  * src/core/adapter.js
  * ====================
- * Translates raw cycentra_scan.py JSON output into the UI asset model.
- * This is the single file responsible for all scan-data → UI mapping.
+ * Translates raw cycentra_scan.py JSON into the UI asset model.
  *
- * Isolating this means:
- *  - Data shape bugs (e.g. cloud vs cloud_infra) are fixed here only
- *  - Unit-testable without React
- *  - Safe to change without touching any page component
+ * FIXED: Primary asset now gets tags ["external","primary"].
+ *        Subdomain sub-assets are created from raw_results.subdomains.results.
+ *        IP sub-assets are created from raw_results.dns.results.ips (index > 0).
+ *        Typosquat sub-assets from raw_results.dns.results.typos.registered.
+ *        All match the original App.jsx adaptCyCentraJSON exactly.
  */
 
 // ── Main adapter ──────────────────────────────────────────────────────────────
@@ -29,7 +29,10 @@ export function adaptCyCentraJSON(raw) {
       return order[mapped] < order[acc] ? mapped : acc;
     }, "low");
 
-    const ports    = a.raw_results?.web?.results?.ports || [];
+    // ── Ports ────────────────────────────────────────────────────────────────
+    const ports = a.raw_results?.web?.results?.ports || [];
+
+    // ── SSL cert ─────────────────────────────────────────────────────────────
     const certInfo = a.raw_results?.crypto?.results?.ssl?.cert_info
                    || a.raw_results?.web?.results?.ssl?.cert_info
                    || null;
@@ -41,6 +44,7 @@ export function adaptCyCentraJSON(raw) {
         })()
       : null;
 
+    // ── CySIEM alert bridge ───────────────────────────────────────────────────
     const cySiemAlerts = vulns
       .filter(v => v.severity === "Critical" || v.severity === "High")
       .map((v, i) => ({
@@ -52,7 +56,8 @@ export function adaptCyCentraJSON(raw) {
         module:      v.module,
       }));
 
-    const subRaw     = a.raw_results?.subdomains?.results || [];
+    // ── Subdomains (for sub-asset creation below) ─────────────────────────────
+    const subRaw  = a.raw_results?.subdomains?.results || [];
     const subdomains = [...new Set(
       subRaw.flatMap(s =>
         typeof s === "string"
@@ -61,23 +66,24 @@ export function adaptCyCentraJSON(raw) {
       )
     )];
 
+    // ── Module data slices ────────────────────────────────────────────────────
     const emailSec    = a.raw_results?.email_sec?.results    || null;
-    // NOTE: scan key is "cloud" (not "cloud_infra") — fixed here
-    const cloudData   = a.raw_results?.cloud?.results        || null;
+    const cloudData   = a.raw_results?.cloud?.results        || null;  // key is "cloud" not "cloud_infra"
     const supplyChain = a.raw_results?.supply_chain?.results || null;
     const darkWeb     = a.raw_results?.dark_web?.results     || null;
+    const brandData   = a.raw_results?.dns?.results?.typos   || null;
 
-    // Determine asset type from web fingerprints
-    const fps  = a.raw_results?.web?.results?.fingerprints;
+    // ── Asset type from web fingerprints ──────────────────────────────────────
     const type = (() => {
-      if (fps?.cms)         return fps.cms;
-      if (fps?.framework)   return fps.framework;
-      if (fps?.server)      return fps.server;
-      const ips = a.raw_results?.dns?.results?.ips || [];
-      if (ips.length)       return "IP Asset";
+      const b = a.raw_results?.web?.results?.fingerprints?.["80"]?.banner || "";
+      if (b.includes("LiteSpeed")) return "Web Server (LiteSpeed)";
+      if (b.includes("nginx"))     return "Web Server (Nginx)";
+      if (b.includes("Apache"))    return "Web Server (Apache)";
       return "Web Asset";
     })();
 
+    // ── PRIMARY ASSET ─────────────────────────────────────────────────────────
+    // tags: ["external","primary"] — both tags required for dashboard stat helpers
     allAssets.push({
       id:            a.id,
       host:          a.host,
@@ -86,26 +92,96 @@ export function adaptCyCentraJSON(raw) {
       ports:         ports.map?.(p => p.port ?? p).filter(Boolean) || [],
       risk:          topSev,
       risk_score:    a.risk_score ?? 0,
-      cves:          a.cves || [],
+      cves:          vulns.map(v => v.vulnerability),
       vulnerabilities: vulns,
       cert_expiry:   certExpiry,
       cert_days:     certInfo?.days_to_expiry ?? null,
-      owner:         a.raw_results?.whois?.results?.registrant || a.host,
+      owner:         raw.meta?.org || "Unknown",
       status:        "open",
       first_seen:    raw.meta?.last_scan?.split("T")[0] || "—",
       last_seen:     raw.meta?.last_scan?.split("T")[0] || "—",
-      tags:          ["primary"],
+      tags:          ["external", "primary"],   // ← FIXED: was ["primary"] only
       subdomains,
       exposed_paths: a.raw_results?.web?.results?.exposed_paths || [],
       email_sec:     emailSec,
       cloud_data:    cloudData,
       supply_chain:  supplyChain,
       dark_web:      darkWeb,
+      brand_data:    brandData,
+      dns_raw:       a.raw_results?.dns?.results || null,
+      registrar:     a.raw_results?.whois?.results?.whois?.registrar || null,
       summary:       a.summary || "",
       cySiemAlerts,
     });
 
-    // Typosquat sub-assets
+    // ── SUBDOMAIN SUB-ASSETS ──────────────────────────────────────────────────
+    // type="Subdomain" + tags=["external","subdomain"]
+    // Required for widget 6 "Subdomains" count and Assets table filtering
+    subdomains.forEach((sub, i) => {
+      if (sub === a.host) return;   // skip if identical to primary
+      allAssets.push({
+        id:            `${a.id}-sub-${i}`,
+        host:          sub,
+        ip:            "—",
+        type:          "Subdomain",
+        ports:         [],
+        risk:          "low",
+        risk_score:    2,
+        cves:          [],
+        vulnerabilities: [],
+        cert_expiry:   null,
+        cert_days:     null,
+        owner:         raw.meta?.org || "Unknown",
+        status:        "open",
+        first_seen:    raw.meta?.last_scan?.split("T")[0] || "—",
+        last_seen:     raw.meta?.last_scan?.split("T")[0] || "—",
+        tags:          ["external", "subdomain"],
+        subdomains:    [],
+        exposed_paths: [],
+        email_sec:     null,
+        cloud_data:    null,
+        supply_chain:  null,
+        dark_web:      null,
+        summary:       `Subdomain of ${a.host}`,
+        cySiemAlerts:  [],
+      });
+    });
+
+    // ── IP SUB-ASSETS ─────────────────────────────────────────────────────────
+    // tags=["external","ip"] — required for widget 6 "IP Addresses" count
+    // Skip index 0 (already used as primary asset's .ip field)
+    (a.raw_results?.dns?.results?.ips || []).forEach((ipObj, i) => {
+      if (i === 0) return;
+      allAssets.push({
+        id:            `${a.id}-ip-${i}`,
+        host:          ipObj.ip,
+        ip:            ipObj.ip,
+        type:          `IP (${ipObj.org || "Unknown"})`,
+        ports:         [],
+        risk:          "low",
+        risk_score:    1,
+        cves:          [],
+        vulnerabilities: [],
+        cert_expiry:   null,
+        cert_days:     null,
+        owner:         ipObj.org || raw.meta?.org || "Unknown",
+        status:        "open",
+        first_seen:    raw.meta?.last_scan?.split("T")[0] || "—",
+        last_seen:     raw.meta?.last_scan?.split("T")[0] || "—",
+        tags:          ["external", "ip"],
+        subdomains:    [],
+        exposed_paths: [],
+        email_sec:     null,
+        cloud_data:    null,
+        supply_chain:  null,
+        dark_web:      null,
+        summary:       `IP address: ${ipObj.ip} (${ipObj.country || "?"})`,
+        cySiemAlerts:  [],
+      });
+    });
+
+    // ── TYPOSQUAT SUB-ASSETS ──────────────────────────────────────────────────
+    // type="Typosquat (Registered)" — required for widget 8 brand count
     (a.raw_results?.dns?.results?.typos?.registered || []).forEach((typo, i) => {
       allAssets.push({
         id:            `${a.id}-typo-${i}`,
@@ -121,7 +197,7 @@ export function adaptCyCentraJSON(raw) {
           severity:      "High",
           risk_score:    7,
           description:   `${typo} is registered and could be used for phishing or brand abuse.`,
-          recommendation:"Investigate ownership. If malicious, file abuse report or acquire the domain.",
+          recommendation: "Investigate ownership. If malicious, file abuse report or acquire the domain.",
           module:        "DNS",
         }],
         cert_expiry:   null,
@@ -133,6 +209,10 @@ export function adaptCyCentraJSON(raw) {
         tags:          ["external", "typosquat"],
         subdomains:    [],
         exposed_paths: [],
+        email_sec:     null,
+        cloud_data:    null,
+        supply_chain:  null,
+        dark_web:      null,
         summary:       `Typosquat domain registered: ${typo}`,
         cySiemAlerts:  [],
       });
@@ -149,11 +229,12 @@ export function adaptCyCentraJSON(raw) {
 // ── Stat helpers (used by DashboardPage) ──────────────────────────────────────
 
 export function getEmailSecData(assets) {
-  const primary = assets.find(a => a.tags?.includes("primary"));
+  // Must find primary asset that has email_sec populated
+  const primary = assets.find(a => a.tags?.includes("primary") && a.email_sec);
   const e       = primary?.email_sec;
   if (!e) return null;
   return {
-    spf:    { value: e.spf?.record  || null, pass: e.spf?.valid  ?? null },
+    spf:    { value: e.spf?.record   || null, pass: e.spf?.present   ?? null },
     dkim:   { value: e.dkim?.[0]?.selector || null, pass: e.dkim?.[0]?.valid ?? null },
     dmarc:  { value: e.dmarc?.policy || null, pass: e.dmarc?.present ?? null },
     bimi:   { value: e.elite_checks?.bimi?.record    || null, pass: e.elite_checks?.bimi?.status    === "pass" },
@@ -162,7 +243,7 @@ export function getEmailSecData(assets) {
 }
 
 export function getWebSecStats(assets) {
-  const allVulns    = assets.flatMap(a =>
+  const allVulns     = assets.flatMap(a =>
     (a.vulnerabilities || []).filter(v => v.module === "Web" || v.module === "Crypto")
   );
   const exposedPaths = assets.reduce((acc, a) => acc + (a.exposed_paths?.length || 0), 0);
@@ -170,7 +251,8 @@ export function getWebSecStats(assets) {
 }
 
 export function getInfraStats(assets) {
-  const ips   = assets.filter(a => a.type?.startsWith("IP")).length;
+  // IP count: assets with tag "ip" OR type starting with "IP"
+  const ips   = assets.filter(a => a.tags?.includes("ip") || a.type?.startsWith("IP")).length;
   const ports = [...new Set(assets.flatMap(a => a.ports || []))].length;
   const cloud = assets.filter(a => a.cloud_data).length;
   return { ips, ports, cloud };
@@ -180,12 +262,14 @@ export function getSupplyChainRisk(assets) {
   const primary = assets.find(a => a.tags?.includes("primary"));
   const sc      = primary?.supply_chain;
   if (!sc) return { count: 0, high: 0 };
+  // Structured format: { scripts, risks, count, high }
   if (sc.risks !== undefined) {
     return {
       count: sc.count ?? sc.scripts?.length ?? 0,
       high:  sc.high  ?? sc.risks?.filter(r => r.severity === "High" || r.severity === "Critical").length ?? 0,
     };
   }
+  // Legacy flat array
   if (Array.isArray(sc)) return { count: sc.length, high: 0 };
   return { count: 0, high: 0 };
 }
