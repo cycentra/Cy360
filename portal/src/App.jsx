@@ -266,7 +266,6 @@ volumes:
       cyirisOidcSecret:   Array.from({length:24}, () => Math.random().toString(36)[2]).join(""),
     },
     configFields: [
-      { key: "IRIS_ADM_EMAIL",    label: "Admin Email",    type: "text",     help: "Fallback login if SSO unavailable" },
       { key: "IRIS_ADM_PASSWORD", label: "Admin Password", type: "password", help: "Fallback admin password" },
     ],
     features: ["Case management","IOC tracking","Timeline analysis","MISP integration","VirusTotal enrichment","Team collaboration","OIDC SSO"],
