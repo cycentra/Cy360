@@ -481,9 +481,15 @@ def _install_module_async(module_id, compose_yaml, env_vars):
             init_dir.mkdir(parents=True, exist_ok=True)
             (init_dir / "01-pgcrypto.sql").write_text(
                 "CREATE EXTENSION IF NOT EXISTS pgcrypto;\n")
-            compose_text = compose_path.read_text().replace(
+
+            compose_text = compose_path.read_text()
+            compose_text = compose_text.replace(
                 "- cyiris_db_init:/docker-entrypoint-initdb.d",
                 f"- {init_dir}:/docker-entrypoint-initdb.d"
+            )
+            compose_text = compose_text.replace(
+                'IRIS_ADM_PASSWORD: "${IRIS_ADM_PASSWORD}"',
+                f'IRIS_ADM_PASSWORD: "{_final_password}"'
             )
             compose_path.write_text(compose_text)
             log("pgcrypto init script written")
@@ -682,50 +688,21 @@ def _install_module_async(module_id, compose_yaml, env_vars):
             db_container  = "cyiris-cyiris-db-1"
             for attempt in range(18):
                 time.sleep(5)
-                rc_ping, _, _ = run(
-                    f"docker exec {app_container} curl -sf http://localhost:8000/api/ping",
+                rc_ping, http_code, _ = run(
+                    f"docker exec {app_container} curl -s -o /dev/null -w '%{{http_code}}' http://localhost:8000/",
                     timeout=10
                 )
-                if rc_ping == 0:
+                if rc_ping == 0 and http_code.strip() in ("200", "302", "401"):
                     iris_ready = True
                     log(f"CyIRIS: app is up (attempt {attempt+1})")
                     break
                 log(f"CyIRIS: waiting for app... ({attempt+1}/18)")
 
             if iris_ready:
-                admin_password = cyiris_env.get("IRIS_ADM_PASSWORD")
-                if not admin_password:
-                    log("ERROR: IRIS_ADM_PASSWORD missing — cannot set admin credentials")
-                    return
-                
-                # Generate password hash inside the app container (has werkzeug)
-                safe_password = admin_password.replace("'", "\\'").replace('"', '\\"')
-                rc_h, hash_out, hash_err = run(
-                    f'docker exec {app_container} python3 -c "'
-                    f'from werkzeug.security import generate_password_hash;'
-                    f'print(generate_password_hash(\\"{safe_password}\\", method=\\"pbkdf2:sha256\\"))"',
-                    timeout=15
-                )
-                if rc_h == 0 and hash_out.strip().startswith("pbkdf2:"):
-                    pw_hash = hash_out.strip()
-                    # Update both email and password for the administrator account
-                    rc_db, _, db_err = run(
-                        f'docker exec {db_container} psql -U iris -d iris_db -c '
-                        f'"UPDATE \\"user\\" SET password=\'{pw_hash}\' '
-                        f'WHERE login=\'administrator\';"',
-                        timeout=15
-                    )
-                    if rc_db == 0:
-                        log(f"CyIRIS: password forced via DB — username: administrator")
-                    else:
-                        log(f"CyIRIS: ERROR — DB update failed. SQL error: {db_err}")
-                        log(f"CyIRIS: FALLBACK — use password from logs: docker compose logs cyiris | grep 'admin'")
-                else:
-                    log(f"CyIRIS: WARNING — could not generate password hash: {hash_err}")
-                    log(f"CyIRIS: use the password from container logs: docker compose logs cyiris | grep 'password >>>'")
+                log("CyIRIS: app initialised — login with administrator and the password entered in UI")
             else:
-                log("CyIRIS: WARNING — app did not respond in 90s, credentials not set")
-                log("CyIRIS: use the password from container logs: docker compose logs cyiris | grep 'password >>>'")
+                log("CyIRIS: WARNING — app did not respond in 90s")
+                log("CyIRIS: check logs: docker compose logs cyiris | grep 'password >>>'")
 
         time.sleep(5)
         running = _docker_containers_running(module_id)
