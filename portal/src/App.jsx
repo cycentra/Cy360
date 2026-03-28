@@ -247,7 +247,8 @@ services:
       - IRIS_POSTGRES_PASSWORD=\${DB_PASSWORD}
       - IRIS_POSTGRES_DB=iris_db
       - CELERY_BROKER=amqp://iris:\${RABBITMQ_PASSWORD}@cyiris-rabbitmq
-      - IRIS_ADM_PASSWORD=\${IRIS_ADM_PASSWORD}
+      - IRIS_ADMIN_PASSWORD=\${ADMIN_PASSWORD}
+      - IRIS_ADMIN_EMAIL=\${ADMIN_EMAIL}
       - IRIS_OIDC_ENABLED=true
       - IRIS_OIDC_PROVIDER_URL=\${CYCENTRA_PORTAL_URL}/oidc
       - IRIS_OIDC_CLIENT_ID=cyiris
@@ -257,16 +258,16 @@ services:
 volumes:
   cyiris_db:`,
     defaultConfig: {
-      IRIS_ADM_USERNAME:  "administrator",   // pre-filled, read-only
-      IRIS_ADM_PASSWORD: window.__CYCENTRA_IRIS_PASS__ || "",
+      IRIS_ADM_PASSWORD:      "CyIRIS@" + Math.random().toString(36).slice(2,8).toUpperCase(),
+      IRIS_ADM_EMAIL:        "admin@cycentra.local",
       dbPassword:         "DB@"      + Math.random().toString(36).slice(2,8).toUpperCase(),
       rabbitmqPassword:   "RMQ@"     + Math.random().toString(36).slice(2,8).toUpperCase(),
       secretKey:          Array.from({length:32}, () => Math.random().toString(36)[2]).join(""),
       cyirisOidcSecret:   Array.from({length:24}, () => Math.random().toString(36)[2]).join(""),
     },
     configFields: [
-      { key: "IRIS_ADM_USERNAME", label: "Admin Username", type: "text", readonly: true, help: "System username — cannot be changed" },
-      { key: "IRIS_ADM_PASSWORD", label: "Admin Password", type: "password", help: "Set a strong password for the administrator account" },
+      { key: "IRIS_ADM_EMAIL",    label: "Admin Email",    type: "text",     help: "Fallback login if SSO unavailable" },
+      { key: "IRIS_ADM_PASSWORD", label: "Admin Password", type: "password", help: "Fallback admin password" },
     ],
     features: ["Case management","IOC tracking","Timeline analysis","MISP integration","VirusTotal enrichment","Team collaboration","OIDC SSO"],
     githubRepo: "https://github.com/cycentra/cyiris",
@@ -1738,17 +1739,15 @@ function InstallForm({ mod, onInstall, onCancel }) {
   if (stage === "config") return (
     <div style={{ background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:4, padding:"20px 24px", marginTop:16 }}>
       <div style={{ color:"rgba(255,255,255,0.35)", fontSize:10, letterSpacing:"1.5px", textTransform:"uppercase", fontFamily:"monospace", marginBottom:16 }}>Configure {mod.name}</div>
-   
-      (mod.configFields||[]).map(f => (
+      {(mod.configFields||[]).map(f => (
         <div key={f.key} style={{ marginBottom:14 }}>
-          <label style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", letterSpacing:"1px", textTransform:"uppercase", display:"block", marginBottom:6 }}>{f.label}{f.readonly ? " [READ-ONLY]" : ""}</label>
-          <input type={f.type||"text"} value={config[f.key]||""} onChange={e=>update(f.key,e.target.value)} readOnly={false}
-            style={{ width:"100%", background:f.readonly?"rgba(255,255,255,0.02)":"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)",
-              color:f.readonly?"rgba(255,255,255,0.35)":"white", padding:"10px 14px", borderRadius:4, fontSize:13, fontFamily:"monospace", outline:"none", boxSizing:"border-box", cursor:f.readonly?"not-allowed":"text" }}/>
+          <label style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", letterSpacing:"1px", textTransform:"uppercase", display:"block", marginBottom:6 }}>{f.label}</label>
+          <input type={f.type||"text"} value={config[f.key]||""} onChange={e=>update(f.key,e.target.value)}
+            style={{ width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)",
+              color:"white", padding:"10px 14px", borderRadius:4, fontSize:13, fontFamily:"monospace", outline:"none", boxSizing:"border-box" }}/>
           {f.help && <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, marginTop:4 }}>{f.help}</div>}
         </div>
       ))}
-
       <div style={{ display:"flex", gap:10, marginTop:20 }}>
         <button onClick={startInstall}
           style={{ background:`${mod.color}`, color:"#0d0f14", border:"none", borderRadius:4,
@@ -2061,7 +2060,7 @@ function PlatformPage({ installedModules, onInstall, onUninstall }) {
                   </div>
                   <div style={{ color:"rgba(255,255,255,0.5)", fontSize:12, lineHeight:1.6, marginBottom:14 }}>{mod.description}</div>
                   <div style={{ display:"flex", gap:5, flexWrap:"wrap", marginBottom:14 }}>
-                    {(mod.features||[]).map(feat=>(
+                    {(mod.features||[]).map(f=>(
                       <span key={f} style={{ background:"rgba(255,255,255,0.05)", color:"rgba(255,255,255,0.4)", border:"1px solid rgba(255,255,255,0.08)",
                         fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2 }}>{f}</span>
                     ))}
@@ -2117,7 +2116,7 @@ function PlatformPage({ installedModules, onInstall, onUninstall }) {
                     </div>
 
                     <div style={{ display:"flex", gap:5, flexWrap:"wrap", marginBottom:14 }}>
-                      {(mod.features||[]).map(feat=>(
+                      {(mod.features||[]).map(f=>(
                         <span key={f} style={{ background:"rgba(255,255,255,0.05)", color:"rgba(255,255,255,0.4)", border:"1px solid rgba(255,255,255,0.08)",
                           fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2 }}>{f}</span>
                       ))}
