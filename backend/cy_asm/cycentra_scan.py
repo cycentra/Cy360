@@ -222,34 +222,9 @@ async def run_full_scan(domain: str, tenant_id: str) -> Dict[str, Any]:
     scan_start = datetime.now()
     logger.info(f"=== Starting CyCentra UNIVERSAL Scan for {domain} (Tenant: {tenant_id}) ===")
 
-    # 1. Core Recon (DNS & Subs first as others depend on them)
-    dns = await gather_dns_intel(domain)
-    subs = await gather_subdomains(domain)
-    subdomains_list = subs.get("results", [])
-
-    # 2. Launch all other modules in parallel
-    logger.info(f"⚡ Launching all security modules in parallel...")
-    tasks = {
-        "crypto": audit_crypto(domain),
-        "whois": gather_whois_history(domain),
-        "osint": gather_passive_osint(domain),
-        "supply_chain": gather_supply_chain(domain),
-        "social_eng": gather_social_eng(domain),
-        "mobile_api": gather_mobile_api(domain),
-        "email_sec": gather_email_security(domain),
-        "dark_web": gather_dark_web(domain, subdomains_list),
-        "web": gather_web_analysis(domain, dns.get("results", {}).get("records", {})),
-        "cloud": gather_cloud_infra(domain, dns.get("results", {}).get("ips", []))
-    }
-
-    module_names = list(tasks.keys())
-    raw_results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-
-    results = {"dns": dns, "subdomains": subs}
-    all_issues = []
-
-    # Progress labels used by app.py /api/scan/status to track % completion.
-    # Keys must match the task dict keys above exactly.
+    # ── Progress labels must match app.py /api/scan/status module_keywords exactly ──
+    # app.py matches on lowercase log lines like "[dns reconnaissance]"
+    # So we log each module start in that format so progress % updates live.
     _progress_labels = {
         "dns":          "DNS Reconnaissance",
         "subdomains":   "Subdomain Enumeration",
@@ -265,22 +240,74 @@ async def run_full_scan(domain: str, tenant_id: str) -> Dict[str, Any]:
         "mobile_api":   "Mobile & API Checks",
     }
 
-    for name, res in zip(module_names, raw_results):
+    def _start(key: str):
+        """Log module start in the format app.py /api/scan/status looks for."""
+        label = _progress_labels.get(key, key)
+        logger.info(f"[{label}] Starting...")
+
+    def _done(key: str, res):
+        label = _progress_labels.get(key, key)
         if isinstance(res, Exception):
-            logger.error(f"❌ Module '{name}' CRASHED: {res}")
-            results[name] = {"error": str(res), "results": {}, "issues": []}
+            logger.error(f"❌ Module '{key}' CRASHED: {res}")
         else:
-            results[name] = res
+            logger.info(f"📥 [{label}] Complete.")
+
+    results    = {}
+    all_issues = []
+
+    # ── Stage 1: DNS (everything else depends on it) ─────────────────────────
+    _start("dns")
+    dns = await gather_dns_intel(domain)
+    _done("dns", dns)
+    results["dns"] = dns
+
+    # ── Stage 2: Subdomains (dark_web and web depend on subdomain list) ───────
+    _start("subdomains")
+    subs = await gather_subdomains(domain)
+    _done("subdomains", subs)
+    results["subdomains"] = subs
+    subdomains_list = subs.get("results", []) if isinstance(subs, dict) else []
+
+    dns_records = dns.get("results", {}).get("records", {}) if isinstance(dns, dict) else {}
+    dns_ips     = dns.get("results", {}).get("ips", [])     if isinstance(dns, dict) else []
+
+    # ── Stage 3: Sequential modules ──────────────────────────────────────────
+    # Ordered by value/speed — fastest/highest-value first so the progress bar
+    # moves steadily and the most important data arrives early.
+    sequential_modules = [
+        ("web",          lambda: gather_web_analysis(domain, dns_records)),
+        ("crypto",       lambda: audit_crypto(domain)),
+        ("email_sec",    lambda: gather_email_security(domain)),
+        ("cloud",        lambda: gather_cloud_infra(domain, dns_ips)),
+        ("whois",        lambda: gather_whois_history(domain)),
+        ("osint",        lambda: gather_passive_osint(domain)),
+        ("dark_web",     lambda: gather_dark_web(domain, subdomains_list)),
+        ("supply_chain", lambda: gather_supply_chain(domain)),
+        ("social_eng",   lambda: gather_social_eng(domain)),
+        ("mobile_api",   lambda: gather_mobile_api(domain)),
+    ]
+
+    for key, coro_fn in sequential_modules:
+        _start(key)
+        try:
+            res = await coro_fn()
+        except Exception as exc:
+            res = exc
+        _done(key, res)
+
+        if isinstance(res, Exception):
+            results[key] = {"error": str(res), "results": {}, "issues": []}
+        else:
+            results[key] = res
             if isinstance(res, dict) and "issues" in res:
                 all_issues.extend(res["issues"])
-            label = _progress_labels.get(name, name)
-            logger.info(f"📥 Module '{name}' completed. [{label}]")
 
+    # ── Summary ───────────────────────────────────────────────────────────────
     summary_text = f"CyCentra scan complete | {len(subdomains_list)} subdomains | {len(all_issues)} issues"
 
     scan_end = datetime.now()
     duration = (scan_end - scan_start).seconds
-
+    
     logger.info(
         f"\n{'='*60}\n"
         f"✅ SCAN COMPLETE: {domain}\n"
