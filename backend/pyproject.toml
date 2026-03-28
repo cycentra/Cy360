@@ -25,6 +25,8 @@ where = ["."]
 include = [
     "cy_asm*",
     "cysiemstack*",
+    "blueprints*",
+    "core*",     
 ]
 exclude = [
     "venv*",
