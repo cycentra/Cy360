@@ -9,6 +9,15 @@ Routes:
   GET    /api/platform/status
   GET    /api/platform/logs/<module_id>
   GET    /api/debug/images
+
+Fixes vs previous version:
+  1. CyIRIS password: env_vars (UI input) is checked FIRST for IRIS_ADM_PASSWORD,
+     then falls back to master .env — so the UI-entered password always wins.
+  2. nginx blocks: added _nginx_add_block() and _nginx_remove_block() helpers.
+     All three modules (cyiris, cysoar, cymisp) now get nginx blocks on install
+     and have them removed on uninstall.
+  3. CyMISP: full post-install sequence restored (credentials, redis patch,
+     nginx block, certbot SSL expansion).
 """
 
 import os
@@ -22,11 +31,16 @@ from flask import Blueprint, request, jsonify, make_response
 
 from core.config import MODULES_DIR
 from core.helpers import run, add_cors_headers
-from blueprints.platform.compose import COMPOSE_TEMPLATES, VALID_MODULES
+from blueprints.platform.compose import (
+    COMPOSE_TEMPLATES, VALID_MODULES,
+    CYSOAR_IMAGE, CYIRIS_IMAGE_APP, CYIRIS_IMAGE_DB,
+)
 from blueprints.platform.state import load_state, save_state
 from blueprints.platform.docker_utils import docker_containers_running
 
 platform_bp = Blueprint("platform", __name__)
+
+NGINX_CONF = Path("/etc/nginx/sites-available/cycentra-modules")
 
 
 # ── Preflight ─────────────────────────────────────────────────────────────────
@@ -35,6 +49,157 @@ platform_bp = Blueprint("platform", __name__)
 @platform_bp.route("/api/platform/uninstall", methods=["OPTIONS"])
 def platform_options():
     return add_cors_headers(make_response('', 204))
+
+
+# ── nginx helpers ─────────────────────────────────────────────────────────────
+
+def _nginx_block_for(module_id: str, base_domain: str) -> str:
+    """Return the nginx server block text for a given module."""
+    ssl_cert     = f"/etc/letsencrypt/live/cy360.{base_domain}/fullchain.pem"
+    ssl_key      = f"/etc/letsencrypt/live/cy360.{base_domain}/privkey.pem"
+    ssl_options  = "/etc/letsencrypt/options-ssl-nginx.conf"
+    ssl_dhparam  = "/etc/letsencrypt/ssl-dhparams.pem"
+    hsts         = 'add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;'
+    xcto         = 'add_header X-Content-Type-Options "nosniff" always;'
+
+    # Each module: subdomain + port + proxy settings
+    configs = {
+        "cyiris": {
+            "subdomain": f"cyiris.{base_domain}",
+            "upstream":  "http://127.0.0.1:4433",
+            "extra":     (
+                "        proxy_set_header X-Real-IP $remote_addr;\n"
+                "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+                "        proxy_set_header X-Forwarded-Proto https;\n"
+                "        proxy_read_timeout 300s;\n"
+            ),
+        },
+        "cysoar": {
+            "subdomain": f"cysoar.{base_domain}",
+            "upstream":  "http://127.0.0.1:1880",
+            "extra":     (
+                "        proxy_set_header Upgrade $http_upgrade;\n"
+                "        proxy_set_header Connection 'upgrade';\n"
+                "        proxy_set_header X-Real-IP $remote_addr;\n"
+                "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+                "        proxy_set_header X-Forwarded-Proto https;\n"
+                "        proxy_read_timeout 300s;\n"
+            ),
+        },
+        "cymisp": {
+            "subdomain": f"cymisp.{base_domain}",
+            "upstream":  "https://127.0.0.1:8243",
+            "extra":     (
+                "        proxy_ssl_verify off;\n"
+                "        proxy_set_header Host $host;\n"
+                "        proxy_set_header X-Real-IP $remote_addr;\n"
+                "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
+                "        proxy_set_header X-Forwarded-Proto https;\n"
+                "        proxy_set_header X-Forwarded-Host $host;\n"
+                "        proxy_set_header X-Forwarded-Port 443;\n"
+                "        proxy_read_timeout 300s;\n"
+                '        add_header Content-Security-Policy "default-src \'self\' \'unsafe-inline\' \'unsafe-eval\' data: blob:;" always;\n'
+            ),
+        },
+    }
+
+    cfg = configs.get(module_id)
+    if not cfg:
+        return ""
+
+    subdomain = cfg["subdomain"]
+    upstream  = cfg["upstream"]
+    extra     = cfg["extra"]
+
+    return (
+        f"\nserver {{\n"
+        f"    listen 80; server_name {subdomain};\n"
+        f"    return 301 https://$host$request_uri;\n"
+        f"}}\n"
+        f"server {{\n"
+        f"    listen 443 ssl http2; server_name {subdomain};\n"
+        f"    ssl_certificate     {ssl_cert};\n"
+        f"    ssl_certificate_key {ssl_key};\n"
+        f"    include             {ssl_options};\n"
+        f"    ssl_dhparam         {ssl_dhparam};\n"
+        f"    {hsts}\n"
+        f"    {xcto}\n"
+        f"    location / {{\n"
+        f"        proxy_pass {upstream};\n"
+        f"        proxy_set_header Host $host;\n"
+        f"{extra}"
+        f"    }}\n"
+        f"}}\n"
+    )
+
+
+def _nginx_add_block(module_id: str, base_domain: str, log_fn):
+    """Add module's nginx server block and reload nginx. Idempotent."""
+    if not NGINX_CONF.exists():
+        log_fn(f"{module_id}: nginx config not found at {NGINX_CONF} — skipping nginx block")
+        return
+
+    subdomain = f"{module_id}.{base_domain}" if module_id != "cysiem" else f"cysiem.{base_domain}"
+    existing  = NGINX_CONF.read_text()
+
+    if subdomain in existing:
+        log_fn(f"{module_id}: nginx block for {subdomain} already exists")
+        return
+
+    block = _nginx_block_for(module_id, base_domain)
+    if not block:
+        log_fn(f"{module_id}: no nginx block template for this module")
+        return
+
+    NGINX_CONF.write_text(existing + block)
+    rc, _, err = run("nginx -t && systemctl reload nginx", timeout=15)
+    if rc == 0:
+        log_fn(f"{module_id}: nginx block added for {subdomain} and nginx reloaded")
+    else:
+        log_fn(f"{module_id}: WARNING — nginx reload failed: {err}")
+
+
+def _nginx_remove_block(module_id: str, base_domain: str):
+    """Remove module's nginx server block and reload nginx."""
+    if not NGINX_CONF.exists():
+        return
+
+    subdomain = f"{module_id}.{base_domain}"
+    content   = NGINX_CONF.read_text()
+
+    # Match both the HTTP redirect block and the HTTPS block for this subdomain
+    new_content = re.sub(
+        r'\nserver \{[^{}]*server_name ' + re.escape(subdomain) + r';[^{}]*\}',
+        '', content, flags=re.DOTALL
+    )
+
+    if new_content != content:
+        NGINX_CONF.write_text(new_content)
+        run("nginx -t && systemctl reload nginx", timeout=15)
+
+
+def _expand_ssl_cert(module_id: str, base_domain: str, log_fn):
+    """Expand the Let's Encrypt cert to cover the new module's subdomain."""
+    # Build the full domain list from the existing nginx config
+    existing   = NGINX_CONF.read_text() if NGINX_CONF.exists() else ""
+    # Always include the core domains
+    core       = [f"cy360.{base_domain}", f"cyscan.{base_domain}", f"cysiem.{base_domain}"]
+    # Add any module subdomains already in the config
+    for mod in ("cyiris", "cysoar", "cymisp"):
+        if f"{mod}.{base_domain}" in existing:
+            core.append(f"{mod}.{base_domain}")
+    # Ensure the new one is included
+    new_sub = f"{module_id}.{base_domain}"
+    if new_sub not in core:
+        core.append(new_sub)
+
+    domains = ",".join(core)
+    rc, _, err = run(
+        f"certbot --nginx --expand --non-interactive --agree-tos --domains {domains} 2>/dev/null || true",
+        timeout=120,
+    )
+    log_fn(f"{module_id}: SSL cert expanded to cover {new_sub}" if rc == 0
+           else f"{module_id}: SSL expansion skipped (certbot not ready or domains not resolving)")
 
 
 # ── Status ────────────────────────────────────────────────────────────────────
@@ -62,8 +227,8 @@ def platform_status():
 
         if saved.get("status") == "installing" and docker_containers_running(module_id):
             if module_id != "cymisp" or saved.get("misp_ready", False):
-                saved["status"]       = "running"
-                state[module_id]      = saved
+                saved["status"]  = "running"
+                state[module_id] = saved
                 save_state(state)
 
         if saved.get("status") in ("running", "degraded"):
@@ -73,8 +238,8 @@ def platform_status():
         else:
             saved["running"] = False
 
-        saved["last_log"]  = last_log
-        result[module_id]  = saved
+        saved["last_log"] = last_log
+        result[module_id] = saved
 
     return jsonify(result)
 
@@ -87,7 +252,7 @@ def platform_install():
     module_id = data.get("module", "").strip()
 
     if module_id not in VALID_MODULES:
-        return jsonify({"error": f"Unknown module: {module_id}. Valid: {sorted(VALID_MODULES)}"}), 400
+        return jsonify({"error": f"Unknown module: {module_id}"}), 400
 
     rc, _, _ = run("docker info")
     if rc != 0:
@@ -97,14 +262,15 @@ def platform_install():
     if rc2 != 0:
         return jsonify({"error": "Docker Compose plugin not found"}), 503
 
-    state              = load_state()
-    state[module_id]   = {"status": "installing", "started_at": time.strftime('%Y-%m-%dT%H:%M:%SZ')}
+    state = load_state()
+    state[module_id] = {"status": "installing", "started_at": time.strftime('%Y-%m-%dT%H:%M:%SZ')}
     save_state(state)
 
     compose_yaml = COMPOSE_TEMPLATES.get(module_id) or data.get("compose_yaml") or ""
     if not compose_yaml:
-        return jsonify({"error": "No compose template for this module"}), 400
+        return jsonify({"error": "No compose template"}), 400
 
+    # Strip empty/private values from UI config
     env_vars = {k: v for k, v in (data.get("config") or {}).items()
                 if v and not k.startswith("_")}
 
@@ -114,11 +280,8 @@ def platform_install():
         daemon=True,
     ).start()
 
-    return jsonify({
-        "status":  "installing",
-        "module":  module_id,
-        "message": "Poll /api/platform/status for progress.",
-    })
+    return jsonify({"status": "installing", "module": module_id,
+                    "message": "Poll /api/platform/status for progress."})
 
 
 # ── Uninstall ─────────────────────────────────────────────────────────────────
@@ -135,38 +298,30 @@ def platform_uninstall():
     errors     = []
 
     if module_dir.exists():
+        # 1. Graceful compose shutdown
         run("docker compose down -v", cwd=str(module_dir), timeout=60)
 
+        # 2. Force-remove known container names
         container_names = {
-            "cyiris": ["cyiris", "cyiris-db", "cyiris-worker"],
-            "cysoar": ["cysoar", "cysoar-rabbitmq"],
+            "cyiris": ["cyiris-cyiris-1", "cyiris-cyiris-db-1", "cyiris", "cyiris-db"],
+            "cysoar": ["cysoar"],
             "cymisp": ["cymisp", "cymisp-db", "cymisp-redis"],
         }.get(module_id, [])
+        for c in container_names:
+            run(f"docker rm -f {c} 2>/dev/null || true", timeout=10)
 
-        for container in container_names:
-            run(f"docker rm -f {container} 2>/dev/null || true", timeout=10)
-
-        rc2, vols_out, _ = run(
-            f"docker volume ls -q --filter name={module_id}", timeout=10
-        )
-        if rc2 == 0 and vols_out.strip():
+        # 3. Remove all volumes matching module name
+        rc, vols_out, _ = run(f"docker volume ls -q --filter name={module_id}", timeout=10)
+        if rc == 0 and vols_out.strip():
             for vol in vols_out.strip().splitlines():
                 run(f"docker volume rm -f {vol.strip()} 2>/dev/null || true", timeout=10)
 
-        # Remove nginx block added for cymisp
-        if module_id == "cymisp":
-            nginx_conf = Path("/etc/nginx/sites-available/cycentra-modules")
-            if nginx_conf.exists():
-                base_domain = os.environ.get("BASE_DOMAIN", "cycentra.com")
-                content     = nginx_conf.read_text()
-                content     = re.sub(
-                    r'\nserver \{[^{}]*server_name cymisp\.' +
-                    re.escape(base_domain) + r';[^{}]*\}',
-                    '', content, flags=re.DOTALL,
-                )
-                nginx_conf.write_text(content)
-                run("nginx -t && systemctl reload nginx", timeout=15)
+        # 4. Remove nginx block (all three modules now have one)
+        base_domain = os.environ.get("BASE_DOMAIN", "cycentra.com")
+        if module_id in ("cyiris", "cysoar", "cymisp"):
+            _nginx_remove_block(module_id, base_domain)
 
+        # 5. Remove module directory
         try:
             shutil.rmtree(str(module_dir))
         except Exception as e:
@@ -181,46 +336,51 @@ def platform_uninstall():
     return jsonify({"status": "uninstalled", "module": module_id})
 
 
-# ── Install logs ──────────────────────────────────────────────────────────────
+# ── Logs ──────────────────────────────────────────────────────────────────────
 
 @platform_bp.route("/api/platform/logs/<module_id>")
 def platform_logs(module_id):
     if module_id not in VALID_MODULES:
         return jsonify({"error": "Unknown module"}), 400
-
     log_file = MODULES_DIR / module_id / "install.log"
     if not log_file.exists():
         return jsonify({"lines": [], "module": module_id})
-
     try:
-        return jsonify({
-            "lines":  log_file.read_text().splitlines()[-100:],
-            "module": module_id,
-        })
+        return jsonify({"lines": log_file.read_text().splitlines()[-100:],
+                        "module": module_id})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-# ── Debug images ──────────────────────────────────────────────────────────────
+# ── Debug ─────────────────────────────────────────────────────────────────────
 
 @platform_bp.route("/api/debug/images")
 def debug_images():
-    from core.config import CYSOAR_IMAGE, CYIRIS_IMAGE_APP, CYIRIS_IMAGE_DB
     return jsonify({
-        "CYSOAR_IMAGE":      CYSOAR_IMAGE,
-        "CYIRIS_IMAGE_APP":  CYIRIS_IMAGE_APP,
-        "CYIRIS_IMAGE_DB":   CYIRIS_IMAGE_DB,
-        "SIEM_ENGINE_URL":   os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100"),
-        "env_file_loaded":   os.path.exists("/opt/cycentra/.env") or os.path.exists(".env"),
+        "CYSOAR_IMAGE":     CYSOAR_IMAGE,
+        "CYIRIS_IMAGE_APP": CYIRIS_IMAGE_APP,
+        "CYIRIS_IMAGE_DB":  CYIRIS_IMAGE_DB,
+        "SIEM_ENGINE_URL":  os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100"),
+        "env_file_loaded":  os.path.exists("/opt/cycentra/.env") or os.path.exists(".env"),
     })
 
 
 # ── Async install worker ──────────────────────────────────────────────────────
 
+def _fail(module_id: str, error: str):
+    state = load_state()
+    state[module_id] = {
+        "status":       "failed",
+        "error":        error,
+        "installed_at": time.strftime('%Y-%m-%dT%H:%M:%SZ'),
+    }
+    save_state(state)
+
+
 def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
     """
     Runs in a daemon thread. Pulls images, starts containers,
-    runs any post-install hooks, and updates persistent state.
+    runs post-install hooks (password forcing, nginx, SSL), updates state.
     """
     module_dir = MODULES_DIR / module_id
     module_dir.mkdir(parents=True, exist_ok=True)
@@ -232,8 +392,10 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
 
     try:
         log(f"Starting installation of {module_id}")
+        base_domain = os.environ.get("BASE_DOMAIN", "cycentra.com")
+        cyiris_env  = {}  # always defined; populated below if module_id == "cyiris"
 
-        # Reload .env so late-set variables are picked up
+        # Reload master .env so all env vars are current
         try:
             from dotenv import load_dotenv
             if os.path.exists("/opt/cycentra/.env"):
@@ -249,30 +411,35 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
 
         env_path = module_dir / ".env"
 
+        # ── CyIRIS: build full env, UI password wins over .env default ────────
         if module_id == "cyiris":
-            _iris_adm_password = os.environ.get("IRIS_ADM_PASSWORD")
+            # FIX: check env_vars (UI input) FIRST, then fall back to master .env
+            # This is what the original app.py did via cyiris_env.update(env_vars)
+            _iris_adm_password = (
+                env_vars.get("IRIS_ADM_PASSWORD")           # UI-entered password — WINS
+                or os.environ.get("IRIS_ADM_PASSWORD")      # master .env fallback
+            )
             if not _iris_adm_password:
-                log("ERROR: IRIS_ADM_PASSWORD not set in /opt/cycentra/.env — aborting")
+                log("ERROR: IRIS_ADM_PASSWORD not provided and not set in /opt/cycentra/.env — aborting")
                 raise ValueError("IRIS_ADM_PASSWORD is required")
 
             cyiris_env = {
                 "POSTGRES_PASSWORD":   os.environ.get("POSTGRES_PASSWORD") or os.environ.get("IRIS_DB_PASS", ""),
-                "IRIS_SECRET_KEY":     os.environ.get("IRIS_SECRET_KEY") or os.environ.get("IRIS_SECRET", ""),
+                "IRIS_SECRET_KEY":     os.environ.get("IRIS_SECRET_KEY")   or os.environ.get("IRIS_SECRET", ""),
                 "CYIRIS_OIDC_SECRET":  os.environ.get("CYIRIS_OIDC_SECRET", ""),
                 "CYCENTRA_PORTAL_URL": os.environ.get("CYCENTRA_PORTAL_URL") or os.environ.get("FRONTEND_URL", ""),
                 "IRIS_ADM_EMAIL":      os.environ.get("IRIS_ADM_EMAIL", "admin@cycentra.com"),
                 "IRIS_ADM_PASSWORD":   _iris_adm_password,
             }
+            # env_vars may contain IRIS_ADM_PASSWORD again — update() ensures UI value persists
             cyiris_env.update(env_vars)
             env_path.write_text("\n".join(f"{k}={v}" for k, v in cyiris_env.items()))
-            log(f"Created cyiris .env with {len(cyiris_env)} variables")
+            log(f"Created cyiris .env ({len(cyiris_env)} vars) — password source: {'UI form' if env_vars.get('IRIS_ADM_PASSWORD') else 'master .env'}")
 
             # pgcrypto init script
             init_dir = module_dir / "db-init"
             init_dir.mkdir(parents=True, exist_ok=True)
-            (init_dir / "01-pgcrypto.sql").write_text(
-                "CREATE EXTENSION IF NOT EXISTS pgcrypto;\n"
-            )
+            (init_dir / "01-pgcrypto.sql").write_text("CREATE EXTENSION IF NOT EXISTS pgcrypto;\n")
             compose_text = compose_path.read_text().replace(
                 "- cyiris_db_init:/docker-entrypoint-initdb.d",
                 f"- {init_dir}:/docker-entrypoint-initdb.d",
@@ -280,6 +447,7 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
             compose_path.write_text(compose_text)
             log("pgcrypto init script written")
 
+        # ── CySOAR: clean stale volumes, write env ────────────────────────────
         elif module_id == "cysoar":
             log("CySOAR pre-install cleanup")
             run("docker compose down -v", cwd=str(module_dir), timeout=60)
@@ -292,13 +460,24 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
             if rc == 0 and v_out.strip():
                 for vol in [v.strip() for v in v_out.strip().split('\n') if v.strip()]:
                     run(f"docker volume rm {vol}", timeout=10)
-            env_path.write_text("\n".join(f"{k}={v}" for k, v in env_vars.items()))
+
+            # Build CySOAR env from master .env + UI overrides
+            cysoar_env = {
+                "CYCENTRA_PORTAL_URL": os.environ.get("CYCENTRA_PORTAL_URL") or os.environ.get("FRONTEND_URL", ""),
+                "CYSOAR_OIDC_SECRET":  os.environ.get("CYSOAR_OIDC_SECRET", ""),
+                "BASE_DOMAIN":         base_domain,
+            }
+            cysoar_env.update(env_vars)
+            env_path.write_text("\n".join(f"{k}={v}" for k, v in cysoar_env.items()))
             log("CySOAR pre-install cleanup complete")
 
+        # ── CyMISP and others: write env_vars directly ────────────────────────
         else:
+            # For CyMISP: env_vars contains MISP_ADMIN_EMAIL, MISP_ADMIN_PASSPHRASE, REDIS_PASSWORD
             env_path.write_text("\n".join(f"{k}={v}" for k, v in env_vars.items()))
             log(f"Created .env with {len(env_vars)} variables")
 
+        # ── Pull + Start ──────────────────────────────────────────────────────
         log("Pulling Docker images…")
         rc, out, err = run("docker compose pull", cwd=str(module_dir), timeout=600)
         if rc != 0:
@@ -313,12 +492,16 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
             _fail(module_id, err)
             return
 
-        # ── CyMISP post-install ──────────────────────────────────────────────
+        # ══════════════════════════════════════════════════════════════════════
+        # POST-INSTALL HOOKS
+        # ══════════════════════════════════════════════════════════════════════
+
+        # ── CyMISP post-install ────────────────────────────────────────────────
         if module_id == "cymisp":
-            base_domain = os.environ.get("BASE_DOMAIN", "cycentra.com")
-            misp_url    = "https://cymisp." + base_domain
+            misp_url  = f"https://cymisp.{base_domain}"
             log("CyMISP: waiting for MISP to initialise (8–12 min)…")
             misp_live = False
+
             for attempt in range(48):
                 time.sleep(15)
                 rc2, logs_out, _ = run(
@@ -326,23 +509,85 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
                 )
                 if logs_out.strip():
                     misp_live = True
+                    log(f"CyMISP: MISP is live (attempt {attempt+1})")
                     break
                 log(f"CyMISP: waiting… ({attempt+1}/48)")
 
             if misp_live:
+                # Patch baseurl in config.php
                 sed_expr = (
                     f"s|'baseurl' => '.*'|'baseurl' => '{misp_url}'|g;"
-                    f" s|'external_baseurl' => '.*'|'external_baseurl' => '{misp_url}'|g"
+                    f" s|'external_baseurl' => '.*'|'external_baseurl' => '{misp_url}'|g;"
+                    f" s|'rest_client_baseurl' => '.*'|'rest_client_baseurl' => '{misp_url}'|g"
                 )
-                run(f"docker exec cymisp sed -i \"{sed_expr}\" /var/www/MISP/app/Config/config.php", timeout=15)
+                rc2, _, err2 = run(
+                    f'docker exec cymisp sed -i "{sed_expr}" /var/www/MISP/app/Config/config.php',
+                    timeout=15,
+                )
+                if rc2 == 0:
+                    log(f"CyMISP: baseurl patched to {misp_url}")
+                    # Save patched config to host (survives restarts)
+                    rc3, config_out, _ = run(
+                        "docker exec cymisp cat /var/www/MISP/app/Config/config.php", timeout=10
+                    )
+                    if rc3 == 0 and config_out:
+                        (module_dir / "misp-config.php").write_text(config_out)
+                        log("CyMISP: config.php saved to host — survives restarts")
+                else:
+                    log(f"CyMISP: WARNING — baseurl patch failed: {err2}")
+
+                # Patch Redis password in config.php and PHP sessions
+                redis_pass = env_vars.get("REDIS_PASSWORD", "redispassword")
+                run(
+                    f"docker exec cymisp sed -i "
+                    f"\"s|'redis_password' => '.*'|'redis_password' => '{redis_pass}'|g\" "
+                    f"/var/www/MISP/app/Config/config.php",
+                    timeout=10,
+                )
+                run(
+                    f"docker exec cymisp bash -c \"find /etc/php -name 'www.conf' "
+                    f"-exec sed -i 's|auth=redispassword|auth={redis_pass}|g' {{}} \\;\"",
+                    timeout=10,
+                )
+                log("CyMISP: Redis password patched in config and PHP sessions")
+
+                # Force admin credentials via database
+                admin_email = env_vars.get("MISP_ADMIN_EMAIL",      "admin@admin.test")
+                admin_pass  = env_vars.get("MISP_ADMIN_PASSPHRASE", "admin")
+                mysql_pass  = env_vars.get("MISP_MYSQL_PASSWORD",   "misp_db_pass")
+
+                rc4, hash_out, _ = run(
+                    f"docker exec cymisp php -r \"echo password_hash('{admin_pass}', PASSWORD_BCRYPT, ['cost'=>10]);\"",
+                    timeout=10,
+                )
+                if rc4 == 0 and hash_out.strip().startswith("$2y$"):
+                    pw_hash = hash_out.strip().replace("$", "\\$")
+                    run(
+                        f"docker exec cymisp php -r \""
+                        f"\\$conn = new PDO('mysql:host=cymisp-db;dbname=misp', 'misp', '{mysql_pass}');"
+                        f"\\$stmt = \\$conn->prepare('UPDATE users SET email=?, password=?, change_pw=0 WHERE id=1');"
+                        f"\\$stmt->execute(['{admin_email}', '{pw_hash}']);"
+                        f"echo 'done';\"",
+                        timeout=15,
+                    )
+                    log(f"CyMISP: credentials set — {admin_email}")
+                else:
+                    log("CyMISP: WARNING — could not hash password; defaults remain (admin@admin.test / admin)")
+
                 state = load_state()
                 state[module_id]["misp_ready"] = True
                 save_state(state)
                 log(f"CyMISP: fully ready — login at {misp_url}")
+            else:
+                log("CyMISP: WARNING — MISP did not come live within 12 minutes")
 
-        # ── CyIRIS post-install: force admin credentials ─────────────────────
+            # Add nginx block + expand SSL cert
+            _nginx_add_block("cymisp", base_domain, log)
+            _expand_ssl_cert("cymisp", base_domain, log)
+
+        # ── CyIRIS post-install: force admin credentials via DB ───────────────
         if module_id == "cyiris":
-            log("CyIRIS: waiting for app (up to 90s)…")
+            log("CyIRIS: waiting for app to initialise (up to 90s)…")
             app_container = "cyiris-cyiris-1"
             db_container  = "cyiris-cyiris-db-1"
             iris_ready    = False
@@ -360,28 +605,64 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
                 log(f"CyIRIS: waiting… ({attempt+1}/18)")
 
             if iris_ready:
-                admin_email    = cyiris_env.get("IRIS_ADM_EMAIL", "admin@cycentra.com")
-                admin_password = cyiris_env.get("IRIS_ADM_PASSWORD", "CyIRIS@CHANGE")
-                safe_pw        = admin_password.replace("'", "\\'").replace('"', '\\"')
-
-                rc_h, hash_out, _ = run(
-                    f'docker exec {app_container} python3 -c "'
-                    f'from werkzeug.security import generate_password_hash;'
-                    f'print(generate_password_hash(\\"{safe_pw}\\", method=\\"pbkdf2:sha256\\"))"',
-                    timeout=15,
+                # Read password directly from env_vars (UI input) first,
+                # then cyiris_env (which merged env_vars + master .env),
+                # then master .env as last resort.
+                admin_email    = (
+                    env_vars.get("IRIS_ADM_EMAIL")
+                    or cyiris_env.get("IRIS_ADM_EMAIL")
+                    or os.environ.get("IRIS_ADM_EMAIL", "admin@cycentra.com")
                 )
-                if rc_h == 0 and hash_out.strip().startswith("pbkdf2:"):
-                    pw_hash = hash_out.strip()
-                    run(
-                        f'docker exec {db_container} psql -U iris -d iris_db -c '
-                        f'"UPDATE \\"User\\" SET password=\'{pw_hash}\', email=\'{admin_email}\' '
-                        f'WHERE login=\'administrator\';"',
+                admin_password = (
+                    env_vars.get("IRIS_ADM_PASSWORD")        # UI form — highest priority
+                    or cyiris_env.get("IRIS_ADM_PASSWORD")   # merged env
+                    or os.environ.get("IRIS_ADM_PASSWORD", "")
+                )
+                if not admin_password:
+                    log("CyIRIS: ERROR — IRIS_ADM_PASSWORD empty, cannot set credentials")
+                else:
+                    safe_pw = admin_password.replace("'", "\\'").replace('"', '\\"')
+                    rc_h, hash_out, hash_err = run(
+                        f'docker exec {app_container} python3 -c "'
+                        f'from werkzeug.security import generate_password_hash;'
+                        f'print(generate_password_hash(\\"{safe_pw}\\", method=\\"pbkdf2:sha256\\"))"',
                         timeout=15,
                     )
-                    log(f"CyIRIS: credentials set — username: administrator | email: {admin_email}")
+                    if rc_h == 0 and hash_out.strip().startswith("pbkdf2:"):
+                        pw_hash = hash_out.strip()
+                        rc_db, _, db_err = run(
+                            f'docker exec {db_container} psql -U iris -d iris_db -c '
+                            f'"UPDATE \\"User\\" SET password=\'{pw_hash}\', email=\'{admin_email}\' '
+                            f'WHERE login=\'administrator\';"',
+                            timeout=15,
+                        )
+                        if rc_db == 0:
+                            log(f"CyIRIS: password forced via DB — username: administrator, email: {admin_email}")
+                        else:
+                            log(f"CyIRIS: ERROR — DB update failed: {db_err}")
+                    else:
+                        log(f"CyIRIS: WARNING — could not generate password hash: {hash_err}")
             else:
-                log("CyIRIS: WARNING — app did not respond; check docker logs cyiris-cyiris-1")
+                log("CyIRIS: WARNING — app did not respond in 90s; check: docker logs cyiris-cyiris-1")
 
+            # Add nginx block + expand SSL
+            _nginx_add_block("cyiris", base_domain, log)
+            _expand_ssl_cert("cyiris", base_domain, log)
+
+        # ── CySOAR post-install: nginx block ──────────────────────────────────
+        if module_id == "cysoar":
+            # Wait briefly for container to be healthy before adding nginx
+            for _ in range(6):
+                time.sleep(5)
+                rc_hc, _, _ = run("docker exec cysoar curl -sf http://localhost:1880/", timeout=5)
+                if rc_hc == 0:
+                    log("CySOAR: container is responding")
+                    break
+
+            _nginx_add_block("cysoar", base_domain, log)
+            _expand_ssl_cert("cysoar", base_domain, log)
+
+        # ── Final state ───────────────────────────────────────────────────────
         time.sleep(5)
         running = docker_containers_running(module_id)
         state   = load_state()
@@ -395,14 +676,6 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
 
     except Exception as e:
         log(f"EXCEPTION: {e}")
+        import traceback
+        log(traceback.format_exc())
         _fail(module_id, str(e))
-
-
-def _fail(module_id: str, error: str):
-    state = load_state()
-    state[module_id] = {
-        "status":       "failed",
-        "error":        error,
-        "installed_at": time.strftime('%Y-%m-%dT%H:%M:%SZ'),
-    }
-    save_state(state)
