@@ -927,10 +927,18 @@ if [[ "$MODE" == "full" ]]; then
 
     step_header "RBAC & CONFIG"
 
-    cat > /opt/cycentra/rbac.json << RBACEOF
+    # Only create rbac.json if it does not already exist
+    if [[ ! -f /opt/cycentra/rbac.json ]]; then
+        info "rbac.json not found. Initializing with admin: ${CLIENT_EMAIL}"
+        cat > /opt/cycentra/rbac.json << RBACEOF
 { "${CLIENT_EMAIL}": { "role": "admin" } }
 RBACEOF
+        success "rbac.json initialized"
+    else
+        success "Existing rbac.json detected — preserving user permissions"
+    fi
 
+    # config.json should always be updated to reflect current version/domain
     cat > "$PORTAL_DIR/config.json" << CFGJSON
 {
   "base_domain": "${BASE_DOMAIN}",
@@ -942,10 +950,11 @@ RBACEOF
 }
 CFGJSON
 
-    success "RBAC and config.json written"
+    success "Portal config.json updated"
 
 fi
 
+# Ensure log directory and auth log exist with correct permissions
 mkdir -p /var/log/cycentra && touch /var/log/cycentra/auth.log
 chmod 644 /var/log/cycentra/auth.log
 
