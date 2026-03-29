@@ -17,8 +17,7 @@ Fixes vs previous version:
      All three modules (cyiris, cysoar, cymisp) now get nginx blocks on install
      and have them removed on uninstall.
   3. CyMISP: full post-install sequence restored (credentials, redis patch,
-     nginx block, certbot SSL expansion). 
-  4. CyMISP waits up to 12 minutes for MISP to come live before proceeding with
+     nginx block, certbot SSL expansion).
 """
 
 import os
@@ -68,25 +67,23 @@ def _nginx_block_for(module_id: str, base_domain: str) -> str:
         "cyiris": {
             "subdomain": f"cyiris.{base_domain}",
             "upstream":  "http://127.0.0.1:4433",
-            "extra":     (
+            "extra": (
+                "        proxy_http_version 1.1;\n"
+                "        proxy_set_header Host $host;\n"
                 "        proxy_set_header X-Real-IP $remote_addr;\n"
-                "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
                 "        proxy_set_header X-Forwarded-Proto https;\n"
-                "        proxy_read_timeout 300s;\n"
+                "        proxy_read_timeout 300;\n"
+                "        proxy_buffer_size 128k;\n"
+                "        proxy_buffers 4 256k;\n"
+                "        proxy_cookie_flags ~ samesite=none secure;\n"
+                '        add_header X-Frame-Options "" always;\\n'
+                f'        add_header Content-Security-Policy "frame-ancestors \'self\' https://cy360.{base_domain}" always;\\n'
+                f'        add_header Access-Control-Allow-Origin "https://cy360.{base_domain}" always;\\n'
+                "        add_header Access-Control-Allow-Credentials \"true\" always;\n"
+                "        if ($request_method = OPTIONS) { return 204; }\n"
             ),
         },
-        "cysoar": {
-            "subdomain": f"cysoar.{base_domain}",
-            "upstream":  "http://127.0.0.1:1880",
-            "extra":     (
-                "        proxy_set_header Upgrade $http_upgrade;\n"
-                "        proxy_set_header Connection 'upgrade';\n"
-                "        proxy_set_header X-Real-IP $remote_addr;\n"
-                "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
-                "        proxy_set_header X-Forwarded-Proto https;\n"
-                "        proxy_read_timeout 300s;\n"
-            ),
-        },
+        # CySOAR: path-based — handled by _nginx_inject_cysoar(), not _nginx_block_for()
         "cymisp": {
             "subdomain": f"cymisp.{base_domain}",
             "upstream":  "https://127.0.0.1:8243",
@@ -176,6 +173,55 @@ def _nginx_remove_block(module_id: str, base_domain: str):
 
     if new_content != content:
         NGINX_CONF.write_text(new_content)
+        run("nginx -t && systemctl reload nginx", timeout=15)
+
+
+def _nginx_inject_cysoar(base_domain: str, log_fn):
+    """
+    Inject location /cysoar/ into the cy360.DOMAIN portal server block.
+    CySOAR is path-based — not a subdomain. Idempotent.
+    """
+    if not NGINX_CONF.exists():
+        log_fn("cysoar: nginx config not found — skipping /cysoar/ injection")
+        return
+    text = NGINX_CONF.read_text()
+    if "location /cysoar/" in text:
+        log_fn("cysoar: /cysoar/ location block already exists")
+        return
+    block = (
+        "    location /cysoar/ {\n"
+        "        proxy_pass http://127.0.0.1:1880/;\n"
+        "        proxy_http_version 1.1;\n"
+        "        proxy_set_header Upgrade $http_upgrade;\n"
+        "        proxy_set_header Connection $connection_upgrade;\n"
+        "        proxy_set_header Host $host;\n"
+        "        proxy_read_timeout 120s;\n"
+        "        proxy_buffering off;\n"
+        "    }\n"
+    )
+    anchor = "    location /oidc/ {"
+    if anchor in text:
+        idx     = text.find(anchor)
+        end_idx = text.find("\n    }\n", idx)
+        if end_idx != -1:
+            ins     = end_idx + len("\n    }\n")
+            text    = text[:ins] + block + text[ins:]
+            NGINX_CONF.write_text(text)
+            rc, _, err = run("nginx -t && systemctl reload nginx", timeout=15)
+            log_fn("cysoar: /cysoar/ location injected and nginx reloaded" if rc == 0
+                   else f"cysoar: WARNING — nginx reload failed: {err}")
+            return
+    log_fn("cysoar: WARNING — could not find /oidc/ anchor to insert /cysoar/ block")
+
+
+def _nginx_remove_cysoar():
+    """Remove the /cysoar/ location block from the portal server block."""
+    if not NGINX_CONF.exists():
+        return
+    text     = NGINX_CONF.read_text()
+    new_text = re.sub(r'[ \t]+location /cysoar/ \{[^{}]+\}\n', '', text, flags=re.DOTALL)
+    if new_text != text:
+        NGINX_CONF.write_text(new_text)
         run("nginx -t && systemctl reload nginx", timeout=15)
 
 
@@ -317,10 +363,12 @@ def platform_uninstall():
             for vol in vols_out.strip().splitlines():
                 run(f"docker volume rm -f {vol.strip()} 2>/dev/null || true", timeout=10)
 
-        # 4. Remove nginx block (all three modules now have one)
+        # 4. Remove nginx config for this module
         base_domain = os.environ.get("BASE_DOMAIN", "cycentra.com")
-        if module_id in ("cyiris", "cysoar", "cymisp"):
+        if module_id in ("cyiris", "cymisp"):
             _nginx_remove_block(module_id, base_domain)
+        elif module_id == "cysoar":
+            _nginx_remove_cysoar()
 
         # 5. Remove module directory
         try:
@@ -646,23 +694,14 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
             else:
                 log("CyIRIS: WARNING — app did not respond in 90s; check: docker logs cyiris-cyiris-1")
 
-            # Add nginx block + expand SSL
+            # Add cyiris.DOMAIN nginx server block + expand SSL cert
             _nginx_add_block("cyiris", base_domain, log)
             _expand_ssl_cert("cyiris", base_domain, log)
 
-        # ── CySOAR post-install: nginx block ──────────────────────────────────
+        # ── CySOAR post-install ───────────────────────────────────────────────────
+        # Inject /cysoar/ location block into the portal server on CySOAR install
         if module_id == "cysoar":
-            # Wait briefly for container to be healthy before adding nginx
-            for _ in range(6):
-                time.sleep(5)
-                rc_hc, _, _ = run("docker exec cysoar curl -sf http://localhost:1880/", timeout=5)
-                if rc_hc == 0:
-                    log("CySOAR: container is responding")
-                    break
-
-            _nginx_add_block("cysoar", base_domain, log)
-            _expand_ssl_cert("cysoar", base_domain, log)
-
+            _nginx_inject_cysoar(base_domain, log)
         # ── Final state ───────────────────────────────────────────────────────
         time.sleep(5)
         running = docker_containers_running(module_id)
