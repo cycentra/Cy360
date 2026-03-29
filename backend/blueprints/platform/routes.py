@@ -17,7 +17,8 @@ Fixes vs previous version:
      All three modules (cyiris, cysoar, cymisp) now get nginx blocks on install
      and have them removed on uninstall.
   3. CyMISP: full post-install sequence restored (credentials, redis patch,
-     nginx block, certbot SSL expansion).
+     nginx block, certbot SSL expansion). 
+  4. CyMISP waits up to 12 minutes for MISP to come live before proceeding with
 """
 
 import os
