@@ -33,7 +33,9 @@ from core.config import MODULES_DIR
 from core.helpers import run, add_cors_headers
 from blueprints.platform.compose import (
     COMPOSE_TEMPLATES, VALID_MODULES,
-    CYSOAR_IMAGE, CYIRIS_IMAGE_APP, CYIRIS_IMAGE_DB,
+    _CYSOAR_IMAGE as CYSOAR_IMAGE,
+    _CYIRIS_IMAGE_APP as CYIRIS_IMAGE_APP,
+    _CYIRIS_IMAGE_DB as CYIRIS_IMAGE_DB,
 )
 from blueprints.platform.state import load_state, save_state
 from blueprints.platform.docker_utils import docker_containers_running
@@ -76,11 +78,11 @@ def _nginx_block_for(module_id: str, base_domain: str) -> str:
                 "        proxy_buffer_size 128k;\n"
                 "        proxy_buffers 4 256k;\n"
                 "        proxy_cookie_flags ~ samesite=none secure;\n"
-                '        add_header X-Frame-Options "" always;\\n'
-                f'        add_header Content-Security-Policy "frame-ancestors \'self\' https://cy360.{base_domain}" always;\\n'
-                f'        add_header Access-Control-Allow-Origin "https://cy360.{base_domain}" always;\\n'
-                "        add_header Access-Control-Allow-Credentials \"true\" always;\n"
-                "        if ($request_method = OPTIONS) { return 204; }\n"
+                '        add_header X-Frame-Options "" always;\n'
+                f'        add_header Content-Security-Policy "frame-ancestors \'self\' https://cy360.{base_domain}" always;\n'
+                f'        add_header Access-Control-Allow-Origin "https://cy360.{base_domain}" always;\n'
+                '        add_header Access-Control-Allow-Credentials "true" always;\n'
+                '        if ($request_method = OPTIONS) { return 204; }\n'
             ),
         },
         # CySOAR: path-based — handled by _nginx_inject_cysoar(), not _nginx_block_for()
@@ -165,9 +167,12 @@ def _nginx_remove_block(module_id: str, base_domain: str):
     subdomain = f"{module_id}.{base_domain}"
     content   = NGINX_CONF.read_text()
 
-    # Match both the HTTP redirect block and the HTTPS block for this subdomain
+    # Remove all server blocks for this subdomain.
+    # The regex handles one level of nested braces (location {} inside server {}).
     new_content = re.sub(
-        r'\nserver \{[^{}]*server_name ' + re.escape(subdomain) + r';[^{}]*\}',
+        r'\nserver\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*server_name\s+'
+        + re.escape(subdomain)
+        + r'[^{}]*(?:\{[^{}]*\}[^{}]*)*\}',
         '', content, flags=re.DOTALL
     )
 
@@ -199,19 +204,31 @@ def _nginx_inject_cysoar(base_domain: str, log_fn):
         "        proxy_buffering off;\n"
         "    }\n"
     )
-    anchor = "    location /oidc/ {"
-    if anchor in text:
-        idx     = text.find(anchor)
-        end_idx = text.find("\n    }\n", idx)
-        if end_idx != -1:
-            ins     = end_idx + len("\n    }\n")
-            text    = text[:ins] + block + text[ins:]
+    # Anchor 1: comment placed by setup.sh exactly where we want to insert
+    anchor_comment = "    # location /cysoar/ is injected here"
+    if anchor_comment in text:
+        ins  = text.find(anchor_comment)
+        text = text[:ins] + block + text[ins:]
+        NGINX_CONF.write_text(text)
+        rc, _, err = run("nginx -t && systemctl reload nginx", timeout=15)
+        log_fn("cysoar: /cysoar/ location injected and nginx reloaded" if rc == 0
+               else f"cysoar: WARNING — nginx reload failed: {err}")
+        return
+    # Anchor 2: insert before the closing brace of the cy360 server block
+    # Find the last } that closes a server block containing /oidc/
+    oidc_pos = text.find("location /oidc/")
+    if oidc_pos != -1:
+        # Find the next server-level closing brace after /oidc/
+        close = text.find("\n}", oidc_pos)
+        if close != -1:
+            ins  = close + 1  # insert before the newline+}
+            text = text[:ins] + "\n" + block + text[ins:]
             NGINX_CONF.write_text(text)
             rc, _, err = run("nginx -t && systemctl reload nginx", timeout=15)
             log_fn("cysoar: /cysoar/ location injected and nginx reloaded" if rc == 0
                    else f"cysoar: WARNING — nginx reload failed: {err}")
             return
-    log_fn("cysoar: WARNING — could not find /oidc/ anchor to insert /cysoar/ block")
+    log_fn("cysoar: WARNING — could not find anchor — add location /cysoar/ manually")
 
 
 def _nginx_remove_cysoar():
