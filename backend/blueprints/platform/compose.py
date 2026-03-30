@@ -107,9 +107,11 @@ services:
     container_name: cymisp
     restart: unless-stopped
     ports:
-      - "8243:80"
+      - "127.0.0.1:8200:80"
+      - "127.0.0.1:8243:443"
     environment:
-      - BASE_URL=https://cymisp.${BASE_DOMAIN}
+      - MISP_BASEURL=https://cymisp.${BASE_DOMAIN}
+      - MISP_EXTERNAL_BASEURL=https://cymisp.${BASE_DOMAIN}
       - MISP_ADMIN_EMAIL=${MISP_ADMIN_EMAIL:-admin@cycentra.local}
       - MISP_ADMIN_PASSPHRASE=${MISP_ADMIN_PASSPHRASE:-MISPadmin1234!}
       - MYSQL_HOST=cymisp-db
@@ -125,6 +127,9 @@ services:
         condition: service_healthy
       cymisp-redis:
         condition: service_started
+    volumes:
+      - cymisp_data:/var/www/MISP
+      - ./misp-config.php:/var/www/MISP/app/Config/config.php
 
   cymisp-db:
     image: mysql:8.0
@@ -142,6 +147,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 30s
 
   cymisp-redis:
     image: redis:7-alpine
@@ -151,6 +157,7 @@ services:
 
 volumes:
   cymisp_db_data:
+  cymisp_data:
 """,
 }
 
