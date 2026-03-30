@@ -707,7 +707,7 @@ done
 # NOTE v7.2: CyIRIS and CySOAR nginx config removed from here.
 # They are now managed dynamically by routes.py on module install/uninstall:
 #   CyIRIS  → adds cyiris.DOMAIN server block + certbot expand on install
-#   CySOAR  → injects location /cysoar/ into portal server on install
+#   CySOAR  → injects location CySOAR into portal server on install
 #   CyMISP  → was already routes.py-managed (unchanged)
 # Only permanent core services remain here: cy360, cyscan, cysiem.
 if [[ "$MODE" == "full" ]]; then
@@ -743,7 +743,7 @@ server {
     location /api/  { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; proxy_read_timeout 180s; }
     location /auth/ { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; }
     location /oidc/ { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; }
-    # location /cysoar/ is injected here by routes.py when CySOAR is installed via portal
+    # location cysoar is injected here by routes.py when CySOAR is installed via portal
 }
 
 # ── Backend / OIDC IdP (cyscan) ──────────────────────────────────────────────

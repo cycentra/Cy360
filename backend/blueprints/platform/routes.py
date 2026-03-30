@@ -452,40 +452,48 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
         # ── Per-module .env preparation ───────────────────────────────────────
 
         if module_id == "cyiris":
-            # ── Exactly matching original app.py logic ──
-            # 1. Read default from master .env
-            # 2. UI input overwrites via update() — so UI always wins
-            _iris_adm_password = os.environ.get("IRIS_ADM_PASSWORD", "")
-            if not _iris_adm_password and not env_vars.get("IRIS_ADM_PASSWORD"):
-                log("ERROR: IRIS_ADM_PASSWORD not set in /opt/cycentra/.env and not provided by UI")
+            # 1. Resolve password — Script 1 style
+            _ui_password     = (env_vars.get("IRIS_ADM_PASSWORD") or "").strip()
+            _master_password = (os.environ.get("IRIS_ADM_PASSWORD") or "").strip()
+            _final_password  = _ui_password or _master_password
+
+            if not _final_password:
+                log("ERROR: IRIS_ADM_PASSWORD missing — aborting")
                 raise ValueError("IRIS_ADM_PASSWORD is required")
 
+            # 2. Build module .env
             cyiris_env = {
                 "POSTGRES_PASSWORD":   os.environ.get("POSTGRES_PASSWORD") or os.environ.get("IRIS_DB_PASS", ""),
-                "IRIS_SECRET_KEY":     os.environ.get("IRIS_SECRET_KEY")   or os.environ.get("IRIS_SECRET", ""),
+                "IRIS_SECRET_KEY":     os.environ.get("IRIS_SECRET_KEY") or os.environ.get("IRIS_SECRET", ""),
                 "CYIRIS_OIDC_SECRET":  os.environ.get("CYIRIS_OIDC_SECRET", ""),
                 "CYCENTRA_PORTAL_URL": os.environ.get("CYCENTRA_PORTAL_URL") or os.environ.get("FRONTEND_URL", ""),
                 "IRIS_ADM_EMAIL":      os.environ.get("IRIS_ADM_EMAIL", "admin@cycentra.com"),
-                "IRIS_ADM_PASSWORD":   _iris_adm_password,
+                "IRIS_ADM_PASSWORD":   _final_password,
             }
-            cyiris_env.update(env_vars)   # UI-passed values overwrite — this is the key line
+            env_vars.pop("IRIS_ADM_PASSWORD", None)
+            cyiris_env.update(env_vars)
             env_path.write_text("\n".join(f"{k}={v}" for k, v in cyiris_env.items()))
-            log(f"CyIRIS .env written ({len(cyiris_env)} vars) — "
-                f"password source: {'UI form' if env_vars.get('IRIS_ADM_PASSWORD') else 'master .env'}")
 
-            # pgcrypto init script
+            # 3. Write pgcrypto init script
             init_dir = module_dir / "db-init"
             init_dir.mkdir(parents=True, exist_ok=True)
             (init_dir / "01-pgcrypto.sql").write_text("CREATE EXTENSION IF NOT EXISTS pgcrypto;\n")
-            compose_text = compose_path.read_text().replace(
+
+            # 4. Patch Compose file (CRITICAL: This is what Script 1 added)
+            compose_text = compose_path.read_text()
+            compose_text = compose_text.replace(
                 "- cyiris_db_init:/docker-entrypoint-initdb.d",
-                f"- {init_dir}:/docker-entrypoint-initdb.d",
+                f"- {init_dir}:/docker-entrypoint-initdb.d"
+            ).replace(
+                'IRIS_ADM_PASSWORD: "${IRIS_ADM_PASSWORD}"',
+                f'IRIS_ADM_PASSWORD: "{_final_password}"'
             )
             compose_path.write_text(compose_text)
-            log("pgcrypto init script written")
+            log(f"CyIRIS setup complete: hardcoded password into docker-compose.yml")
 
         elif module_id == "cysoar":
             # Pre-install cleanup — stale volumes cause httpStatic issues
+            print(f"DEBUG: Current module_id is: '{module_id}'")
             log("CySOAR pre-install cleanup — removing stale containers and volumes")
             run("docker compose down -v", cwd=str(module_dir), timeout=60)
             rc, c_out, _ = run("docker ps -aq --filter 'name=cysoar'", timeout=10)
@@ -636,73 +644,33 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
             _nginx_add_cymisp(base_domain, log)
             _expand_ssl("cymisp", base_domain, log)
 
-        # ── CyIRIS: wait for app, force credentials via DB ────────────────────
+        # Add nginx block + expand SSL
         if module_id == "cyiris":
-            log("CyIRIS: waiting for app to initialise (up to 90s)...")
-            app_container = "cyiris-cyiris-1"
-            db_container  = "cyiris-cyiris-db-1"
-            iris_ready    = False
-
-            for attempt in range(18):
-                time.sleep(5)
-                rc_ping, _, _ = run(
-                    f"docker exec {app_container} curl -sf http://localhost:8000/api/ping",
-                    timeout=10
-                )
-                if rc_ping == 0:
-                    iris_ready = True
-                    log(f"CyIRIS: app is up (attempt {attempt + 1})")
-                    break
-                log(f"CyIRIS: waiting for app... ({attempt + 1}/18)")
-
-            if iris_ready:
-                # Use the merged cyiris_env — guaranteed to have the UI password after update()
-                admin_email    = cyiris_env.get("IRIS_ADM_EMAIL",    "admin@cycentra.com")
-                admin_password = cyiris_env.get("IRIS_ADM_PASSWORD", "")
-                if not admin_password:
-                    log("CyIRIS: ERROR — IRIS_ADM_PASSWORD empty; cannot force credentials")
-                else:
-                    safe_pw = admin_password.replace("'", "\\'").replace('"', '\\"')
-                    rc_h, hash_out, hash_err = run(
-                        f'docker exec {app_container} python3 -c "'
-                        f'from werkzeug.security import generate_password_hash;'
-                        f'print(generate_password_hash(\\"{safe_pw}\\", method=\\"pbkdf2:sha256\\"))"',
-                        timeout=15
-                    )
-                    if rc_h == 0 and hash_out.strip().startswith("pbkdf2:"):
-                        pw_hash = hash_out.strip()
-                        # IMPORTANT: table name is "user" (lowercase) — DFIR-IRIS schema
-                        rc_db, _, db_err = run(
-                            f'docker exec {db_container} psql -U iris -d iris_db -c '
-                            f'"UPDATE \\"user\\" SET password=\'{pw_hash}\' '
-                            f'WHERE login=\'administrator\';"',
-                            timeout=15
-                        )
-                        if rc_db == 0:
-                            log(f"CyIRIS: password forced via DB — login: administrator")
-                        else:
-                            log(f"CyIRIS: ERROR — DB update failed: {db_err}")
-                    else:
-                        log(f"CyIRIS: WARNING — could not generate hash: {hash_err}")
-            else:
-                log("CyIRIS: WARNING — app did not respond in 90s; credentials not set")
-                log("CyIRIS: check logs: docker compose logs cyiris-cyiris-1 | grep password")
-
-            # Add nginx block + expand SSL
+            log("CyIRIS: Setup complete via environment injection. Finalizing Nginx...")
             _nginx_add_cyiris(base_domain, log)
             _expand_ssl("cyiris", base_domain, log)
 
         # ── CySOAR: inject /cysoar/ location into portal server ───────────────
+
         if module_id == "cysoar":
-            # Brief wait for container health
+            print(f"DEBUG: Current module_id is: '{module_id}'")
+            
+            # Standardize indentation (4 spaces is the Python standard)
             for _ in range(6):
                 time.sleep(5)
+                # Check if the container is up and the service is responding
                 rc_hc, _, _ = run("docker exec cysoar curl -sf http://localhost:1880/", timeout=5)
+                
                 if rc_hc == 0:
                     log("CySOAR: container is responding")
                     break
-            _nginx_inject_cysoar(base_domain, log)
+            else:
+                # Optional: Add a warning if the loop finishes without breaking (success)
+                log("WARNING: CySOAR container did not respond in time, attempting Nginx config anyway.")
 
+            # This must align with the 'print' and 'for' to be inside the 'if'
+            _nginx_inject_cysoar(base_domain, log)
+        
         # ── Final state ───────────────────────────────────────────────────────
         time.sleep(5)
         running = docker_containers_running(module_id)

@@ -129,8 +129,7 @@ services:
         condition: service_started
     volumes:
       - cymisp_data:/var/www/MISP
-      - ./misp-config.php:/var/www/MISP/app/Config/config.php
-
+  
   cymisp-db:
     image: mysql:8.0
     container_name: cymisp-db
