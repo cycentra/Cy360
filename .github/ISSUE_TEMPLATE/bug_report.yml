@@ -1,0 +1,54 @@
+name: Bug Report
+description: Report a bug in this project
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "**Thanks for reporting a bug. Please fill in as much detail as possible.**"
+  - type: input
+    id: version
+    attributes:
+      label: Project version
+      placeholder: "e.g. 1.0.0 (run: git log --oneline -1)"
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which component?
+      options:
+        - Backend
+        - Frontend
+        - API
+        - Integration
+        - Deployment
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      placeholder: "Describe the bug clearly"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Go to...\n2. Click...\n3. See error"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: "Paste relevant output or logs"
+      render: shell

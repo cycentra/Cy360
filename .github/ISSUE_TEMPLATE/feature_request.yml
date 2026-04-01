@@ -1,0 +1,29 @@
+name: Feature Request
+description: Suggest a new feature for this project
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      placeholder: "What are you trying to do that this project doesn't support today?"
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which area?
+      options:
+        - Backend
+        - Frontend
+        - API
+        - Integration
+        - Deployment
+        - New module

@@ -963,7 +963,8 @@ step_header "CRON JOBS"
 
 WORDLIST=$(find "$SITE_PKG" -name "update_wordlist.py" 2>/dev/null | head -1 || true)
 if [[ -n "$WORDLIST" ]]; then
-    ( crontab -l 2>/dev/null | grep -v "update_wordlist"
+    # Added "|| true" to crontab -l to prevent exit if crontab is empty
+    ( crontab -l 2>/dev/null || true | grep -v "update_wordlist"
       echo "0 0 * * * ${PYTHON_BIN} ${WORDLIST} >> /opt/cycentra/cron.log 2>&1" ) | crontab -
     success "Cron: ASM wordlist update registered (daily midnight)"
 else
