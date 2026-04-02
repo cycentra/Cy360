@@ -330,8 +330,14 @@ StandardError=append:/opt/cycentra/engine.log
 WantedBy=multi-user.target
 UNITEOF
 
-# Disable Filebeat if present (it crashes on kernel 6.x)
-systemctl disable --now filebeat 2>/dev/null || true
+# Remove Filebeat if installed — it crashes on kernel 6.x (seccomp pthread issue)
+# Guard: only runs when the package is actually present; safe to re-run idempotently.
+if dpkg -l filebeat &>/dev/null 2>&1; then
+    systemctl disable --now filebeat 2>/dev/null || true
+    apt-get purge -y filebeat 2>/dev/null || true
+    rm -rf /etc/filebeat /var/lib/filebeat /var/log/filebeat
+    success "Filebeat removed (replaced by wazuh-to-redis)"
+fi
 
 # Ensure Wazuh alerts log is readable
 if [[ -f /var/ossec/logs/alerts/alerts.json ]]; then
