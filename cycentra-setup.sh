@@ -343,7 +343,7 @@ if [[ "$MODE" == "full" ]]; then
     ask CLIENT_EMAIL "Primary admin email"        "admin@${CLIENT_NAME,,}.com"
     ask BASE_DOMAIN  "Base domain"                "${CLIENT_NAME,,}.com"
     echo ""
-    info "Subdomains: cy360 · cyscan · cysiem · cyiris · cysoar  (all on .${BASE_DOMAIN})"
+    info "Subdomains: cy360 · cyscan · cysiem · cyiris · cysoar · cymind  (all on .${BASE_DOMAIN})"
     echo ""
     if ! ask_yn "Are all subdomains pointing at this server in DNS?"; then
         SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
@@ -798,6 +798,56 @@ server {
 }
 # cyiris.DOMAIN server block is added by routes.py when CyIRIS is installed via portal
 # cymisp.DOMAIN server block is added by routes.py when CyMISP is installed via portal
+
+# ── CyMind AI (cymind / cyq) ─────────────────────────────────────────────────
+server { listen 80; server_name cymind.${BASE_DOMAIN} cyq.${BASE_DOMAIN}; return 301 https://\$host\$request_uri; }
+server {
+    listen 443 ssl http2; server_name cymind.${BASE_DOMAIN} cyq.${BASE_DOMAIN};
+    ssl_certificate     /etc/letsencrypt/live/cy360.${BASE_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/cy360.${BASE_DOMAIN}/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    client_max_body_size 500M;
+
+    # ── SSE streaming (chat/stream, model pull) — no buffering ────
+    location ~ ^/api/v1/(chat/stream|models/.*/pull) {
+        proxy_pass         http://127.0.0.1:${CYMIND_PORT:-8080};
+        proxy_http_version 1.1;
+        proxy_set_header   Host              \$host;
+        proxy_set_header   X-Real-IP         \$remote_addr;
+        proxy_set_header   X-Forwarded-For   \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_set_header   Connection        "";
+        proxy_buffering    off;
+        proxy_cache        off;
+        proxy_read_timeout 3600s;
+        chunked_transfer_encoding on;
+    }
+
+    # ── All API requests ──────────────────────────────────────────
+    location /api/ {
+        proxy_pass         http://127.0.0.1:${CYMIND_PORT:-8080};
+        proxy_http_version 1.1;
+        proxy_set_header   Host              \$host;
+        proxy_set_header   X-Real-IP         \$remote_addr;
+        proxy_set_header   X-Forwarded-For   \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_set_header   Connection        "";
+        proxy_read_timeout 300s;
+    }
+
+    # ── Frontend SPA ──────────────────────────────────────────────
+    location / {
+        proxy_pass         http://127.0.0.1:${CYMIND_PORT:-8080};
+        proxy_http_version 1.1;
+        proxy_set_header   Host              \$host;
+        proxy_set_header   X-Real-IP         \$remote_addr;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 60s;
+    }
+}
 NGINXEOF
 
     cp "$SSL_CONF" "$SSL_CONF_BACKUP"
