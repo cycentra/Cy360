@@ -110,16 +110,26 @@ async def enrich_with_cymind(
     base_url, api_key, model = config
     logger.info(f"🧠 [CyMind] Sending ASM enrichment request for {domain} (model: {model})...")
 
+    # Override CyMind's default system prompt (which uses markdown) with a strict
+    # JSON-only instruction so the LLM never wraps output in markdown fences.
+    _CYMIND_ASM_SYSTEM = (
+        "You are a security analysis engine. "
+        "You MUST respond with ONLY a valid raw JSON array — no markdown, no code fences, "
+        "no explanation, no preamble, no trailing text. "
+        "Output starts with '[' and ends with ']'. Nothing else."
+    )
+
     payload = {
         "messages":     [{"role": "user", "content": prompt}],
+        "system":       _CYMIND_ASM_SYSTEM,
         "model":        model,
         "use_rag":      False,   # ASM enrichment uses direct scan data, not RAG docs
         "use_external": False,   # Stay on-premise — do not relay to external AI
-        "temperature":  0.3,     # Lower temp for structured/deterministic JSON output
+        "temperature":  0.2,     # Lowest practical temp for deterministic structured output
     }
 
     try:
-        timeout_config = httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=10.0)
+        timeout_config = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
         async with httpx.AsyncClient(timeout=timeout_config) as client:
             resp = await client.post(
                 f"{base_url}/api/v1/chat",
@@ -132,16 +142,22 @@ async def enrich_with_cymind(
             resp.raise_for_status()
             data    = resp.json()
             content = data.get("content", "")
-            # Strip any markdown fences CyMind may wrap around JSON
-            content = content.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-            result  = json.loads(content)
+            # Robustly extract the first JSON array from the response.
+            # Uses regex to find the outermost [...] block, handling cases where
+            # the LLM wraps output in markdown fences or adds trailing commentary.
+            import re as _re
+            match = _re.search(r'\[.*\]', content, _re.DOTALL)
+            if not match:
+                logger.error(f"❌ [CyMind] No JSON array found in response. Raw: {content[:300]}")
+                return None
+            result = json.loads(match.group(0))
             if isinstance(result, list):
                 logger.info(f"✅ [CyMind] Enrichment succeeded for {domain} — {len(result)} findings.")
                 return result
             logger.warning(f"⚠️ [CyMind] Unexpected response shape (not a list): {str(result)[:200]}")
             return None
     except json.JSONDecodeError as e:
-        logger.error(f"❌ [CyMind] Malformed JSON in response: {e}")
+        logger.error(f"❌ [CyMind] Malformed JSON in response: {e}\nRaw snippet: {content[:300]}")
     except httpx.HTTPStatusError as e:
         logger.error(f"❌ [CyMind] HTTP {e.response.status_code}: {e.response.text[:300]}")
     except Exception as e:
