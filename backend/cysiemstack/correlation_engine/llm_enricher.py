@@ -1,13 +1,17 @@
 """
 llm_enricher.py
-Ollama LLM enrichment for incidents.
+Incident narrative generation via LLM.
+
+Provider priority:
+  1. CyMind  — if CYMIND_API_KEY is set in cysiemstack.env  (OpenAI-compatible /api/v1/chat)
+  2. Ollama  — fallback if CyMind is not configured         (/api/generate)
 
 Generates:
   1. Analyst summary  — plain English incident narrative
   2. Remediation steps — prioritised, asset-specific response steps
 
-Runs async, non-blocking. Falls back gracefully if Ollama is unavailable.
 Only triggers for critical/high incidents with ≥3 alerts.
+Falls back gracefully if the LLM service is unavailable.
 """
 import json
 from datetime import datetime, timezone
@@ -77,6 +81,123 @@ Tactics: {', '.join(incident.mitre_tactics or [])}
 
 Correlation Rules Triggered:
 {corr_rules}
+
+{misp_section}
+
+Top Alerts:
+{alert_lines}
+"""
+
+
+def _parse_response(raw: str) -> tuple[str, str]:
+    summary = ''
+    remediation = ''
+    try:
+        if 'ANALYST_SUMMARY:' in raw and 'REMEDIATION_STEPS:' in raw:
+            parts = raw.split('REMEDIATION_STEPS:')
+            summary = parts[0].replace('ANALYST_SUMMARY:', '').strip()
+            remediation = parts[1].strip() if len(parts) > 1 else ''
+        else:
+            summary = raw.strip()
+    except Exception:
+        summary = raw.strip()
+    return summary, remediation
+
+
+async def _call_cymind(context: str) -> str:
+    """Call CyMind /api/v1/chat (OpenAI messages format). Returns raw text."""
+    model_payload = {}
+    if settings.cymind_model:
+        model_payload["model"] = settings.cymind_model
+
+    async with httpx.AsyncClient(
+        base_url=settings.cymind_url,
+        headers={"Authorization": f"Bearer {settings.cymind_api_key}"},
+        timeout=120.0,
+    ) as client:
+        resp = await client.post('/api/v1/chat', json={
+            **model_payload,
+            "messages": [
+                {"role": "system",  "content": SYSTEM_PROMPT},
+                {"role": "user",    "content": f"Analyse this security incident:\n\n{context}\n\nProvide ANALYST_SUMMARY and REMEDIATION_STEPS."},
+            ],
+            "use_rag":  False,
+            "temperature": 0.1,
+        })
+    if resp.status_code != 200:
+        raise RuntimeError(f"CyMind returned {resp.status_code}")
+    data = resp.json()
+    # CyMind returns {"response": "...", ...}
+    return data.get("response") or data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+
+async def _call_ollama(context: str) -> str:
+    """Call local Ollama /api/generate. Returns raw text."""
+    prompt = f"Analyse this security incident:\n\n{context}\n\nProvide ANALYST_SUMMARY and REMEDIATION_STEPS."
+    async with httpx.AsyncClient(base_url=settings.ollama_url, timeout=90.0) as client:
+        resp = await client.post('/api/generate', json={
+            'model':  settings.ollama_model,
+            'prompt': prompt,
+            'system': SYSTEM_PROMPT,
+            'stream': False,
+            'options': {'temperature': 0.1, 'num_predict': 600},
+        })
+    if resp.status_code != 200:
+        raise RuntimeError(f"Ollama returned {resp.status_code}")
+    return resp.json().get('response', '')
+
+
+async def enrich_incident(db: AsyncSession, incident: Incident) -> dict:
+    """Generate LLM narrative for an incident. Returns dict or empty dict."""
+    if not settings.llm_enabled:
+        return {}
+
+    result = await db.execute(select(Alert).where(Alert.incident_id == incident.id))
+    alerts = result.scalars().all()
+    if not alerts:
+        return {}
+
+    context = _build_context(incident, alerts)
+    use_cymind = bool(settings.cymind_api_key)
+
+    try:
+        if use_cymind:
+            raw = await _call_cymind(context)
+            provider = "cymind"
+        else:
+            raw = await _call_ollama(context)
+            provider = "ollama"
+
+        summary, remediation = _parse_response(raw)
+
+        incident.llm_summary      = summary
+        incident.llm_remediation  = remediation
+        incident.llm_generated_at = datetime.now(timezone.utc)
+        await db.flush()
+
+        log.info('llm_enrichment_done', incident_id=incident.id, provider=provider)
+        return {'summary': summary, 'remediation': remediation}
+
+    except httpx.ConnectError as e:
+        provider = "cymind" if use_cymind else "ollama"
+        log.warning(f'{provider}_unavailable', url=str(e))
+        # If CyMind failed, try Ollama as fallback
+        if use_cymind:
+            try:
+                raw = await _call_ollama(context)
+                summary, remediation = _parse_response(raw)
+                incident.llm_summary      = summary
+                incident.llm_remediation  = remediation
+                incident.llm_generated_at = datetime.now(timezone.utc)
+                await db.flush()
+                log.info('llm_enrichment_done', incident_id=incident.id, provider='ollama_fallback')
+                return {'summary': summary, 'remediation': remediation}
+            except Exception:
+                pass
+        return {}
+    except Exception as e:
+        log.error('llm_enrichment_error', incident_id=incident.id, error=str(e))
+        return {}
 
 {misp_section}
 

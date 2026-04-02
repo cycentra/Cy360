@@ -179,7 +179,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
             style={{ background: "rgba(77,158,255,0.1)", border: "1px solid rgba(77,158,255,0.3)",
               color: "#4d9eff", padding: "6px 12px", borderRadius: 4, cursor: "pointer",
               fontSize: 11, fontFamily: "monospace", textDecoration: "none", whiteSpace: "nowrap" }}>
-            ↗ Investigate in Wazuh
+            ↗ Investigate in CySIEM Dashboard
           </a>
           <button onClick={onClose}
             style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)",
