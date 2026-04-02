@@ -21,16 +21,10 @@ class Settings(BaseSettings):
     misp_api_key: str = ""
     misp_enabled: bool = False
 
-    # LLM — Ollama (local fallback)
-    ollama_url: str = "http://127.0.0.1:11434"
-    ollama_model: str = "llama3.1:8b"
+    # LLM — provider and credentials are read from /opt/cycentra/ai_settings.json
+    # (written by the AI Settings page in the portal — no separate config needed).
+    # Set LLM_ENABLED=false to disable LLM enrichment entirely.
     llm_enabled: bool = True
-
-    # LLM — CyMind (preferred when configured)
-    # Set cymind_api_key to a pak_... key to enable; leave blank to use Ollama
-    cymind_url: str = "http://127.0.0.1:8100"
-    cymind_api_key: str = ""
-    cymind_model: str = ""          # empty = CyMind picks its default model
 
     # Correlation engine tuning
     correlation_window_minutes: int = 15
