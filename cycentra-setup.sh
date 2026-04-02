@@ -1234,7 +1234,8 @@ fi
 echo -e "  ${BOLD}${YELLOW}Next steps:${NC}"
 echo -e "  ${DIM}1. Set WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env${NC}"
 echo -e "  ${DIM}   then: systemctl restart cysiemstack-engine${NC}"
-echo -e "  ${DIM}2. Verify Filebeat is forwarding: redis-cli -p 6379 llen cysiemstack:alerts:raw${NC}"
+echo -e "  ${DIM}2. Verify alerts flowing: redis-cli -p 6379 llen cysiemstack:alerts:raw${NC}"
+echo -e "  ${DIM}   (wazuh-to-redis tails Wazuh → Redis — check: journalctl -u wazuh-to-redis -n 20)${NC}"
 echo -e "  ${DIM}3. Check engine log: tail -f /opt/cycentra/engine.log${NC}"
 echo -e "  ${DIM}4. Install CyIRIS / CySOAR via portal${NC}"
 echo -e "  ${DIM}5. To update: sudo bash cycentra-setup.sh --update${NC}"
@@ -1279,7 +1280,8 @@ Paths:
 Next steps:
   1. Set WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env
      then: systemctl restart cysiemstack-engine
-  2. Verify Filebeat: redis-cli -p 6379 llen cysiemstack:alerts:raw
+  2. Verify alerts flowing: redis-cli -p 6379 llen cysiemstack:alerts:raw
+     (wazuh-to-redis service tails Wazuh alerts.json → Redis)
   3. Check engine log: tail -f /opt/cycentra/engine.log
   4. Install CyIRIS/CySOAR via portal
   5. Update: sudo bash cycentra-setup.sh --update
