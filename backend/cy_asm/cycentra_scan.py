@@ -33,9 +33,120 @@ from google.genai import types
 
 logger = setup_logging()
 
-# --- OLLAMA CONFIG ---
-OLLAMA_BASE_URL = "http://116.203.115.95:11434"
-OLLAMA_MODEL = "mranv/siem-llama-3.1:v1"
+# --- AI SETTINGS: dynamic read from /opt/cycentra/ai_settings.json ---
+_AI_SETTINGS_FILE = Path("/opt/cycentra/ai_settings.json")
+
+# Hardcoded fallbacks (used when no settings file exists)
+_FALLBACK_OLLAMA_URL   = "http://116.203.115.95:11434"
+_FALLBACK_OLLAMA_MODEL = "mranv/siem-llama-3.1:v1"
+
+
+def _load_ai_settings() -> dict:
+    """Load AI settings persisted by the UI. Returns empty dict on any failure."""
+    try:
+        if _AI_SETTINGS_FILE.exists():
+            return json.loads(_AI_SETTINGS_FILE.read_text())
+    except Exception as e:
+        logger.warning(f"⚠️ [AI] Could not load ai_settings.json: {e}")
+    return {}
+
+
+def _get_ollama_config() -> tuple[str, str]:
+    """Return (base_url, model) from saved settings or fallback defaults."""
+    settings = _load_ai_settings()
+    fields   = settings.get("fields", {})
+    url      = fields.get("baseUrl", "").strip() or _FALLBACK_OLLAMA_URL
+    model    = fields.get("model",   "").strip() or _FALLBACK_OLLAMA_MODEL
+    return url, model
+
+
+def _get_gemini_key() -> str:
+    """Return Gemini API key from saved settings or env/config fallback."""
+    settings = _load_ai_settings()
+    provider = settings.get("provider", "")
+    if provider == "gemini":
+        key = settings.get("fields", {}).get("apiKey", "").strip()
+        if key:
+            return key
+    return GOOGLE_GEMINI_KEY
+
+
+def _get_cymind_config() -> tuple[str, str, str] | None:
+    """
+    Return (base_url, api_key, model) if provider=cymind is configured.
+    Returns None if CyMind is not the selected provider or config is incomplete.
+    """
+    settings = _load_ai_settings()
+    if settings.get("provider") != "cymind":
+        return None
+    fields  = settings.get("fields", {})
+    url     = fields.get("baseUrl", "").strip()
+    api_key = fields.get("apiKey",  "").strip()
+    model   = fields.get("model",   "").strip() or "mistral:7b"
+    if not url or not api_key:
+        logger.warning("⚠️ [CyMind] Provider set to cymind but baseUrl or apiKey is missing.")
+        return None
+    return url.rstrip("/"), api_key, model
+
+
+async def enrich_with_cymind(
+    context_payload: dict,
+    domain: str,
+    prompt: str,
+) -> list | None:
+    """
+    Call CyMind's authenticated /api/v1/chat endpoint for ASM enrichment.
+    Returns parsed JSON list on success, None on failure.
+
+    CyMind API contract (from cymind/api/routers/chat.py):
+      POST /api/v1/chat
+      Authorization: Bearer <pak_...>
+      Body: { messages, model, use_rag, system }
+    """
+    config = _get_cymind_config()
+    if config is None:
+        return None
+
+    base_url, api_key, model = config
+    logger.info(f"🧠 [CyMind] Sending ASM enrichment request for {domain} (model: {model})...")
+
+    payload = {
+        "messages":     [{"role": "user", "content": prompt}],
+        "model":        model,
+        "use_rag":      False,   # ASM enrichment uses direct scan data, not RAG docs
+        "use_external": False,   # Stay on-premise — do not relay to external AI
+        "temperature":  0.3,     # Lower temp for structured/deterministic JSON output
+    }
+
+    try:
+        timeout_config = httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=10.0)
+        async with httpx.AsyncClient(timeout=timeout_config) as client:
+            resp = await client.post(
+                f"{base_url}/api/v1/chat",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type":  "application/json",
+                },
+                json=payload,
+            )
+            resp.raise_for_status()
+            data    = resp.json()
+            content = data.get("content", "")
+            # Strip any markdown fences CyMind may wrap around JSON
+            content = content.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+            result  = json.loads(content)
+            if isinstance(result, list):
+                logger.info(f"✅ [CyMind] Enrichment succeeded for {domain} — {len(result)} findings.")
+                return result
+            logger.warning(f"⚠️ [CyMind] Unexpected response shape (not a list): {str(result)[:200]}")
+            return None
+    except json.JSONDecodeError as e:
+        logger.error(f"❌ [CyMind] Malformed JSON in response: {e}")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"❌ [CyMind] HTTP {e.response.status_code}: {e.response.text[:300]}")
+    except Exception as e:
+        logger.error(f"❌ [CyMind] Request failed: {type(e).__name__}: {e}")
+    return None
 
 
 def _trim_payload(context_payload: dict, max_chars: int = 3000) -> dict:
@@ -48,15 +159,16 @@ def _trim_payload(context_payload: dict, max_chars: int = 3000) -> dict:
 
 
 async def get_available_ollama_models() -> List[str]:
-    """Fetches the list of pulled models from Ollama on server B."""
+    """Fetches the list of pulled models from Ollama (URL read from ai_settings.json)."""
+    ollama_url, _ = _get_ollama_config()
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{OLLAMA_BASE_URL}/api/tags")
+            response = await client.get(f"{ollama_url}/api/tags")
             response.raise_for_status()
             models = response.json().get("models", [])
             return [m["name"] for m in models]
     except Exception as e:
-        logger.warning(f"⚠️ [Ollama] Could not reach server B to check models: {e}")
+        logger.warning(f"⚠️ [Ollama] Could not reach Ollama at {ollama_url}: {e}")
         return []
 
 
@@ -121,10 +233,16 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> 
     Return ONLY the raw JSON list, no markdown, no explanation.
     """
 
-    # ── ATTEMPT 1: Google Gemini ──────────────────────────────────────────────
+    # ── ATTEMPT 1: CyMind (on-premise, authenticated, preferred) ─────────────
+    cymind_result = await enrich_with_cymind(context_payload, domain, prompt)
+    if cymind_result is not None:
+        return cymind_result
+
+    # ── ATTEMPT 2: Google Gemini ──────────────────────────────────────────────
     try:
         logger.info(f"🤖 [AI] Trying Google Gemini for {domain}...")
-        client = genai.Client(api_key=GOOGLE_GEMINI_KEY)
+        gemini_key = _get_gemini_key()
+        client = genai.Client(api_key=gemini_key)
         response = await asyncio.to_thread(
             client.models.generate_content,
             model="gemini-2.5-flash",
@@ -137,10 +255,12 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> 
 
     except Exception as gemini_err:
         logger.warning(f"⚠️ [AI] Gemini failed: {type(gemini_err).__name__}: {gemini_err}")
-        logger.info(f"🔄 [AI] Falling back to Ollama ({OLLAMA_MODEL}) for {domain}...")
+        _, ollama_model = _get_ollama_config()
+        logger.info(f"🔄 [AI] Falling back to Ollama ({ollama_model}) for {domain}...")
 
-    # ── ATTEMPT 2: Ollama (trimmed payload + extended timeout) ────────────────
-    resolved_model = await resolve_ollama_model(OLLAMA_MODEL)
+    # ── ATTEMPT 3: Ollama (trimmed payload + extended timeout) ────────────────
+    ollama_url, ollama_model = _get_ollama_config()
+    resolved_model = await resolve_ollama_model(ollama_model)
 
     if resolved_model is None:
         logger.error("❌ [AI] Ollama unavailable or model missing. Returning empty.")
@@ -177,7 +297,7 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> 
             logger.info(f"⏳ [AI] Sending to Ollama (streaming, may take a few mins)...")
             async with http_client.stream(
                 "POST",
-                f"{OLLAMA_BASE_URL}/api/generate",
+                f"{ollama_url}/api/generate",
                 json={
                     "model": resolved_model,
                     "prompt": prompt_ollama,
@@ -213,7 +333,7 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> 
             f"{traceback.format_exc()}"
         )
 
-    # ── BOTH FAILED ───────────────────────────────────────────────────────────
+    # ── ALL PROVIDERS EXHAUSTED (CyMind → Gemini → Ollama) ───────────────────
     logger.error(f"❌ [AI] All enrichment providers exhausted for {domain}. Returning empty.")
     return []
 

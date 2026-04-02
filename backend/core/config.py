@@ -78,8 +78,9 @@ RBAC_FILE     = Path("/opt/cycentra/rbac.json")
 AUTH_LOG_FILE = Path("/var/log/cycentra/auth.log")
 MODULES_DIR   = Path("/opt/cycentra/modules")
 MODULES_STATE = Path("/opt/cycentra/modules_state.json")
-SCANS_DIR     = Path("/var/log/cycentra/cy-asm/scans")
-ASM_LOGS      = Path("/var/log/cycentra/cy-asm/logs")
+SCANS_DIR        = Path("/var/log/cycentra/cy-asm/scans")
+ASM_LOGS         = Path("/var/log/cycentra/cy-asm/logs")
+AI_SETTINGS_FILE = Path("/opt/cycentra/ai_settings.json")
 
 # Locate cy_asm package regardless of install method
 _SITE_PKG = Path(site.getsitepackages()[0])

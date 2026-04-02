@@ -133,6 +133,13 @@ export function useAppState() {
   function handleSaveAIConfig(config) {
     setAiConfig(config);
     try { localStorage.setItem("cycentra_ai_config", JSON.stringify(config)); } catch {}
+    // Persist to backend so the ASM enrichment pipeline can read it server-side
+    fetch(`${API_BASE}/api/ai/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(config),
+    }).catch(() => {});
   }
 
   function handleScanComplete(raw) {

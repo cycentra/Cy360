@@ -4,17 +4,21 @@ blueprints/system/routes.py
 System-level endpoints.
 
 Routes:
-  GET  /health           liveness check
-  POST /api/ai/test      test external AI provider connectivity
-  GET  /api/config       debug — dump non-secret env config
+  GET  /health               liveness check
+  POST /api/ai/test          test external AI provider connectivity
+  GET  /api/ai/settings      retrieve persisted AI settings
+  POST /api/ai/settings      persist AI settings (provider/model/keys)
+  GET  /api/config           debug — dump non-secret env config
 """
 
 import os
+import json
 
 import requests as http_requests
 from flask import Blueprint, request, jsonify, make_response
 
 from core.helpers import add_cors_headers
+from core.config import AI_SETTINGS_FILE
 
 system_bp = Blueprint("system", __name__)
 
@@ -60,7 +64,24 @@ def ai_test():
 
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-        if provider == "anthropic":
+        if provider == "cymind":
+            # CyMind: validate API key via GET /api/v1/models (lightweight, no chat cost)
+            if not api_key:
+                return jsonify({"ok": False, "error": "CyMind API key (pak_...) is required"}), 400
+            cymind_base = base_url.rstrip("/")
+            resp = http_requests.get(
+                f"{cymind_base}/api/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10,
+            )
+            if resp.status_code == 401:
+                return jsonify({"ok": False, "error": "Invalid CyMind API key"}), 400
+            if not resp.ok:
+                return jsonify({"ok": False, "error": f"CyMind returned {resp.status_code}"}), 400
+            models_list = [m["id"] for m in resp.json().get("models", [])]
+            return jsonify({"ok": True, "message": f"CyMind connected · {len(models_list)} models available"})
+
+        elif provider == "anthropic":
             resp = http_requests.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={**headers, "anthropic-version": "2023-06-01", "x-api-key": api_key},
@@ -97,6 +118,48 @@ def ai_test():
         return jsonify({"ok": False, "error": "Connection timed out"}), 400
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ── AI settings persistence ────────────────────────────────────────────────────
+
+@system_bp.route("/api/ai/settings", methods=["OPTIONS"])
+def ai_settings_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/ai/settings", methods=["GET"])
+def ai_settings_get():
+    try:
+        if AI_SETTINGS_FILE.exists():
+            data = json.loads(AI_SETTINGS_FILE.read_text())
+            # Strip stored API key from response — return masked version
+            if "fields" in data and "apiKey" in data["fields"] and data["fields"]["apiKey"]:
+                data["fields"]["apiKey"] = "••••••••"
+            return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({})
+
+
+@system_bp.route("/api/ai/settings", methods=["POST"])
+def ai_settings_post():
+    data = request.get_json() or {}
+    # Only accept known top-level keys to prevent arbitrary data storage
+    allowed = {"provider", "fields", "prompts"}
+    payload = {k: v for k, v in data.items() if k in allowed}
+    if not payload:
+        return jsonify({"error": "No valid settings provided"}), 400
+    try:
+        # Merge with existing so a partial update doesn't wipe other keys
+        existing = {}
+        if AI_SETTINGS_FILE.exists():
+            existing = json.loads(AI_SETTINGS_FILE.read_text())
+        existing.update(payload)
+        AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        AI_SETTINGS_FILE.write_text(json.dumps(existing, indent=2))
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ── Config debug ──────────────────────────────────────────────────────────────

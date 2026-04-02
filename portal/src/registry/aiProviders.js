@@ -6,6 +6,17 @@
  */
 
 export const AI_PROVIDERS = {
+  cymind: {
+    id: "cymind", name: "CyMind (On-Premise AI)", icon: "🧠", color: "#a855f7",
+    description: "CyMind enterprise AI-in-a-box. Fully private, authenticated, RAG-enabled. Recommended for ASM enrichment.",
+    fields: [
+      { key: "baseUrl", label: "CyMind Server URL", placeholder: "http://cymind.yourdomain.com", type: "text" },
+      { key: "apiKey",  label: "API Key (pak_...)", placeholder: "pak_xxxxxxxxxxxxxxxxxxxx",      type: "password" },
+      { key: "model",   label: "Model",             placeholder: "mistral:7b",                   type: "text" },
+    ],
+    apiKeyRequired: true, badge: "ON-PREM",
+    models: ["mistral:7b", "llama3:8b", "llama3:70b", "deepseek-r1:7b", "phi3:mini", "gemma2:9b"],
+  },
   local: {
     id: "local", name: "Local AI (Ollama)", icon: "🖥", color: "#00e5a0",
     description: "Self-hosted Ollama. Runs on your server — no data leaves your network.",
