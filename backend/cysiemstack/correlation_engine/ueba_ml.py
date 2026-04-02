@@ -26,7 +26,7 @@ settings = get_settings()
 
 SHADOW_MODE    = os.getenv('UEBA_ML_SHADOW_MODE', 'true').lower() == 'true'
 MIN_TRAIN_DAYS = int(os.getenv('UEBA_ML_MIN_TRAIN_DAYS', '7'))
-MODEL_DIR      = Path(os.getenv('UEBA_ML_MODEL_DIR', '/app/ml_models'))
+MODEL_DIR      = Path(settings.ueba_ml_model_dir)
 CONTAMINATION  = float(os.getenv('UEBA_ML_CONTAMINATION', '0.05'))
 
 MODEL_DIR.mkdir(parents=True, exist_ok=True)

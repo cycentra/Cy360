@@ -122,9 +122,14 @@ def normalise(raw: dict) -> Optional[dict]:
     if rule_level < MIN_RULE_LEVEL:
         return None
 
-    agent_id = agent.get('id', '000')
-    if not agent_id or agent_id == '000':
+    agent_id   = agent.get('id', '000')
+    agent_name = agent.get('name') or 'manager'
+    # Agent ID '000' is the Wazuh Manager's own local agent — valid, not filtered.
+    # Normalise it to the manager name so downstream grouping works correctly.
+    if not agent_id:
         return None
+    if agent_id == '000':
+        agent_id = agent_name
 
     # Timestamp
     ts_str = raw.get('timestamp')

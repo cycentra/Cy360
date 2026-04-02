@@ -235,6 +235,122 @@ redis-cli ping 2>/dev/null | grep -q "PONG" \
     && success "Redis running on :6379" \
     || { error "Redis failed to start"; ERRORS+=("Redis failed"); }
 
+# ── Step 3b: Wazuh → Redis bridge (Python watcher — replaces Filebeat) ────────
+# NOTE: Filebeat 7.x (Wazuh-distributed) crashes on kernel 6.x with a
+#       pthread_create seccomp SIGABRT. We use a pure-Python tail watcher
+#       instead — no kernel compatibility issues, same NDJSON → Redis push.
+step_header "WAZUH → REDIS BRIDGE (Python watcher)"
+
+# Install redis-py if missing (already satisfied when cysiemstack wheel installs)
+python3 -c "import redis" 2>/dev/null \
+    || pip3 install --break-system-packages --quiet redis
+
+# Write the watcher script
+cat > /opt/cycentra/wazuh_to_redis.py << 'PYEOF'
+#!/usr/bin/env python3
+"""Tail Wazuh alerts.json and push NDJSON lines to Redis list."""
+import json, logging, os, time
+from pathlib import Path
+import redis
+
+ALERTS_FILE = "/var/ossec/logs/alerts/alerts.json"
+REDIS_HOST  = "127.0.0.1"
+REDIS_PORT  = 6379
+REDIS_KEY   = "cysiemstack:alerts:raw"
+MAX_LIST    = 200_000
+
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("wazuh_to_redis")
+
+
+def tail_forever():
+    r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+    r.ping()
+    path = Path(ALERTS_FILE)
+    log.info("watching %s  →  redis:%d/%s", ALERTS_FILE, REDIS_PORT, REDIS_KEY)
+    with open(path) as f:
+        f.seek(0, 2)                      # start at EOF — no replay of history
+        inode = os.stat(path).st_ino
+        pushed = 0
+        while True:
+            line = f.readline()
+            if line:
+                line = line.strip()
+                if line:
+                    try:
+                        json.loads(line)  # validate JSON before pushing
+                        pipe = r.pipeline()
+                        pipe.lpush(REDIS_KEY, line)
+                        pipe.ltrim(REDIS_KEY, 0, MAX_LIST - 1)
+                        pipe.execute()
+                        pushed += 1
+                        if pushed % 100 == 0:
+                            log.info("pushed %d alerts total", pushed)
+                    except (json.JSONDecodeError, redis.RedisError) as exc:
+                        log.warning("skipped line: %s", exc)
+            else:
+                # detect log rotation (Wazuh rotates daily)
+                try:
+                    if os.stat(path).st_ino != inode:
+                        log.info("rotation detected — reopening")
+                        f.close()
+                        f = open(path)
+                        inode = os.stat(path).st_ino
+                except FileNotFoundError:
+                    pass
+                time.sleep(0.05)
+
+
+if __name__ == "__main__":
+    while True:
+        try:
+            tail_forever()
+        except Exception as exc:
+            log.error("fatal: %s — retrying in 5s", exc)
+            time.sleep(5)
+PYEOF
+chmod 750 /opt/cycentra/wazuh_to_redis.py
+
+# Write the systemd unit
+cat > /etc/systemd/system/wazuh-to-redis.service << 'UNITEOF'
+[Unit]
+Description=Wazuh alerts.json → Redis bridge
+After=network.target redis.service wazuh-manager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/cycentra/wazuh_to_redis.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/cycentra/engine.log
+StandardError=append:/opt/cycentra/engine.log
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+
+# Disable Filebeat if present (it crashes on kernel 6.x)
+systemctl disable --now filebeat 2>/dev/null || true
+
+# Ensure Wazuh alerts log is readable
+if [[ -f /var/ossec/logs/alerts/alerts.json ]]; then
+    chmod o+r /var/ossec/logs/alerts/alerts.json 2>/dev/null || true
+    chmod o+x /var/ossec/logs/alerts/ 2>/dev/null || true
+    success "Wazuh alerts.json readable"
+else
+    warn "Wazuh alerts.json not found — watcher will retry once Wazuh generates alerts"
+fi
+
+systemctl daemon-reload
+systemctl enable wazuh-to-redis
+systemctl restart wazuh-to-redis
+sleep 2
+systemctl is-active wazuh-to-redis >/dev/null 2>&1 \
+    && success "wazuh-to-redis running — tailing Wazuh alerts → Redis :6379" \
+    || { warn "wazuh-to-redis failed — check: journalctl -u wazuh-to-redis -n 20"; \
+         ERRORS+=("wazuh-to-redis failed"); }
+
 fi  # end INFRA block
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -541,10 +657,16 @@ INCIDENT_ID_PREFIX=INC
 LOG_LEVEL=INFO
 UEBA_ML_SHADOW_MODE=true
 UEBA_ML_MIN_TRAIN_DAYS=7
+UEBA_ML_MODEL_DIR=/opt/cycentra/ml_models
 MISP_ENABLED=false
 SIEMEOF
     chmod 600 /opt/cycentra/cysiemstack.env
     success "cysiemstack.env written → /opt/cycentra/cysiemstack.env"
+
+    # Create ML model persistence directory
+    mkdir -p /opt/cycentra/ml_models
+    chmod 755 /opt/cycentra/ml_models
+    success "ML model directory created → /opt/cycentra/ml_models"
 
 fi  # end full env block
 
@@ -617,6 +739,19 @@ if [[ -f "$BUNDLE_DIR/db/init.sql" ]]; then
         -U corruser -d correlation \
         -f "$BUNDLE_DIR/db/init.sql" -v ON_ERROR_STOP=0 -q 2>/dev/null || true
     success "init.sql applied"
+else
+    # Fallback: use the init.sql shipped with the installed package
+    _PKG_INIT=$(find "$SITE_PKG" -path "*/cysiemstack/postgres/init.sql" 2>/dev/null | head -1 || true)
+    if [[ -n "$_PKG_INIT" ]]; then
+        info "Applying init.sql from installed package ..."
+        PGPASSWORD="$CORR_DB_PASS" psql -h 127.0.0.1 -p 5433 \
+            -U corruser -d correlation \
+            -f "$_PKG_INIT" -v ON_ERROR_STOP=0 -q 2>/dev/null || true
+        success "init.sql applied (from ${_PKG_INIT})"
+    else
+        warn "No init.sql found — database schema may not be initialised"
+        ERRORS+=("init.sql missing")
+    fi
 fi
 
 if [[ -d "$BUNDLE_DIR/db/migrations" ]]; then
@@ -1042,7 +1177,7 @@ _port_up 4433 && success "CyIRIS          :4433 UP" || warn "CyIRIS          :44
 _port_up 1880 && success "CySOAR          :1880 UP" || warn "CySOAR          :1880 DOWN (install via portal)"
 
 echo ""; info "── Systemd services ──"
-for svc in cycentra-backend cysiemstack-engine postgresql redis-server nginx; do
+for svc in cycentra-backend cysiemstack-engine postgresql redis-server nginx wazuh-to-redis; do
     systemctl is-active "$svc" >/dev/null 2>&1 \
         && success "${svc} active" \
         || warn    "${svc} inactive"
@@ -1099,8 +1234,10 @@ fi
 echo -e "  ${BOLD}${YELLOW}Next steps:${NC}"
 echo -e "  ${DIM}1. Set WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env${NC}"
 echo -e "  ${DIM}   then: systemctl restart cysiemstack-engine${NC}"
-echo -e "  ${DIM}2. Install CyIRIS / CySOAR via portal${NC}"
-echo -e "  ${DIM}3. To update: sudo bash cycentra-setup.sh --update${NC}"
+echo -e "  ${DIM}2. Verify Filebeat is forwarding: redis-cli -p 6379 llen cysiemstack:alerts:raw${NC}"
+echo -e "  ${DIM}3. Check engine log: tail -f /opt/cycentra/engine.log${NC}"
+echo -e "  ${DIM}4. Install CyIRIS / CySOAR via portal${NC}"
+echo -e "  ${DIM}5. To update: sudo bash cycentra-setup.sh --update${NC}"
 echo ""
 
 # Save summary file
@@ -1142,8 +1279,10 @@ Paths:
 Next steps:
   1. Set WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env
      then: systemctl restart cysiemstack-engine
-  2. Install CyIRIS/CySOAR via portal
-  3. Update: sudo bash cycentra-setup.sh --update
+  2. Verify Filebeat: redis-cli -p 6379 llen cysiemstack:alerts:raw
+  3. Check engine log: tail -f /opt/cycentra/engine.log
+  4. Install CyIRIS/CySOAR via portal
+  5. Update: sudo bash cycentra-setup.sh --update
 SUMEOF
 
 success "Summary saved → /root/cycentra-setup-summary.txt"

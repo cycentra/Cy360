@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     # UEBA ML
     ueba_ml_shadow_mode: bool = True
     ueba_ml_min_train_days: int = 7
+    ueba_ml_model_dir: str = "/opt/cycentra/ml_models"
+    ueba_ml_contamination: float = 0.05
 
     class Config:
         env_file = "/opt/cycentra/cysiemstack.env"
