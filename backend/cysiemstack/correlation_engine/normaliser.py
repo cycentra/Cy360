@@ -27,6 +27,31 @@ SCAN_RULE_IDS    = {40001, 40002, 40003}
 # Min rule level to ingest — drop noisy debug/info events below this
 MIN_RULE_LEVEL = 3
 
+# ── Suppression filters ───────────────────────────────────────────────────────
+# Alerts matching either list are silently dropped before any DB write or UEBA
+# analysis. Add rule IDs or lowercased description substrings as needed.
+#
+# Rule 5710  — sshd: Attempt to login using a non-existent user
+# Rule 5711  — sshd: Attempt to login using a non-existent user (double-check variant)
+# Rule 5702  — sshd: Reverse lookup error (DNS noise)
+# Rule 5703  — sshd: error: Could not get shadow information (PAM config noise)
+SUPPRESSED_RULE_IDS: frozenset[int] = frozenset({
+    5710,   # Attempt to login using a non-existent user
+    5711,   # Non-existent user login (scanner variant)
+    5702,   # Reverse lookup error
+    5703,   # PAM shadow lookup error
+})
+
+# Lowercased substrings — any alert whose rule_desc contains one of these is dropped.
+# Keep phrases specific enough to avoid false suppression.
+SUPPRESSED_DESC_FRAGMENTS: tuple[str, ...] = (
+    "attempt to login using a non-existent user",
+    "invalid user",
+    "reverse lookup error",
+    "could not get shadow information",
+)
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Map Wazuh rule levels (0-15) to base score (used in risk scoring)
 def _level_to_score(level: int) -> float:
     """Logarithmic mapping: level 3→1.0, level 7→5.0, level 12→10.0, level 15→13.0"""
@@ -120,6 +145,13 @@ def normalise(raw: dict) -> Optional[dict]:
     rule_id = int(rule_id)
 
     if rule_level < MIN_RULE_LEVEL:
+        return None
+
+    # Suppression: drop noisy / low-value alert types before any processing
+    if rule_id in SUPPRESSED_RULE_IDS:
+        return None
+    rule_desc_raw = rule.get('description', '') or ''
+    if any(frag in rule_desc_raw.lower() for frag in SUPPRESSED_DESC_FRAGMENTS):
         return None
 
     agent_id   = agent.get('id', '000')
