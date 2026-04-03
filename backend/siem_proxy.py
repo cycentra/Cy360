@@ -158,6 +158,102 @@ def siem_ueba_detail(username):
     return _proxy(f"/ueba/{username}")
 
 
+@siem_bp.route("/ueba/escalate", methods=["POST"])
+@require_siem_analyst
+def siem_ueba_escalate():
+    """Create a case in IRIS from a UEBA anomaly. Requires IRIS_URL + IRIS_API_KEY in .env."""
+    import json as _json
+    from core.config import IRIS_URL, IRIS_API_KEY
+
+    if not IRIS_URL or not IRIS_API_KEY:
+        return jsonify({"error": "IRIS integration not configured. Set IRIS_URL and IRIS_API_KEY in .env."}), 503
+
+    body = request.get_json(silent=True) or {}
+    username     = body.get("username", "unknown")
+    anomaly_type = body.get("anomaly_type", "unknown")
+    description  = body.get("description", "")
+    agent_name   = body.get("agent_name", "unknown")
+    src_ip       = body.get("src_ip", "")
+    rule_id      = body.get("rule_id", "")
+    rule_desc    = body.get("rule_desc", "")
+    process_name = body.get("process_name", "")
+    file_path    = body.get("file_path", "")
+    raw_log      = body.get("raw_log", "")
+    detected_at  = body.get("detected_at", "")
+    incident_id  = body.get("incident_id", "")
+    risk_score   = body.get("risk_contribution", 0)
+
+    analyst_email = session.get("user_email", "unknown")
+
+    case_name = f"[UEBA] {anomaly_type.replace('_', ' ').title()} — {username} on {agent_name}"
+
+    case_description = (
+        f"## UEBA Anomaly: {anomaly_type.replace('_', ' ').title()}\n\n"
+        f"**User:** `{username}`  \n"
+        f"**Host:** `{agent_name}`  \n"
+        f"**Detected:** {detected_at}  \n"
+        f"**Risk Contribution:** +{risk_score}  \n\n"
+        f"### Detection Details\n"
+        f"{description}\n\n"
+    )
+    if src_ip:
+        case_description += f"**Source IP:** `{src_ip}`  \n"
+    if rule_id:
+        case_description += f"**Rule:** {rule_id} — {rule_desc}  \n"
+    if process_name:
+        case_description += f"**Process:** `{process_name}`  \n"
+    if file_path:
+        case_description += f"**File:** `{file_path}`  \n"
+    if incident_id:
+        case_description += f"\n**CySIEM Incident:** `{incident_id}`  \n"
+    if raw_log:
+        case_description += f"\n### Raw Log\n```\n{raw_log[:1000]}\n```\n"
+    case_description += f"\n---\n*Escalated by {analyst_email} via CyCentra360 UEBA*"
+
+    try:
+        resp = _req.post(
+            f"{IRIS_URL.rstrip('/')}/api/v1/cases/add",
+            headers={
+                "Authorization": f"Bearer {IRIS_API_KEY}",
+                "Content-Type":  "application/json",
+            },
+            json={
+                "case_name":         case_name,
+                "case_description":  case_description,
+                "case_customer":     1,
+                "case_classification": 0,
+                "soc_id":            "",
+            },
+            timeout=10,
+            verify=False,  # self-signed certs common on internal IRIS installs
+        )
+        if resp.status_code in (200, 201):
+            data = resp.json()
+            case_id = (data.get("data") or {}).get("case_id") or data.get("case_id")
+            case_url = f"{IRIS_URL.rstrip('/')}/case?cid={case_id}" if case_id else IRIS_URL
+            return jsonify({"case_id": case_id, "case_url": case_url, "case_name": case_name})
+        return jsonify({"error": f"IRIS returned HTTP {resp.status_code}", "detail": resp.text[:300]}), 502
+    except _req.exceptions.ConnectionError:
+        return jsonify({"error": "Cannot reach IRIS. Check IRIS_URL in .env."}), 503
+    except _req.exceptions.Timeout:
+        return jsonify({"error": "IRIS request timed out"}), 504
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@siem_bp.route("/ueba/integrations")
+@require_siem_auth
+def siem_ueba_integrations():
+    """Return public integration URLs (no secrets) for the frontend to construct deep-links."""
+    from core.config import IRIS_URL, WAZUH_URL
+    return jsonify({
+        "iris_url":   IRIS_URL   or None,
+        "wazuh_url":  WAZUH_URL  or None,
+        "iris_enabled":  bool(IRIS_URL),
+        "wazuh_enabled": bool(WAZUH_URL),
+    })
+
+
 @siem_bp.route("/alerts")
 @require_siem_auth
 def siem_alerts():

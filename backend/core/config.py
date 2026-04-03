@@ -91,6 +91,17 @@ CYSOAR_IMAGE     = os.environ.get("CYSOAR_IMAGE",     "ghcr.io/cycentra/cysoar:l
 CYIRIS_IMAGE_APP = os.environ.get("CYIRIS_IMAGE_APP", "ghcr.io/cycentra/cyiris:latest")
 CYIRIS_IMAGE_DB  = os.environ.get("CYIRIS_IMAGE_DB",  "postgres:15-alpine")
 
+# ── IRIS (Incident Response) Integration ─────────────────────────────────────
+# Set IRIS_URL and IRIS_API_KEY in /opt/cycentra/.env to enable escalation.
+# IRIS_URL example: https://iris.cycentra.com
+IRIS_URL     = os.environ.get("IRIS_URL", "")
+IRIS_API_KEY = os.environ.get("IRIS_API_KEY", "")
+
+# ── Wazuh Dashboard ───────────────────────────────────────────────────────────
+# Set WAZUH_URL to allow deep-links from UEBA anomaly cards into Wazuh.
+# WAZUH_URL example: https://wazuh.cycentra.com
+WAZUH_URL    = os.environ.get("WAZUH_URL", "")
+
 # ── CORS allowed origins ───────────────────────────────────────────────────────
 CORS_ALLOWED_ORIGINS = {
     FRONTEND_URL,

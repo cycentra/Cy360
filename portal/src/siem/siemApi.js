@@ -75,6 +75,12 @@ export const siemApi = {
   /** Full UEBA profile for a user: baseline + anomaly history */
   getUebaUser: (username) => _get(`/ueba/${encodeURIComponent(username)}`),
 
+  /** Escalate a UEBA anomaly to IRIS as a new case (analyst+ role) */
+  escalateToIris: (body) => _post("/ueba/escalate", body),
+
+  /** Returns integration URLs (iris_url, wazuh_url, iris_enabled, wazuh_enabled) */
+  getUebaIntegrations: () => _get("/ueba/integrations"),
+
   /** Recent raw alert list */
   getAlerts: (params = {}) => _get("/alerts", params),
 

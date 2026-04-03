@@ -347,7 +347,9 @@ def _baseline_to_dict(b: UEBABaseline) -> dict:
     }
 
 
-def _anomaly_to_dict(a: UEBAAnomaly) -> dict:
+def _anomaly_to_dict(a: UEBAAnomaly, alert_ctx: dict = None) -> dict:
+    """Serialise anomaly; optionally enrich with the triggering alert's context."""
+    ctx = alert_ctx or {}
     return {
         "id":               a.id,
         "detected_at":      a.detected_at.isoformat() if a.detected_at else None,
@@ -355,8 +357,21 @@ def _anomaly_to_dict(a: UEBAAnomaly) -> dict:
         "anomaly_type":     a.anomaly_type,
         "description":      a.description,
         "risk_contribution": a.risk_contribution,
+        "alert_ids":        a.alert_ids or [],
         "incident_id":      a.incident_id,
         "resolved":         a.resolved,
+        # ── Triggering alert context (enriched at query time) ──────────────────
+        "agent_name":       ctx.get("agent_name"),
+        "agent_ip":         ctx.get("agent_ip"),
+        "src_ip":           ctx.get("src_ip"),
+        "rule_id":          ctx.get("rule_id"),
+        "rule_desc":        ctx.get("rule_desc"),
+        "rule_level":       ctx.get("rule_level"),
+        "process_name":     ctx.get("process_name"),
+        "file_path":        ctx.get("file_path"),
+        "raw_log":          ctx.get("raw_log"),
+        "mitre_id":         ctx.get("mitre_id"),
+        "category":         ctx.get("category"),
     }
 
 
@@ -542,10 +557,40 @@ async def get_ueba_user(username: str, db: AsyncSession = Depends(get_db)):
         .limit(100)
     )).scalars().all()
 
+    # Batch-fetch the triggering alert for each anomaly (first wazuh_id per anomaly)
+    wazuh_ids = [
+        ids[0] for a in anomalies
+        if (ids := (a.alert_ids or [])) and ids[0]
+    ]
+    alert_by_wazuh: dict[str, Alert] = {}
+    if wazuh_ids:
+        rows = (await db.execute(
+            select(Alert).where(Alert.wazuh_id.in_(wazuh_ids))
+        )).scalars().all()
+        alert_by_wazuh = {r.wazuh_id: r for r in rows}
+
+    def _enrich(a: UEBAAnomaly) -> dict:
+        ids = a.alert_ids or []
+        alert = alert_by_wazuh.get(ids[0]) if ids else None
+        ctx = {
+            "agent_name":   alert.agent_name  if alert else None,
+            "agent_ip":     alert.agent_ip    if alert else None,
+            "src_ip":       alert.src_ip      if alert else None,
+            "rule_id":      alert.rule_id     if alert else None,
+            "rule_desc":    alert.rule_desc   if alert else None,
+            "rule_level":   alert.rule_level  if alert else None,
+            "process_name": alert.process_name if alert else None,
+            "file_path":    alert.file_path   if alert else None,
+            "raw_log":      alert.raw_log     if alert else None,
+            "mitre_id":     alert.mitre_id    if alert else None,
+            "category":     alert.category    if alert else None,
+        } if alert else {}
+        return _anomaly_to_dict(a, ctx)
+
     return {
         "username":  username,
         "baseline":  _baseline_to_dict(baseline) if baseline else None,
-        "anomalies": [_anomaly_to_dict(a) for a in anomalies],
+        "anomalies": [_enrich(a) for a in anomalies],
     }
 
 

@@ -98,7 +98,248 @@ function AnomalyBadge({ active, total }) {
   );
 }
 
-function UserProfile({ username }) {
+// ── Anomaly detail card with investigation context ────────────────────────────
+function AnomalyCard({ a, integrations }) {
+  const [expanded,     setExpanded]     = useState(false);
+  const [escalating,   setEscalating]   = useState(false);
+  const [escalated,    setEscalated]    = useState(null);  // { case_id, case_url }
+  const [escalateErr,  setEscalateErr]  = useState(null);
+
+  const color = ANOMALY_COLORS[a.anomaly_type] || "#888";
+
+  async function handleEscalate(e) {
+    e.stopPropagation();
+    setEscalating(true);
+    setEscalateErr(null);
+    try {
+      const resp = await siemApi.escalateToIris({
+        username:         a.username,
+        anomaly_type:     a.anomaly_type,
+        description:      a.description,
+        agent_name:       a.agent_name,
+        src_ip:           a.src_ip,
+        rule_id:          a.rule_id,
+        rule_desc:        a.rule_desc,
+        process_name:     a.process_name,
+        file_path:        a.file_path,
+        raw_log:          a.raw_log,
+        detected_at:      a.detected_at,
+        incident_id:      a.incident_id,
+        risk_contribution: a.risk_contribution,
+      });
+      const data = await resp.json();
+      if (!resp.ok || data.error) {
+        setEscalateErr(data.error || `HTTP ${resp.status}`);
+      } else {
+        setEscalated(data);
+      }
+    } catch {
+      setEscalateErr("Network error — check IRIS connectivity.");
+    } finally {
+      setEscalating(false);
+    }
+  }
+
+  // Wazuh deep-link: opens Wazuh Discover filtered by the first alert_id
+  const wazuhLink = (integrations?.wazuh_url && (a.alert_ids?.[0]))
+    ? `${integrations.wazuh_url}/app/discover#/?_g=(time:(from:now-1d,to:now))&_a=(query:(language:kuery,query:'_id:"${a.alert_ids[0]}"'))`
+    : null;
+
+  const hasContext = a.agent_name || a.src_ip || a.rule_id || a.process_name || a.file_path;
+
+  return (
+    <div style={{
+      background: a.resolved ? "rgba(255,255,255,0.01)" : "rgba(255,255,255,0.03)",
+      border: `1px solid rgba(255,255,255,${a.resolved ? 0.04 : 0.07})`,
+      borderLeft: `3px solid ${a.resolved ? "rgba(255,255,255,0.08)" : color}`,
+      borderRadius: "0 4px 4px 0",
+      opacity: a.resolved ? 0.6 : 1,
+    }}>
+      {/* ── Card header (always visible) ── */}
+      <div
+        onClick={() => hasContext && setExpanded(v => !v)}
+        style={{ display: "flex", gap: 12, padding: "10px 14px",
+          cursor: hasContext ? "pointer" : "default" }}>
+        {/* Timestamp */}
+        <div style={{ minWidth: 72, color: "rgba(255,255,255,0.3)", fontSize: 10,
+          fontFamily: "monospace", flexShrink: 0, lineHeight: 1.5 }}>
+          {a.detected_at ? new Date(a.detected_at).toLocaleDateString() : "—"}
+          <br />
+          {a.detected_at ? new Date(a.detected_at).toLocaleTimeString() : ""}
+        </div>
+
+        {/* Main content */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Row 1: type + score + status */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4,
+            flexWrap: "wrap" }}>
+            <span style={{ color, fontSize: 11, fontWeight: 700, fontFamily: "monospace" }}>
+              {ANOMALY_LABELS[a.anomaly_type] || a.anomaly_type}
+            </span>
+            <span style={{ background: `${color}20`, color, border: `1px solid ${color}40`,
+              fontSize: 9, fontFamily: "monospace", padding: "1px 6px", borderRadius: 2 }}>
+              +{a.risk_contribution}
+            </span>
+            {a.resolved && (
+              <span style={{ color: "#00e5a0", fontSize: 9, fontFamily: "monospace" }}>
+                ✓ RESOLVED
+              </span>
+            )}
+            {a.mitre_id && (
+              <span style={{ color: "#b06eff", fontSize: 9, fontFamily: "monospace",
+                background: "rgba(176,110,255,0.1)", padding: "1px 6px", borderRadius: 2,
+                border: "1px solid rgba(176,110,255,0.2)" }}>
+                {a.mitre_id}
+              </span>
+            )}
+          </div>
+
+          {/* Row 2: description */}
+          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, marginBottom: 5 }}>
+            {a.description}
+          </div>
+
+          {/* Row 3: key facts inline (always visible when data exists) */}
+          {hasContext && (
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {a.agent_name && (
+                <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10,
+                  fontFamily: "monospace" }}>
+                  🖥 {a.agent_name}
+                </span>
+              )}
+              {a.src_ip && (
+                <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10,
+                  fontFamily: "monospace" }}>
+                  🌐 {a.src_ip}
+                </span>
+              )}
+              {a.rule_id && (
+                <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10,
+                  fontFamily: "monospace" }}>
+                  📋 Rule {a.rule_id}
+                </span>
+              )}
+              {a.process_name && (
+                <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10,
+                  fontFamily: "monospace" }}>
+                  ⚡ {a.process_name}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Expand chevron */}
+        {hasContext && (
+          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, flexShrink: 0,
+            alignSelf: "center" }}>
+            {expanded ? "▾" : "▸"}
+          </div>
+        )}
+      </div>
+
+      {/* ── Expanded detail panel ── */}
+      {expanded && (
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.05)",
+          padding: "12px 14px 14px 14px", display: "flex", flexDirection: "column", gap: 12 }}>
+
+          {/* Context grid */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {[
+              { label: "HOST",     val: a.agent_name },
+              { label: "SOURCE IP", val: a.src_ip },
+              { label: "RULE",     val: a.rule_id ? `${a.rule_id}${a.rule_level ? ` (L${a.rule_level})` : ""}` : null },
+              { label: "RULE DESC", val: a.rule_desc },
+              { label: "PROCESS",  val: a.process_name },
+              { label: "FILE",     val: a.file_path },
+              { label: "INCIDENT", val: a.incident_id },
+              { label: "CATEGORY", val: a.category },
+            ].filter(r => r.val).map(({ label, val }) => (
+              <div key={label}>
+                <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9,
+                  fontFamily: "monospace", letterSpacing: "1px", marginBottom: 2 }}>
+                  {label}
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 11,
+                  fontFamily: "monospace", wordBreak: "break-all" }}>
+                  {val}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Raw log */}
+          {a.raw_log && (
+            <div>
+              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9,
+                fontFamily: "monospace", letterSpacing: "1px", marginBottom: 4 }}>
+                RAW LOG
+              </div>
+              <pre style={{ margin: 0, padding: "8px 10px",
+                background: "rgba(0,0,0,0.35)", borderRadius: 3,
+                color: "rgba(255,255,255,0.5)", fontSize: 10, fontFamily: "monospace",
+                whiteSpace: "pre-wrap", wordBreak: "break-all", maxHeight: 120,
+                overflow: "auto", lineHeight: 1.5 }}>
+                {a.raw_log.slice(0, 800)}{a.raw_log.length > 800 ? "…" : ""}
+              </pre>
+            </div>
+          )}
+
+          {/* Action buttons */}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {/* Wazuh deep-link */}
+            {wazuhLink && (
+              <a href={wazuhLink} target="_blank" rel="noopener noreferrer"
+                style={{ display: "inline-flex", alignItems: "center", gap: 5,
+                  background: "rgba(77,158,255,0.08)", border: "1px solid rgba(77,158,255,0.25)",
+                  color: "#4d9eff", fontSize: 11, fontFamily: "monospace",
+                  padding: "5px 12px", borderRadius: 3, textDecoration: "none",
+                  cursor: "pointer" }}>
+                🔍 View in Wazuh
+              </a>
+            )}
+
+            {/* IRIS escalation */}
+            {integrations?.iris_enabled && !escalated && (
+              <button
+                onClick={handleEscalate}
+                disabled={escalating}
+                style={{ display: "inline-flex", alignItems: "center", gap: 5,
+                  background: escalating ? "rgba(255,255,255,0.03)" : "rgba(255,59,59,0.08)",
+                  border: `1px solid ${escalating ? "rgba(255,255,255,0.1)" : "rgba(255,59,59,0.3)"}`,
+                  color: escalating ? "rgba(255,255,255,0.3)" : "#ff6b6b",
+                  fontSize: 11, fontFamily: "monospace", padding: "5px 12px",
+                  borderRadius: 3, cursor: escalating ? "default" : "pointer" }}>
+                {escalating ? "⏳ Escalating…" : "🚨 Escalate to IRIS"}
+              </button>
+            )}
+
+            {/* Success state */}
+            {escalated && (
+              <a href={escalated.case_url} target="_blank" rel="noopener noreferrer"
+                style={{ display: "inline-flex", alignItems: "center", gap: 5,
+                  background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.3)",
+                  color: "#00e5a0", fontSize: 11, fontFamily: "monospace",
+                  padding: "5px 12px", borderRadius: 3, textDecoration: "none" }}>
+                ✓ IRIS Case #{escalated.case_id} — Open
+              </a>
+            )}
+          </div>
+
+          {/* Error */}
+          {escalateErr && (
+            <div style={{ color: "#ff6b6b", fontSize: 11, fontFamily: "monospace" }}>
+              ✕ {escalateErr}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UserProfile({ username, integrations }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -197,9 +438,16 @@ function UserProfile({ username }) {
           <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace",
             letterSpacing: "1px" }}>ANOMALY TIMELINE</div>
           {activeAnomalies.length > 0 && (
-            <span style={{ background: "rgba(255,59,59,0.12)", color: "#ff3b3b", fontSize: 10,
-              fontFamily: "monospace", padding: "2px 8px", borderRadius: 2, fontWeight: 700 }}>
+            <span style={{ background: "rgba(255,59,59,0.12)", color: "#ff3b3b",
+              fontSize: 10, fontFamily: "monospace", padding: "2px 8px",
+              borderRadius: 2, fontWeight: 700 }}>
               {activeAnomalies.length} ACTIVE
+            </span>
+          )}
+          {integrations?.iris_enabled && (
+            <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9,
+              fontFamily: "monospace" }}>
+              • Expand any alert to escalate to IRIS
             </span>
           )}
         </div>
@@ -209,46 +457,10 @@ function UserProfile({ username }) {
             No anomalies detected for this user.
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {anomalies.slice(0, 50).map(a => {
-              const color = ANOMALY_COLORS[a.anomaly_type] || "#888";
-              return (
-                <div key={a.id} style={{ display: "flex", gap: 12, padding: "10px 14px",
-                  background: a.resolved ? "rgba(255,255,255,0.01)" : "rgba(255,255,255,0.03)",
-                  border: `1px solid rgba(255,255,255,${a.resolved ? 0.04 : 0.07})`,
-                  borderLeft: `3px solid ${a.resolved ? "rgba(255,255,255,0.08)" : color}`,
-                  borderRadius: "0 4px 4px 0", opacity: a.resolved ? 0.5 : 1 }}>
-                  <div style={{ minWidth: 80, color: "rgba(255,255,255,0.3)", fontSize: 10,
-                    fontFamily: "monospace", flexShrink: 0 }}>
-                    {a.detected_at ? new Date(a.detected_at).toLocaleDateString() : "—"}<br />
-                    {a.detected_at ? new Date(a.detected_at).toLocaleTimeString() : ""}
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
-                      <span style={{ color, fontSize: 11, fontWeight: 700, fontFamily: "monospace" }}>
-                        {ANOMALY_LABELS[a.anomaly_type] || a.anomaly_type}
-                      </span>
-                      <span style={{ background: `${color}20`, color, border: `1px solid ${color}40`,
-                        fontSize: 9, fontFamily: "monospace", padding: "1px 6px", borderRadius: 2 }}>
-                        +{a.risk_contribution}
-                      </span>
-                      {a.resolved && (
-                        <span style={{ color: "#00e5a0", fontSize: 9, fontFamily: "monospace" }}>
-                          ✓ RESOLVED
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 12 }}>{a.description}</div>
-                    {a.incident_id && (
-                      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10,
-                        fontFamily: "monospace", marginTop: 2 }}>
-                        → Incident {a.incident_id}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {anomalies.slice(0, 50).map(a => (
+              <AnomalyCard key={a.id} a={a} integrations={integrations} />
+            ))}
           </div>
         )}
       </div>
@@ -389,11 +601,12 @@ function StatBar({ users }) {
 
 // ── Main page ──────────────────────────────────────────────────────────────────
 export function SiemUebaPage() {
-  const [users,    setUsers]    = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [search,   setSearch]   = useState("");
-  const [selected, setSelected] = useState(null);
-  const [activeTab, setActiveTab] = useState("all");
+  const [users,        setUsers]        = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [search,       setSearch]       = useState("");
+  const [selected,     setSelected]     = useState(null);
+  const [activeTab,    setActiveTab]    = useState("all");
+  const [integrations, setIntegrations] = useState(null);
 
   useEffect(() => {
     siemFetch(siemApi.getUebaUsers()).then(data => {
@@ -401,6 +614,9 @@ export function SiemUebaPage() {
         setUsers(Array.isArray(data) ? data : []);
       }
       setLoading(false);
+    });
+    siemFetch(siemApi.getUebaIntegrations()).then(data => {
+      if (data && !data._offline && !data._error) setIntegrations(data);
     });
   }, []);
 
@@ -619,7 +835,7 @@ export function SiemUebaPage() {
                     </div>
                   );
                 })()}
-                <UserProfile username={selected} />
+                <UserProfile username={selected} integrations={integrations} />
               </div>
             )}
           </div>
