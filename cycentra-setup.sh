@@ -166,13 +166,29 @@ else
 fi
 
 # Bind to :5433 to avoid conflict with CyIRIS Docker postgres on :5432
-PG_CONF=$(sudo -u postgres psql -t -c "SHOW config_file;" 2>/dev/null | tr -d ' ' || echo "")
+# Try 5433 first (idempotent re-runs), then fall back to 5432 (fresh install)
+PG_CONF=$(sudo -u postgres psql -p 5433 -t -c "SHOW config_file;" 2>/dev/null | tr -d ' \n' \
+       || sudo -u postgres psql -p 5432 -t -c "SHOW config_file;" 2>/dev/null | tr -d ' \n' \
+       || echo "")
 if [[ -n "$PG_CONF" && -f "$PG_CONF" ]]; then
+    _pg_changed=false
     if grep -q "^port = 5432" "$PG_CONF" 2>/dev/null; then
         info "Reconfiguring PostgreSQL from :5432 to :5433 ..."
         sed -i "s/^port = 5432/port = 5433/" "$PG_CONF"
+        _pg_changed=true
+    fi
+    # Ensure PostgreSQL listens on TCP (asyncpg requires host=127.0.0.1)
+    if ! grep -q "^listen_addresses = 'localhost'" "$PG_CONF" 2>/dev/null; then
+        if grep -q "^#*listen_addresses" "$PG_CONF" 2>/dev/null; then
+            sed -i "s/^#*listen_addresses.*/listen_addresses = 'localhost'/" "$PG_CONF"
+        else
+            echo "listen_addresses = 'localhost'" >> "$PG_CONF"
+        fi
+        _pg_changed=true
+    fi
+    if [[ "$_pg_changed" == true ]]; then
         systemctl restart postgresql
-        success "PostgreSQL now on :5433"
+        success "PostgreSQL configured: port 5433, TCP on localhost"
     fi
 fi
 
@@ -652,8 +668,8 @@ WAZUH_API_URL=https://127.0.0.1:55000
 WAZUH_API_USER=wazuh-wui
 WAZUH_API_PASSWORD=${_WAZUH_PASS}
 
-OLLAMA_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=${AI_MODEL:-llama3.1:8b}
+# LLM provider and credentials are read from /opt/cycentra/ai_settings.json
+# Configure via the AI Settings page in the portal — no keys needed here.
 LLM_ENABLED=${_LLM_FLAG}
 
 CORRELATION_WINDOW_MINUTES=15
