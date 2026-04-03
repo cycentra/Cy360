@@ -255,7 +255,7 @@ redis-cli ping 2>/dev/null | grep -q "PONG" \
 # NOTE: Filebeat 7.x (Wazuh-distributed) crashes on kernel 6.x with a
 #       pthread_create seccomp SIGABRT. We use a pure-Python tail watcher
 #       instead — no kernel compatibility issues, same NDJSON → Redis push.
-step_header "WAZUH → REDIS BRIDGE (Python watcher)"
+step_header "CySIEM → REDIS BRIDGE (Python watcher)"
 
 # Install redis-py if missing (already satisfied when cysiemstack wheel installs)
 python3 -c "import redis" 2>/dev/null \
@@ -331,7 +331,7 @@ chmod 750 /opt/cycentra/wazuh_to_redis.py
 # Write the systemd unit
 cat > /etc/systemd/system/wazuh-to-redis.service << 'UNITEOF'
 [Unit]
-Description=Wazuh alerts.json → Redis bridge
+Description=CySIEM alerts.json → Redis bridge
 After=network.target redis.service wazuh-manager.service
 
 [Service]
@@ -359,9 +359,9 @@ fi
 if [[ -f /var/ossec/logs/alerts/alerts.json ]]; then
     chmod o+r /var/ossec/logs/alerts/alerts.json 2>/dev/null || true
     chmod o+x /var/ossec/logs/alerts/ 2>/dev/null || true
-    success "Wazuh alerts.json readable"
+    success "CySIEM alerts.json readable"
 else
-    warn "Wazuh alerts.json not found — watcher will retry once Wazuh generates alerts"
+    warn "CySIEM alerts.json not found — watcher will retry once CySIEM generates alerts"
 fi
 
 systemctl daemon-reload
@@ -369,7 +369,7 @@ systemctl enable wazuh-to-redis
 systemctl restart wazuh-to-redis
 sleep 2
 systemctl is-active wazuh-to-redis >/dev/null 2>&1 \
-    && success "wazuh-to-redis running — tailing Wazuh alerts → Redis :6379" \
+    && success "wazuh-to-redis running — tailing CySIEM alerts → Redis :6379" \
     || { warn "wazuh-to-redis failed — check: journalctl -u wazuh-to-redis -n 20"; \
          ERRORS+=("wazuh-to-redis failed"); }
 
@@ -393,31 +393,40 @@ if [[ "$MODE" == "update" ]]; then
     fi
 fi
 
-# ── Step 4: Wazuh install (full install only) ────────────────────────────────
+# ── Step 4: CySIEM install (full install only) ───────────────────────────────
+_CYSIEM_FRESH=false
+_CYSIEM_ADMIN_PASS=""
+_CYSIEM_WUI_PASS=""
+
 if [[ "$MODE" == "full" ]]; then
 
-    step_header "WAZUH / CySIEM INSTALLATION"
+    step_header "CySIEM INSTALLATION"
 
     if dpkg -l 2>/dev/null | grep -q wazuh-manager; then
-        success "Wazuh already installed — ensuring services are running"
+        success "CySIEM already installed — ensuring services running"
         systemctl start wazuh-manager wazuh-indexer wazuh-dashboard 2>/dev/null || true
     else
-        info "Running Wazuh all-in-one installer (this takes 5–10 minutes) ..."
+        info "Running CySIEM all-in-one installer (this takes 5–10 minutes) ..."
         cd ~
         curl -sO https://packages.wazuh.com/4.14/wazuh-install.sh
         bash wazuh-install.sh -a
-        success "Wazuh installed"
+        success "CySIEM installed"
+        _CYSIEM_FRESH=true
+        # Capture generated credentials from installer before cleanup removes the tar
+        _cysiem_pwfile=$(tar -xOf ~/wazuh-install-files.tar wazuh-install-files/wazuh-passwords.txt 2>/dev/null || echo "")
+        _CYSIEM_ADMIN_PASS=$(echo "$_cysiem_pwfile" | grep -A 1 "^username: admin$" | grep "^password:" | awk '{print $2}')
+        _CYSIEM_WUI_PASS=$(echo "$_cysiem_pwfile" | grep -A 1 "^username: wazuh-wui$" | grep "^password:" | awk '{print $2}')
         cd ~
     fi
 
-fi  # end Wazuh install block
+fi  # end CySIEM install block
 
 
-# ── Step 4.1: Wazuh Dashboard configuration ────────────────────────────────────
+# ── Step 4.1: CySIEM Dashboard configuration ─────────────────────────────────
 WAZUH_YML="/etc/wazuh-dashboard/opensearch_dashboards.yml"
 if [[ -f "$WAZUH_YML" ]]; then
 
-    step_header "WAZUH DASHBOARD CONFIGURATION"
+    step_header "CySIEM DASHBOARD CONFIGURATION"
 
     cp "$WAZUH_YML" "${WAZUH_YML}.backup-$(date +%Y%m%d)" 2>/dev/null || true
     grep -q "^server.host:" "$WAZUH_YML" \
@@ -427,10 +436,33 @@ if [[ -f "$WAZUH_YML" ]]; then
         && sed -i 's|^server.port:.*|server.port: 5601|' "$WAZUH_YML" \
         || echo 'server.port: 5601' >> "$WAZUH_YML"
     systemctl restart wazuh-dashboard 2>/dev/null || true
-    success "Wazuh Dashboard: host=127.0.0.1, port=5601"
+    success "CySIEM Dashboard configured: host=127.0.0.1, port=5601"
 
 fi
 
+# ── Step 4.2: Auto-detect CySIEM API password ─────────────────────────────────
+# Read the wazuh-wui password from the dashboard config file.
+# Works for both fresh installs and existing installs; runs in all modes.
+if [[ -f "/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml" ]]; then
+    step_header "CySIEM API PASSWORD DETECTION"
+    _detected=$(grep -v '^#' /usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml 2>/dev/null \
+        | grep -oP '(?<=password: ")[^"]+' | head -1)
+    if [[ -n "$_detected" ]]; then
+        _CYSIEM_WUI_PASS="$_detected"
+        success "CySIEM API password auto-detected from dashboard config"
+        # Patch cysiemstack.env immediately — handles update mode (step 10 is skipped)
+        if [[ -f "/opt/cycentra/cysiemstack.env" ]]; then
+            if grep -q "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env; then
+                sed -i "s|^WAZUH_API_PASSWORD=.*|WAZUH_API_PASSWORD=${_detected}|" /opt/cycentra/cysiemstack.env
+            else
+                echo "WAZUH_API_PASSWORD=${_detected}" >> /opt/cycentra/cysiemstack.env
+            fi
+            success "WAZUH_API_PASSWORD updated in cysiemstack.env"
+        fi
+    else
+        warn "CySIEM API password not found — update WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env manually"
+    fi
+fi
 
 # ── Step 5: Download release bundle ──────────────────────────────────────────
 step_header "DOWNLOAD RELEASE BUNDLE"
@@ -514,20 +546,8 @@ if [[ "$MODE" == "full" ]]; then
         warn "OAuth skipped — configure later in /opt/cycentra/.env"
     fi
 
-    step_header "AI ENRICHMENT (OPTIONAL)"
+    # AI provider is configured after install via the portal's AI Settings page.
     AI_PROVIDER="none"; AI_API_KEY=""; AI_MODEL=""
-    PS3="  Choose: "
-    select choice in "OpenAI (GPT-4)" "Anthropic (Claude)" "Local (Ollama)" "Skip"; do
-        case $REPLY in
-            1) AI_PROVIDER="openai";    AI_MODEL="gpt-4o";            break;;
-            2) AI_PROVIDER="anthropic"; AI_MODEL="claude-sonnet-4-5"; break;;
-            3) AI_PROVIDER="local";     AI_MODEL="mistral:7b";        break;;
-            4) AI_PROVIDER="none";                                     break;;
-        esac
-    done
-    [[ "$AI_PROVIDER" != "none" && "$AI_PROVIDER" != "local" ]] \
-        && ask AI_API_KEY "API Key for ${AI_PROVIDER}"
-    [[ "$AI_PROVIDER" == "local" ]] && ask AI_MODEL "Ollama model name" "mistral:7b"
 
     step_header "SMTP CONFIGURATION (OPTIONAL)"
     SMTP_HOST=""; SMTP_PORT=""; SMTP_USER=""; SMTP_PASS=""; SUPPORT_EMAIL=""
@@ -653,12 +673,13 @@ ENVEOF
     _LLM_FLAG="false"
     [[ "${AI_PROVIDER:-none}" != "none" ]] && _LLM_FLAG="true"
 
-    _WAZUH_PASS=$(grep "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null \
-        | cut -d= -f2 || echo "CHANGE_ME_after_wazuh_install")
+    # Use auto-detected password if available, otherwise preserve existing, or placeholder
+    _WAZUH_PASS="${_CYSIEM_WUI_PASS:-$(grep "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null | cut -d= -f2)}"
+    _WAZUH_PASS="${_WAZUH_PASS:-CHANGE_ME_after_cysiem_install}"
 
     cat > /opt/cycentra/cysiemstack.env << SIEMEOF
-# CySIEMStack environment — set WAZUH_API_PASSWORD after Wazuh installs
-# then: systemctl restart cysiemstack-engine
+# CySIEMStack environment — auto-generated by setup.sh
+# WAZUH_API_PASSWORD is auto-detected from CySIEM dashboard config
 
 DATABASE_URL=postgresql+asyncpg://corruser:${CORR_DB_PASS}@127.0.0.1:5433/correlation
 REDIS_URL=redis://127.0.0.1:6379/0
@@ -1094,8 +1115,8 @@ if [[ -d "/var/ossec" ]]; then
     fi
 
     /var/ossec/bin/wazuh-analysisd -t 2>/dev/null \
-        && success "Wazuh rules valid" \
-        || { warn "wazuh-analysisd -t reported errors"; ERRORS+=("Wazuh rules invalid"); }
+        && success "CySIEM rules valid" \
+        || { warn "wazuh-analysisd -t reported errors"; ERRORS+=("CySIEM rules invalid"); }
 
     systemctl restart wazuh-manager && success "wazuh-manager restarted"
 
@@ -1194,7 +1215,7 @@ _port_up 5252 && success "Flask backend   :5252 UP" || warn "Flask backend   :52
 _port_up 8100 && success "SIEM engine     :8100 UP" || warn "SIEM engine     :8100 DOWN"
 _port_up 5433 && success "PostgreSQL      :5433 UP" || warn "PostgreSQL      :5433 DOWN"
 _port_up 6379 && success "Redis           :6379 UP" || warn "Redis           :6379 DOWN"
-_port_up 5601 && success "Wazuh Dashboard :5601 UP" || warn "Wazuh Dashboard :5601 DOWN (install via portal)"
+_port_up 5601 && success "CySIEM Dashboard :5601 UP" || warn "CySIEM Dashboard :5601 DOWN (install via portal)"
 _port_up 4433 && success "CyIRIS          :4433 UP" || warn "CyIRIS          :4433 DOWN (install via portal)"
 _port_up 1880 && success "CySOAR          :1880 UP" || warn "CySOAR          :1880 DOWN (install via portal)"
 
@@ -1253,11 +1274,27 @@ if [[ "$MODE" == "full" ]]; then
     echo ""
 fi
 
+if [[ "${_CYSIEM_FRESH:-false}" == "true" ]]; then
+    echo -e "  ${BOLD}${CYAN}── CySIEM Initial Credentials ──${NC}"
+    echo -e "  ${CYAN}Dashboard URL  ${NC}  https://cysiem.${BASE_DOMAIN}"
+    if [[ -n "${_CYSIEM_ADMIN_PASS:-}" ]]; then
+        echo -e "  ${BOLD}Admin login    :${NC}  ${WHITE}admin / ${_CYSIEM_ADMIN_PASS}${NC}"
+    else
+        echo -e "  ${DIM}Admin password : See ~/wazuh-install-files.tar → wazuh-passwords.txt${NC}"
+    fi
+    if [[ -n "${_CYSIEM_WUI_PASS:-}" ]]; then
+        echo -e "  ${BOLD}API user (wui) :${NC}  ${WHITE}wazuh-wui / ${_CYSIEM_WUI_PASS}${NC}"
+    else
+        echo -e "  ${DIM}API password   : Stored in /opt/cycentra/cysiemstack.env${NC}"
+    fi
+    echo ""
+fi
+
 echo -e "  ${BOLD}${YELLOW}Next steps:${NC}"
-echo -e "  ${DIM}1. Set WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env${NC}"
+echo -e "  ${DIM}1. Verify WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env (auto-detected if CySIEM is installed)${NC}"
 echo -e "  ${DIM}   then: systemctl restart cysiemstack-engine${NC}"
 echo -e "  ${DIM}2. Verify alerts flowing: redis-cli -p 6379 llen cysiemstack:alerts:raw${NC}"
-echo -e "  ${DIM}   (wazuh-to-redis tails Wazuh → Redis — check: journalctl -u wazuh-to-redis -n 20)${NC}"
+echo -e "  ${DIM}   (wazuh-to-redis tails CySIEM alerts → Redis — check: journalctl -u wazuh-to-redis -n 20)${NC}"
 echo -e "  ${DIM}3. Check engine log: tail -f /opt/cycentra/engine.log${NC}"
 echo -e "  ${DIM}4. Install CyIRIS / CySOAR via portal${NC}"
 echo -e "  ${DIM}5. To update: sudo bash cycentra-setup.sh --update${NC}"
@@ -1287,7 +1324,7 @@ Services:
   PostgreSQL     : systemctl status postgresql   (port 5433)
   Redis          : systemctl status redis-server (port 6379)
   nginx          : systemctl status nginx
-  Wazuh          : systemctl status wazuh-manager
+  CySIEM         : systemctl status wazuh-manager
 
 Paths:
   Flask log    : /opt/cycentra/flask.log
@@ -1300,10 +1337,10 @@ Paths:
   Branding     : /opt/cycentra-branding
 
 Next steps:
-  1. Set WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env
+  1. Verify WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env (auto-detected if CySIEM is installed)
      then: systemctl restart cysiemstack-engine
   2. Verify alerts flowing: redis-cli -p 6379 llen cysiemstack:alerts:raw
-     (wazuh-to-redis service tails Wazuh alerts.json → Redis)
+     (wazuh-to-redis service tails CySIEM alerts → Redis)
   3. Check engine log: tail -f /opt/cycentra/engine.log
   4. Install CyIRIS/CySOAR via portal
   5. Update: sudo bash cycentra-setup.sh --update
