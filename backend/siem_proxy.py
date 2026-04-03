@@ -145,7 +145,11 @@ def siem_risk_scores():
 @siem_bp.route("/ueba/users")
 @require_siem_auth
 def siem_ueba_users():
-    return _proxy("/ueba/users")
+    # Forward filter query params to the engine
+    from flask import request as _req
+    qs = _req.query_string.decode()
+    path = f"/ueba/users?{qs}" if qs else "/ueba/users"
+    return _proxy(path)
 
 
 @siem_bp.route("/ueba/<username>")

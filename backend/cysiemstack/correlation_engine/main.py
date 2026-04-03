@@ -226,14 +226,124 @@ def _risk_to_dict(r: RiskScore) -> dict:
     }
 
 
+# ── User classification ────────────────────────────────────────────────────────
+_SYSTEM_ACCOUNTS = frozenset({
+    # Standard POSIX/Linux system users
+    "root", "bin", "daemon", "adm", "lp", "sync", "shutdown", "halt", "mail",
+    "operator", "games", "ftp", "nobody", "systemd-network", "systemd-resolve",
+    "systemd-timesync", "systemd-journal", "systemd-bus-proxy", "syslog",
+    "messagebus", "uuidd", "dnsmasq", "usbmux", "rtkit", "cups-pk-helper",
+    "speech-dispatcher", "avahi", "kernoops", "saned", "pulse", "colord",
+    "hplip", "geoclue", "gnome-initial-setup", "gdm", "whoopsie", "lightdm",
+    "backup", "list", "irc", "gnats", "man", "news", "proxy", "www-data",
+    "at", "uucp", "libuuid", "sshd", "oprofile", "tcpdump", "suse-ncc",
+    "beagleindex", "mockbuild", "statd", "rpc", "rpcuser", "nfsnobody",
+    "postfix", "dovecot", "dovenull", "smmta", "smmsp",
+})
+
+_SERVICE_ACCOUNTS = frozenset({
+    # Web servers
+    "apache", "nginx", "www", "http", "lighttpd", "caddy", "traefik",
+    # Databases
+    "postgres", "postgresql", "mysql", "mariadb", "mongo", "mongodb",
+    "redis", "cassandra", "couchdb", "db2inst2",
+    # DevOps / CI
+    "jenkins", "gitlab", "gitlab-runner", "gitlab-psql", "gitlab-prometheus",
+    "gitlab_ci", "gitlab_ci_runner", "docker", "dockeradmin", "runner",
+    # App servers
+    "tomcat", "jboss", "wildfly", "weblogic", "glassfish", "artemis",
+    "activemq", "openmeetings", "ejbca", "liferay", "solr", "sphinxsearch",
+    "confluence", "jira", "youtrack", "nagios", "grafana", "influxdb",
+    "kibana", "elasticsearch", "logstash", "filebeat", "prometheus",
+    # FTP
+    "ftp", "ftpuser", "ftpuser2", "ftpadmin", "ftptest", "ftpznz",
+    "ftpayu", "ftpweb", "ftpup", "ftpkakou", "FTPapache", "FTPguest",
+    "uftp", "sftpPS",
+    # System services
+    "qmails", "qmailr", "qmailq", "qmailp", "qmaill", "qmaild",
+    "mailman", "cyrus", "postmaster", "squid", "net", "snort", "ossec",
+    # Crypto / blockchain (service bots)
+    "ethereum", "eth", "btc", "bitcoin", "monero", "solana", "sol",
+    "polkadot", "filecoin", "lotus", "dogecoin", "blockchain", "miner",
+    "xmrig", "pool", "gwei", "web3", "uniswap", "raydium", "eigenlayer",
+    "eigen", "euler", "solnode", "soltech", "soldev", "solscript", "solv",
+    "validator", "node", "staking", "delegate",
+    # Monitoring / automation
+    "ansible", "puppet", "chef", "terraform", "packer", "vagrant",
+    "zabbix", "cacti", "ntopng", "rundeck", "oxidized", "tiler",
+    "consul", "vault", "nomad", "kong", "blackfire",
+    # Dev tools
+    "composer", "git", "svn", "cvs", "cvsuser",
+    # Game servers
+    "csgo", "csgoserver", "gmod", "gmodserver", "l4d2", "minecraft",
+    "mcserver1", "teraria", "terrariaserver", "terraria", "samp",
+    "arkserver", "ark",
+    # Web/app frameworks
+    "laravel", "django", "rails", "wordpress", "drupal", "joomla",
+    "magento", "odoo8", "apinizer",
+    # Misc service patterns
+    "plex", "emby", "jellyfin", "teamspeak", "discordbot", "musicbot",
+    "telegram", "telegramapi", "bot", "Bot", "nsbot", "scanner",
+    "downloader", "tradebot", "trade-bot", "trade.bot", "evmbot",
+    "traffic_monitor", "audit", "squid", "bungeecord", "pi",
+    "nginx", "redis", "grafana", "influx", "netdata",
+})
+
+_SERVICE_PREFIXES = (
+    "svc_", "svc-", "srv_", "srv-", "bot_", "bot-",
+    "ftp", "sftp", "nfs", "rpc", "db_", "db-",
+)
+
+_SERVICE_SUFFIXES = (
+    "_svc", "-svc", "_daemon", "_service", "_bot", "_worker",
+    "_agent", "_runner", "_server",
+)
+
+
+def _classify_user(username: str) -> tuple[str, str]:
+    """
+    Returns (category, description) where category is one of:
+      'system'  — OS-level system/daemon account
+      'service' — Application or infrastructure service account
+      'human'   — Likely a real interactive user
+    """
+    lname = username.lower()
+
+    if lname in _SYSTEM_ACCOUNTS:
+        return ("system", "Linux/POSIX system account — not an interactive user")
+
+    if lname in _SERVICE_ACCOUNTS:
+        return ("service", "Application or infrastructure service account")
+
+    for pfx in _SERVICE_PREFIXES:
+        if lname.startswith(pfx):
+            return ("service", "Application or infrastructure service account")
+
+    for sfx in _SERVICE_SUFFIXES:
+        if lname.endswith(sfx):
+            return ("service", "Application or infrastructure service account")
+
+    # Names that look like pure system patterns (e.g. "1", "2", "4leo")
+    if lname.isdigit():
+        return ("system", "Numeric placeholder system account")
+
+    return ("human", "Interactive user account")
+
+
 def _baseline_to_dict(b: UEBABaseline) -> dict:
+    category, description = _classify_user(b.username)
     return {
         "username":         b.username,
+        "category":         category,
+        "description":      description,
         "typical_hours":    b.typical_hours or [],
         "typical_agents":   b.typical_agents or [],
         "avg_daily_events": float(b.avg_daily_events or 0),
         "avg_fail_rate":    float(b.avg_fail_rate or 0),
         "updated_at":       b.updated_at.isoformat() if b.updated_at else None,
+        # anomaly counts injected separately by list_ueba_users
+        "active_anomalies": 0,
+        "total_anomalies":  0,
     }
 
 
@@ -365,11 +475,58 @@ async def get_risk_scores(
 
 
 @app.get("/ueba/users")
-async def list_ueba_users(db: AsyncSession = Depends(get_db)):
-    baselines = (await db.execute(
-        select(UEBABaseline).order_by(UEBABaseline.updated_at.desc())
-    )).scalars().all()
-    return [_baseline_to_dict(b) for b in baselines]
+async def list_ueba_users(
+    category:         Optional[str] = None,   # system | service | human
+    has_anomaly:      Optional[bool] = None,  # true = only users with active anomalies
+    top_activity:     Optional[int] = None,   # top N by avg_daily_events
+    db: AsyncSession = Depends(get_db),
+):
+    q = select(UEBABaseline).order_by(UEBABaseline.updated_at.desc())
+    baselines = (await db.execute(q)).scalars().all()
+
+    # Build anomaly-count lookup in one query
+    anomaly_rows = (await db.execute(
+        select(
+            UEBAAnomaly.username,
+            func.count().label("total"),
+            func.sum(
+                func.cast(~UEBAAnomaly.resolved, type_=func.count().type)
+            ).label("active"),
+        )
+        .group_by(UEBAAnomaly.username)
+    )).all()
+    # Re-query simpler: two separate aggregates
+    total_map: dict = {}
+    active_map: dict = {}
+    all_anomaly_rows = (await db.execute(
+        select(UEBAAnomaly.username, UEBAAnomaly.resolved)
+    )).all()
+    for row in all_anomaly_rows:
+        total_map[row.username] = total_map.get(row.username, 0) + 1
+        if not row.resolved:
+            active_map[row.username] = active_map.get(row.username, 0) + 1
+
+    result = []
+    for b in baselines:
+        d = _baseline_to_dict(b)
+        d["total_anomalies"]  = total_map.get(b.username, 0)
+        d["active_anomalies"] = active_map.get(b.username, 0)
+
+        # Filter by category
+        if category and d["category"] != category:
+            continue
+        # Filter to users with active anomalies only
+        if has_anomaly is True and d["active_anomalies"] == 0:
+            continue
+
+        result.append(d)
+
+    # Sort by activity (avg_daily_events) for top_activity view, else keep updated_at order
+    if top_activity:
+        result.sort(key=lambda x: x["avg_daily_events"], reverse=True)
+        result = result[:top_activity]
+
+    return result
 
 
 @app.get("/ueba/{username}")

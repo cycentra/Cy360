@@ -67,8 +67,10 @@ export const siemApi = {
    */
   getRiskScores: (params = {}) => _get("/risk-scores", params),
 
-  /** List all UEBA baselines */
-  getUebaUsers: () => _get("/ueba/users"),
+  /** List all UEBA baselines
+   * @param {{ category?: 'human'|'service'|'system', has_anomaly?: boolean, top_activity?: number }} params
+   */
+  getUebaUsers: (params = {}) => _get("/ueba/users", params),
 
   /** Full UEBA profile for a user: baseline + anomaly history */
   getUebaUser: (username) => _get(`/ueba/${encodeURIComponent(username)}`),
