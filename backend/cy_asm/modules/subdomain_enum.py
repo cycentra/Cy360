@@ -3,19 +3,15 @@ import aiohttp
 import asyncio
 import re
 import json
-
-from typing import List, Set
-import asyncio
+import os
+from typing import List, Set, Dict, Any
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
 import dns.asyncresolver
-import asyncio
 
 from config import HTTP_TIMEOUT, BRUTE_FORCE_WORDLIST, SECURITYTRAILS_API_KEY, VIRUSTOTAL_API_KEY
 from utils import setup_logging, create_async_session
-from typing import List, Set, Dict, Any
-import asyncio
 
 
 logger = setup_logging()
@@ -161,38 +157,143 @@ async def get_subdomains_alienvault(domain: str, session: aiohttp.ClientSession)
     except:
         return []
 
-async def gather_subdomains(domain: str, sources: List[str] = ['crtsh', 'securitytrails', 'bruteforce', 'crawl', 'virustotal', 'alienvault']) -> Dict[str, Any]:
+
+# ── Live DNS validation ───────────────────────────────────────────────────────
+
+async def _check_live(subdomain: str, sem: asyncio.Semaphore) -> Dict[str, Any]:
+    """Resolve a subdomain via DNS and return live status with IP/CNAME details."""
+    resolver = dns.asyncresolver.Resolver()
+    resolver.timeout  = 3
+    resolver.lifetime = 5
+
+    resolved_ips: List[str] = []
+    cname: str | None       = None
+    live                    = False
+
+    async with sem:
+        # A record
+        try:
+            ans = await resolver.resolve(subdomain, "A")
+            resolved_ips = [r.address for r in ans]
+            live = True
+        except Exception:
+            pass
+
+        # CNAME (common for CDN/cloud-hosted subdomains)
+        if not live:
+            try:
+                ans = await resolver.resolve(subdomain, "CNAME")
+                cname = str(ans[0].target).rstrip(".")
+                live  = True
+            except Exception:
+                pass
+
+        # AAAA (IPv6)
+        if not live:
+            try:
+                ans = await resolver.resolve(subdomain, "AAAA")
+                resolved_ips = [r.address for r in ans]
+                live = True
+            except Exception:
+                pass
+
+    return {
+        "subdomain":    subdomain,
+        "live":         live,
+        "resolved_ips": resolved_ips,
+        "cname":        cname,
+    }
+
+
+async def gather_subdomains(
+    domain: str,
+    sources: List[str] = ['crtsh', 'securitytrails', 'bruteforce', 'crawl', 'virustotal', 'alienvault'],
+) -> Dict[str, Any]:
+    """
+    Collect subdomains from all passive + active sources, then validate each
+    one with a live DNS check.
+
+    Returns a list of enriched dicts:
+        {subdomain, live, resolved_ips, cname, sources}
+    sorted live-first, then alphabetically.
+    """
     async with await create_async_session() as session:
-        tasks = []
-        if 'crtsh' in sources: tasks.append(get_subdomains_crtsh(domain, session))
-        if 'securitytrails' in sources: tasks.append(get_subdomains_securitytrails(domain, session))
-        if 'bruteforce' in sources: tasks.append(brute_force_subdomains_async(domain))
-        if 'crawl' in sources: tasks.append(crawl_for_subdomains(domain, session))
-        if 'virustotal' in sources: tasks.append(get_subdomains_virustotal(domain, session))
-        if 'alienvault' in sources: tasks.append(get_subdomains_alienvault(domain, session))
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        all_subs = set()
-        for r in results:
-            if isinstance(r, list):
-                all_subs.update(r)
-        all_subs = sorted(all_subs)
-        issues = [] if all_subs else ["No subdomains found"]
-        summary = f"Found {len(all_subs)} unique subdomains from {len(tasks)} sources"
-        return {"results": all_subs, "issues": issues, "summary": summary}
+        # ── 1. Collect from all passive / active sources ─────────────────────
+        task_specs: List[tuple[str, any]] = []
+        if 'crtsh'          in sources: task_specs.append(('crtsh',          get_subdomains_crtsh(domain, session)))
+        if 'securitytrails' in sources: task_specs.append(('securitytrails', get_subdomains_securitytrails(domain, session)))
+        if 'bruteforce'     in sources: task_specs.append(('bruteforce',     brute_force_subdomains_async(domain)))
+        if 'crawl'          in sources: task_specs.append(('crawl',          crawl_for_subdomains(domain, session)))
+        if 'virustotal'     in sources: task_specs.append(('virustotal',     get_subdomains_virustotal(domain, session)))
+        if 'alienvault'     in sources: task_specs.append(('alienvault',     get_subdomains_alienvault(domain, session)))
 
-    if len(sys.argv) != 2:
-        print(f"Usage: python modules/{__file__.split('/')[-1]} <domain>")
-        sys.exit(1)
+        source_names  = [s for s, _ in task_specs]
+        source_tasks  = [t for _, t in task_specs]
+        source_results = await asyncio.gather(*source_tasks, return_exceptions=True)
 
-    domain = sys.argv[1].strip().lower()
-    logger = setup_logging()
-    logger.info(f"Running standalone {__file__.split('/')[-1]} on {domain}")
-    result = asyncio.run(gather_subdomains(domain))  # ← use your actual function name
-    print(json.dumps(result, indent=2, default=str))
+        # Build {subdomain -> set(sources)} map
+        seen: Dict[str, Set[str]] = {}
+        for src_name, result in zip(source_names, source_results):
+            if not isinstance(result, list):
+                continue
+            for sub in result:
+                sub = sub.lower().strip()
+                if not sub:
+                    continue
+                if sub not in seen:
+                    seen[sub] = set()
+                seen[sub].add(src_name)
 
+        if not seen:
+            return {"results": [], "issues": ["No subdomains found"], "summary": "No subdomains found"}
 
-    run_standalone(gather_subdomains)
+        # ── 2. Live DNS validation (concurrent, capped at 50 parallel) ───────
+        logger.info(f"🔍 [Subdomains] Validating {len(seen)} subdomains via live DNS...")
+        sem = asyncio.Semaphore(50)
+        live_checks = await asyncio.gather(
+            *[_check_live(sub, sem) for sub in seen],
+            return_exceptions=True,
+        )
+
+        # ── 3. Build enriched result list ────────────────────────────────────
+        enriched: List[Dict[str, Any]] = []
+        for check in live_checks:
+            if isinstance(check, Exception):
+                continue
+            sub = check["subdomain"]
+            enriched.append({
+                **check,
+                "sources": sorted(seen.get(sub, set())),
+                # is_new / change are injected later by cycentra_scan.py state compare
+                "is_new":  None,
+                "change":  None,
+            })
+
+        # Sort: live first, then alphabetically
+        enriched.sort(key=lambda x: (not x["live"], x["subdomain"]))
+
+        live_count = sum(1 for e in enriched if e["live"])
+        hist_count = len(enriched) - live_count
+        summary = (
+            f"Found {len(enriched)} subdomains "
+            f"({live_count} LIVE, {hist_count} historical/not-resolving) "
+            f"from {len(task_specs)} sources"
+        )
+        logger.info(f"✅ [Subdomains] {summary}")
+
+        return {
+            "results": enriched,
+            "issues":  [] if enriched else ["No subdomains found"],
+            "summary": summary,
+        }
+
 
 if __name__ == "__main__":
-    from . import run_standalone
-    run_standalone(gather_subdomains)
+    import sys
+    if len(sys.argv) != 2:
+        print(f"Usage: python modules/subdomain_enum.py <domain>")
+        sys.exit(1)
+    domain = sys.argv[1].strip().lower()
+    logger = setup_logging()
+    result = asyncio.run(gather_subdomains(domain))
+    print(json.dumps(result, indent=2, default=str))

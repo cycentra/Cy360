@@ -33,6 +33,87 @@ from google.genai import types
 
 logger = setup_logging()
 
+# ── Subdomain state management ────────────────────────────────────────────────
+# State files persist subdomain history across scans so new/disappeared
+# subdomains can be highlighted. Location: /var/log/cycentra/cy-asm/state/
+_STATE_BASE = Path("/var/log/cycentra/cy-asm/state")
+
+
+def _load_subdomain_state(tenant_id: str, domain: str) -> dict:
+    """Load previous subdomain state. Returns {} on first scan or any read error."""
+    state_file = _STATE_BASE / tenant_id / f"{domain}_subdomains.json"
+    try:
+        if state_file.exists():
+            return json.loads(state_file.read_text())
+    except Exception as e:
+        logger.warning(f"⚠️ [State] Could not load subdomain state: {e}")
+    return {}
+
+
+def _save_subdomain_state(tenant_id: str, domain: str, enriched_subs: list):
+    """Persist current scan subdomain data for comparison on the next scan."""
+    state_file = _STATE_BASE / tenant_id / f"{domain}_subdomains.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    now = datetime.now().isoformat()
+
+    # Preserve first_seen dates from previous state
+    existing      = _load_subdomain_state(tenant_id, domain)
+    existing_subs = existing.get("subdomains", {})
+
+    updated: dict = {}
+    for e in enriched_subs:
+        sub  = e["subdomain"] if isinstance(e, dict) else e
+        live = e.get("live", False) if isinstance(e, dict) else False
+        ips  = e.get("resolved_ips", []) if isinstance(e, dict) else []
+        prior = existing_subs.get(sub, {})
+        updated[sub] = {
+            "first_seen": prior.get("first_seen", now),
+            "last_seen":  now,
+            "last_live":  live,
+            "last_ips":   ips,
+        }
+
+    state = {"domain": domain, "last_scan": now, "subdomains": updated}
+    try:
+        state_file.write_text(json.dumps(state, indent=2))
+        logger.info(f"✅ [State] Subdomain state saved → {state_file}")
+    except Exception as e:
+        logger.error(f"❌ [State] Failed to save subdomain state: {e}")
+
+
+def _annotate_subdomains(enriched_subs: list, prev_state: dict) -> list:
+    """
+    Compare current scan against previous state. Adds to each subdomain dict:
+      is_new  (bool)  — True if this subdomain was never seen before
+      change  (str)   — 'new' | 'appeared' | 'disappeared' | 'persisted' | 'first_scan'
+    """
+    prev_subs  = prev_state.get("subdomains", {})
+    first_scan = not prev_subs  # no previous data at all
+
+    annotated: list = []
+    for e in enriched_subs:
+        if not isinstance(e, dict):
+            e = {"subdomain": e, "live": False, "resolved_ips": [], "cname": None, "sources": []}
+
+        sub   = e["subdomain"]
+        live  = e.get("live", False)
+        prior = prev_subs.get(sub)
+
+        if first_scan:
+            change, is_new = "first_scan", False
+        elif prior is None:
+            change, is_new = "new", True
+        elif live and not prior.get("last_live", False):
+            change, is_new = "appeared", False
+        elif not live and prior.get("last_live", False):
+            change, is_new = "disappeared", False
+        else:
+            change, is_new = "persisted", False
+
+        annotated.append({**e, "is_new": is_new, "change": change})
+    return annotated
+# ─────────────────────────────────────────────────────────────────────────────
+
 # --- AI SETTINGS: dynamic read from /opt/cycentra/ai_settings.json ---
 _AI_SETTINGS_FILE = Path("/opt/cycentra/ai_settings.json")
 
@@ -401,8 +482,22 @@ async def run_full_scan(domain: str, tenant_id: str) -> Dict[str, Any]:
     _start("subdomains")
     subs = await gather_subdomains(domain)
     _done("subdomains", subs)
+
+    # Annotate with historical change status before storing in results
+    subdomain_entries = subs.get("results", []) if isinstance(subs, dict) else []
+    prev_state        = _load_subdomain_state(tenant_id, domain)
+    subdomain_entries = _annotate_subdomains(subdomain_entries, prev_state)
+    if isinstance(subs, dict):
+        subs["results"] = subdomain_entries
+
     results["subdomains"] = subs
-    subdomains_list = subs.get("results", []) if isinstance(subs, dict) else []
+
+    # Extract plain strings for downstream modules (dark_web, etc.)
+    # Use all subdomains (live + historical) so dark web check is exhaustive
+    subdomains_list = [
+        e["subdomain"] if isinstance(e, dict) else e
+        for e in subdomain_entries
+    ]
 
     dns_records = dns.get("results", {}).get("records", {}) if isinstance(dns, dict) else {}
     dns_ips     = dns.get("results", {}).get("ips", [])     if isinstance(dns, dict) else []
@@ -439,7 +534,15 @@ async def run_full_scan(domain: str, tenant_id: str) -> Dict[str, Any]:
                 all_issues.extend(res["issues"])
 
     # ── Summary ───────────────────────────────────────────────────────────────
-    summary_text = f"CyCentra scan complete | {len(subdomains_list)} subdomains | {len(all_issues)} issues"
+    live_count = sum(1 for e in subdomain_entries if isinstance(e, dict) and e.get("live"))
+    new_count  = sum(1 for e in subdomain_entries if isinstance(e, dict) and e.get("is_new"))
+    summary_text = (
+        f"CyCentra scan complete | "
+        f"{len(subdomains_list)} subdomains "
+        f"({live_count} live, {len(subdomains_list) - live_count} historical"
+        f"{f', {new_count} new' if new_count else ''}) | "
+        f"{len(all_issues)} issues"
+    )
 
     scan_end = datetime.now()
     duration = (scan_end - scan_start).seconds
@@ -448,7 +551,8 @@ async def run_full_scan(domain: str, tenant_id: str) -> Dict[str, Any]:
         f"\n{'='*60}\n"
         f"✅ SCAN COMPLETE: {domain}\n"
         f"   Tenant      : {tenant_id}\n"
-        f"   Subdomains  : {len(subdomains_list)}\n"
+        f"   Subdomains  : {len(subdomains_list)} total "
+        f"({live_count} live, {len(subdomains_list) - live_count} historical, {new_count} new)\n"
         f"   Issues Found: {len(all_issues)}\n"
         f"   Duration    : {duration}s\n"
         f"   Finished At : {scan_end.strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -456,13 +560,16 @@ async def run_full_scan(domain: str, tenant_id: str) -> Dict[str, Any]:
     )
 
     return {
-        "domain": domain,
-        "summary": summary_text,
-        "total_subdomains": len(subdomains_list),
-        "total_issues": len(all_issues),
-        "tenant_id": tenant_id,
-        "results": results,
-        "all_issues": all_issues
+        "domain":             domain,
+        "summary":            summary_text,
+        "total_subdomains":   len(subdomains_list),
+        "live_subdomains":    live_count,
+        "historical_subdomains": len(subdomains_list) - live_count,
+        "new_subdomains":     new_count,
+        "total_issues":       len(all_issues),
+        "tenant_id":          tenant_id,
+        "results":            results,
+        "all_issues":         all_issues,
     }
 
 
@@ -477,6 +584,10 @@ def main():
 
     # Execute Scan
     result = asyncio.run(run_full_scan(domain, final_tenant_id))
+
+    # ── Persist subdomain state for next scan comparison ─────────────────────
+    enriched_sub_entries = result["results"].get("subdomains", {}).get("results", [])
+    _save_subdomain_state(final_tenant_id, domain, enriched_sub_entries)
 
     # AI Enrichment (single call — removed duplicate)
     logger.info(f"🤖 Starting AI enrichment for {domain}...")
@@ -553,20 +664,31 @@ def main():
             if enriched_issues else result['summary']
         )
 
+        # Subdomain breakdown for portal display
+        live_subs  = [e for e in enriched_sub_entries if isinstance(e, dict) and e.get("live")]
+        hist_subs  = [e for e in enriched_sub_entries if isinstance(e, dict) and not e.get("live")]
+        new_subs   = [e for e in enriched_sub_entries if isinstance(e, dict) and e.get("is_new")]
+
         portal_payload = {
             "meta": {
                 "last_scan": datetime.now().isoformat(),
-                "org": final_tenant_id,
-                "scan_id": f"ASM-{timestamp}",
-                "domain": domain
+                "org":       final_tenant_id,
+                "scan_id":   f"ASM-{timestamp}",
+                "domain":    domain,
+            },
+            "subdomain_summary": {
+                "total":      len(enriched_sub_entries),
+                "live":       len(live_subs),
+                "historical": len(hist_subs),
+                "new":        len(new_subs),
             },
             "assets": [{
-                "id": f"{domain}-{timestamp}",
-                "host": domain,
-                "risk_score": ai_score,
-                "summary": summary_text,
+                "id":              f"{domain}-{timestamp}",
+                "host":            domain,
+                "risk_score":      ai_score,
+                "summary":         summary_text,
                 "vulnerabilities": enriched_issues,
-                "raw_results": result['results']
+                "raw_results":     result['results'],
             }]
         }
 
