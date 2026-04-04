@@ -154,6 +154,16 @@ def ai_settings_post():
         existing = {}
         if AI_SETTINGS_FILE.exists():
             existing = json.loads(AI_SETTINGS_FILE.read_text())
+        # Guard: never overwrite a stored API key with an empty string or the
+        # masked placeholder "••••••••" that the GET endpoint returns.
+        incoming_fields = payload.get("fields", {})
+        incoming_key    = incoming_fields.get("apiKey", "")
+        _MASK = "\u2022" * 8  # ••••••••
+        if not incoming_key or incoming_key == _MASK:
+            # Preserve whatever key is already on disk
+            existing_key = existing.get("fields", {}).get("apiKey", "")
+            if existing_key:
+                payload.setdefault("fields", {})["apiKey"] = existing_key
         existing.update(payload)
         AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         AI_SETTINGS_FILE.write_text(json.dumps(existing, indent=2))

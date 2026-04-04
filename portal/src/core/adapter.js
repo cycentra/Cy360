@@ -58,13 +58,16 @@ export function adaptCyCentraJSON(raw) {
 
     // ── Subdomains (for sub-asset creation below) ─────────────────────────────
     const subRaw  = a.raw_results?.subdomains?.results || [];
-    const subdomains = [...new Set(
-      subRaw.flatMap(s =>
-        typeof s === "string"
-          ? s.split("\n").map(d => d.trim()).filter(Boolean)
-          : []
-      )
-    )];
+    // v1.0.45+: results are enriched dicts {subdomain,live,is_new,change,resolved_ips,sources}
+    // Legacy:   results may still be plain strings — handle both formats
+    const subEntries = subRaw.map(s => {
+      if (typeof s === "string") {
+        const name = s.trim();
+        return name ? { subdomain: name, live: null, is_new: false, change: null, resolved_ips: [], sources: [], cname: null } : null;
+      }
+      return (s && typeof s === "object" && s.subdomain) ? s : null;
+    }).filter(e => e && e.subdomain);
+    const subdomains = [...new Set(subEntries.map(e => e.subdomain))];
 
     // ── Module data slices ────────────────────────────────────────────────────
     const emailSec    = a.raw_results?.email_sec?.results    || null;
@@ -117,16 +120,27 @@ export function adaptCyCentraJSON(raw) {
     // ── SUBDOMAIN SUB-ASSETS ──────────────────────────────────────────────────
     // type="Subdomain" + tags=["external","subdomain"]
     // Required for widget 6 "Subdomains" count and Assets table filtering
-    subdomains.forEach((sub, i) => {
-      if (sub === a.host) return;   // skip if identical to primary
+    subEntries.forEach((entry, i) => {
+      if (entry.subdomain === a.host) return;   // skip if identical to primary
+      const isNew  = entry.is_new  === true;
+      const isLive = entry.live    === true;
+      const change = entry.change  || null;
+      const subTags = ["external", "subdomain"];
+      if (isNew)             subTags.push("new");
+      if (!isLive && entry.live !== null) subTags.push("historical");
       allAssets.push({
         id:            `${a.id}-sub-${i}`,
-        host:          sub,
-        ip:            "—",
+        host:          entry.subdomain,
+        ip:            entry.resolved_ips?.[0] || "—",
         type:          "Subdomain",
         ports:         [],
-        risk:          "low",
-        risk_score:    2,
+        risk:          isLive ? "low" : "info",
+        risk_score:    isLive ? 2 : 0,
+        live:          isLive,
+        is_new:        isNew,
+        change,
+        cname:         entry.cname || null,
+        sources:       entry.sources || [],
         cves:          [],
         vulnerabilities: [],
         cert_expiry:   null,
@@ -135,14 +149,14 @@ export function adaptCyCentraJSON(raw) {
         status:        "open",
         first_seen:    raw.meta?.last_scan?.split("T")[0] || "—",
         last_seen:     raw.meta?.last_scan?.split("T")[0] || "—",
-        tags:          ["external", "subdomain"],
+        tags:          subTags,
         subdomains:    [],
         exposed_paths: [],
         email_sec:     null,
         cloud_data:    null,
         supply_chain:  null,
         dark_web:      null,
-        summary:       `Subdomain of ${a.host}`,
+        summary:       `Subdomain of ${a.host} — ${isLive ? "LIVE" : "historical"}${isNew ? " (NEW)" : ""}`,
         cySiemAlerts:  [],
       });
     });
