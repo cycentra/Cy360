@@ -68,7 +68,9 @@ async def brute_force_subdomains_async(domain: str) -> List[str]:
     # concurrent DNS queries. Adjust to 100 if your server is powerful.
     sem = asyncio.Semaphore(50) 
 
-    wordlist_path = "/opt/cycentra/backend/cy-asm/modules/wordlists/subdomains.txt" 
+    # Wordlist path: resolve relative to this module file so it works whether
+    # cy_asm is installed as a site-package or run directly from source.
+    wordlist_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wordlists", "subdomains.txt")
     
     async def check(prefix: str):
         async with sem:

@@ -672,13 +672,33 @@ def main():
     try:
         all_findings = result.get('all_issues', [])
         severity_map = {"Critical": 10, "High": 8, "Medium": 5, "Low": 2, "Informational": 1}
+
+        # ── Normalise raw module issues into the same shape the UI adapter expects ──
+        # Needed when AI enrichment fails (all providers exhausted) so the dashboard
+        # still shows real findings rather than empty vulnerability widgets.
+        def _normalise_issue(issue) -> dict:
+            if isinstance(issue, dict):
+                return {
+                    "vulnerability":  issue.get("vulnerability", issue.get("type", "Unknown Finding")),
+                    "severity":       issue.get("severity",      "Medium"),
+                    "risk_score":     issue.get("risk_score",    5),
+                    "description":    issue.get("description",   ""),
+                    "recommendation": issue.get("recommendation",""),
+                    "module":         issue.get("module",        "Scan"),
+                }
+            return {"vulnerability": str(issue), "severity": "Medium", "risk_score": 5,
+                    "description": str(issue), "recommendation": "", "module": "Scan"}
+
+        # Use AI findings when available; fall back to raw module issues
+        final_vulns = enriched_issues if enriched_issues else [_normalise_issue(i) for i in all_findings]
+
         ai_score = max(
-            [severity_map.get(i.get('severity'), 0) for i in enriched_issues] + [len(all_findings)]
+            [severity_map.get(i.get('severity'), 0) for i in final_vulns] + [len(all_findings)]
         )
 
         summary_text = (
-            enriched_issues[0]['description'][:100] + "..."
-            if enriched_issues else result['summary']
+            final_vulns[0]['description'][:100] + "..."
+            if final_vulns else result['summary']
         )
 
         # Subdomain breakdown for portal display
@@ -704,7 +724,7 @@ def main():
                 "host":            domain,
                 "risk_score":      ai_score,
                 "summary":         summary_text,
-                "vulnerabilities": enriched_issues,
+                "vulnerabilities": final_vulns,
                 "raw_results":     result['results'],
             }]
         }
