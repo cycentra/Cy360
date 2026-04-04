@@ -133,12 +133,19 @@ def _load_ai_settings() -> dict:
 
 
 def _get_ollama_config() -> tuple[str, str]:
-    """Return (base_url, model) from saved settings or fallback defaults."""
+    """Return (base_url, model) from saved settings or fallback defaults.
+    Only reads fields when provider == 'local' — other providers (cymind,
+    gemini, etc.) store different URLs/keys in the same fields dict and must
+    never bleed into the Ollama fallback.
+    """
     settings = _load_ai_settings()
-    fields   = settings.get("fields", {})
-    url      = fields.get("baseUrl", "").strip() or _FALLBACK_OLLAMA_URL
-    model    = fields.get("model",   "").strip() or _FALLBACK_OLLAMA_MODEL
-    return url, model
+    if settings.get("provider", "") == "local":
+        fields = settings.get("fields", {})
+        url    = fields.get("baseUrl", "").strip() or _FALLBACK_OLLAMA_URL
+        model  = fields.get("model",   "").strip() or _FALLBACK_OLLAMA_MODEL
+        return url, model
+    # Non-local provider is active — always use the hardcoded Ollama fallback
+    return _FALLBACK_OLLAMA_URL, _FALLBACK_OLLAMA_MODEL
 
 
 def _get_gemini_key() -> str:
@@ -331,6 +338,7 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> 
     """
 
     # ── ATTEMPT 1: CyMind (on-premise, authenticated, preferred) ─────────────
+    logger.info(f"[AI Enrichment] Starting...")
     cymind_result = await enrich_with_cymind(context_payload, domain, prompt)
     if cymind_result is not None:
         return cymind_result
@@ -340,13 +348,21 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> 
         logger.info(f"🤖 [AI] Trying Google Gemini for {domain}...")
         gemini_key = _get_gemini_key()
         client = genai.Client(api_key=gemini_key)
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(response_mime_type="application/json")
+        # 90-second hard timeout — prevents indefinite hang if the Gemini API
+        # is slow or unresponsive, ensuring the portal JSON is always saved.
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                client.models.generate_content,
+                model="gemini-2.0-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json"),
+            ),
+            timeout=90.0,
         )
         result = response.parsed if response.parsed else json.loads(response.text)
+        if not isinstance(result, list):
+            logger.warning(f"⚠️ [AI] Gemini returned non-list ({type(result).__name__}), discarding.")
+            raise ValueError("Gemini response is not a JSON list")
         logger.info(f"✅ [AI] Gemini enrichment succeeded for {domain}.")
         return result
 
@@ -651,6 +667,7 @@ def main():
         logger.error(f"❌ Failed to save NDJSON: {e}")
 
     # --- 2. PORTAL JSON ---
+    logger.info("[Portal JSON] Saving...")
     logger.info("💾 Saving portal JSON...")
     try:
         all_findings = result.get('all_issues', [])

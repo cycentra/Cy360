@@ -106,7 +106,7 @@ def scan_status():
 
     try:
         if log_file.exists():
-            if time.time() - log_file.stat().st_mtime < 600:
+            if time.time() - log_file.stat().st_mtime < 1800:  # 30 min — allows for slow AI enrichment
                 running = True
 
             with open(log_file, errors='replace') as f:
