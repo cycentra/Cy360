@@ -213,29 +213,38 @@ async def calculate_entity_risk(
 
 
 async def recalculate_all(db: AsyncSession) -> int:
-    """Recalculate risk scores for all entities seen in the last 48h. Called every 5 min."""
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+    """Recalculate risk scores for entities seen in the last 24 h.
+    Capped at 200 entities per run to prevent CPU saturation on high-volume deployments.
+    Called every 600 s by the scheduler (was 300 s).
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)   # was 48 h
     count  = 0
+    CAP    = 200   # safety cap — protects 8 GB / 4 CPU servers under alert storms
 
-    # All active hosts
+    # All active hosts (most recent first, so highest-priority entities are scored)
     host_q = await db.execute(
         select(Alert.agent_id, Alert.agent_name)
         .where(Alert.timestamp >= cutoff)
         .distinct()
+        .limit(CAP)
     )
     for agent_id, agent_name in host_q.all():
         await calculate_entity_risk(db, agent_id, agent_name or agent_id, 'host')
         count += 1
+        if count >= CAP:
+            break
 
-    # All active users
-    user_q = await db.execute(
-        select(Alert.username)
-        .where(Alert.timestamp >= cutoff, Alert.username.isnot(None))
-        .distinct()
-    )
-    for (username,) in user_q.all():
-        await calculate_entity_risk(db, username, username, 'user')
-        count += 1
+    # All active users (within remaining cap headroom)
+    if count < CAP:
+        user_q = await db.execute(
+            select(Alert.username)
+            .where(Alert.timestamp >= cutoff, Alert.username.isnot(None))
+            .distinct()
+            .limit(CAP - count)
+        )
+        for (username,) in user_q.all():
+            await calculate_entity_risk(db, username, username, 'user')
+            count += 1
 
     await db.commit()
     log.info('risk_recalc_complete', entities=count)

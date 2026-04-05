@@ -6,6 +6,7 @@ normalises them, and drives the full pipeline:
 """
 import asyncio
 import json
+import time
 from datetime import datetime, timezone, timedelta
 import redis.asyncio as aioredis
 import structlog
@@ -28,15 +29,39 @@ UEBA_CONTEXT_WINDOW   = timedelta(hours=2)
 LLM_TRIGGER_SEVERITY  = {"critical", "high"}
 LLM_TRIGGER_MIN_ALERTS = 3
 
+# ── Performance optimisation: limit concurrent alert processing ──────────────
+# On a 4-CPU / 8 GB server, processing every alert in parallel with full DB
+# query chains causes memory and CPU saturation. Limit to 6 concurrent tasks.
+_PROCESS_SEM = asyncio.Semaphore(6)
+
+# ── UEBA context cache (per-username, 30 s TTL) ──────────────────────────────
+# _get_recent_user_alerts is called on EVERY alert with a username — this saves
+# the DB round-trip for high-frequency users generating bursts of events.
+_ueba_ctx_cache: dict[str, tuple[float, list]] = {}   # username → (ts, rows)
+_UEBA_CTX_TTL = 30.0   # seconds
+
+# ── Per-entity risk scoring throttle ─────────────────────────────────────────
+# calculate_entity_risk runs for every alert (host + optional user = up to 8 DB
+# queries per alert). Throttle to once per entity per 60 s — the risk scheduler
+# at 600 s handles batch recalculation for everything else.
+_last_risk_calc: dict[str, float] = {}   # entity_id → epoch seconds
+_RISK_CALC_MIN_INTERVAL = 60.0  # seconds
+
 
 async def _get_recent_user_alerts(db, username: str, cutoff: datetime) -> list[dict]:
+    # Return cached result if fresh enough — avoids a DB query on every alert burst
+    now_ts = time.monotonic()
+    cached = _ueba_ctx_cache.get(username)
+    if cached and (now_ts - cached[0]) < _UEBA_CTX_TTL:
+        return cached[1]
+
     result = await db.execute(
         select(Alert).where(
             Alert.username  == username,
             Alert.timestamp >= cutoff,
         ).order_by(Alert.timestamp.desc()).limit(100)
     )
-    return [
+    rows = [
         {
             'rule_id':  a.rule_id,
             'agent_id': a.agent_id,
@@ -45,9 +70,16 @@ async def _get_recent_user_alerts(db, username: str, cutoff: datetime) -> list[d
         }
         for a in result.scalars().all()
     ]
+    _ueba_ctx_cache[username] = (now_ts, rows)
+    return rows
 
 
 async def _process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
+    async with _PROCESS_SEM:   # limit concurrent processing to 6 tasks
+        await _do_process_alert(raw_bytes, pubsub)
+
+
+async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
     try:
         raw = json.loads(raw_bytes)
     except json.JSONDecodeError:
@@ -75,13 +107,20 @@ async def _process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                 ml_anomalies    = await ml_analyse_alert(db, alert, recent, incident.id)
                 ueba_anomalies.extend(ml_anomalies)
 
-            # 4. Risk scoring
-            await calculate_entity_risk(
-                db, alert["agent_id"],
-                alert.get("agent_name", alert["agent_id"]), "host"
-            )
+            # 4. Risk scoring — throttled per entity to avoid 8 DB queries per alert
+            now_ts = time.monotonic()
+            host_key = f"host:{alert['agent_id']}"
+            if now_ts - _last_risk_calc.get(host_key, 0) >= _RISK_CALC_MIN_INTERVAL:
+                await calculate_entity_risk(
+                    db, alert["agent_id"],
+                    alert.get("agent_name", alert["agent_id"]), "host"
+                )
+                _last_risk_calc[host_key] = now_ts
             if alert.get("username"):
-                await calculate_entity_risk(db, alert["username"], alert["username"], "user")
+                user_key = f"user:{alert['username']}"
+                if now_ts - _last_risk_calc.get(user_key, 0) >= _RISK_CALC_MIN_INTERVAL:
+                    await calculate_entity_risk(db, alert["username"], alert["username"], "user")
+                    _last_risk_calc[user_key] = now_ts
 
             # 5. MISP enrichment (new incidents or new correlation rules)
             misp_result = {}
@@ -125,8 +164,11 @@ async def _process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
 
 
 async def run_ingestor():
-    """Main ingestor loop — blocks on Redis BLPOP."""
-    redis       = aioredis.from_url(settings.redis_url, decode_responses=False)
+    """Main ingestor loop — blocks on Redis BLPOP.
+    Spawns each alert as an asyncio task so the loop is never blocked by a slow
+    pipeline stage. The _PROCESS_SEM semaphore caps concurrency at 6.
+    """
+    redis        = aioredis.from_url(settings.redis_url, decode_responses=False)
     pubsub_redis = aioredis.from_url(settings.redis_url, decode_responses=True)
 
     log.info("ingestor_started", key=settings.redis_alert_key)
@@ -136,7 +178,7 @@ async def run_ingestor():
             result = await redis.blpop(settings.redis_alert_key, timeout=2)
             if result:
                 _, raw_bytes = result
-                await _process_alert(raw_bytes, pubsub_redis)
+                asyncio.create_task(_process_alert(raw_bytes, pubsub_redis))
         except asyncio.CancelledError:
             log.info("ingestor_stopped")
             break

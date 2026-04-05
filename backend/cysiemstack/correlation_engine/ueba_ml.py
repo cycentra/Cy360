@@ -31,6 +31,10 @@ CONTAMINATION  = float(os.getenv('UEBA_ML_CONTAMINATION', '0.05'))
 
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
+# In-memory model cache: username → (model_object, file_mtime)
+# Avoids repeated pickle.load() on every alert — critical on 4-CPU / 8 GB servers.
+_model_cache: dict[str, tuple] = {}
+
 
 def _feature_vector(alert: dict, recent: list[dict]) -> list[float]:
     """Convert alert + context into a numeric feature vector."""
@@ -54,15 +58,25 @@ def _feature_vector(alert: dict, recent: list[dict]) -> list[float]:
 
 
 def _load_model(username: str):
-    """Load trained model for a user. Returns None if not trained yet."""
+    """Load trained model for a user.
+    Uses an in-memory cache keyed by file mtime — avoids pickle.load on every alert.
+    Returns None if not trained yet.
+    """
     model_path = MODEL_DIR / f"{username.replace('/', '_')}.pkl"
-    if model_path.exists():
-        try:
-            with open(model_path, 'rb') as f:
-                return pickle.load(f)
-        except Exception:
-            return None
-    return None
+    if not model_path.exists():
+        return None
+
+    try:
+        current_mtime = model_path.stat().st_mtime
+        cached = _model_cache.get(username)
+        if cached and cached[1] == current_mtime:
+            return cached[0]                          # cache hit — no disk I/O
+        with open(model_path, 'rb') as f:
+            model = pickle.load(f)
+        _model_cache[username] = (model, current_mtime)
+        return model
+    except Exception:
+        return None
 
 
 def _save_model(username: str, model) -> None:
@@ -70,6 +84,8 @@ def _save_model(username: str, model) -> None:
     try:
         with open(model_path, 'wb') as f:
             pickle.dump(model, f)
+        # Evict stale cache entry so next load picks up the new mtime
+        _model_cache.pop(username, None)
     except Exception as e:
         log.warning('ml_model_save_error', username=username, error=str(e))
 

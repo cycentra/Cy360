@@ -44,8 +44,10 @@ _alert_count = 0
 
 
 async def _risk_scheduler():
+    # Run every 600 s (was 300 s) — per-alert throttle in ingestor.py handles
+    # fresh entities; this batch pass catches everything else with time decay.
     while True:
-        await asyncio.sleep(300)
+        await asyncio.sleep(600)
         try:
             from models import AsyncSessionLocal
             async with AsyncSessionLocal() as db:
