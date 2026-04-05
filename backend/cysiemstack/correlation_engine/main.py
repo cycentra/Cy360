@@ -15,8 +15,13 @@ Endpoints:
   WS    /ws/live
 """
 import asyncio
-import json
 from contextlib import asynccontextmanager
+try:
+    import orjson as _json
+    _DUMPS = lambda obj: _json.dumps(obj, option=_json.OPT_NON_STR_KEYS).decode()
+except ImportError:
+    import json as _json
+    _DUMPS = lambda obj: _json.dumps(obj, default=str)
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -79,7 +84,7 @@ async def _campaign_scheduler():
                 linked = await run_campaign_correlation(db)
                 await db.commit()
                 if linked:
-                    await manager.broadcast(json.dumps({
+                    await manager.broadcast(_DUMPS({
                         'type': 'campaign_detected',
                         'linked_count': linked,
                         'timestamp': datetime.now(timezone.utc).isoformat(),
@@ -615,7 +620,7 @@ async def ingest_alert(alert: dict):
     Pushes to the Redis ingest queue; the ingestor picks it up within 2 seconds.
     """
     redis_conn = aioredis.from_url(settings.redis_url, decode_responses=False)
-    await redis_conn.rpush(settings.redis_alert_key, json.dumps(alert).encode())
+    await redis_conn.rpush(settings.redis_alert_key, _json.dumps(alert))
     await redis_conn.aclose()
     return {"status": "queued", "key": settings.redis_alert_key}
 

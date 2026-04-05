@@ -5,8 +5,13 @@ normalises them, and drives the full pipeline:
   normalise → group → correlate → UEBA → risk_score → MISP → LLM → WebSocket push
 """
 import asyncio
-import json
 import time
+try:
+    import orjson as _json   # 5-10x faster than stdlib json; handles bytes natively
+    _DUMPS = lambda obj: _json.dumps(obj, option=_json.OPT_NON_STR_KEYS).decode()
+except ImportError:
+    import json as _json
+    _DUMPS = lambda obj: _json.dumps(obj, default=str)
 from datetime import datetime, timezone, timedelta
 import redis.asyncio as aioredis
 import structlog
@@ -81,8 +86,8 @@ async def _process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
 
 async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
     try:
-        raw = json.loads(raw_bytes)
-    except json.JSONDecodeError:
+        raw = _json.loads(raw_bytes)   # orjson accepts bytes directly — no decode step
+    except (ValueError, TypeError):
         log.warning("alert_json_decode_error", raw=raw_bytes[:200])
         return
 
@@ -152,7 +157,7 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                 "agent_name":        alert.get("agent_name"),
                 "rule_desc":         alert.get("rule_desc"),
             }
-            await pubsub.publish("cysiemstack:live", json.dumps(event, default=str))
+            await pubsub.publish("cysiemstack:live", _DUMPS(event))
 
             log.info("alert_processed",
                      incident=incident.id, severity=incident.severity,
@@ -164,21 +169,44 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
 
 
 async def run_ingestor():
-    """Main ingestor loop — blocks on Redis BLPOP.
-    Spawns each alert as an asyncio task so the loop is never blocked by a slow
-    pipeline stage. The _PROCESS_SEM semaphore caps concurrency at 6.
+    """Main ingestor loop — batch drain up to 10 alerts per cycle.
+
+    Uses BLPOP to block until at least one alert is available, then immediately
+    drains up to 9 more with non-blocking LPOP in a single pipeline call.
+    This amortizes per-iteration overhead (event loop scheduling, Redis round
+    trips) across a batch rather than paying it for every single alert.
+
+    Each alert is spawned as an asyncio task; _PROCESS_SEM caps concurrency at 6.
     """
     redis        = aioredis.from_url(settings.redis_url, decode_responses=False)
     pubsub_redis = aioredis.from_url(settings.redis_url, decode_responses=True)
 
     log.info("ingestor_started", key=settings.redis_alert_key)
+    BATCH_SIZE = 9   # additional alerts to drain after the blocking pop
 
     while True:
         try:
+            # Block until at least one alert is ready (2 s timeout)
             result = await redis.blpop(settings.redis_alert_key, timeout=2)
-            if result:
-                _, raw_bytes = result
+            if not result:
+                continue
+            _, first = result
+            batch = [first]
+
+            # Non-blocking: drain up to BATCH_SIZE more in one pipeline round-trip
+            if BATCH_SIZE > 0:
+                pipe = redis.pipeline()
+                for _ in range(BATCH_SIZE):
+                    pipe.lpop(settings.redis_alert_key)
+                extras = await pipe.execute()
+                batch.extend(b for b in extras if b is not None)
+
+            for raw_bytes in batch:
                 asyncio.create_task(_process_alert(raw_bytes, pubsub_redis))
+
+            if len(batch) > 1:
+                log.debug("ingestor_batch", size=len(batch))
+
         except asyncio.CancelledError:
             log.info("ingestor_stopped")
             break
