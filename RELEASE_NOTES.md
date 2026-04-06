@@ -2,6 +2,23 @@
 
 ---
 
+## v1.0.67 — 2026-04-06
+
+### Bug Fixes
+
+**cycentra-setup.sh — CySIEM credential extraction no longer aborts setup**
+- The `grep` pipeline extracting admin and wazuh-wui passwords from `wazuh-install-files.tar`
+  returned exit code 1 when the passwords file was absent or Wazuh 4.14 changed its format.
+  With `set -euo pipefail` active this killed the script immediately after a successful CySIEM
+  install, printing the ERR trap message for Step 4 "CySIEM INSTALLATION".
+- Fixed: added `|| true` to both password-extraction greps so a no-match is non-fatal.
+- Fixed: added a fallback grep against the tar file itself for the `Password: <value>` pattern
+  printed by the Wazuh 4.x installer in its stdout summary.
+- Note: Step 4.2 (CySIEM API Password Detection) auto-detects the wazuh-wui password from the
+  dashboard config independently — these variables are purely for the final summary display.
+
+---
+
 ## v1.0.66 — 2026-04-06
 
 ### Enhancements

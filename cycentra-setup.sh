@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.66"
+_SCRIPT_VERSION="v1.0.67"
 
 # Mask Cloudsmith auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|dl\.cloudsmith\.io/[A-Za-z0-9_-]\{8,\}/|dl.cloudsmith.io/[TOKEN]/|g'; }
@@ -318,10 +318,14 @@ if [[ "$MODE" == "full" ]]; then
         bash wazuh-install.sh -a
         success "CySIEM installed"
         _CYSIEM_FRESH=true
-        # Capture generated credentials from installer before cleanup removes the tar
+        # Capture generated credentials from passwords file (non-fatal — Step 4.2 auto-detects from dashboard config)
         _cysiem_pwfile=$(tar -xOf ~/wazuh-install-files.tar wazuh-install-files/wazuh-passwords.txt 2>/dev/null || echo "")
-        _CYSIEM_ADMIN_PASS=$(echo "$_cysiem_pwfile" | grep -A 1 "^username: admin$" | grep "^password:" | awk '{print $2}')
-        _CYSIEM_WUI_PASS=$(echo "$_cysiem_pwfile" | grep -A 1 "^username: wazuh-wui$" | grep "^password:" | awk '{print $2}')
+        _CYSIEM_ADMIN_PASS=$(echo "$_cysiem_pwfile" | grep -A 1 "^username: admin$"   | grep "^password:" | awk '{print $2}' || true)
+        _CYSIEM_WUI_PASS=$(echo  "$_cysiem_pwfile" | grep -A 1 "^username: wazuh-wui$" | grep "^password:" | awk '{print $2}' || true)
+        # Fallback: Wazuh 4.x installer prints credentials in stdout summary — capture if tar extract above found nothing
+        if [[ -z "$_CYSIEM_ADMIN_PASS" ]]; then
+            _CYSIEM_ADMIN_PASS=$(grep -oP '(?<=Password: )\S+' ~/wazuh-install-files.tar 2>/dev/null | head -1 || true)
+        fi
         cd ~
     fi
 
@@ -586,6 +590,23 @@ mkdir -p /opt/cycentra
 
 cat > "$_RN_DEST" << 'RELEASE_NOTES_EOF'
 # CyCentra 360 — Release Notes
+
+---
+
+## v1.0.67 — 2026-04-06
+
+### Bug Fixes
+
+**cycentra-setup.sh — CySIEM credential extraction no longer aborts setup**
+- The `grep` pipeline extracting admin and wazuh-wui passwords from `wazuh-install-files.tar`
+  returned exit code 1 when the passwords file was absent or Wazuh 4.14 changed its format.
+  With `set -euo pipefail` active this killed the script immediately after a successful CySIEM
+  install, printing the ERR trap message for Step 4 "CySIEM INSTALLATION".
+- Fixed: added `|| true` to both password-extraction greps so a no-match is non-fatal.
+- Fixed: added a fallback grep against the tar file itself for the `Password: <value>` pattern
+  printed by the Wazuh 4.x installer in its stdout summary.
+- Note: Step 4.2 (CySIEM API Password Detection) auto-detects the wazuh-wui password from the
+  dashboard config independently — these variables are purely for the final summary display.
 
 ---
 
