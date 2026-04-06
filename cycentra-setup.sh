@@ -83,7 +83,7 @@ step_header() {
 ERRORS=()
 
 # ── Banner ────────────────────────────────────────────────────────────────────
-clear; echo ""
+[[ -t 1 ]] && clear; echo ""
 echo -e "${CYAN}${BOLD}"
 echo "  ██████╗██╗   ██╗ ██████╗███████╗███╗   ██╗████████╗██████╗  █████╗ "
 echo "  ██╔════╝╚██╗ ██╔╝██╔════╝██╔════╝████╗  ██║╚══██╔══╝██╔══██╗██╔══██╗"
@@ -384,8 +384,15 @@ command -v jq >/dev/null 2>&1 || apt-get install -y -qq jq
 
 # In update mode read CORR_DB_PASS from existing env
 if [[ "$MODE" == "update" ]]; then
+    # Try standalone POSTGRES_PASSWORD= line first (written by v1.0.61+)
     CORR_DB_PASS=$(grep "^POSTGRES_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null \
-        | cut -d= -f2 || true)
+        | sed 's/^POSTGRES_PASSWORD=//' | tr -d '"' || true)
+    # Fallback: extract from DATABASE_URL (installs prior to v1.0.61 had no standalone key)
+    if [[ -z "$CORR_DB_PASS" ]]; then
+        CORR_DB_PASS=$(grep "^DATABASE_URL=" /opt/cycentra/cysiemstack.env 2>/dev/null \
+            | sed 's|.*://[^:]*:\([^@]*\)@.*|\1|' || true)
+        [[ -n "$CORR_DB_PASS" ]] && info "Correlation DB password recovered from DATABASE_URL"
+    fi
     if [[ -z "$CORR_DB_PASS" ]]; then
         warn "POSTGRES_PASSWORD not found in /opt/cycentra/cysiemstack.env — generating a new one"
         warn "If the correlation DB already exists, update POSTGRES_PASSWORD in cysiemstack.env manually"
@@ -522,25 +529,42 @@ cat > "$_RN_DEST" << 'RELEASE_NOTES_EOF'
 
 ---
 
-## v1.0.59 — 2026-04-06
+## v1.0.61 — 2026-04-06
+
+### Bug Fixes
+
+**cycentra-setup.sh — UI update no longer fails with exit code 1**
+- `clear` was called unconditionally before printing the banner. When the script runs as a Flask
+  subprocess there is no TTY, so `TERM=unknown` causes `clear` to print
+  `'unknown': I need something more specific.` and exit 1 (caught by `set -euo pipefail`).
+  Fixed to `[[ -t 1 ]] && clear` — only clears when stdout is attached to a real terminal.
+
+**cycentra-setup.sh — POSTGRES_PASSWORD no longer re-generated on every update**
+- `cysiemstack.env` was never written with a standalone `POSTGRES_PASSWORD=` line — the
+  credential was only embedded inside `DATABASE_URL`. The `--update` mode grep found nothing
+  and generated a new password on every run.
+- Fixed: update mode now falls back to extracting the password from `DATABASE_URL` when the
+  standalone key is absent (covers all installs prior to v1.0.61).
+- Fixed: `cysiemstack.env` template now includes `POSTGRES_PASSWORD=` as a standalone line so
+  future updates read it directly without parsing the connection URL.
+
+---
+
+## v1.0.60 — 2026-04-06
 
 ### Bug Fixes
 
 **cycentra-setup.sh — RELEASE_NOTES.md now embedded in script**
-- Previous fallback chain (bundle → script dir → Cloudsmith raw → placeholder) failed because
-  RELEASE_NOTES.md is not a separately published Cloudsmith artifact.
-- Release notes content is now written as a heredoc directly inside cycentra-setup.sh, which is
-  itself the downloaded artifact. No separate file or network call needed.
-- git-push.sh updated to regenerate this heredoc block before each push, keeping it in sync.
+- All prior fallback strategies failed; content is now a heredoc baked into the script itself.
 
 ---
 
-## v1.0.58 — 2026-04-06
+## v1.0.59 — 2026-04-06
 
 ### Bug Fixes
 
-**cycentra-setup.sh — RELEASE_NOTES.md fallback added GitHub raw + warn**
-- Added parent-dir check and curl fallback to GitHub raw URL (superseded by v1.0.59).
+**cycentra-setup.sh — Cloudsmith raw URL fallback + placeholder heredoc**
+- Superseded by v1.0.60 embedded approach.
 
 ---
 
@@ -549,14 +573,11 @@ cat > "$_RN_DEST" << 'RELEASE_NOTES_EOF'
 ### Bug Fixes
 
 **WorldMapWidget — all asset IPs now resolved (not just primary)**
-- IP collection and dot grouping previously filtered `tags.includes("primary")` — only the
-  main domain asset was ever sent to /api/system/geoip. Changed to include all assets with a
-  valid IPv4 address; IPv6 addresses explicitly skipped.
-- Multiple unique locations now appear on the map for all subdomains and discovered IPs.
+- Changed IP filter from `tags.includes("primary")` to any valid IPv4. Multiple locations
+  now appear on the map for all subdomains and discovered IPs.
 
 **Backend — RELEASE_NOTES.md path resolution improved**
-- Added `../cwd` and `../../cwd` fallback paths so release notes resolve when Flask is started
-  from within backend/ or backend/blueprints/ subdirectory.
+- Added ../cwd and ../../cwd fallback paths.
 
 ---
 
@@ -564,10 +585,7 @@ cat > "$_RN_DEST" << 'RELEASE_NOTES_EOF'
 
 ### Hotfix
 
-**WorldMapWidget.jsx — build error fixed**
-- replace_string_in_file left stale JSDoc content appended from the old file after the new
-  content, starting at line 298 with a bare `*` that caused esbuild to fail. Truncated at
-  line 297 (closing `}` of `WorldMapWidget`).
+**WorldMapWidget.jsx — build error (stale JSDoc appended at line 298) fixed**
 
 ---
 
@@ -581,17 +599,11 @@ cat > "$_RN_DEST" << 'RELEASE_NOTES_EOF'
 **cycentra-setup.sh — version file written on every run**
 - BUNDLE_VERSION written to /opt/cycentra/version (create or overwrite).
 
-**Backend — corrected env file paths**
-- cyiris → /opt/cycentra/modules/cyiris/.env
-- cysoar → /opt/cycentra/modules/cysoar/.env
-- cymisp → /opt/cycentra/modules/cymisp/.env
-- cysiem → /opt/cycentra/.env
+**Backend — corrected env file paths for cyiris/cysoar/cymisp/cysiem**
 
-**Frontend — asset status preserved across refreshes and rescans**
-- Status changes persisted to localStorage under cycentra_asset_statuses (keyed by hostname).
+**Frontend — asset status preserved across refreshes and rescans via localStorage**
 
 **WorldMapWidget — improved SVG continent outlines + animations**
-- Detailed multi-point paths, animated scan-line, pulsing rings, glow filter.
 
 RELEASE_NOTES_EOF
 
@@ -793,6 +805,8 @@ UEBA_ML_SHADOW_MODE=true
 UEBA_ML_MIN_TRAIN_DAYS=7
 UEBA_ML_MODEL_DIR=/opt/cycentra/ml_models
 MISP_ENABLED=false
+# Standalone key so --update mode can read the password without parsing DATABASE_URL
+POSTGRES_PASSWORD=${CORR_DB_PASS}
 SIEMEOF
     chmod 600 /opt/cycentra/cysiemstack.env
     success "cysiemstack.env written → /opt/cycentra/cysiemstack.env"

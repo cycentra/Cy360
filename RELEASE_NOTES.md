@@ -2,6 +2,28 @@
 
 ---
 
+## v1.0.61 — 2026-04-06
+
+### Bug Fixes
+
+**cycentra-setup.sh — UI-triggered update no longer fails with exit code 1**
+- `clear` was called unconditionally at script start. When executed as a Flask subprocess
+  there is no TTY, so `TERM=unknown` causes `clear` to output
+  `'unknown': I need something more specific.` then exit 1 (caught by `set -euo pipefail`),
+  aborting the entire update before the banner even printed.
+  Fixed to `[[ -t 1 ]] && clear` — only clears the screen when stdout is a real terminal.
+
+**cycentra-setup.sh — POSTGRES_PASSWORD no longer re-generated on every --update run**
+- `cysiemstack.env` was never written with a standalone `POSTGRES_PASSWORD=` line; the
+  credential existed only embedded inside `DATABASE_URL`. The update-mode grep found nothing
+  and silently generated a fresh password on every run.
+- Fix 1: Update mode now falls back to extracting the password from `DATABASE_URL` when the
+  standalone key is absent (covers all existing installs prior to v1.0.61).
+- Fix 2: `cysiemstack.env` template now includes a `POSTGRES_PASSWORD=` standalone line so
+  future updates can read it directly without parsing the connection URL.
+
+---
+
 ## v1.0.60 — 2026-04-08
 
 ### Bug Fixes
