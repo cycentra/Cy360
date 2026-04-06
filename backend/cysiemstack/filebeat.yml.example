@@ -4,12 +4,12 @@
 #
 # Filebeat 7.x (Wazuh-distributed) crashes with a seccomp pthread_create
 # SIGABRT on Linux kernel 6.x.  CyCentra 360 setup.sh now deploys
-# wazuh_to_redis.py (a pure-Python tail watcher) as a systemd service
-# called wazuh-to-redis.service instead.
+# cysiem_to_redis.py (a pure-Python tail watcher) as a systemd service
+# called cysiem-to-redis.service instead.
 #
-# Source: backend/cysiemstack/wazuh_to_redis.py
-# Deployed to: /opt/cycentra/wazuh_to_redis.py
-# Systemd unit: /etc/systemd/system/wazuh-to-redis.service
+# Source: backend/cysiemstack/correlation_engine/cysiem_to_redis.py
+# Deployed to: /opt/cycentra/cysiem_to_redis.py
+# Systemd unit: /etc/systemd/system/cysiem-to-redis.service
 #
 # The config below is retained only for environments where Filebeat IS working
 # and you prefer to use it over the Python watcher.

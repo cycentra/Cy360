@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.63"
+_SCRIPT_VERSION="v1.0.64"
 
 # Mask Cloudsmith auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|dl\.cloudsmith\.io/[A-Za-z0-9_-]\{8,\}/|dl.cloudsmith.io/[TOKEN]/|g'; }
@@ -268,41 +268,60 @@ step_header "CySIEM → REDIS BRIDGE (Python watcher)"
 python3 -c "import redis" 2>/dev/null \
     || pip3 install --break-system-packages --quiet redis
 
+# Ensure deploy directory exists
+mkdir -p /opt/cycentra
+
 # Write the watcher script
-cat > /opt/cycentra/wazuh_to_redis.py << 'PYEOF'
+cat > /opt/cycentra/cysiem_to_redis.py << 'PYEOF'
 #!/usr/bin/env python3
-"""Tail Wazuh alerts.json and push NDJSON lines to Redis list."""
-import json, logging, os, time
+"""CySIEM alerts.json → Redis bridge — tails alerts and pushes NDJSON lines to Redis."""
+import json
+import logging
+import os
+import time
 from pathlib import Path
+
 import redis
 
 ALERTS_FILE = "/var/ossec/logs/alerts/alerts.json"
 REDIS_HOST  = "127.0.0.1"
 REDIS_PORT  = 6379
 REDIS_KEY   = "cysiemstack:alerts:raw"
-MAX_LIST    = 200_000
+MAX_LIST    = 200_000   # cap Redis list to avoid unbounded memory growth
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("wazuh_to_redis")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+log = logging.getLogger("cysiem_to_redis")
 
 
-def tail_forever():
+def tail_forever() -> None:
     r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
     r.ping()
+
     path = Path(ALERTS_FILE)
     log.info("watching %s  →  redis:%d/%s", ALERTS_FILE, REDIS_PORT, REDIS_KEY)
-    with open(path) as f:
-        f.seek(0, 2)                      # start at EOF — no replay of history
-        inode = os.stat(path).st_ino
+
+    # Open in raw unbuffered binary mode so OS-level appends are immediately
+    # visible — Python text-mode buffering can silently stall on tailed files.
+    with open(path, "rb", buffering=0) as fb:
+        fb.seek(0, 2)                         # start at EOF — no history replay
+        inode  = os.stat(path).st_ino
+        buf    = b""
         pushed = 0
+
         while True:
-            line = f.readline()
-            if line:
-                line = line.strip()
-                if line:
+            chunk = fb.read(65536)
+            if chunk:
+                buf += chunk
+                while b"\n" in buf:
+                    raw, buf = buf.split(b"\n", 1)
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
                     try:
-                        json.loads(line)  # validate JSON before pushing
+                        json.loads(line)      # validate before pushing
                         pipe = r.pipeline()
                         pipe.lpush(REDIS_KEY, line)
                         pipe.ltrim(REDIS_KEY, 0, MAX_LIST - 1)
@@ -310,15 +329,19 @@ def tail_forever():
                         pushed += 1
                         if pushed % 100 == 0:
                             log.info("pushed %d alerts total", pushed)
-                    except (json.JSONDecodeError, redis.RedisError) as exc:
-                        log.warning("skipped line: %s", exc)
+                    except json.JSONDecodeError as exc:
+                        log.warning("invalid JSON — skipped: %s", exc)
+                    except redis.RedisError as exc:
+                        log.error("redis error: %s", exc)
+                        raise  # let outer loop reconnect
             else:
-                # detect log rotation (Wazuh rotates daily)
+                # detect CySIEM daily log rotation
                 try:
                     if os.stat(path).st_ino != inode:
-                        log.info("rotation detected — reopening")
-                        f.close()
-                        f = open(path)
+                        log.info("log rotation detected — reopening %s", path)
+                        buf = b""
+                        fb.close()
+                        fb = open(path, "rb", buffering=0)
                         inode = os.stat(path).st_ino
                 except FileNotFoundError:
                     pass
@@ -330,20 +353,20 @@ if __name__ == "__main__":
         try:
             tail_forever()
         except Exception as exc:
-            log.error("fatal: %s — retrying in 5s", exc)
+            log.error("fatal: %s — retrying in 5 s", exc)
             time.sleep(5)
 PYEOF
-chmod 750 /opt/cycentra/wazuh_to_redis.py
+chmod 750 /opt/cycentra/cysiem_to_redis.py
 
 # Write the systemd unit
-cat > /etc/systemd/system/wazuh-to-redis.service << 'UNITEOF'
+cat > /etc/systemd/system/cysiem-to-redis.service << 'UNITEOF'
 [Unit]
 Description=CySIEM alerts.json → Redis bridge
 After=network.target redis.service wazuh-manager.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /opt/cycentra/wazuh_to_redis.py
+ExecStart=/usr/bin/python3 /opt/cycentra/cysiem_to_redis.py
 Restart=always
 RestartSec=5
 StandardOutput=append:/opt/cycentra/engine.log
@@ -359,7 +382,7 @@ if dpkg -l filebeat &>/dev/null 2>&1; then
     systemctl disable --now filebeat 2>/dev/null || true
     apt-get purge -y filebeat 2>/dev/null || true
     rm -rf /etc/filebeat /var/lib/filebeat /var/log/filebeat
-    success "Filebeat removed (replaced by wazuh-to-redis)"
+    success "Filebeat removed (replaced by cysiem-to-redis)"
 fi
 
 # Ensure Wazuh alerts log is readable
@@ -372,13 +395,13 @@ else
 fi
 
 systemctl daemon-reload
-systemctl enable wazuh-to-redis
-systemctl restart wazuh-to-redis
+systemctl enable cysiem-to-redis
+systemctl restart cysiem-to-redis
 sleep 2
-systemctl is-active wazuh-to-redis >/dev/null 2>&1 \
-    && success "wazuh-to-redis running — tailing CySIEM alerts → Redis :6379" \
-    || { warn "wazuh-to-redis failed — check: journalctl -u wazuh-to-redis -n 20"; \
-         ERRORS+=("wazuh-to-redis failed"); }
+systemctl is-active cysiem-to-redis >/dev/null 2>&1 \
+    && success "cysiem-to-redis running — tailing CySIEM alerts → Redis :6379" \
+    || { warn "cysiem-to-redis failed — check: journalctl -u cysiem-to-redis -n 20"; \
+         ERRORS+=("cysiem-to-redis failed"); }
 
 fi  # end INFRA block
 
@@ -1348,7 +1371,7 @@ _port_up 4433 && success "CyIRIS          :4433 UP" || warn "CyIRIS          :44
 _port_up 1880 && success "CySOAR          :1880 UP" || warn "CySOAR          :1880 DOWN (install via portal)"
 
 echo ""; info "── Systemd services ──"
-for svc in cycentra-backend cysiemstack-engine postgresql redis-server nginx wazuh-to-redis; do
+for svc in cycentra-backend cysiemstack-engine postgresql redis-server nginx cysiem-to-redis; do
     systemctl is-active "$svc" >/dev/null 2>&1 \
         && success "${svc} active" \
         || warn    "${svc} inactive"
@@ -1422,7 +1445,7 @@ echo -e "  ${BOLD}${YELLOW}Next steps:${NC}"
 echo -e "  ${DIM}1. Verify WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env (auto-detected if CySIEM is installed)${NC}"
 echo -e "  ${DIM}   then: systemctl restart cysiemstack-engine${NC}"
 echo -e "  ${DIM}2. Verify alerts flowing: redis-cli -p 6379 llen cysiemstack:alerts:raw${NC}"
-echo -e "  ${DIM}   (wazuh-to-redis tails CySIEM alerts → Redis — check: journalctl -u wazuh-to-redis -n 20)${NC}"
+echo -e "  ${DIM}   (cysiem-to-redis tails CySIEM alerts → Redis — check: journalctl -u cysiem-to-redis -n 20)${NC}"
 echo -e "  ${DIM}3. Check engine log: tail -f /opt/cycentra/engine.log${NC}"
 echo -e "  ${DIM}4. Install CyIRIS / CySOAR via portal${NC}"
 echo -e "  ${DIM}5. To update: sudo bash cycentra-setup.sh --update${NC}"
@@ -1468,7 +1491,7 @@ Next steps:
   1. Verify WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env (auto-detected if CySIEM is installed)
      then: systemctl restart cysiemstack-engine
   2. Verify alerts flowing: redis-cli -p 6379 llen cysiemstack:alerts:raw
-     (wazuh-to-redis service tails CySIEM alerts → Redis)
+     (cysiem-to-redis service tails CySIEM alerts → Redis)
   3. Check engine log: tail -f /opt/cycentra/engine.log
   4. Install CyIRIS/CySOAR via portal
   5. Update: sudo bash cycentra-setup.sh --update

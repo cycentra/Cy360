@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wazuh alerts.json → Redis bridge.
+CySIEM alerts.json → Redis bridge.
 
 Replaces Filebeat as the ingest mechanism because Filebeat 7.x
 (Wazuh-distributed) crashes with a seccomp pthread_create SIGABRT on
@@ -8,8 +8,9 @@ Linux kernel 6.x.  This script performs the same job: it tails
 /var/ossec/logs/alerts/alerts.json and pushes each NDJSON alert line
 as an LPUSH into the Redis list consumed by the CySIEMStack ingestor.
 
-Deployed to: /opt/cycentra/wazuh_to_redis.py
-Managed by:  systemd unit  wazuh-to-redis.service
+Source:      backend/cysiemstack/correlation_engine/cysiem_to_redis.py
+Deployed to: /opt/cycentra/cysiem_to_redis.py
+Managed by:  systemd unit  cysiem-to-redis.service
 Logs to:     /opt/cycentra/engine.log  (shared with cysiemstack-engine)
 """
 import json
@@ -32,7 +33,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
 )
-log = logging.getLogger("wazuh_to_redis")
+log = logging.getLogger("cysiem_to_redis")
 
 
 def tail_forever() -> None:
