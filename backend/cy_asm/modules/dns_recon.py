@@ -19,7 +19,7 @@ def get_dns_records(domain: str) -> Dict[str, List[str]]:
         return {}
     records = {record_type: [] for record_type in DNS_RECORD_TYPES}
     resolver = dns.resolver.Resolver()
-    resolver.nameservers = ["8.8.8.8"]
+    #resolver.nameservers = ["8.8.8.8"]
     resolver.timeout = 5
     resolver.lifetime = 10
     try:
