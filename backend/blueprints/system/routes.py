@@ -31,12 +31,12 @@ system_bp = Blueprint("system", __name__)
 
 # ── Env file paths keyed by target name ──────────────────────────────────────
 _ENV_FILE_MAP = {
-    "global":     "/opt/cycentra/.env",
+    "global":      "/opt/cycentra/.env",
     "cysiemstack": "/opt/cycentra/cysiemstack.env",
-    "cyiris":     "/opt/cycentra/cyiris.env",
-    "cysoar":     "/opt/cycentra/cysoar.env",
-    "cymisp":     "/opt/cycentra/cymisp.env",
-    "cysiem":     "/opt/cycentra/cysiem.env",
+    "cyiris":      "/opt/cycentra/modules/cyiris/.env",
+    "cysoar":      "/opt/cycentra/modules/cysoar/.env",
+    "cymisp":      "/opt/cycentra/modules/cymisp/.env",
+    "cysiem":      "/opt/cycentra/.env",
 }
 
 # Keys that must never be returned or overwritten via the API (security)
@@ -221,12 +221,20 @@ def system_version():
             break
 
     # Parse RELEASE_NOTES.md — return last 5 version blocks
-    rn_path = "/opt/cycentra/RELEASE_NOTES.md"
-    if not os.path.exists(rn_path):
-        # Dev fallback: look relative to repo root
-        rn_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "RELEASE_NOTES.md")
+    # Try multiple locations: production /opt/cycentra/, then relative to this file (dev), then cwd
+    _this_dir = os.path.dirname(os.path.abspath(__file__))
+    rn_path = None
+    for _candidate in (
+        "/opt/cycentra/RELEASE_NOTES.md",
+        os.path.join(_this_dir, "..", "..", "..", "RELEASE_NOTES.md"),
+        os.path.join(os.getcwd(), "RELEASE_NOTES.md"),
+    ):
+        _abs = os.path.abspath(_candidate)
+        if os.path.exists(_abs):
+            rn_path = _abs
+            break
 
-    if os.path.exists(rn_path):
+    if rn_path and os.path.exists(rn_path):
         with open(rn_path) as f:
             content = f.read()
         # Split on "## v" headings, keep last 5

@@ -2,6 +2,50 @@
 
 ---
 
+## v1.0.55 — 2026-04-07
+
+### Bug Fixes
+
+**cycentra-setup.sh — --update no longer aborts on missing POSTGRES_PASSWORD**
+- The `--update` mode previously hard-exited if `POSTGRES_PASSWORD` was absent in
+  `/opt/cycentra/cysiemstack.env`. Now it warns and auto-generates a fallback password
+  so updates complete even on environments where the cysiemstack stack was not fully initialised.
+
+**cycentra-setup.sh — version file now written on every run**
+- After the bundle manifest is parsed, `BUNDLE_VERSION` is written to `/opt/cycentra/version`
+  (create if absent, overwrite if present). System Settings version display now always reflects
+  the latest deployed version.
+- `RELEASE_NOTES.md` is also copied to `/opt/cycentra/` so the System Settings page
+  can read release history on the live server.
+
+**Backend — corrected env file paths for module targets**
+- `cyiris`  → `/opt/cycentra/modules/cyiris/.env`
+- `cysoar`  → `/opt/cycentra/modules/cysoar/.env`
+- `cymisp`  → `/opt/cycentra/modules/cymisp/.env`
+- `cysiem`  → `/opt/cycentra/.env` (shared global env)
+- `cysiemstack` and `global` remain unchanged.
+
+**Backend — RELEASE_NOTES.md multi-path resolution**
+- The `/api/system/version` endpoint now tries `/opt/cycentra/RELEASE_NOTES.md`,
+  then the dev repo path relative to `routes.py`, then `cwd` — so release notes
+  display correctly in both production and local development.
+
+**Frontend — asset status preserved across page refreshes and rescans**
+- Status changes (`in-review`, `resolved`, etc.) are now persisted to `localStorage`
+  under `cycentra_asset_statuses` (keyed by hostname).
+- On page refresh or after a new cy-asm scan completes, saved statuses are re-applied
+  before re-rendering the asset list — statuses no longer revert to "open".
+
+**WorldMapWidget — significantly improved map + animations**
+- Continent outlines replaced with detailed multi-point paths: all major landmasses
+  including Scandinavia, Indian subcontinent, SE Asia, Japan, Madagascar, New Zealand.
+- Animated scan-line sweep across the ocean, animated dot pulse rings (staggered per location),
+  drop-shadow glow filter on dots, radial ocean gradient with subtle breathing animation.
+- Risk colour escalation for co-located assets (worst risk shown per location).
+- Asset count badge on co-located dots; legend shows total primary assets mapped.
+
+---
+
 ## v1.0.54 — 2026-04-07
 
 ### New Features

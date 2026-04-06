@@ -387,9 +387,9 @@ if [[ "$MODE" == "update" ]]; then
     CORR_DB_PASS=$(grep "^POSTGRES_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null \
         | cut -d= -f2 || true)
     if [[ -z "$CORR_DB_PASS" ]]; then
-        error "Cannot find POSTGRES_PASSWORD in /opt/cycentra/cysiemstack.env"
-        error "Run full install first: sudo bash cycentra-setup.sh"
-        exit 1
+        warn "POSTGRES_PASSWORD not found in /opt/cycentra/cysiemstack.env — generating a new one"
+        warn "If the correlation DB already exists, update POSTGRES_PASSWORD in cysiemstack.env manually"
+        CORR_DB_PASS=$(gen_pass)
     fi
 fi
 
@@ -505,6 +505,18 @@ INDEX_URL=$(jq    -r '.packages.cycentra_backend.index_url'   "$MANIFEST")
 
 success "Bundle version  : ${BUNDLE_VERSION}"
 info    "Package         : ${PKG_NAME}==${PKG_VER}"
+
+# Write version file (always — so System Settings page can read it)
+mkdir -p /opt/cycentra
+echo "${BUNDLE_VERSION}" > /opt/cycentra/version
+success "Version file written: /opt/cycentra/version → ${BUNDLE_VERSION}"
+
+# Copy RELEASE_NOTES.md for System Settings page
+_SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+if [[ -f "${_SCRIPT_DIR}/RELEASE_NOTES.md" ]]; then
+    cp "${_SCRIPT_DIR}/RELEASE_NOTES.md" /opt/cycentra/RELEASE_NOTES.md
+    success "RELEASE_NOTES.md updated at /opt/cycentra/"
+fi
 # ── Step 6-9: Interactive config (full install only) ─────────────────────────
 if [[ "$MODE" == "full" ]]; then
 

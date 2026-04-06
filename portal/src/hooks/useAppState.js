@@ -103,18 +103,37 @@ export function useAppState() {
 
   /**
    * Merge previously user-set statuses (open/in-review/resolved) into a freshly
-   * adapted asset list.  Keyed by `host` (stable across scans).  Assets without
-   * a prior status default to "open" from the adapter — behaviour unchanged for
-   * first scans or newly discovered assets.
+   * adapted asset list.  Keyed by `host` (stable across scans).
+   * Sources: in-memory prevAssets (highest priority) + localStorage fallback
+   * (survives page refresh).  Assets without a prior status keep "open".
    */
+  const _STATUS_KEY = "cycentra_asset_statuses";
+
+  function _saveStatuses(updatedAssets) {
+    try {
+      const map = {};
+      updatedAssets.forEach(a => {
+        if (a.host && a.status && a.status !== "open") map[a.host] = a.status;
+      });
+      localStorage.setItem(_STATUS_KEY, JSON.stringify(map));
+    } catch {}
+  }
+
+  function _loadStatusMap() {
+    try {
+      const s = localStorage.getItem(_STATUS_KEY);
+      return s ? JSON.parse(s) : {};
+    } catch { return {}; }
+  }
+
   function _mergeStatuses(newAssets, prevAssets) {
-    if (!prevAssets?.length) return newAssets;
-    const statusMap = {};
-    prevAssets.forEach(a => {
-      if (a.host && a.status && a.status !== "open") {
-        statusMap[a.host] = a.status;
-      }
+    // Build combined status map: localStorage as base, in-memory prev overrides
+    const savedMap = _loadStatusMap();
+    const liveMap  = {};
+    (prevAssets || []).forEach(a => {
+      if (a.host && a.status && a.status !== "open") liveMap[a.host] = a.status;
     });
+    const statusMap = { ...savedMap, ...liveMap };
     if (!Object.keys(statusMap).length) return newAssets;
     return newAssets.map(a =>
       statusMap[a.host] ? { ...a, status: statusMap[a.host] } : a
@@ -130,7 +149,11 @@ export function useAppState() {
   }
 
   function handleStatusChange(id, status) {
-    setAssets(prev => prev.map(a => a.id === id ? { ...a, status } : a));
+    setAssets(prev => {
+      const updated = prev.map(a => a.id === id ? { ...a, status } : a);
+      _saveStatuses(updated);   // persist across refreshes + rescans
+      return updated;
+    });
   }
 
   function handleInstallModule(moduleId, config) {
