@@ -2,6 +2,18 @@
 
 ---
 
+## v1.0.75 — 2026-04-06
+
+### Fix — suppress pip root-user warning during setup
+
+Both `pip3 install` calls in `cycentra-setup.sh` now prepend `PIP_ROOT_USER_ACTION=ignore`,
+which is pip's own env-var mechanism for suppressing the "Running pip as root" advisory.
+Installing into system Python as root is intentional here (required for the Flask systemd
+service), so the warning was noise. No virtualenv or separate user is introduced — the
+service architecture requires root-owned system Python packages.
+
+---
+
 ## v1.0.74 — 2026-04-06
 
 ### Bug Fix — "Setup script not found on server" error in portal UI update

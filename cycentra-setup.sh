@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.74"
+_SCRIPT_VERSION="v1.0.75"
 
 # Mask Cloudsmith auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|dl\.cloudsmith\.io/[A-Za-z0-9_-]\{8,\}/|dl.cloudsmith.io/[TOKEN]/|g'; }
@@ -383,7 +383,7 @@ step_header "CySIEM → REDIS BRIDGE (Python watcher)"
 
 # Install redis-py if not already present
 python3 -c "import redis" 2>/dev/null \
-    || pip3 install --break-system-packages --quiet redis
+    || PIP_ROOT_USER_ACTION=ignore pip3 install --break-system-packages --quiet redis
 
 # Ensure deploy directory exists
 mkdir -p /opt/cycentra
@@ -840,7 +840,8 @@ info "Installing ${PKG_NAME}==${PKG_VER} into system Python ..."
 info "Index: $(_mask_url "${INDEX_URL}")"
 
 # --break-system-packages required on Ubuntu 24.04 (PEP 668 externally-managed env)
-pip3 install \
+# PIP_ROOT_USER_ACTION=ignore suppresses the "running as root" advisory — intentional here.
+PIP_ROOT_USER_ACTION=ignore pip3 install \
     --index-url "$INDEX_URL" \
     --extra-index-url https://pypi.org/simple/ \
     "${PKG_NAME}==${PKG_VER}" \
