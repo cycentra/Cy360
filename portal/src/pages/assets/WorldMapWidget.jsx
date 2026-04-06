@@ -94,9 +94,10 @@ export function WorldMapWidget({ assets }) {
   const [tooltip, setTooltip] = useState(null);
   const sweepRef = useRef(null);
 
-  // Unique non-private IPs from primary assets only
+  // Unique IPv4 IPs from ALL assets (primary + subdomains), skip IPv6 and placeholder "—"
+  const _isIPv4 = ip => ip && ip !== "—" && !ip.includes(":");
   const uniqueIPs = [...new Set(
-    assets.filter(a => a.tags?.includes("primary") && a.ip && a.ip !== "—").map(a => a.ip)
+    assets.filter(a => _isIPv4(a.ip)).map(a => a.ip)
   )];
 
   const fetchGeo = useCallback(async () => {
@@ -116,9 +117,9 @@ export function WorldMapWidget({ assets }) {
 
   useEffect(() => { fetchGeo(); }, [fetchGeo]);
 
-  // Build dot list, group co-located IPs
+  // Build dot list, group ALL assets by resolved IP (primary + subdomains)
   const dotsByIP = {};
-  assets.filter(a => a.tags?.includes("primary") && geoMap[a.ip]).forEach(a => {
+  assets.filter(a => _isIPv4(a.ip) && geoMap[a.ip]).forEach(a => {
     const geo = geoMap[a.ip];
     if (!dotsByIP[a.ip]) dotsByIP[a.ip] = { ...a, ...geo, xy: project(geo.lon, geo.lat), count: 0, hosts: [] };
     dotsByIP[a.ip].count++;

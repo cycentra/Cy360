@@ -223,11 +223,14 @@ def system_version():
     # Parse RELEASE_NOTES.md — return last 5 version blocks
     # Try multiple locations: production /opt/cycentra/, then relative to this file (dev), then cwd
     _this_dir = os.path.dirname(os.path.abspath(__file__))
+    _cwd = os.getcwd()
     rn_path = None
     for _candidate in (
         "/opt/cycentra/RELEASE_NOTES.md",
-        os.path.join(_this_dir, "..", "..", "..", "RELEASE_NOTES.md"),
-        os.path.join(os.getcwd(), "RELEASE_NOTES.md"),
+        os.path.join(_this_dir, "..", "..", "..", "RELEASE_NOTES.md"),   # dev: blueprints/system/ → repo root
+        os.path.join(_cwd, "RELEASE_NOTES.md"),                          # cwd = repo root
+        os.path.join(_cwd, "..", "RELEASE_NOTES.md"),                     # cwd = backend/
+        os.path.join(_cwd, "..", "..", "RELEASE_NOTES.md"),               # cwd = backend/blueprints/
     ):
         _abs = os.path.abspath(_candidate)
         if os.path.exists(_abs):
