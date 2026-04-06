@@ -515,7 +515,19 @@ success "Version file written: /opt/cycentra/version → ${BUNDLE_VERSION}"
 _SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 if [[ -f "${_SCRIPT_DIR}/RELEASE_NOTES.md" ]]; then
     cp "${_SCRIPT_DIR}/RELEASE_NOTES.md" /opt/cycentra/RELEASE_NOTES.md
-    success "RELEASE_NOTES.md updated at /opt/cycentra/"
+    success "RELEASE_NOTES.md copied from script dir"
+elif [[ -f "${_SCRIPT_DIR}/../RELEASE_NOTES.md" ]]; then
+    cp "${_SCRIPT_DIR}/../RELEASE_NOTES.md" /opt/cycentra/RELEASE_NOTES.md
+    success "RELEASE_NOTES.md copied from parent dir"
+else
+    # Fallback: fetch directly from GitHub raw
+    info "RELEASE_NOTES.md not found locally — downloading from GitHub..."
+    _RN_URL="https://raw.githubusercontent.com/cycentra/cycentra360/main/RELEASE_NOTES.md"
+    if curl -fsSL "$_RN_URL" -o /opt/cycentra/RELEASE_NOTES.md 2>/dev/null; then
+        success "RELEASE_NOTES.md downloaded from GitHub"
+    else
+        warn "Could not fetch RELEASE_NOTES.md — System Settings release notes will be unavailable"
+    fi
 fi
 # ── Step 6-9: Interactive config (full install only) ─────────────────────────
 if [[ "$MODE" == "full" ]]; then
