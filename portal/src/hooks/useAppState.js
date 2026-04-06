@@ -91,7 +91,9 @@ export function useAppState() {
       .then(raw => {
         if (raw?.assets) {
           const adapted = adaptCyCentraJSON(raw);
-          if (adapted) { setData(adapted); setAssets(adapted.assets); }
+          // On initial load there are no prior statuses — _mergeStatuses is a no-op
+          // but keeps the code path consistent so future reloads also preserve state.
+          if (adapted) { setData(adapted); setAssets(prev => _mergeStatuses(adapted.assets, prev)); }
         }
       })
       .catch(() => {});
@@ -99,9 +101,32 @@ export function useAppState() {
 
   // ── Action handlers ─────────────────────────────────────────────────────────
 
+  /**
+   * Merge previously user-set statuses (open/in-review/resolved) into a freshly
+   * adapted asset list.  Keyed by `host` (stable across scans).  Assets without
+   * a prior status default to "open" from the adapter — behaviour unchanged for
+   * first scans or newly discovered assets.
+   */
+  function _mergeStatuses(newAssets, prevAssets) {
+    if (!prevAssets?.length) return newAssets;
+    const statusMap = {};
+    prevAssets.forEach(a => {
+      if (a.host && a.status && a.status !== "open") {
+        statusMap[a.host] = a.status;
+      }
+    });
+    if (!Object.keys(statusMap).length) return newAssets;
+    return newAssets.map(a =>
+      statusMap[a.host] ? { ...a, status: statusMap[a.host] } : a
+    );
+  }
+
   function handleImport(raw) {
     const adapted = adaptCyCentraJSON(raw);
-    if (adapted) { setData(adapted); setAssets(adapted.assets); }
+    if (adapted) {
+      setData(adapted);
+      setAssets(prev => _mergeStatuses(adapted.assets, prev));
+    }
   }
 
   function handleStatusChange(id, status) {
@@ -146,7 +171,8 @@ export function useAppState() {
     const adapted = adaptCyCentraJSON(raw);
     if (adapted) {
       setData(adapted);
-      setAssets(adapted.assets);
+      // Preserve any statuses the user set before the rescan
+      setAssets(prev => _mergeStatuses(adapted.assets, prev));
       setActiveTab("dashboard");
     }
   }

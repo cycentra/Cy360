@@ -45,7 +45,7 @@ async def gather_email_security(domain: str) -> Dict[str, Any]:
     }
 
     resolver = dns.resolver.Resolver()
-    resolver.nameservers = ["8.8.8.8", "8.8.4.4"]
+    #resolver.nameservers = ["8.8.8.8", "8.8.4.4"]
     resolver.timeout = 5
 
     # --- SPF & TXT ---

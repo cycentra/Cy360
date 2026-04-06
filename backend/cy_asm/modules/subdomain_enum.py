@@ -28,16 +28,22 @@ async def get_subdomains_crtsh(domain: str, session: aiohttp.ClientSession) -> L
             data = await resp.json()
             target = f".{domain}"
             for entry in data:
-                name = entry.get("name_value", "").strip()
-                # Strict filter: must end exactly with .domain or be domain itself
-                # AND must NOT contain "example." or other known test domains
-                if name.lower().endswith(target) or name.lower() == domain:
-                    if "example." not in name.lower() and "test." not in name.lower():
-                        clean = name.lstrip("*.").split("@")[0]  # remove wildcard & email
-                        if clean.endswith(f".{domain}"):
-                            subdomains.add(clean)
-                        elif clean == domain:
-                            subdomains.add(domain)
+                # crt.sh name_value can contain multiple SANs separated by \n
+                # (one certificate can cover many subdomains — must split each line)
+                raw_names = entry.get("name_value", "").strip().splitlines()
+                for name in raw_names:
+                    name = name.strip()
+                    if not name:
+                        continue
+                    # Strict filter: must end exactly with .domain or be domain itself
+                    # AND must NOT contain "example." or other known test domains
+                    if name.lower().endswith(target) or name.lower() == domain:
+                        if "example." not in name.lower() and "test." not in name.lower():
+                            clean = name.lstrip("*.").split("@")[0]  # remove wildcard & email
+                            if clean.endswith(f".{domain}"):
+                                subdomains.add(clean)
+                            elif clean == domain:
+                                subdomains.add(domain)
     except Exception as e:
         logger.debug(f"crt.sh failed for {domain}: {e}")
     return sorted(subdomains)
