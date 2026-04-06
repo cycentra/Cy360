@@ -73,14 +73,28 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.64"
+_SCRIPT_VERSION="v1.0.65"
 
 # Mask Cloudsmith auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|dl\.cloudsmith\.io/[A-Za-z0-9_-]\{8,\}/|dl.cloudsmith.io/[TOKEN]/|g'; }
 
 step=0
+_LAST_STEP="(initializing)"
+
+# ── Error trap — fires on any unexpected non-zero exit (set -euo pipefail) ──────
+trap '
+    ec=$?
+    echo ""
+    echo -e "\n${RED}${BOLD}  ✗ FATAL: Setup aborted during STEP ${step} \"${_LAST_STEP}\"${NC}"
+    echo -e "  ${RED}  Failed command : ${BASH_COMMAND}${NC}"
+    echo -e "  ${RED}  Exit code      : ${ec}  |  Line: ${BASH_LINENO[0]}${NC}"
+    echo -e "  ${DIM}  Fix the issue above, then re-run: sudo bash cycentra-setup.sh${NC}"
+    echo ""
+' ERR
+
 step_header() {
     step=$((step+1))
+    _LAST_STEP="$1"
     echo -e "\n${BOLD}${CYAN}  ── STEP ${step}: $1${NC}"
     divider
 }
@@ -258,13 +272,112 @@ redis-cli ping 2>/dev/null | grep -q "PONG" \
     && success "Redis running on :6379" \
     || { error "Redis failed to start"; ERRORS+=("Redis failed"); }
 
-# ── Step 3b: Wazuh → Redis bridge (Python watcher — replaces Filebeat) ────────
-# NOTE: Filebeat 7.x (Wazuh-distributed) crashes on kernel 6.x with a
-#       pthread_create seccomp SIGABRT. We use a pure-Python tail watcher
-#       instead — no kernel compatibility issues, same NDJSON → Redis push.
+fi  # end INFRA block
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# APP BLOCK — runs in all modes
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Ensure jq is present for all modes
+command -v jq >/dev/null 2>&1 || apt-get install -y -qq jq
+
+# In update mode read CORR_DB_PASS from existing env
+if [[ "$MODE" == "update" ]]; then
+    # Try standalone POSTGRES_PASSWORD= line first (written by v1.0.61+)
+    CORR_DB_PASS=$(grep "^POSTGRES_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null \
+        | sed 's/^POSTGRES_PASSWORD=//' | tr -d '"' || true)
+    # Fallback: extract from DATABASE_URL (installs prior to v1.0.61 had no standalone key)
+    if [[ -z "$CORR_DB_PASS" ]]; then
+        CORR_DB_PASS=$(grep "^DATABASE_URL=" /opt/cycentra/cysiemstack.env 2>/dev/null \
+            | sed 's|.*://[^:]*:\([^@]*\)@.*|\1|' || true)
+        [[ -n "$CORR_DB_PASS" ]] && info "Correlation DB password recovered from DATABASE_URL"
+    fi
+    if [[ -z "$CORR_DB_PASS" ]]; then
+        warn "POSTGRES_PASSWORD not found in /opt/cycentra/cysiemstack.env — generating a new one"
+        warn "If the correlation DB already exists, update POSTGRES_PASSWORD in cysiemstack.env manually"
+        CORR_DB_PASS=$(gen_pass)
+    fi
+fi
+
+# ── Step 4: CySIEM install (full install only) ───────────────────────────────
+_CYSIEM_FRESH=false
+_CYSIEM_ADMIN_PASS=""
+_CYSIEM_WUI_PASS=""
+
+if [[ "$MODE" == "full" ]]; then
+
+    step_header "CySIEM INSTALLATION"
+
+    if dpkg -l 2>/dev/null | grep -q wazuh-manager; then
+        success "CySIEM already installed — ensuring services running"
+        systemctl start wazuh-manager wazuh-indexer wazuh-dashboard 2>/dev/null || true
+    else
+        info "Running CySIEM all-in-one installer (this takes 5–10 minutes) ..."
+        cd ~
+        curl -sO https://packages.wazuh.com/4.14/wazuh-install.sh
+        bash wazuh-install.sh -a
+        success "CySIEM installed"
+        _CYSIEM_FRESH=true
+        # Capture generated credentials from installer before cleanup removes the tar
+        _cysiem_pwfile=$(tar -xOf ~/wazuh-install-files.tar wazuh-install-files/wazuh-passwords.txt 2>/dev/null || echo "")
+        _CYSIEM_ADMIN_PASS=$(echo "$_cysiem_pwfile" | grep -A 1 "^username: admin$" | grep "^password:" | awk '{print $2}')
+        _CYSIEM_WUI_PASS=$(echo "$_cysiem_pwfile" | grep -A 1 "^username: wazuh-wui$" | grep "^password:" | awk '{print $2}')
+        cd ~
+    fi
+
+fi  # end CySIEM install block
+
+
+# ── Step 4.1: CySIEM Dashboard configuration ─────────────────────────────────
+WAZUH_YML="/etc/wazuh-dashboard/opensearch_dashboards.yml"
+if [[ -f "$WAZUH_YML" ]]; then
+
+    step_header "CySIEM DASHBOARD CONFIGURATION"
+
+    cp "$WAZUH_YML" "${WAZUH_YML}.backup-$(date +%Y%m%d)" 2>/dev/null || true
+    grep -q "^server.host:" "$WAZUH_YML" \
+        && sed -i 's|^server.host:.*|server.host: "127.0.0.1"|' "$WAZUH_YML" \
+        || echo 'server.host: "127.0.0.1"' >> "$WAZUH_YML"
+    grep -q "^server.port:" "$WAZUH_YML" \
+        && sed -i 's|^server.port:.*|server.port: 5601|' "$WAZUH_YML" \
+        || echo 'server.port: 5601' >> "$WAZUH_YML"
+    systemctl restart wazuh-dashboard 2>/dev/null || true
+    success "CySIEM Dashboard configured: host=127.0.0.1, port=5601"
+
+fi
+
+# ── Step 4.2: Auto-detect CySIEM API password ─────────────────────────────────
+# Read the wazuh-wui password from the dashboard config file.
+# Works for both fresh installs and existing installs; runs in all modes.
+if [[ -f "/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml" ]]; then
+    step_header "CySIEM API PASSWORD DETECTION"
+    _detected=$(grep -v '^#' /usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml 2>/dev/null \
+        | grep -oP '(?<=password: ")[^"]+' | head -1)
+    if [[ -n "$_detected" ]]; then
+        _CYSIEM_WUI_PASS="$_detected"
+        success "CySIEM API password auto-detected from dashboard config"
+        # Patch cysiemstack.env immediately — handles update mode (step 10 is skipped)
+        if [[ -f "/opt/cycentra/cysiemstack.env" ]]; then
+            if grep -q "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env; then
+                sed -i "s|^WAZUH_API_PASSWORD=.*|WAZUH_API_PASSWORD=${_detected}|" /opt/cycentra/cysiemstack.env
+            else
+                echo "WAZUH_API_PASSWORD=${_detected}" >> /opt/cycentra/cysiemstack.env
+            fi
+            success "WAZUH_API_PASSWORD updated in cysiemstack.env"
+        fi
+    else
+        warn "CySIEM API password not found — update WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env manually"
+    fi
+fi
+
+# ── CySIEM → Redis bridge ─────────────────────────────────────────────────────
+# Deployed AFTER CySIEM is installed so alerts.json exists when the service starts.
+# Runs in all modes (full/infra/update): rewrites the watcher script and restarts.
+# NOTE: Filebeat 7.x (Wazuh-distributed) crashes on kernel 6.x (seccomp SIGABRT);
+#       this pure-Python watcher replaces it with no kernel-compatibility issues.
 step_header "CySIEM → REDIS BRIDGE (Python watcher)"
 
-# Install redis-py if missing (already satisfied when cysiemstack wheel installs)
+# Install redis-py if not already present
 python3 -c "import redis" 2>/dev/null \
     || pip3 install --break-system-packages --quiet redis
 
@@ -377,7 +490,6 @@ WantedBy=multi-user.target
 UNITEOF
 
 # Remove Filebeat if installed — it crashes on kernel 6.x (seccomp pthread issue)
-# Guard: only runs when the package is actually present; safe to re-run idempotently.
 if dpkg -l filebeat &>/dev/null 2>&1; then
     systemctl disable --now filebeat 2>/dev/null || true
     apt-get purge -y filebeat 2>/dev/null || true
@@ -385,7 +497,7 @@ if dpkg -l filebeat &>/dev/null 2>&1; then
     success "Filebeat removed (replaced by cysiem-to-redis)"
 fi
 
-# Ensure Wazuh alerts log is readable
+# Ensure CySIEM alerts log is readable (may not exist yet if CySIEM not generating alerts)
 if [[ -f /var/ossec/logs/alerts/alerts.json ]]; then
     chmod o+r /var/ossec/logs/alerts/alerts.json 2>/dev/null || true
     chmod o+x /var/ossec/logs/alerts/ 2>/dev/null || true
@@ -403,105 +515,7 @@ systemctl is-active cysiem-to-redis >/dev/null 2>&1 \
     || { warn "cysiem-to-redis failed — check: journalctl -u cysiem-to-redis -n 20"; \
          ERRORS+=("cysiem-to-redis failed"); }
 
-fi  # end INFRA block
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# APP BLOCK — runs in all modes
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# Ensure jq is present for all modes
-command -v jq >/dev/null 2>&1 || apt-get install -y -qq jq
-
-# In update mode read CORR_DB_PASS from existing env
-if [[ "$MODE" == "update" ]]; then
-    # Try standalone POSTGRES_PASSWORD= line first (written by v1.0.61+)
-    CORR_DB_PASS=$(grep "^POSTGRES_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null \
-        | sed 's/^POSTGRES_PASSWORD=//' | tr -d '"' || true)
-    # Fallback: extract from DATABASE_URL (installs prior to v1.0.61 had no standalone key)
-    if [[ -z "$CORR_DB_PASS" ]]; then
-        CORR_DB_PASS=$(grep "^DATABASE_URL=" /opt/cycentra/cysiemstack.env 2>/dev/null \
-            | sed 's|.*://[^:]*:\([^@]*\)@.*|\1|' || true)
-        [[ -n "$CORR_DB_PASS" ]] && info "Correlation DB password recovered from DATABASE_URL"
-    fi
-    if [[ -z "$CORR_DB_PASS" ]]; then
-        warn "POSTGRES_PASSWORD not found in /opt/cycentra/cysiemstack.env — generating a new one"
-        warn "If the correlation DB already exists, update POSTGRES_PASSWORD in cysiemstack.env manually"
-        CORR_DB_PASS=$(gen_pass)
-    fi
-fi
-
-# ── Step 4: CySIEM install (full install only) ───────────────────────────────
-_CYSIEM_FRESH=false
-_CYSIEM_ADMIN_PASS=""
-_CYSIEM_WUI_PASS=""
-
-if [[ "$MODE" == "full" ]]; then
-
-    step_header "CySIEM INSTALLATION"
-
-    if dpkg -l 2>/dev/null | grep -q wazuh-manager; then
-        success "CySIEM already installed — ensuring services running"
-        systemctl start wazuh-manager wazuh-indexer wazuh-dashboard 2>/dev/null || true
-    else
-        info "Running CySIEM all-in-one installer (this takes 5–10 minutes) ..."
-        cd ~
-        curl -sO https://packages.wazuh.com/4.14/wazuh-install.sh
-        bash wazuh-install.sh -a
-        success "CySIEM installed"
-        _CYSIEM_FRESH=true
-        # Capture generated credentials from installer before cleanup removes the tar
-        _cysiem_pwfile=$(tar -xOf ~/wazuh-install-files.tar wazuh-install-files/wazuh-passwords.txt 2>/dev/null || echo "")
-        _CYSIEM_ADMIN_PASS=$(echo "$_cysiem_pwfile" | grep -A 1 "^username: admin$" | grep "^password:" | awk '{print $2}')
-        _CYSIEM_WUI_PASS=$(echo "$_cysiem_pwfile" | grep -A 1 "^username: wazuh-wui$" | grep "^password:" | awk '{print $2}')
-        cd ~
-    fi
-
-fi  # end CySIEM install block
-
-
-# ── Step 4.1: CySIEM Dashboard configuration ─────────────────────────────────
-WAZUH_YML="/etc/wazuh-dashboard/opensearch_dashboards.yml"
-if [[ -f "$WAZUH_YML" ]]; then
-
-    step_header "CySIEM DASHBOARD CONFIGURATION"
-
-    cp "$WAZUH_YML" "${WAZUH_YML}.backup-$(date +%Y%m%d)" 2>/dev/null || true
-    grep -q "^server.host:" "$WAZUH_YML" \
-        && sed -i 's|^server.host:.*|server.host: "127.0.0.1"|' "$WAZUH_YML" \
-        || echo 'server.host: "127.0.0.1"' >> "$WAZUH_YML"
-    grep -q "^server.port:" "$WAZUH_YML" \
-        && sed -i 's|^server.port:.*|server.port: 5601|' "$WAZUH_YML" \
-        || echo 'server.port: 5601' >> "$WAZUH_YML"
-    systemctl restart wazuh-dashboard 2>/dev/null || true
-    success "CySIEM Dashboard configured: host=127.0.0.1, port=5601"
-
-fi
-
-# ── Step 4.2: Auto-detect CySIEM API password ─────────────────────────────────
-# Read the wazuh-wui password from the dashboard config file.
-# Works for both fresh installs and existing installs; runs in all modes.
-if [[ -f "/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml" ]]; then
-    step_header "CySIEM API PASSWORD DETECTION"
-    _detected=$(grep -v '^#' /usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml 2>/dev/null \
-        | grep -oP '(?<=password: ")[^"]+' | head -1)
-    if [[ -n "$_detected" ]]; then
-        _CYSIEM_WUI_PASS="$_detected"
-        success "CySIEM API password auto-detected from dashboard config"
-        # Patch cysiemstack.env immediately — handles update mode (step 10 is skipped)
-        if [[ -f "/opt/cycentra/cysiemstack.env" ]]; then
-            if grep -q "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env; then
-                sed -i "s|^WAZUH_API_PASSWORD=.*|WAZUH_API_PASSWORD=${_detected}|" /opt/cycentra/cysiemstack.env
-            else
-                echo "WAZUH_API_PASSWORD=${_detected}" >> /opt/cycentra/cysiemstack.env
-            fi
-            success "WAZUH_API_PASSWORD updated in cysiemstack.env"
-        fi
-    else
-        warn "CySIEM API password not found — update WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env manually"
-    fi
-fi
-
-# ── Step 5: Download release bundle ──────────────────────────────────────────
+# ── Download release bundle ───────────────────────────────────────────────────
 step_header "DOWNLOAD RELEASE BUNDLE"
 
 CS_TOKEN="${CS_TOKEN:-}"
