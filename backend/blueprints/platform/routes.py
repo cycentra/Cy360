@@ -17,7 +17,6 @@ Key design decisions (matching original app.py exactly):
 import os
 import re
 import shutil
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -531,26 +530,6 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
             # MISP_MYSQL_PASSWORD, MISP_MYSQL_ROOT_PASSWORD, REDIS_PASSWORD
             env_path.write_text("\n".join(f"{k}={v}" for k, v in env_vars.items()))
             log(f"Written .env with {len(env_vars)} variables")
-
-        # ── Authenticate to GHCR for private images ───────────────────────────
-        _PRIVATE_MODULES = {"cysoar", "cyiris"}
-        if module_id in _PRIVATE_MODULES:
-            ghcr_token = os.environ.get("GHCR_TOKEN", "").strip()
-            ghcr_user  = os.environ.get("GHCR_USER",  "").strip()
-            if ghcr_token and ghcr_user:
-                try:
-                    login_result = subprocess.run(
-                        ["docker", "login", "ghcr.io", "-u", ghcr_user, "--password-stdin"],
-                        input=ghcr_token, capture_output=True, text=True, timeout=30,
-                    )
-                    if login_result.returncode == 0:
-                        log("GHCR login successful")
-                    else:
-                        log(f"WARNING: GHCR login failed: {login_result.stderr.strip()}")
-                except Exception as exc:
-                    log(f"WARNING: GHCR login error: {exc}")
-            else:
-                log("WARNING: GHCR_TOKEN or GHCR_USER not set — image pull may fail for private registry")
 
         # ── Pull images ───────────────────────────────────────────────────────
         log("Pulling Docker images...")

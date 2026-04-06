@@ -2,6 +2,23 @@
 
 ---
 
+## v1.0.73 — 2026-04-06
+
+### Bug Fix — wizard version header now auto-stamps on every release; GHCR auth removed
+
+- `cycentra-setup.sh` lines 3 and 117 had the version string hardcoded as `v1.0.69` instead
+  of the `_WIZARD_VERSION_` placeholder that `git-push.sh` replaces on each release. The
+  placeholder is now restored so every push correctly stamps the header comment and the
+  boot banner with the current tag and UTC timestamp.
+
+- Reverted the GHCR auth wizard step, `.env` entries (`GHCR_USER`, `GHCR_TOKEN`), and
+  `docker login` block in `routes.py` added in v1.0.72. The GHCR packages
+  (`ghcr.io/cycentra/cysoar`, `ghcr.io/cycentra/cyiris`) are public — authentication is
+  not required and the extra prompts in the setup wizard added unnecessary friction.
+  The `SESSION_SECRET` → `CYSOAR_SESSION_SECRET` rename from v1.0.72 is kept.
+
+---
+
 ## v1.0.72 — 2026-04-06
 
 ### Bug Fix — CySOAR / CyIRIS installation failing with "unauthorized" on new servers
