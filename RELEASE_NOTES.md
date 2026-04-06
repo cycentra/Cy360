@@ -2,6 +2,23 @@
 
 ---
 
+## v1.0.70 — 2026-04-06
+
+### Enhancements
+
+**cycentra-setup.sh — engine.log automatically printed when cysiemstack-engine fails to start**
+- When the engine health-check times out, the last 30 lines of `/opt/cycentra/engine.log` are
+  now printed inline so the exact Python traceback is visible immediately without needing to
+  SSH and run `tail` manually.
+
+**cysiemstack correlation_engine/models.py — init_db surfaces clear error on DB connection failure**
+- `init_db()` now wraps the `engine.begin()` call in a try/except that logs a `CRITICAL`
+  message explicitly stating "DATABASE CONNECTION FAILED — check DATABASE_URL in
+  /opt/cycentra/cysiemstack.env" before re-raising, making the root cause immediately visible
+  in `engine.log` instead of a raw asyncpg traceback.
+
+---
+
 ## v1.0.69 — 2026-04-06
 
 ### Bug Fixes

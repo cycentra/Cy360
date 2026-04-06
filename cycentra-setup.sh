@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.69"
+_SCRIPT_VERSION="v1.0.70"
 
 # Mask Cloudsmith auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|dl\.cloudsmith\.io/[A-Za-z0-9_-]\{8,\}/|dl.cloudsmith.io/[TOKEN]/|g'; }
@@ -966,7 +966,11 @@ for i in $(seq 1 12); do
     sleep 5
 done
 [[ "$ENGINE_UP" == false ]] && \
-    { warn "Engine timed out — check: journalctl -u cysiemstack-engine -n 30"; \
+    { warn "Engine timed out — last 30 lines of engine.log:"
+      echo ""
+      tail -30 /opt/cycentra/engine.log 2>/dev/null | while IFS= read -r line; do echo -e "  ${DIM}${line}${NC}"; done
+      echo ""
+      warn "To investigate: journalctl -u cysiemstack-engine -n 30"
       ERRORS+=("Engine not responding"); }
 
 # ── Step 15: nginx vhosts (full install only) ─────────────────────────────────

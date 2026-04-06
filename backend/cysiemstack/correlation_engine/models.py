@@ -172,5 +172,15 @@ async def get_db():
 
 async def init_db():
     """Create tables if they don't exist (init.sql is primary, this is fallback)."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as exc:
+        import logging
+        logging.getLogger("cysiemstack").critical(
+            "DATABASE CONNECTION FAILED — check DATABASE_URL in /opt/cycentra/cysiemstack.env\n"
+            "  Error: %s\n"
+            "  Ensure PostgreSQL is running on 127.0.0.1:5433 and corruser has access.",
+            exc,
+        )
+        raise
