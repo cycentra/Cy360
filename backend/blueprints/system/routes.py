@@ -41,8 +41,16 @@ _ENV_FILE_MAP = {
 }
 
 # Keys that must never be returned or overwritten via the API (security)
-_SECRET_KEYS = {"SECRET_KEY", "SESSION_SECRET", "DB_PASSWORD", "POSTGRES_PASSWORD",
-                "REDIS_PASSWORD", "WAZUH_API_PASSWORD", "API_KEY", "CS_TOKEN"}
+_SECRET_KEYS = {
+    "SECRET_KEY", "SESSION_SECRET",
+    "DB_PASSWORD", "POSTGRES_PASSWORD", "REDIS_PASSWORD",
+    "WAZUH_API_PASSWORD",
+    "API_KEY", "CS_TOKEN",
+    "GOOGLE_CLIENT_SECRET", "MICROSOFT_CLIENT_SECRET",
+    "CYIRIS_OIDC_SECRET", "CYSOAR_OIDC_SECRET",
+    "IRIS_SECRET", "IRIS_DB_PASS", "NODE_RED_CREDENTIAL_SECRET",
+    "JWT_SECRET", "ADMIN_API_KEY", "SMTP_PASS",
+}
 
 # ── Preflight ─────────────────────────────────────────────────────────────────
 

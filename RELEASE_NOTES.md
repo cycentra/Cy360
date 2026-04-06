@@ -2,6 +2,20 @@
 
 ---
 
+## v1.0.63 — 2026-04-06
+
+### Security
+
+**Backend — OAuth and OIDC secrets now fully protected in env editor**
+- `GOOGLE_CLIENT_SECRET`, `MICROSOFT_CLIENT_SECRET`, `CYIRIS_OIDC_SECRET`,
+  `CYSOAR_OIDC_SECRET`, `IRIS_SECRET`, `IRIS_DB_PASS`, `JWT_SECRET`, `ADMIN_API_KEY`,
+  `NODE_RED_CREDENTIAL_SECRET`, and `SMTP_PASS` were absent from `_SECRET_KEYS`.
+- These values appeared as plain text in the Env Config tab and could be overwritten
+  via the PUT endpoint.
+- All secrets are now masked as `•••••••• (protected)` in the UI and blocked from writes.
+
+---
+
 ## v1.0.62 — 2026-04-06
 
 ### Enhancements
