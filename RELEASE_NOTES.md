@@ -2,6 +2,29 @@
 
 ---
 
+## v1.0.69 — 2026-04-06
+
+### Bug Fixes
+
+**cycentra-setup.sh — CRON JOBS step no longer aborts setup**
+- The cron registration used `crontab -l 2>/dev/null || true | grep -v "update_wordlist"`.
+  Due to bash operator precedence, `||` binds more loosely than `|`, so this parsed as
+  `crontab -l 2>/dev/null || (true | grep -v "update_wordlist")`. When `crontab -l` failed
+  (empty crontab on fresh server), `grep -v` received empty input and exited 1. With
+  `set -euo pipefail` active this aborted setup at Step 25.
+- Fixed: replaced the subshell pipeline with a tempfile approach — no operator-precedence
+  ambiguity, no pipefail interaction, and idempotent (deduplicates existing entries).
+
+### Enhancements
+
+**cycentra-setup.sh — wizard version and date auto-stamped by git-push.sh**
+- The banner comment (`# CyCentra 360 — Setup & Update Wizard v7.1 - March 25, ...`) and the
+  printed banner line were hardcoded and never updated after the initial commit.
+- Replaced with a `_WIZARD_VERSION_` placeholder that `git-push.sh` stamps with the release
+  tag and UTC timestamp on every push (e.g. `v1.0.69 — 2026-04-06 20:30 UTC`).
+
+---
+
 ## v1.0.68 — 2026-04-06
 
 ### Enhancements

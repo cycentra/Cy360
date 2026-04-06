@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 — Setup & Update Wizard v7.1 - March 25, 21:58 CET   
+# CyCentra 360 — Setup & Update Wizard v1.0.69 — 2026-04-06 20:41 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.68"
+_SCRIPT_VERSION="v1.0.69"
 
 # Mask Cloudsmith auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|dl\.cloudsmith\.io/[A-Za-z0-9_-]\{8,\}/|dl.cloudsmith.io/[TOKEN]/|g'; }
@@ -114,7 +114,7 @@ echo "  ╚██████╗   ██║   ╚██████╗███
 echo "   ╚═════╝   ╚═╝    ╚═════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝"
 echo -e "${NC}"
 echo -e "  ${BOLD}360° Security Operations Platform${NC}"
-echo -e "  ${DIM}Setup & Update Wizard — v7.1${NC}"
+echo -e "  ${DIM}Setup & Update Wizard — v1.0.69 — 2026-04-06 20:41 UTC${NC}"
 echo ""; divider
 
 if [[ "$MODE" == "update" ]]; then
@@ -1280,9 +1280,14 @@ step_header "CRON JOBS"
 
 WORDLIST=$(find "$SITE_PKG" -name "update_wordlist.py" 2>/dev/null | head -1 || true)
 if [[ -n "$WORDLIST" ]]; then
-    # Added "|| true" to crontab -l to prevent exit if crontab is empty
-    ( crontab -l 2>/dev/null || true | grep -v "update_wordlist"
-      echo "0 0 * * * ${PYTHON_BIN} ${WORDLIST} >> /opt/cycentra/cron.log 2>&1" ) | crontab -
+    # Use a tempfile to avoid bash pipeline operator-precedence pitfalls with
+    # set -euo pipefail (|| has lower precedence than |, causing grep to exit 1
+    # on empty input and aborting the script).
+    _tmpcron=$(mktemp)
+    { crontab -l 2>/dev/null || true; } | grep -v "update_wordlist" > "$_tmpcron" || true
+    echo "0 0 * * * ${PYTHON_BIN} ${WORDLIST} >> /opt/cycentra/cron.log 2>&1" >> "$_tmpcron"
+    crontab "$_tmpcron"
+    rm -f "$_tmpcron"
     success "Cron: ASM wordlist update registered (daily midnight)"
 else
     info "update_wordlist.py not found — cron job skipped"
