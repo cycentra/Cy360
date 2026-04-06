@@ -2,6 +2,21 @@
 
 ---
 
+## v1.0.60 — 2026-04-08
+
+### Bug Fixes
+
+**cycentra-setup.sh — RELEASE_NOTES.md now embedded directly in the script**
+- All prior fallback strategies (bundle tarball, script dir, Cloudsmith raw URL, GitHub raw URL)
+  failed because RELEASE_NOTES.md is not published as a separate Cloudsmith artifact and the
+  Git repository is private.
+- Release notes content is now embedded as a heredoc block inside `cycentra-setup.sh` itself.
+  Since the script is always freshly downloaded from Cloudsmith, the content is always present.
+- `git-push.sh` updated to regenerate this heredoc from the live `RELEASE_NOTES.md` before each
+  push, keeping the embedded copy in sync with every tagged release.
+
+---
+
 ## v1.0.55 — 2026-04-07
 
 ### Bug Fixes

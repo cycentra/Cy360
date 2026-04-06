@@ -511,39 +511,91 @@ mkdir -p /opt/cycentra
 echo "${BUNDLE_VERSION}" > /opt/cycentra/version
 success "Version file written: /opt/cycentra/version → ${BUNDLE_VERSION}"
 
-# Copy RELEASE_NOTES.md for System Settings page
-# Sources tried in order: bundle tarball → script dir → Cloudsmith (CS_TOKEN) → placeholder
-_SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Write RELEASE_NOTES.md for System Settings page
+# The release notes content is embedded directly in this script — no separate file needed.
+# This block is auto-updated by git-push.sh before each release upload to Cloudsmith.
 _RN_DEST="/opt/cycentra/RELEASE_NOTES.md"
+mkdir -p /opt/cycentra
 
-if [[ -f "${BUNDLE_DIR}/RELEASE_NOTES.md" ]]; then
-    cp "${BUNDLE_DIR}/RELEASE_NOTES.md" "$_RN_DEST"
-    success "RELEASE_NOTES.md copied from bundle"
-elif [[ -f "${_SCRIPT_DIR}/RELEASE_NOTES.md" ]]; then
-    cp "${_SCRIPT_DIR}/RELEASE_NOTES.md" "$_RN_DEST"
-    success "RELEASE_NOTES.md copied from script dir"
-else
-    # Try Cloudsmith raw file (same token used to download the bundle)
-    _RN_CS_URL="${CS_BASE}/latest/RELEASE_NOTES.md"
-    info "Fetching RELEASE_NOTES.md from Cloudsmith..."
-    if curl -fsSL "$_RN_CS_URL" -o "$_RN_DEST" 2>/dev/null && [[ -s "$_RN_DEST" ]]; then
-        success "RELEASE_NOTES.md downloaded from Cloudsmith"
-    else
-        # Last resort: write minimal placeholder so the UI shows something
-        warn "RELEASE_NOTES.md not available — writing placeholder"
-        cat > "$_RN_DEST" << RNEOF
+cat > "$_RN_DEST" << 'RELEASE_NOTES_EOF'
 # CyCentra 360 — Release Notes
 
 ---
 
-## ${BUNDLE_VERSION} — $(date +%Y-%m-%d)
+## v1.0.59 — 2026-04-06
 
-This installation is running version ${BUNDLE_VERSION}.
-Full release notes are available in the CyCentra repository.
-RNEOF
-        info "Placeholder release notes written to ${_RN_DEST}"
-    fi
-fi
+### Bug Fixes
+
+**cycentra-setup.sh — RELEASE_NOTES.md now embedded in script**
+- Previous fallback chain (bundle → script dir → Cloudsmith raw → placeholder) failed because
+  RELEASE_NOTES.md is not a separately published Cloudsmith artifact.
+- Release notes content is now written as a heredoc directly inside cycentra-setup.sh, which is
+  itself the downloaded artifact. No separate file or network call needed.
+- git-push.sh updated to regenerate this heredoc block before each push, keeping it in sync.
+
+---
+
+## v1.0.58 — 2026-04-06
+
+### Bug Fixes
+
+**cycentra-setup.sh — RELEASE_NOTES.md fallback added GitHub raw + warn**
+- Added parent-dir check and curl fallback to GitHub raw URL (superseded by v1.0.59).
+
+---
+
+## v1.0.57 — 2026-04-06
+
+### Bug Fixes
+
+**WorldMapWidget — all asset IPs now resolved (not just primary)**
+- IP collection and dot grouping previously filtered `tags.includes("primary")` — only the
+  main domain asset was ever sent to /api/system/geoip. Changed to include all assets with a
+  valid IPv4 address; IPv6 addresses explicitly skipped.
+- Multiple unique locations now appear on the map for all subdomains and discovered IPs.
+
+**Backend — RELEASE_NOTES.md path resolution improved**
+- Added `../cwd` and `../../cwd` fallback paths so release notes resolve when Flask is started
+  from within backend/ or backend/blueprints/ subdirectory.
+
+---
+
+## v1.0.56 — 2026-04-06
+
+### Hotfix
+
+**WorldMapWidget.jsx — build error fixed**
+- replace_string_in_file left stale JSDoc content appended from the old file after the new
+  content, starting at line 298 with a bare `*` that caused esbuild to fail. Truncated at
+  line 297 (closing `}` of `WorldMapWidget`).
+
+---
+
+## v1.0.55 — 2026-04-07
+
+### Bug Fixes
+
+**cycentra-setup.sh — --update no longer aborts on missing POSTGRES_PASSWORD**
+- Warns and auto-generates a fallback password instead of hard-exiting.
+
+**cycentra-setup.sh — version file written on every run**
+- BUNDLE_VERSION written to /opt/cycentra/version (create or overwrite).
+
+**Backend — corrected env file paths**
+- cyiris → /opt/cycentra/modules/cyiris/.env
+- cysoar → /opt/cycentra/modules/cysoar/.env
+- cymisp → /opt/cycentra/modules/cymisp/.env
+- cysiem → /opt/cycentra/.env
+
+**Frontend — asset status preserved across refreshes and rescans**
+- Status changes persisted to localStorage under cycentra_asset_statuses (keyed by hostname).
+
+**WorldMapWidget — improved SVG continent outlines + animations**
+- Detailed multi-point paths, animated scan-line, pulsing rings, glow filter.
+
+RELEASE_NOTES_EOF
+
+success "RELEASE_NOTES.md written to ${_RN_DEST}"
 # ── Step 6-9: Interactive config (full install only) ─────────────────────────
 if [[ "$MODE" == "full" ]]; then
 
