@@ -2,6 +2,44 @@
 
 ---
 
+## v1.0.72 — 2026-04-06
+
+### Bug Fix — CySOAR / CyIRIS installation failing with "unauthorized" on new servers
+
+**Root cause:** Module installs called `docker compose pull` against private GHCR images
+(`ghcr.io/cycentra/cysoar:latest`, `ghcr.io/cycentra/cyiris:latest`) without first
+authenticating to the registry. New servers have no cached Docker credentials.
+
+**Secondary issue:** The CySOAR module `.env` wrote `SESSION_SECRET` but the compose
+template referenced `${CYSOAR_SESSION_SECRET}`, causing a blank-string warning from
+Docker Compose on every install.
+
+**Changes:**
+
+- `backend/blueprints/platform/routes.py`
+  - Added `import subprocess` (stdlib).
+  - Added GHCR login block (using `--password-stdin` via subprocess stdin — token never
+    exposed in process list) before `docker compose pull` for `cysoar` and `cyiris` modules.
+    Logs `"GHCR login successful"` on success; warns but continues if credentials missing.
+  - Renamed `"SESSION_SECRET"` → `"CYSOAR_SESSION_SECRET"` in the CySOAR `.env` dict to
+    match the compose template variable.
+
+- `cycentra-setup.sh`
+  - Added a **GITHUB CONTAINER REGISTRY** setup step (defaulting to `y`) that prompts for
+    `GHCR_USER` (GitHub username) and `GHCR_TOKEN` (PAT with `read:packages` scope).
+  - Writes `GHCR_USER` and `GHCR_TOKEN` to `/opt/cycentra/.env`.
+  - Shows GHCR user in the Review & Confirm summary.
+
+**How to fix existing servers without re-running setup:**
+```
+echo "GHCR_USER=<github-username>" >> /opt/cycentra/.env
+echo "GHCR_TOKEN=<pat-with-read-packages>" >> /opt/cycentra/.env
+sudo systemctl restart cycentra
+```
+Then re-install CySOAR / CyIRIS from the portal.
+
+---
+
 ## v1.0.71 — 2026-04-06
 
 ### Bug Fix

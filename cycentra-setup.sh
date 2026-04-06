@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.71"
+_SCRIPT_VERSION="v1.0.72"
 
 # Mask Cloudsmith auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|dl\.cloudsmith\.io/[A-Za-z0-9_-]\{8,\}/|dl.cloudsmith.io/[TOKEN]/|g'; }
@@ -647,6 +647,20 @@ if [[ "$MODE" == "full" ]]; then
         success "SMTP configured → ${SUPPORT_EMAIL}"
     fi
 
+    step_header "GITHUB CONTAINER REGISTRY (REQUIRED FOR CYSOAR / CYIRIS)"
+    GHCR_USER=""; GHCR_TOKEN=""
+    info "CySOAR and CyIRIS images are hosted on ghcr.io (private)."
+    info "You need a GitHub username and a Personal Access Token with read:packages scope."
+    if ask_yn "Configure GHCR credentials now?" "y"; then
+        ask GHCR_USER  "GitHub username"                  ""
+        ask GHCR_TOKEN "GitHub PAT (read:packages scope)" ""
+        [[ -n "$GHCR_USER" && -n "$GHCR_TOKEN" ]] \
+            && success "GHCR credentials saved for ${GHCR_USER}" \
+            || warn "GHCR credentials incomplete — CySOAR/CyIRIS install will fail without them"
+    else
+        warn "GHCR skipped — add GHCR_USER and GHCR_TOKEN to /opt/cycentra/.env before installing CySOAR/CyIRIS"
+    fi
+
     step_header "GENERATING SECRETS"
     _env="/opt/cycentra/.env"
     _get() { grep -m1 "^${1}=" "$_env" 2>/dev/null | cut -d= -f2- | tr -d '"' || true; }
@@ -675,6 +689,7 @@ if [[ "$MODE" == "full" ]]; then
     echo -e "  ${DIM}OAuth   :${NC} ${WHITE}${OAUTH_PROVIDER}${NC}"
     echo -e "  ${DIM}AI      :${NC} ${WHITE}${AI_PROVIDER}${NC}"
     echo -e "  ${DIM}SMTP    :${NC} ${WHITE}${SMTP_HOST:-not configured}${NC}"
+    echo -e "  ${DIM}GHCR    :${NC} ${WHITE}${GHCR_USER:-not configured}${NC}"
     echo -e "  ${DIM}Version :${NC} ${WHITE}${BUNDLE_VERSION}${NC}"
     echo ""
     ask_yn "Proceed with full installation?" || exit 0
@@ -748,6 +763,9 @@ SMTP_PORT=${SMTP_PORT:-}
 SMTP_USER=${SMTP_USER:-}
 SMTP_PASS=${SMTP_PASS:-}
 SUPPORT_EMAIL=${SUPPORT_EMAIL:-support@cycentra.com}
+
+GHCR_USER=${GHCR_USER:-}
+GHCR_TOKEN=${GHCR_TOKEN:-}
 
 SIEM_ENGINE_URL=http://127.0.0.1:8100
 SIEM_LLM_ENABLED=true
