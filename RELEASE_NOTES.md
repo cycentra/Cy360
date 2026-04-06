@@ -2,6 +2,19 @@
 
 ---
 
+## v1.0.71 — 2026-04-06
+
+### Bug Fix
+
+**cysiemstack correlation_engine/config.py — engine no longer crashes on startup**
+- `pydantic-settings` v2 defaults `BaseSettings` to `extra='forbid'`, causing an immediate
+  `ValidationError` for `Settings` because the `cysiemstack.env` file contains a
+  `POSTGRES_PASSWORD` convenience key (used by `--update` mode) that is not a declared field.
+- Fixed by migrating `class Config` to `SettingsConfigDict(extra='ignore')` so unrecognised
+  env-file keys are silently discarded instead of causing a crash.
+
+---
+
 ## v1.0.70 — 2026-04-06
 
 ### Enhancements

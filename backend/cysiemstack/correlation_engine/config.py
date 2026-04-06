@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
 
@@ -39,9 +39,12 @@ class Settings(BaseSettings):
     ueba_ml_model_dir: str = "/opt/cycentra/ml_models"
     ueba_ml_contamination: float = 0.05
 
-    class Config:
-        env_file = "/opt/cycentra/cysiemstack.env"
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file="/opt/cycentra/cysiemstack.env",
+        case_sensitive=False,
+        # Ignore unrecognised keys (e.g. POSTGRES_PASSWORD stored for --update convenience)
+        extra="ignore",
+    )
 
 
 @lru_cache()

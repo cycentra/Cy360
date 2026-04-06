@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.70"
+_SCRIPT_VERSION="v1.0.71"
 
 # Mask Cloudsmith auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|dl\.cloudsmith\.io/[A-Za-z0-9_-]\{8,\}/|dl.cloudsmith.io/[TOKEN]/|g'; }
