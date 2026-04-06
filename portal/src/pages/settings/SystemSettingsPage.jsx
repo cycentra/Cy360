@@ -30,14 +30,16 @@ const ENV_TARGETS = [
 // ════════════════════════════════════════════════════════════════════════════
 
 function UpdatesTab() {
-  const [versionData, setVersionData] = useState(null);
-  const [csToken,     setCsToken]     = useState("");
-  const [updating,    setUpdating]    = useState(false);
-  const [updateLog,   setUpdateLog]   = useState([]);
-  const [logRunning,  setLogRunning]  = useState(false);
-  const [error,       setError]       = useState(null);
-  const [success,     setSuccess]     = useState(null);
-  const logRef = useRef(null);
+  const [versionData,  setVersionData]  = useState(null);
+  const [csToken,      setCsToken]      = useState("");
+  const [updating,     setUpdating]     = useState(false);
+  const [updateLog,    setUpdateLog]    = useState([]);
+  const [logRunning,   setLogRunning]   = useState(false);
+  const [error,        setError]        = useState(null);
+  const [success,      setSuccess]      = useState(null);
+  const [latestInfo,   setLatestInfo]   = useState(null);   // {current, latest, up_to_date, error?}
+  const [checkingVer,  setCheckingVer]  = useState(false);
+  const logRef  = useRef(null);
   const pollRef = useRef(null);
 
   useEffect(() => {
@@ -66,9 +68,9 @@ function UpdatesTab() {
     }, 1500);
   };
 
-  const handleUpdate = async () => {
-    if (!csToken.trim()) { setError("Enter your CS_TOKEN first"); return; }
-    setError(null); setSuccess(null); setUpdateLog([]); setUpdating(true); setLogRunning(true);
+  // Trigger the actual update script (bypasses version check)
+  const _triggerUpdate = async () => {
+    setUpdateLog([]); setUpdating(true); setLogRunning(true);
     try {
       const r = await fetch(`${API_BASE}/api/system/update`, {
         method: "POST", credentials: "include",
@@ -83,20 +85,64 @@ function UpdatesTab() {
     }
   };
 
+  // Primary handler: version-check first, then update if needed
+  const handleUpdate = async () => {
+    if (!csToken.trim()) { setError("Enter your CS_TOKEN first"); return; }
+    setError(null); setSuccess(null); setLatestInfo(null);
+
+    // Step 1: lightweight version check
+    setCheckingVer(true);
+    let vd = null;
+    try {
+      const vr = await fetch(
+        `${API_BASE}/api/system/latest-version?csToken=${encodeURIComponent(csToken.trim())}`,
+        { credentials: "include" },
+      );
+      vd = await vr.json();
+      setLatestInfo(vd);
+    } catch {
+      // Network error — non-fatal; show warning but let the update proceed
+      setLatestInfo({ error: "Version check failed — proceeding with update anyway" });
+    } finally {
+      setCheckingVer(false);
+    }
+
+    // Step 2: gate on version equality (unless check failed)
+    if (vd?.up_to_date) {
+      setSuccess(`Already running the latest version (${vd.latest}) — no update needed.`);
+      return;
+    }
+
+    await _triggerUpdate();
+  };
+
   useEffect(() => () => clearInterval(pollRef.current), []);
+
+  const isUpToDate  = latestInfo?.up_to_date === true;
+  const updateAvail = latestInfo && !latestInfo.error && !latestInfo.up_to_date && latestInfo.latest;
 
   return (
     <div>
-      {/* Current version */}
+      {/* Current version + latest available */}
       <div style={CARD}>
         <div style={LABEL}>Current Version</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
           <span style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 22, fontWeight: 700 }}>
             {versionData?.version || "—"}
           </span>
           <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>
             CyCentra 360
           </span>
+          {isUpToDate && (
+            <span style={{ background: "rgba(0,229,160,0.08)", color: "#00e5a0", border: "1px solid rgba(0,229,160,0.3)", borderRadius: 4, padding: "2px 8px", fontSize: 10, fontFamily: "monospace", letterSpacing: "0.8px" }}>
+              ✓ UP TO DATE
+            </span>
+          )}
+          {updateAvail && (
+            <span style={{ background: "rgba(255,217,61,0.08)", color: "#ffd93d", border: "1px solid rgba(255,217,61,0.3)", borderRadius: 4, padding: "2px 8px", fontSize: 10, fontFamily: "monospace", letterSpacing: "0.8px" }}>
+              ↑ {latestInfo.latest} AVAILABLE
+            </span>
+          )}
         </div>
       </div>
 
@@ -104,8 +150,8 @@ function UpdatesTab() {
       <div style={CARD}>
         <div style={LABEL}>Pull Latest Update</div>
         <p style={{ color: "rgba(255,255,255,0.4)", fontSize: 12, marginBottom: 16, lineHeight: 1.6 }}>
-          Runs <code style={{ color: "#00e5a0" }}>CS_TOKEN=… sudo -E bash cycentra-setup.sh --update</code> on the server.
-          This updates all platform packages without re-provisioning infrastructure.
+          Checks the latest published version against your installed version before running the update.
+          Runs <code style={{ color: "#00e5a0" }}>cycentra-setup.sh --update</code> on the server only when a newer version is available.
         </p>
         <div style={{ marginBottom: 12 }}>
           <div style={LABEL}>Cloudsmith Token (CS_TOKEN)</div>
@@ -113,15 +159,42 @@ function UpdatesTab() {
             type="password"
             placeholder="Enter CS_TOKEN…"
             value={csToken}
-            onChange={e => setCsToken(e.target.value)}
+            onChange={e => { setCsToken(e.target.value); setLatestInfo(null); setSuccess(null); setError(null); }}
             style={INPUT}
           />
         </div>
-        <button onClick={handleUpdate} disabled={updating} style={{ ...BTN(), opacity: updating ? 0.5 : 1 }}>
-          {updating ? "Updating…" : "Run Update"}
-        </button>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <button
+            onClick={handleUpdate}
+            disabled={updating || checkingVer}
+            style={{ ...BTN(), opacity: (updating || checkingVer) ? 0.5 : 1 }}
+          >
+            {checkingVer ? "Checking version…" : updating ? "Updating…" : "Run Update"}
+          </button>
+
+          {/* Force reinstall — shown only when server is already on the latest version */}
+          {isUpToDate && !updating && (
+            <button
+              onClick={_triggerUpdate}
+              style={{ ...BTN("#4d9eff"), fontSize: 10 }}
+            >
+              Force Reinstall
+            </button>
+          )}
+        </div>
+
+        {latestInfo?.error && (
+          <div style={{ color: "#ffd93d", fontSize: 11, marginTop: 10, fontFamily: "monospace" }}>
+            ⚠ {latestInfo.error}
+          </div>
+        )}
         {error   && <div style={{ color: "#ff3b3b", fontSize: 12, marginTop: 10, fontFamily: "monospace" }}>✗ {error}</div>}
-        {success && <div style={{ color: "#00e5a0", fontSize: 12, marginTop: 10, fontFamily: "monospace" }}>✓ {success}</div>}
+        {success && (
+          <div style={{ color: "#00e5a0", fontSize: 12, marginTop: 10, fontFamily: "monospace" }}>
+            ✓ {success}
+          </div>
+        )}
 
         {/* Live log */}
         {updateLog.length > 0 && (

@@ -2,6 +2,46 @@
 
 ---
 
+## v1.0.62 — 2026-04-06
+
+### Enhancements
+
+**cycentra-setup.sh — Version pre-check skips redundant updates**
+- In `--update` mode, the script now compares `_SCRIPT_VERSION` (embedded by `git-push.sh`
+  at each release) against `/opt/cycentra/version` (written after every successful install).
+- If versions match the script prints "Already at the latest version" and exits 0 immediately
+  — no bundle download, no service restarts, no disruption.
+- Run `FORCE_UPDATE=1 sudo -E bash cycentra-setup.sh --update` to bypass the check and
+  re-apply the current version regardless.
+
+**cycentra-setup.sh — Secrets and tokens no longer appear in terminal output**
+- `_mask_url()` helper replaces Cloudsmith auth tokens in any printed URL with `[TOKEN]`.
+- Applied to both the bundle download URL and the pip index URL so no credentials appear
+  in terminal scrollback, logs, or CI capture.
+
+**Backend — `/api/system/latest-version` endpoint**
+- `GET /api/system/latest-version?csToken=…` fetches only the first 4 KB of the published
+  `cycentra-setup.sh` from Cloudsmith, reads the embedded `_SCRIPT_VERSION`, and returns
+  `{current, latest, up_to_date}` without downloading the full release bundle.
+
+**Backend — Secrets redacted from live update log**
+- `_redact_line()` applied to every line before it is appended to `_update_log`.
+- Masks `key=value` / `key: value` patterns for password/secret/token/key fields, and
+  replaces Cloudsmith auth tokens in URLs with `[TOKEN]` and `[REDACTED]` respectively.
+
+**UI — Version comparison before triggering update**
+- "Run Update" now performs a version check first:
+  - If already on the latest version: shows "✓ Already running latest (vX.X.X)" and
+    surfaces a "Force Reinstall" button for intentional re-application.
+  - If an update is available: shows a yellow "↑ vX.X.X AVAILABLE" badge and proceeds.
+  - If the version check fails (network/token error): shows a warning but allows the
+    update to proceed anyway (non-fatal).
+- The current-version card displays an inline `✓ UP TO DATE` or `↑ vX.X.X AVAILABLE` badge
+  once a check has been performed.
+- The CS_TOKEN input is of type `password` — not visible in the browser or screenshot.
+
+---
+
 ## v1.0.61 — 2026-04-06
 
 ### Bug Fixes

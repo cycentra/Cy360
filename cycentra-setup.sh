@@ -71,6 +71,13 @@ gen_secret() { openssl rand -hex 24; }
 gen_pass()   { openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 20; }
 _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
+# Published version of this script — updated automatically by git-push.sh on each release.
+# Used by --update mode to skip re-installation when the server is already on the latest version.
+_SCRIPT_VERSION="v1.0.62"
+
+# Mask Cloudsmith auth tokens in URLs before printing to output
+_mask_url() { echo "$1" | sed 's|dl\.cloudsmith\.io/[A-Za-z0-9_-]\{8,\}/|dl.cloudsmith.io/[TOKEN]/|g'; }
+
 step=0
 step_header() {
     step=$((step+1))
@@ -489,10 +496,26 @@ else
     CYCENTRA_RELEASE_URL="${CYCENTRA_RELEASE_URL:-${CS_BASE}/${CYCENTRA_VERSION}/cycentra-release.tar.gz}"
 fi
 
+# ── Version pre-check (update mode only) ─────────────────────────────────────
+# The script itself IS the latest published artifact. Compare its embedded
+# _SCRIPT_VERSION against the currently installed version on this server.
+# If they match, skip the full update unless FORCE_UPDATE=1 is set.
+if [[ "$MODE" == "update" && "${FORCE_UPDATE:-0}" != "1" ]]; then
+    _installed_ver=$(cat /opt/cycentra/version 2>/dev/null | tr -d '[:space:]' || echo "")
+    if [[ -n "$_installed_ver" && "$_installed_ver" == "$_SCRIPT_VERSION" ]]; then
+        echo ""
+        success "Already at the latest version: ${_SCRIPT_VERSION}"
+        info    "Nothing to update. Run with FORCE_UPDATE=1 to re-apply the current version."
+        exit 0
+    elif [[ -n "$_installed_ver" ]]; then
+        info "Update available: ${_installed_ver} → ${_SCRIPT_VERSION}"
+    fi
+fi
+
 BUNDLE_DIR="/tmp/cycentra-release"
 rm -rf "$BUNDLE_DIR" /tmp/cycentra-release.tar.gz
 
-info "Downloading: ${CYCENTRA_RELEASE_URL}"
+info "Downloading: $(_mask_url "${CYCENTRA_RELEASE_URL}")"
 if [[ "$CYCENTRA_RELEASE_URL" == http* ]]; then
     curl -fsSL "$CYCENTRA_RELEASE_URL" -o /tmp/cycentra-release.tar.gz \
         && success "Bundle downloaded" \
@@ -847,7 +870,7 @@ success "ASM log directories created"
 step_header "INSTALLING CYCENTRA-BACKEND PACKAGE"
 
 info "Installing ${PKG_NAME}==${PKG_VER} into system Python ..."
-info "Index: ${INDEX_URL}"
+info "Index: $(_mask_url "${INDEX_URL}")"
 
 # --break-system-packages required on Ubuntu 24.04 (PEP 668 externally-managed env)
 pip3 install \

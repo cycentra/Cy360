@@ -9,8 +9,9 @@ Routes:
   GET  /api/ai/settings          retrieve persisted AI settings
   POST /api/ai/settings          persist AI settings (provider/model/keys)
   GET  /api/config               debug — dump non-secret env config
-  GET  /api/system/version       current version + last 5 release notes
-  POST /api/system/update        trigger cycentra-setup.sh --update (CS_TOKEN required)
+  GET  /api/system/version         current version + last 5 release notes
+  GET  /api/system/latest-version   query Cloudsmith for latest published version (csToken required)
+  POST /api/system/update           trigger cycentra-setup.sh --update (CS_TOKEN required)
   GET  /api/system/env/<target>  read env file (global|cysiemstack|cyiris|cysoar|cymisp|cysiem)
   PUT  /api/system/env/<target>  write env file
 """
@@ -260,6 +261,16 @@ def system_version():
 
 # ── Trigger update ────────────────────────────────────────────────────────────
 
+# Pattern matching sensitive key names and Cloudsmith auth tokens in URLs
+_REDACT_KEY_RE  = re.compile(r'(?i)((?:password|secret|token|key|pass)\s*[=:]\s*)\S+')
+_REDACT_URL_RE  = re.compile(r'(dl\.cloudsmith\.io/)([A-Za-z0-9_\-]{8,128})(/)')
+
+def _redact_line(line: str) -> str:
+    """Strip secrets and Cloudsmith tokens from a log line before storing."""
+    line = _REDACT_KEY_RE.sub(r'\1[REDACTED]', line)
+    line = _REDACT_URL_RE.sub(r'\1[TOKEN]\3', line)
+    return line
+
 _update_log: list[str] = []
 _update_running = False
 
@@ -301,7 +312,7 @@ def system_update():
                 text=True, bufsize=1,
             )
             for line in proc.stdout:
-                _update_log.append(line.rstrip())
+                _update_log.append(_redact_line(line.rstrip()))
                 if len(_update_log) > 500:       # cap buffer
                     _update_log = _update_log[-500:]
             proc.wait()
@@ -319,6 +330,67 @@ def system_update():
 def system_update_log():
     """Poll the live update log."""
     return jsonify({"running": _update_running, "log": _update_log[-200:]})
+
+
+# ── Latest version check ──────────────────────────────────────────────────────
+
+@system_bp.route("/api/system/latest-version", methods=["OPTIONS"])
+def latest_version_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/latest-version", methods=["GET"])
+def system_latest_version():
+    """Query the latest published version from Cloudsmith without downloading the bundle.
+
+    Fetches the first 4 KB of cycentra-setup.sh (always on Cloudsmith) and reads
+    the _SCRIPT_VERSION variable that git-push.sh stamps before every release.
+    Returns {current, latest, up_to_date} for the UI to act on.
+    """
+    cs_token = request.args.get("csToken", "").strip()
+    if not cs_token:
+        return jsonify({"error": "csToken is required"}), 400
+    if not re.match(r'^[A-Za-z0-9_\-]{8,128}$', cs_token):
+        return jsonify({"error": "Invalid CS_TOKEN format"}), 400
+
+    # Read currently installed version
+    current = "unknown"
+    for vf in ("/opt/cycentra/version", "/opt/cycentra/.version"):
+        if os.path.exists(vf):
+            current = open(vf).read().strip()
+            break
+
+    # Fetch only the first 4 KB of setup.sh — enough to reach _SCRIPT_VERSION near the top
+    cs_url = (
+        f"https://dl.cloudsmith.io/{cs_token}/cycentra/cycentra360/raw/versions"
+        f"/latest/cycentra-setup.sh"
+    )
+    latest = None
+    try:
+        resp = http_requests.get(
+            cs_url, timeout=15,
+            headers={"Range": "bytes=0-4095"},
+        )
+        if resp.status_code in (200, 206):
+            m = re.search(r'^_SCRIPT_VERSION="(v[\d.]+)"', resp.text, re.MULTILINE)
+            if m:
+                latest = m.group(1)
+    except Exception:
+        pass
+
+    if latest is None:
+        return jsonify({
+            "current": current,
+            "latest":  None,
+            "up_to_date": False,
+            "error": "Could not read latest version — verify CS_TOKEN and connectivity",
+        })
+
+    return jsonify({
+        "current":    current,
+        "latest":     latest,
+        "up_to_date": current == latest,
+    })
 
 
 # ── Env file editor ───────────────────────────────────────────────────────────
