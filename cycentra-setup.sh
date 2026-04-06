@@ -512,21 +512,36 @@ echo "${BUNDLE_VERSION}" > /opt/cycentra/version
 success "Version file written: /opt/cycentra/version → ${BUNDLE_VERSION}"
 
 # Copy RELEASE_NOTES.md for System Settings page
+# Sources tried in order: bundle tarball → script dir → Cloudsmith (CS_TOKEN) → placeholder
 _SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-if [[ -f "${_SCRIPT_DIR}/RELEASE_NOTES.md" ]]; then
-    cp "${_SCRIPT_DIR}/RELEASE_NOTES.md" /opt/cycentra/RELEASE_NOTES.md
+_RN_DEST="/opt/cycentra/RELEASE_NOTES.md"
+
+if [[ -f "${BUNDLE_DIR}/RELEASE_NOTES.md" ]]; then
+    cp "${BUNDLE_DIR}/RELEASE_NOTES.md" "$_RN_DEST"
+    success "RELEASE_NOTES.md copied from bundle"
+elif [[ -f "${_SCRIPT_DIR}/RELEASE_NOTES.md" ]]; then
+    cp "${_SCRIPT_DIR}/RELEASE_NOTES.md" "$_RN_DEST"
     success "RELEASE_NOTES.md copied from script dir"
-elif [[ -f "${_SCRIPT_DIR}/../RELEASE_NOTES.md" ]]; then
-    cp "${_SCRIPT_DIR}/../RELEASE_NOTES.md" /opt/cycentra/RELEASE_NOTES.md
-    success "RELEASE_NOTES.md copied from parent dir"
 else
-    # Fallback: fetch directly from GitHub raw
-    info "RELEASE_NOTES.md not found locally — downloading from GitHub..."
-    _RN_URL="https://raw.githubusercontent.com/cycentra/cycentra360/main/RELEASE_NOTES.md"
-    if curl -fsSL "$_RN_URL" -o /opt/cycentra/RELEASE_NOTES.md 2>/dev/null; then
-        success "RELEASE_NOTES.md downloaded from GitHub"
+    # Try Cloudsmith raw file (same token used to download the bundle)
+    _RN_CS_URL="${CS_BASE}/latest/RELEASE_NOTES.md"
+    info "Fetching RELEASE_NOTES.md from Cloudsmith..."
+    if curl -fsSL "$_RN_CS_URL" -o "$_RN_DEST" 2>/dev/null && [[ -s "$_RN_DEST" ]]; then
+        success "RELEASE_NOTES.md downloaded from Cloudsmith"
     else
-        warn "Could not fetch RELEASE_NOTES.md — System Settings release notes will be unavailable"
+        # Last resort: write minimal placeholder so the UI shows something
+        warn "RELEASE_NOTES.md not available — writing placeholder"
+        cat > "$_RN_DEST" << RNEOF
+# CyCentra 360 — Release Notes
+
+---
+
+## ${BUNDLE_VERSION} — $(date +%Y-%m-%d)
+
+This installation is running version ${BUNDLE_VERSION}.
+Full release notes are available in the CyCentra repository.
+RNEOF
+        info "Placeholder release notes written to ${_RN_DEST}"
     fi
 fi
 # ── Step 6-9: Interactive config (full install only) ─────────────────────────
