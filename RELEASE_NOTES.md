@@ -2,6 +2,31 @@
 
 ---
 
+## v1.0.74 — 2026-04-06
+
+### Bug Fix — "Setup script not found on server" error in portal UI update
+
+The portal's `/api/system/update` endpoint checks for `/opt/cycentra/cycentra-setup.sh`
+before triggering `--update`. The file was never deployed there — `cycentra-setup.sh`
+copied config files, the release notes, and the cysiem bridge but never itself.
+
+Fixed by adding a self-copy step in `cycentra-setup.sh` immediately after the version
+file and release notes are written (runs in both `full` and `update` modes):
+
+```bash
+_SELF="$(realpath "$0")"
+cp "$_SELF" /opt/cycentra/cycentra-setup.sh
+chmod 750  /opt/cycentra/cycentra-setup.sh
+```
+
+**Immediate fix for existing servers (no full reinstall needed):**
+```bash
+sudo cp /path/to/cycentra-setup.sh /opt/cycentra/cycentra-setup.sh
+sudo chmod 750 /opt/cycentra/cycentra-setup.sh
+```
+
+---
+
 ## v1.0.73 — 2026-04-06
 
 ### Bug Fix — wizard version header now auto-stamps on every release; GHCR auth removed

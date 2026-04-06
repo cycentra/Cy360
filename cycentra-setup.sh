@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.73"
+_SCRIPT_VERSION="v1.0.74"
 
 # Mask Cloudsmith auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|dl\.cloudsmith\.io/[A-Za-z0-9_-]\{8,\}/|dl.cloudsmith.io/[TOKEN]/|g'; }
@@ -592,6 +592,12 @@ if [[ -f "$BUNDLE_DIR/RELEASE_NOTES.md" ]]; then
 else
     warn "RELEASE_NOTES.md not found in bundle — Settings tab release history may be outdated"
 fi
+
+# Copy this script to /opt/cycentra/ so the portal can invoke it for --update
+_SELF="$(realpath "$0")"
+cp "$_SELF" /opt/cycentra/cycentra-setup.sh
+chmod 750  /opt/cycentra/cycentra-setup.sh
+success "Setup script deployed to /opt/cycentra/cycentra-setup.sh"
 # ── Step 6-9: Interactive config (full install only) ─────────────────────────
 if [[ "$MODE" == "full" ]]; then
 
