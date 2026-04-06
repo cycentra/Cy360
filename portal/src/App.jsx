@@ -24,6 +24,7 @@ import { SiemFeedPage }      from './pages/siem/SiemFeedPage.jsx';
 import { PlatformPage }      from './pages/platform/PlatformPage.jsx';
 import { AISettingsPage }    from './pages/ai/AISettingsPage.jsx';
 import { UseCasesPage }      from './pages/usecases/UseCasesPage.jsx';
+import { SystemSettingsPage } from './pages/settings/SystemSettingsPage.jsx';
 import { AssetModal }        from './pages/assets/AssetModal.jsx';
 import { ImportModal }       from './pages/assets/ImportModal.jsx';
 
@@ -154,6 +155,7 @@ export default function App() {
             {activeTab==="usecases"       && <UseCasesPage/>}
             {activeTab==="platform"       && <PlatformPage installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
             {activeTab==="ai-settings"    && <AISettingsPage aiConfig={aiConfig} onSave={handleSaveAIConfig}/>}
+            {activeTab==="system-settings" && <SystemSettingsPage />}
 
           </div>
         </div>

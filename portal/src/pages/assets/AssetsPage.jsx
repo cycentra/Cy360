@@ -3,6 +3,7 @@
  */
 
 import { RISK_CONFIG, STATUS_CONFIG } from '../../core/constants.js';
+import { WorldMapWidget } from './WorldMapWidget.jsx';
 
 function Badge({ risk }) {
   const cfg = RISK_CONFIG[risk] || RISK_CONFIG.low;
@@ -33,6 +34,8 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
           Import Scan
         </button>
       </div>
+
+      <WorldMapWidget assets={assets} />
 
       <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, overflow: "hidden" }}>
         <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 120px 160px 140px 90px 110px", padding: "10px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.3)", fontSize: 10, letterSpacing: "1.2px", textTransform: "uppercase", fontFamily: "monospace" }}>

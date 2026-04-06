@@ -4,15 +4,22 @@ blueprints/system/routes.py
 System-level endpoints.
 
 Routes:
-  GET  /health               liveness check
-  POST /api/ai/test          test external AI provider connectivity
-  GET  /api/ai/settings      retrieve persisted AI settings
-  POST /api/ai/settings      persist AI settings (provider/model/keys)
-  GET  /api/config           debug — dump non-secret env config
+  GET  /health                   liveness check
+  POST /api/ai/test              test external AI provider connectivity
+  GET  /api/ai/settings          retrieve persisted AI settings
+  POST /api/ai/settings          persist AI settings (provider/model/keys)
+  GET  /api/config               debug — dump non-secret env config
+  GET  /api/system/version       current version + last 5 release notes
+  POST /api/system/update        trigger cycentra-setup.sh --update (CS_TOKEN required)
+  GET  /api/system/env/<target>  read env file (global|cysiemstack|cyiris|cysoar|cymisp|cysiem)
+  PUT  /api/system/env/<target>  write env file
 """
 
 import os
+import re
 import json
+import subprocess
+import threading
 
 import requests as http_requests
 from flask import Blueprint, request, jsonify, make_response
@@ -22,6 +29,19 @@ from core.config import AI_SETTINGS_FILE
 
 system_bp = Blueprint("system", __name__)
 
+# ── Env file paths keyed by target name ──────────────────────────────────────
+_ENV_FILE_MAP = {
+    "global":     "/opt/cycentra/.env",
+    "cysiemstack": "/opt/cycentra/cysiemstack.env",
+    "cyiris":     "/opt/cycentra/cyiris.env",
+    "cysoar":     "/opt/cycentra/cysoar.env",
+    "cymisp":     "/opt/cycentra/cymisp.env",
+    "cysiem":     "/opt/cycentra/cysiem.env",
+}
+
+# Keys that must never be returned or overwritten via the API (security)
+_SECRET_KEYS = {"SECRET_KEY", "SESSION_SECRET", "DB_PASSWORD", "POSTGRES_PASSWORD",
+                "REDIS_PASSWORD", "WAZUH_API_PASSWORD", "API_KEY", "CS_TOKEN"}
 
 # ── Preflight ─────────────────────────────────────────────────────────────────
 
@@ -184,3 +204,260 @@ def config_debug():
         "SIEM_ENGINE_URL":  os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100"),
         "env_file_loaded":  os.path.exists("/opt/cycentra/.env") or os.path.exists(".env"),
     })
+
+
+# ── Version + release notes ───────────────────────────────────────────────────
+
+@system_bp.route("/api/system/version")
+def system_version():
+    """Return current installed version and last 5 release note blocks."""
+    version = "unknown"
+    release_notes = []
+
+    # Read installed version from /opt/cycentra/version (written by setup.sh)
+    for vf in ("/opt/cycentra/version", "/opt/cycentra/.version"):
+        if os.path.exists(vf):
+            version = open(vf).read().strip()
+            break
+
+    # Parse RELEASE_NOTES.md — return last 5 version blocks
+    rn_path = "/opt/cycentra/RELEASE_NOTES.md"
+    if not os.path.exists(rn_path):
+        # Dev fallback: look relative to repo root
+        rn_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "RELEASE_NOTES.md")
+
+    if os.path.exists(rn_path):
+        with open(rn_path) as f:
+            content = f.read()
+        # Split on "## v" headings, keep last 5
+        blocks = re.split(r"(?=^## v)", content, flags=re.MULTILINE)
+        blocks = [b.strip() for b in blocks if b.strip().startswith("## v")]
+        for block in blocks[:5]:
+            lines  = block.splitlines()
+            header = lines[0]                        # "## v1.0.53 — 2026-04-06"
+            body   = "\n".join(lines[1:]).strip()
+            tag    = re.search(r"(v[\d.]+)", header)
+            date   = re.search(r"(\d{4}-\d{2}-\d{2})", header)
+            release_notes.append({
+                "version": tag.group(1)  if tag  else header,
+                "date":    date.group(1) if date else "",
+                "notes":   body,
+            })
+
+    return jsonify({"version": version, "release_notes": release_notes})
+
+
+# ── Trigger update ────────────────────────────────────────────────────────────
+
+_update_log: list[str] = []
+_update_running = False
+
+@system_bp.route("/api/system/update", methods=["OPTIONS"])
+def update_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/update", methods=["POST"])
+def system_update():
+    """Trigger sudo cycentra-setup.sh --update in a background thread."""
+    global _update_running, _update_log
+
+    if _update_running:
+        return jsonify({"ok": False, "error": "Update already in progress"}), 409
+
+    data      = request.get_json() or {}
+    cs_token  = data.get("csToken", "").strip()
+    if not cs_token:
+        return jsonify({"ok": False, "error": "CS_TOKEN is required"}), 400
+    # Basic format guard — tokens are alphanumeric+hyphen, no shell metacharacters
+    if not re.match(r'^[A-Za-z0-9_\-]{8,128}$', cs_token):
+        return jsonify({"ok": False, "error": "Invalid CS_TOKEN format"}), 400
+
+    setup_script = "/opt/cycentra/cycentra-setup.sh"
+    if not os.path.exists(setup_script):
+        return jsonify({"ok": False, "error": "Setup script not found on server"}), 404
+
+    _update_log = ["[UPDATE] Starting update…"]
+    _update_running = True
+
+    def _run():
+        global _update_running, _update_log
+        try:
+            env = {**os.environ, "CS_TOKEN": cs_token}
+            proc = subprocess.Popen(
+                ["sudo", "-E", "bash", setup_script, "--update"],
+                env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+            )
+            for line in proc.stdout:
+                _update_log.append(line.rstrip())
+                if len(_update_log) > 500:       # cap buffer
+                    _update_log = _update_log[-500:]
+            proc.wait()
+            _update_log.append(f"[UPDATE] Finished with exit code {proc.returncode}")
+        except Exception as e:
+            _update_log.append(f"[UPDATE ERROR] {e}")
+        finally:
+            _update_running = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"ok": True, "message": "Update started"})
+
+
+@system_bp.route("/api/system/update/log")
+def system_update_log():
+    """Poll the live update log."""
+    return jsonify({"running": _update_running, "log": _update_log[-200:]})
+
+
+# ── Env file editor ───────────────────────────────────────────────────────────
+
+@system_bp.route("/api/system/env/<target>", methods=["OPTIONS"])
+def env_options(target):
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/env/<target>", methods=["GET"])
+def env_get(target):
+    """Read an env file. Secret values are masked."""
+    path = _ENV_FILE_MAP.get(target)
+    if not path:
+        return jsonify({"error": f"Unknown env target: {target}"}), 400
+
+    if not os.path.exists(path):
+        return jsonify({"vars": [], "exists": False})
+
+    vars_list = []
+    with open(path) as f:
+        for raw_line in f:
+            line = raw_line.rstrip("\n")
+            if not line or line.startswith("#"):
+                vars_list.append({"line": line, "key": None, "value": None, "comment": True})
+                continue
+            m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)=(.*)$', line)
+            if m:
+                key = m.group(1)
+                val = m.group(2)
+                # Mask secrets — return placeholder, never the real value
+                if any(s in key.upper() for s in _SECRET_KEYS):
+                    val = "••••••••"
+                vars_list.append({"line": line, "key": key, "value": val, "comment": False})
+            else:
+                vars_list.append({"line": line, "key": None, "value": None, "comment": True})
+
+    return jsonify({"vars": vars_list, "exists": True, "path": path})
+
+
+@system_bp.route("/api/system/env/<target>", methods=["PUT"])
+def env_put(target):
+    """Write updated key=value pairs into an env file.
+    Only non-secret keys are writable via this endpoint.
+    Preserves comments and line order. Adds missing keys at end.
+    """
+    path = _ENV_FILE_MAP.get(target)
+    if not path:
+        return jsonify({"error": f"Unknown env target: {target}"}), 400
+
+    data    = request.get_json() or {}
+    updates = data.get("vars", {})   # {KEY: VALUE, ...}
+    if not isinstance(updates, dict):
+        return jsonify({"error": "vars must be a key→value dict"}), 400
+
+    # Reject any attempt to write secret keys
+    for key in updates:
+        if any(s in key.upper() for s in _SECRET_KEYS):
+            return jsonify({"error": f"Cannot modify secret key: {key}"}), 403
+        # Validate key format — no shell injection
+        if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key):
+            return jsonify({"error": f"Invalid key name: {key}"}), 400
+        # Validate value — disallow newlines and bare shell substitution
+        val = str(updates[key])
+        if "\n" in val or "\r" in val:
+            return jsonify({"error": f"Value for {key} must not contain newlines"}), 400
+
+    # Read existing file (or start empty)
+    existing_lines = []
+    if os.path.exists(path):
+        with open(path) as f:
+            existing_lines = f.read().splitlines()
+
+    written_keys = set()
+    new_lines = []
+    for line in existing_lines:
+        m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)=', line)
+        if m:
+            key = m.group(1)
+            if key in updates:
+                new_lines.append(f"{key}={updates[key]}")
+                written_keys.add(key)
+                continue
+        new_lines.append(line)
+
+    # Append any new keys not already in file
+    for key, val in updates.items():
+        if key not in written_keys:
+            new_lines.append(f"{key}={val}")
+
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("\n".join(new_lines) + "\n")
+        return jsonify({"ok": True, "path": path, "updated": len(updates)})
+    except PermissionError:
+        return jsonify({"error": "Permission denied — backend may need write access to env file"}), 403
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── IP Geolocation (for world map) ────────────────────────────────────────────
+
+_geo_cache: dict = {}   # ip → {lat, lon, country, city}
+
+@system_bp.route("/api/system/geoip", methods=["POST", "OPTIONS"])
+def system_geoip():
+    """Resolve a list of IPs to lat/lon. Returns cached results where available.
+    Uses ipwho.is (free, no key required) for uncached IPs.
+    Private/loopback IPs are skipped.
+    """
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response('', 204))
+
+    data = request.get_json() or {}
+    ips  = [str(ip).strip() for ip in data.get("ips", []) if str(ip).strip()]
+    if not ips:
+        return jsonify({"results": {}})
+
+    _PRIVATE = re.compile(
+        r'^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.|::1|localhost)'
+    )
+
+    results = {}
+    to_fetch = []
+    for ip in ips[:50]:           # hard cap — no unbounded external requests
+        if _PRIVATE.match(ip) or ip == "—":
+            continue
+        if ip in _geo_cache:
+            results[ip] = _geo_cache[ip]
+        else:
+            to_fetch.append(ip)
+
+    for ip in to_fetch[:20]:
+        try:
+            r = http_requests.get(f"https://ipwho.is/{ip}", timeout=4)
+            if r.ok:
+                d = r.json()
+                if d.get("success"):
+                    entry = {
+                        "lat":     d.get("latitude"),
+                        "lon":     d.get("longitude"),
+                        "country": d.get("country", ""),
+                        "city":    d.get("city", ""),
+                        "flag":    d.get("flag", {}).get("emoji", ""),
+                    }
+                    _geo_cache[ip]  = entry
+                    results[ip]     = entry
+        except Exception:
+            pass
+
+    return jsonify({"results": results})
+

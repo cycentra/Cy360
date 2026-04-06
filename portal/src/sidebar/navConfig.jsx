@@ -18,6 +18,7 @@ const SvgScan  = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" str
 const SvgUC    = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6h16M4 10h16M4 14h10M4 18h6"/></svg>;
 const SvgMods  = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>;
 const SvgAI    = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>;
+const SvgGear  = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>;
 
 /**
  * Build the sidebar nav sections.
@@ -35,27 +36,28 @@ export function buildNavSections({ installedModules = {}, data = null }) {
     {
       section: "MONITOR",
       items: [
-        { id: "dashboard",      label: "Dashboard",       icon: SvgDash  },
-        { id: "assets",         label: "Assets",          icon: SvgAsset },
-        { id: "vulns",          label: "Vulnerabilities", icon: SvgVuln  },
-        { id: "cysiemfeed",     label: "CySIEM Feed",     icon: SvgSIEM, badge: data?.cysiemAlerts?.length || 0 },
-        { id: "siem-incidents", label: "Incidents",       icon: <span style={{ fontSize: 13 }}>🔥</span>, accent: "#ff3b3b" },
-        { id: "siem-risk",      label: "Risk Scores",     icon: <span style={{ fontSize: 13 }}>⚡</span>, accent: "#ff8c00" },
-        { id: "siem-ueba",      label: "UEBA",            icon: <span style={{ fontSize: 13 }}>👤</span>, accent: "#b06eff" },
+        { id: "dashboard",      label: "Threat Overview",       icon: SvgDash  },
+        { id: "assets",         label: "Asset Inventory",       icon: SvgAsset },
+        { id: "vulns",          label: "Findings",              icon: SvgVuln  },
+        { id: "cysiemfeed",     label: "Alert Feed",            icon: SvgSIEM, badge: data?.cysiemAlerts?.length || 0 },
+        { id: "siem-incidents", label: "Active Incidents",      icon: <span style={{ fontSize: 13 }}>🔥</span>, accent: "#ff3b3b" },
+        { id: "siem-risk",      label: "Entity Risk",           icon: <span style={{ fontSize: 13 }}>⚡</span>, accent: "#ff8c00" },
+        { id: "siem-ueba",      label: "Behaviour Analytics",   icon: <span style={{ fontSize: 13 }}>👤</span>, accent: "#b06eff" },
       ],
     },
     {
       section: "ACTIONS",
       items: [
-        { id: "scan",      label: "New Scan",   icon: SvgScan, accent: "#00e5a0" },
-        { id: "usecases",  label: "Use Cases",  icon: SvgUC,   accent: "#4d9eff" },
+        { id: "scan",      label: "Run Scan",    icon: SvgScan, accent: "#00e5a0" },
+        { id: "usecases",  label: "Use Cases",   icon: SvgUC,   accent: "#4d9eff" },
       ],
     },
     {
       section: "PLATFORM",
       items: [
-        { id: "platform",    label: "Modules",     icon: SvgMods, badge: addonInstalled.length || 0, accent: "#b06eff" },
-        { id: "ai-settings", label: "AI Settings", icon: SvgAI,   accent: "#4d9eff" },
+        { id: "platform",         label: "Platform Modules", icon: SvgMods, badge: addonInstalled.length || 0, accent: "#b06eff" },
+        { id: "ai-settings",      label: "AI Settings",      icon: SvgAI,   accent: "#4d9eff" },
+        { id: "system-settings",  label: "System Settings",  icon: SvgGear, accent: "#00e5a0" },
       ],
     },
     {

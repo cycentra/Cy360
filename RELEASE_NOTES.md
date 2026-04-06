@@ -2,6 +2,52 @@
 
 ---
 
+## v1.0.54 — 2026-04-07
+
+### New Features
+
+**System Settings page (navConfig, App.jsx, SystemSettingsPage.jsx)**
+- New "System Settings" entry in the PLATFORM section of the sidebar (gear icon, `#00e5a0` accent).
+- **Updates & Version tab**: displays running version (read from `/opt/cycentra/version`), last 5
+  release notes blocks from `RELEASE_NOTES.md`, CS_TOKEN password input, "Run Update" button that
+  spawns `sudo -E bash cycentra-setup.sh --update` server-side in a daemon thread.
+- Live update log console: polls `GET /api/system/update/log` every 1.5 s, auto-scrolls, colour-codes
+  `[UPDATE]` lines (green) and `[UPDATE ERROR]` (red). Stops polling when backend reports `running: false`.
+- **Environment Config tab**: sidebar with 6 targets (global, cysiemstack, cyiris, cysoar, cymisp, cysiem).
+  Reads env file via `GET /api/system/env/<target>`; secrets masked as `•••••••• (protected)`, non-editable.
+  Dirty-change tracker counts unsaved keys; `PUT /api/system/env/<target>` writes changes with
+  shell-injection prevention on both keys and values.
+
+**Asset geo-location world map (WorldMapWidget.jsx, AssetsPage.jsx)**
+- Equirectangular SVG world map (800 × 380 viewBox) with simplified continent outlines and latitude/longitude
+  grid lines — zero npm dependencies.
+- Primary asset IPs resolved to `{lat, lon, country, city, flag}` via `POST /api/system/geoip` (backend
+  proxies to `ipwho.is`, skips RFC-1918 private ranges, in-process cache avoids repeat lookups).
+- Risk-coloured pulsing dots on map; co-located IPs aggregated into a count badge.
+- Hover tooltip shows hostname, IP, city, country flag; "Refresh" button re-fetches geo data.
+- Map inserted above the asset table in `AssetsPage.jsx`.
+
+**Backend endpoints (blueprints/system/routes.py)**
+- `GET  /api/system/version` — version string + last 5 `## v` blocks from RELEASE_NOTES.md.
+- `POST /api/system/update`  — validates CS_TOKEN format, spawns update script, streams stdout.
+- `GET  /api/system/update/log` — `{running, log}` payload for frontend polling.
+- `GET  /api/system/env/<target>` — read env file; masked secrets.
+- `PUT  /api/system/env/<target>` — write env file; injection-safe validation.
+- `POST /api/system/geoip` — batch IP → geo resolver with cache.
+
+**Nav sidebar renames (navConfig.jsx)**
+- Dashboard → Threat Overview
+- Assets → Asset Inventory
+- Vulnerabilities → Findings
+- CySIEM Feed → Alert Feed
+- Incidents → Active Incidents
+- Risk Scores → Entity Risk
+- UEBA → Behaviour Analytics
+- New Scan → Run Scan
+- Modules → Platform Modules
+
+---
+
 ## v1.0.53 — 2026-04-06
 
 ### Enhancements
