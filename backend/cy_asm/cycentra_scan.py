@@ -27,13 +27,42 @@ from tenant_manager import validate_tenant
 from utils import setup_logging
 
 # --- ENRICHMENT IMPORTS ---
-from config import GOOGLE_GEMINI_KEY
 from google import genai
 from google.genai import types
 
 logger = setup_logging()
 
-# ── Subdomain state management ────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# SCAN PROFILES
+# Each profile controls which sequential modules run and whether AI enrichment
+# is executed at the end. DNS Reconnaissance is always run as a baseline.
+# ─────────────────────────────────────────────────────────────────────────────
+SCAN_PROFILES = {
+    # Passive: read-only lookups only — no active probing, no subdomain brute-force
+    "passive": {
+        "run_subdomains": False,
+        "modules": ["email_sec", "whois", "osint", "dark_web"],
+        "ai_enrichment": False,
+    },
+    # Standard: core active recon + surface checks, no heavy/slow modules
+    "standard": {
+        "run_subdomains": True,
+        "modules": ["web", "crypto", "email_sec", "cloud", "whois", "osint"],
+        "ai_enrichment": False,
+    },
+    # Deep: full module suite + AI enrichment
+    "deep": {
+        "run_subdomains": True,
+        "modules": ["web", "crypto", "email_sec", "cloud", "whois", "osint",
+                    "dark_web", "supply_chain", "social_eng", "mobile_api"],
+        "ai_enrichment": True,
+    },
+}
+
+# Fallback when an unrecognised scan_type is supplied
+_DEFAULT_SCAN_TYPE = "standard"
+
+
 # State files persist subdomain history across scans so new/disappeared
 # subdomains can be highlighted. Location: /var/log/cycentra/cy-asm/state/
 _STATE_BASE = Path("/var/log/cycentra/cy-asm/state")
@@ -303,8 +332,8 @@ async def resolve_ollama_model(desired: str) -> str | None:
     return None
 
 
-async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> List[Dict[str, Any]]:
-    """Tries Google Gemini first, falls back to local Ollama on server B if it fails."""
+async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> tuple[List[Dict[str, Any]], str]:
+    """Tries CyMind first, then Google Gemini, then local Ollama. Returns (findings, provider_name)."""
 
     context_payload = {
         "dns": full_results.get('dns', {}).get('results', {}).get('records', {}),
@@ -341,7 +370,7 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> 
     logger.info(f"[AI Enrichment] Starting...")
     cymind_result = await enrich_with_cymind(context_payload, domain, prompt)
     if cymind_result is not None:
-        return cymind_result
+        return cymind_result, "CyMind"
 
     # ── ATTEMPT 2: Google Gemini ──────────────────────────────────────────────
     try:
@@ -364,7 +393,7 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> 
             logger.warning(f"⚠️ [AI] Gemini returned non-list ({type(result).__name__}), discarding.")
             raise ValueError("Gemini response is not a JSON list")
         logger.info(f"✅ [AI] Gemini enrichment succeeded for {domain}.")
-        return result
+        return result, "Gemini (gemini-2.0-flash)"
 
     except Exception as gemini_err:
         logger.warning(f"⚠️ [AI] Gemini failed: {type(gemini_err).__name__}: {gemini_err}")
@@ -377,7 +406,7 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> 
 
     if resolved_model is None:
         logger.error("❌ [AI] Ollama unavailable or model missing. Returning empty.")
-        return []
+        return [], "None (all providers failed)"
 
     ollama_payload = _trim_payload(context_payload, max_chars=3000)
 
@@ -436,7 +465,7 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> 
 
         result = json.loads(full_response)
         logger.info(f"✅ [AI] Ollama ({resolved_model}) enrichment succeeded for {domain} ({chunk_count} chunks).")
-        return result
+        return result, f"Ollama ({resolved_model})"
 
     except json.JSONDecodeError as e:
         logger.error(f"❌ [AI] Ollama returned malformed JSON: {e}\nRaw: {full_response[:500]}")
@@ -448,12 +477,21 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> 
 
     # ── ALL PROVIDERS EXHAUSTED (CyMind → Gemini → Ollama) ───────────────────
     logger.error(f"❌ [AI] All enrichment providers exhausted for {domain}. Returning empty.")
-    return []
+    return [], "None (all providers exhausted)"
 
 
-async def run_full_scan(domain: str, tenant_id: str) -> Dict[str, Any]:
+async def run_full_scan(
+    domain: str,
+    tenant_id: str,
+    scan_type: str = "standard",
+    include_subdomains: bool = True,
+) -> Dict[str, Any]:
+    profile    = SCAN_PROFILES.get(scan_type, SCAN_PROFILES[_DEFAULT_SCAN_TYPE])
     scan_start = datetime.now()
-    logger.info(f"=== Starting CyCentra UNIVERSAL Scan for {domain} (Tenant: {tenant_id}) ===")
+    logger.info(
+        f"=== Starting CyCentra {scan_type.upper()} Scan for {domain} "
+        f"(Tenant: {tenant_id}, subdomains={'on' if include_subdomains else 'off'}) ==="
+    )
 
     # ── Progress labels must match app.py /api/scan/status module_keywords exactly ──
     # app.py matches on lowercase log lines like "[dns reconnaissance]"
@@ -488,40 +526,42 @@ async def run_full_scan(domain: str, tenant_id: str) -> Dict[str, Any]:
     results    = {}
     all_issues = []
 
-    # ── Stage 1: DNS (everything else depends on it) ─────────────────────────
+    # ── Stage 1: DNS (always runs — baseline for all scan types) ─────────────
     _start("dns")
     dns = await gather_dns_intel(domain)
     _done("dns", dns)
     results["dns"] = dns
 
-    # ── Stage 2: Subdomains (dark_web and web depend on subdomain list) ───────
-    _start("subdomains")
-    subs = await gather_subdomains(domain)
-    _done("subdomains", subs)
-
-    # Annotate with historical change status before storing in results
-    subdomain_entries = subs.get("results", []) if isinstance(subs, dict) else []
-    prev_state        = _load_subdomain_state(tenant_id, domain)
-    subdomain_entries = _annotate_subdomains(subdomain_entries, prev_state)
-    if isinstance(subs, dict):
-        subs["results"] = subdomain_entries
-
-    results["subdomains"] = subs
-
-    # Extract plain strings for downstream modules (dark_web, etc.)
-    # Use all subdomains (live + historical) so dark web check is exhaustive
-    subdomains_list = [
-        e["subdomain"] if isinstance(e, dict) else e
-        for e in subdomain_entries
-    ]
-
     dns_records = dns.get("results", {}).get("records", {}) if isinstance(dns, dict) else {}
     dns_ips     = dns.get("results", {}).get("ips", [])     if isinstance(dns, dict) else []
 
-    # ── Stage 3: Sequential modules ──────────────────────────────────────────
-    # Ordered by value/speed — fastest/highest-value first so the progress bar
-    # moves steadily and the most important data arrives early.
-    sequential_modules = [
+    # ── Stage 2: Subdomains (skipped for passive scan) ────────────────────────
+    subdomain_entries = []
+    subdomains_list   = []
+
+    if profile["run_subdomains"] and include_subdomains:
+        _start("subdomains")
+        subs = await gather_subdomains(domain)
+        _done("subdomains", subs)
+
+        subdomain_entries = subs.get("results", []) if isinstance(subs, dict) else []
+        prev_state        = _load_subdomain_state(tenant_id, domain)
+        subdomain_entries = _annotate_subdomains(subdomain_entries, prev_state)
+        if isinstance(subs, dict):
+            subs["results"] = subdomain_entries
+        results["subdomains"] = subs
+        subdomains_list = [
+            e["subdomain"] if isinstance(e, dict) else e
+            for e in subdomain_entries
+        ]
+    else:
+        reason = "profile" if not profile["run_subdomains"] else "user preference"
+        logger.info(f"⏭️  [Subdomain Enumeration] Skipped — {reason}.")
+        results["subdomains"] = {"skipped": True, "results": [], "issues": []}
+
+    # ── Stage 3: Profile-filtered sequential modules ──────────────────────────
+    # Master registry — only modules listed in the active profile will run.
+    _all_sequential = [
         ("web",          lambda: gather_web_analysis(domain, dns_records)),
         ("crypto",       lambda: audit_crypto(domain)),
         ("email_sec",    lambda: gather_email_security(domain)),
@@ -533,6 +573,8 @@ async def run_full_scan(domain: str, tenant_id: str) -> Dict[str, Any]:
         ("social_eng",   lambda: gather_social_eng(domain)),
         ("mobile_api",   lambda: gather_mobile_api(domain)),
     ]
+    active_keys        = set(profile["modules"])
+    sequential_modules = [(k, fn) for k, fn in _all_sequential if k in active_keys]
 
     for key, coro_fn in sequential_modules:
         _start(key)
@@ -577,6 +619,7 @@ async def run_full_scan(domain: str, tenant_id: str) -> Dict[str, Any]:
 
     return {
         "domain":             domain,
+        "scan_type":          scan_type,
         "summary":            summary_text,
         "total_subdomains":   len(subdomains_list),
         "live_subdomains":    live_count,
@@ -590,24 +633,39 @@ async def run_full_scan(domain: str, tenant_id: str) -> Dict[str, Any]:
 
 
 def main():
-    if len(sys.argv) != 3:
-        print("Usage: python3 cycentra_scan.py <domain> <tenant_id>")
+    if len(sys.argv) < 3:
+        print("Usage: python3 cycentra_scan.py <domain> <tenant_id> [scan_type]")
         sys.exit(1)
 
-    domain = sys.argv[1].strip().lower()
+    domain    = sys.argv[1].strip().lower()
     raw_tenant = sys.argv[2].strip().lower()
+    scan_type = sys.argv[3].strip().lower() if len(sys.argv) >= 4 else _DEFAULT_SCAN_TYPE
+
+    # Guard: reject unknown scan types so misconfigured callers fail loudly
+    if scan_type not in SCAN_PROFILES:
+        logger.warning(f"⚠️  Unknown scan_type '{scan_type}' — falling back to '{_DEFAULT_SCAN_TYPE}'.")
+        scan_type = _DEFAULT_SCAN_TYPE
+
     final_tenant_id = validate_tenant(raw_tenant)
 
+    # Read include_subdomains from env var (set by scanner.py) or default True
+    include_subdomains = os.environ.get("CYCENTRA_INCLUDE_SUBDOMAINS", "true").strip().lower() != "false"
+
     # Execute Scan
-    result = asyncio.run(run_full_scan(domain, final_tenant_id))
+    result = asyncio.run(run_full_scan(domain, final_tenant_id, scan_type, include_subdomains))
 
     # ── Persist subdomain state for next scan comparison ─────────────────────
     enriched_sub_entries = result["results"].get("subdomains", {}).get("results", [])
     _save_subdomain_state(final_tenant_id, domain, enriched_sub_entries)
 
-    # AI Enrichment (single call — removed duplicate)
-    logger.info(f"🤖 Starting AI enrichment for {domain}...")
-    enriched_issues = asyncio.run(enrich_findings_with_ai(result['results'], domain))
+    # AI Enrichment — only for Deep scan; skipped for Standard and Passive
+    profile = SCAN_PROFILES[scan_type]
+    if profile["ai_enrichment"]:
+        logger.info(f"🤖 Starting AI enrichment for {domain}...")
+        enriched_issues, ai_provider_used = asyncio.run(enrich_findings_with_ai(result['results'], domain))
+    else:
+        logger.info(f"⏭️  AI enrichment skipped — {scan_type} scan profile.")
+        enriched_issues, ai_provider_used = [], f"Skipped ({scan_type} scan)"
     timestamp = int(time.time())
 
     # --- FOLDER SETUP ---
@@ -712,6 +770,8 @@ def main():
                 "org":       final_tenant_id,
                 "scan_id":   f"ASM-{timestamp}",
                 "domain":    domain,
+                "scan_type":           scan_type,
+                "include_subdomains":  include_subdomains,
             },
             "subdomain_summary": {
                 "total":      len(enriched_sub_entries),
@@ -738,11 +798,11 @@ def main():
         logger.error(f"❌ Failed to save portal JSON: {e}")
 
     # --- FINAL SUMMARY ---
-    ai_provider = "Gemini" if enriched_issues else "None (both providers failed)"
     logger.info(
         f"\n{'='*60}\n"
         f"🏁 ALL DONE: {domain}\n"
-        f"   AI Provider : {ai_provider}\n"
+        f"   Scan Type   : {scan_type.upper()}\n"
+        f"   AI Provider : {ai_provider_used}\n"
         f"   AI Findings : {len(enriched_issues)} enriched issues\n"
         f"   Reports     : {report_file}\n"
         f"              : {portal_file}\n"

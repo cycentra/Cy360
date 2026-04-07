@@ -52,14 +52,23 @@ def scan_options():
 
 # ── Trigger scan ──────────────────────────────────────────────────────────────
 
+_VALID_SCAN_TYPES = {"standard", "deep", "passive"}
+
+
 @asm_bp.route("/api/scan/trigger", methods=["POST"])
 def trigger_scan():
-    data   = request.get_json() or {}
-    domain = data.get("domain", "").strip()
-    uid    = data.get("uid", "anonymous")
+    data      = request.get_json() or {}
+    domain    = data.get("domain", "").strip()
+    uid       = data.get("uid", "anonymous")
+    scan_type          = data.get("scan_type", "standard").strip().lower()
+    include_subdomains = bool(data.get("include_subdomains", True))
 
     if not domain or "." not in domain:
         return jsonify({"error": "Invalid domain"}), 400
+
+    # Reject unrecognised scan types rather than silently defaulting
+    if scan_type not in _VALID_SCAN_TYPES:
+        return jsonify({"error": f"Invalid scan_type '{scan_type}'. Must be one of: standard, deep, passive"}), 400
 
     user_dir = SCANS_DIR / uid
     user_dir.mkdir(parents=True, exist_ok=True)
@@ -74,18 +83,20 @@ def trigger_scan():
 
     try:
         log_file.write_text(
-            f"[{datetime.now().strftime('%H:%M:%S')}] Scan triggered for {domain} by {uid}\n"
+            f"[{datetime.now().strftime('%H:%M:%S')}] {scan_type.upper()} scan triggered for {domain} by {uid}"
+            f" (subdomains={'on' if include_subdomains else 'off'})\n"
         )
-    except Exception as le:
+    except Exception:
         pass  # non-fatal — log init failure
 
     env = os.environ.copy()
-    env["CYCENTRA_OUTPUT_DIR"] = str(user_dir)
-    env["CYCENTRA_USER_ID"]    = uid
+    env["CYCENTRA_OUTPUT_DIR"]        = str(user_dir)
+    env["CYCENTRA_USER_ID"]           = uid
+    env["CYCENTRA_INCLUDE_SUBDOMAINS"] = "true" if include_subdomains else "false"
 
     try:
         subprocess.Popen(
-            [str(python_bin), str(scan_script), domain, uid],
+            [str(python_bin), str(scan_script), domain, uid, scan_type],
             stdout=open(log_file, "a"),
             stderr=subprocess.STDOUT,
             env=env,
@@ -94,7 +105,13 @@ def trigger_scan():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    return jsonify({"status": "started", "domain": domain, "uid": uid})
+    return jsonify({
+        "status":              "started",
+        "domain":              domain,
+        "uid":                 uid,
+        "scan_type":           scan_type,
+        "include_subdomains":  include_subdomains,
+    })
 
 
 # ── Scan status ───────────────────────────────────────────────────────────────

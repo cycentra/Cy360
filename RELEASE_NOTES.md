@@ -2,7 +2,37 @@
 
 ---
 
-## v1.0.76 — 2026-04-07
+## v1.0.78 — 2026-04-08
+
+### Feature — ASM scan levels (Standard / Deep / Passive) + subdomain toggle
+
+**Backend changes to align with the Scan UI:**
+
+Three configurable scan profiles are now enforced end-to-end:
+
+| Profile | Subdomains | Modules | AI Enrichment |
+|---|:---:|---|:---:|
+| **Passive** (~20 s) | ✗ | DNS, Email Security, WHOIS, OSINT, Dark Web | ✗ |
+| **Standard** (~45 s) | ✓ | DNS, Subdomains, Web, Crypto & SSL, Email Security, Cloud, WHOIS, OSINT | ✗ |
+| **Deep** (~90 s) | ✓ | Full suite (Standard + Dark Web, Supply Chain, Social Engineering, Mobile & API) | ✓ |
+
+`POST /api/scan/trigger` now accepts two new body fields:
+- `scan_type` — `"standard"` (default) | `"deep"` | `"passive"`. Returns HTTP 400 for unknown values.
+- `include_subdomains` — boolean (default `true`). When `false`, subdomain enumeration is skipped regardless of profile.
+
+Both parameters are forwarded to the scan engine; `scan_type` via CLI argv, `include_subdomains` via
+the `CYCENTRA_INCLUDE_SUBDOMAINS` environment variable. The portal JSON `meta` block now includes
+both `scan_type` and `include_subdomains` for auditability.
+
+`cycentra_scan.py` changes:
+- `SCAN_PROFILES` dict is the single source of truth for module lists and AI enrichment flag.
+- `run_full_scan()` accepts `scan_type` + `include_subdomains`; Stage 2 and Stage 3 are filtered accordingly.
+- `main()` accepts optional 3rd arg `[scan_type]` (backward-compatible — defaults to `standard`).
+- AI enrichment chain (CyMind → Gemini → Ollama) only executes for Deep scan.
+
+---
+
+
 
 ### Fix — CyIRIS/CySOAR install: clear stale ghcr.io credentials before pulling images
 
