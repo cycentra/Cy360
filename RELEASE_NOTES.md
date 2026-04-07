@@ -2,6 +2,21 @@
 
 ---
 
+## v1.0.76 — 2026-04-07
+
+### Fix — CyIRIS/CySOAR install: clear stale ghcr.io credentials before pulling images
+
+Docker sends stored credentials for a registry with every pull request. When the
+Docker credential store holds an expired/invalid ghcr.io token, the registry
+returns `unauthorized` even for fully public images — it does not fall back to
+anonymous access. The install thread now runs `docker logout ghcr.io` before
+`docker compose pull` whenever the compose template references `ghcr.io`, clearing
+any stale credential and allowing anonymous pulls to succeed. If a `GHCR_TOKEN`
+env var is set (e.g. for private images or rate-limit bypass), it performs a proper
+`docker login` via stdin instead. No manual server-side changes required.
+
+---
+
 ## v1.0.75 — 2026-04-06
 
 ### Fix — suppress pip root-user warning during setup
