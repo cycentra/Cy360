@@ -217,6 +217,49 @@ def ai_settings_post():
         return jsonify({"error": str(e)}), 500
 
 
+# ── MISP connectivity test ───────────────────────────────────────────────────
+
+@system_bp.route("/api/system/misp/test", methods=["OPTIONS"])
+def misp_test_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/misp/test", methods=["POST"])
+def misp_test():
+    """Test connectivity to a MISP instance using its REST API."""
+    data    = request.get_json() or {}
+    url     = data.get("url", "").rstrip("/")
+    api_key = data.get("apiKey", "")
+
+    if not url:
+        return jsonify({"ok": False, "error": "MISP Server URL is required"}), 400
+    if not api_key or api_key == "\u2022" * 8:
+        return jsonify({"ok": False, "error": "MISP API Key is required"}), 400
+
+    try:
+        # GET /servers/getPyMISPVersion.json — fast, unauthenticated fields still need a valid key
+        resp = http_requests.get(
+            f"{url}/servers/getPyMISPVersion.json",
+            headers={"Authorization": api_key, "Accept": "application/json"},
+            timeout=8,
+            verify=False,   # MISP is commonly on self-signed certs in on-premise deployments
+        )
+        if resp.status_code == 403:
+            return jsonify({"ok": False, "error": "Invalid API key (403 Forbidden)"}), 400
+        if resp.ok:
+            version = resp.json().get("version", "unknown")
+            return jsonify({"ok": True, "message": f"MISP {version} responding"})
+        return jsonify({"ok": False, "error": f"MISP returned HTTP {resp.status_code}"}), 400
+    except http_requests.exceptions.SSLError as e:
+        return jsonify({"ok": False, "error": f"SSL error — {e}"}), 400
+    except http_requests.exceptions.ConnectionError:
+        return jsonify({"ok": False, "error": "Cannot reach MISP server — check URL and network"}), 400
+    except http_requests.exceptions.Timeout:
+        return jsonify({"ok": False, "error": "Connection timed out"}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ── Config debug ──────────────────────────────────────────────────────────────
 
 @system_bp.route("/api/config")

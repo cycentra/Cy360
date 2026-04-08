@@ -14,7 +14,6 @@ export function AISettingsPage({ aiConfig, onSave }) {
   const [fields,         setFields]      = useState(aiConfig?.fields   || {});
   const [prompts,        setPrompts]     = useState(aiConfig?.prompts  || DEFAULT_PROMPTS);
   const [cymindMemory,   setCymindMemory] = useState(aiConfig?.cymind_memory || {});
-  const [misp,           setMisp]         = useState(aiConfig?.misp || {});
   const [activePromptTab,setActivePTab]  = useState("system");
   const [testStatus,     setTestStatus]  = useState(null);   // null | "testing" | "ok" | "fail"
   const [testMsg,        setTestMsg]     = useState("");
@@ -52,7 +51,7 @@ export function AISettingsPage({ aiConfig, onSave }) {
   };
 
   const handleSave = () => {
-    onSave({ provider, fields, prompts, cymind_memory: cymindMemory, misp });
+    onSave({ provider, fields, prompts, cymind_memory: cymindMemory });
     try { Object.entries(moduleUrls).forEach(([id, url]) => localStorage.setItem(`cycentra_url_${id}`, url)); } catch {}
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);

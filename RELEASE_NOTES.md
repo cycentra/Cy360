@@ -1,7 +1,30 @@
 # CyCentra 360 — Release Notes
 
----
-## v1.0.82 — 2026-04-09
+---## v1.0.90 — 2026-04-09
+
+### Fix + Feature — MISP moved to System Settings, test connection, AI enrichment DB columns
+
+**`portal/src/pages/settings/SystemSettingsPage.jsx`:**
+- New **Integrations** tab added between "Updates & Version" and "Environment Config"
+- Full MISP Threat Intelligence card moved here: enable toggle, MISP Server URL, API Key, **Test Connection** button, status indicator, Save
+- Test Connection calls `POST /api/system/misp/test` and shows live result (✓ MISP version or ✗ error reason)
+
+**`portal/src/pages/ai/AISettingsPage.jsx`:**
+- MISP card and `misp` state removed — configuration is now exclusively in System Settings → Integrations
+- No functional change to AI provider, prompts, or CyMind Episodic Memory sections
+
+**`backend/blueprints/system/routes.py`:**
+- New `POST /api/system/misp/test` endpoint — tests MISP connectivity via `GET /servers/getPyMISPVersion.json`; handles 403 (bad key), SSL errors, timeouts, and connection failures with specific messages
+
+**`backend/cysiemstack/postgres/migrations/002_ai_enrichment.sql`:**
+- New migration: `ALTER TABLE incidents ADD COLUMN IF NOT EXISTS llm_summary`, `llm_remediation`, `llm_generated_at`, `misp_enrichment`
+- Fixes existing installations where the incidents table was created before these columns were added to `init.sql`
+
+**`cycentra-setup.sh`:**
+- DB migration step now also applies any `*.sql` files found inside the installed Python package (`site-packages/cysiemstack/postgres/migrations/`), covering upgrades where the bundle didn't ship a `db/migrations/` directory
+- All migration files are idempotent — safe to re-run
+
+---## v1.0.82 — 2026-04-09
 
 ### Fix — Migrated setup script from Cloudsmith to GitHub Packages
 

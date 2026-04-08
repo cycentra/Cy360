@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.89"
+_SCRIPT_VERSION="v1.0.90"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -924,6 +924,23 @@ if [[ -d "$BUNDLE_DIR/db/migrations" ]]; then
             && success "$(basename $sql) applied" \
             || warn    "$(basename $sql) had warnings (may already be applied)"
     done
+fi
+
+# Also apply any migrations shipped inside the installed Python package.
+# These cover upgrades where the bundle didn't include a db/migrations/ directory.
+# All migration SQL files are idempotent (ADD COLUMN IF NOT EXISTS), so re-runs are safe.
+_pkg_migrations=$(find "${SITE_PKG:-/usr/local/lib/python3.12/dist-packages}" \
+    -path "*/cysiemstack/postgres/migrations/*.sql" 2>/dev/null | sort || true)
+if [[ -n "$_pkg_migrations" ]]; then
+    while IFS= read -r sql; do
+        [[ -f "$sql" ]] || continue
+        info "Package migration: $(basename $sql) ..."
+        PGPASSWORD="$CORR_DB_PASS" psql -h 127.0.0.1 -p 5433 \
+            -U corruser -d correlation \
+            -f "$sql" -v ON_ERROR_STOP=0 -q 2>/dev/null \
+            && success "$(basename $sql) applied" \
+            || warn    "$(basename $sql) had warnings (may already be applied)"
+    done <<< "$_pkg_migrations"
 fi
 
 # ── Step 14: Systemd services ─────────────────────────────────────────────────

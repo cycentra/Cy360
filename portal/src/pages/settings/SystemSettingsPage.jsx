@@ -354,9 +354,141 @@ function EnvConfigTab() {
 // ════════════════════════════════════════════════════════════════════════════
 
 const TABS = [
-  { id: "updates", label: "Updates & Version" },
-  { id: "env",     label: "Environment Config" },
+  { id: "updates",      label: "Updates & Version" },
+  { id: "integrations", label: "Integrations" },
+  { id: "env",          label: "Environment Config" },
 ];
+
+// ════════════════════════════════════════════════════════════════════════════
+// TAB 3 — Integrations (MISP)
+// ════════════════════════════════════════════════════════════════════════════
+
+function MispTab() {
+  const [misp,       setMisp]       = useState({});
+  const [loading,    setLoading]    = useState(true);
+  const [saving,     setSaving]     = useState(false);
+  const [saved,      setSaved]      = useState(false);
+  const [testStatus, setTestStatus] = useState(null);  // null | "testing" | "ok" | "fail"
+  const [testMsg,    setTestMsg]    = useState("");
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/ai/settings`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => { setMisp(d.misp || {}); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/api/ai/settings`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ misp }),
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } finally { setSaving(false); }
+  };
+
+  const testConnection = async () => {
+    if (!misp.url) { setTestStatus("fail"); setTestMsg("MISP Server URL is required"); return; }
+    if (!misp.apiKey || misp.apiKey === "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022") {
+      setTestStatus("fail"); setTestMsg("Enter your API Key (currently showing masked placeholder)"); return;
+    }
+    setTestStatus("testing"); setTestMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/system/misp/test`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: misp.url, apiKey: misp.apiKey }),
+      });
+      const d = await r.json();
+      if (d.ok) { setTestStatus("ok");   setTestMsg(d.message || "Connected"); }
+      else       { setTestStatus("fail"); setTestMsg(d.error  || "Connection failed"); }
+    } catch { setTestStatus("fail"); setTestMsg("Cannot reach backend"); }
+  };
+
+  if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
+
+  return (
+    <div style={{ maxWidth: 620 }}>
+      <div style={{ background: "rgba(255,59,59,0.04)", border: "1px solid rgba(255,59,59,0.2)", borderRadius: 6, padding: "22px 24px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+          <span style={{ fontSize: 18 }}>🔴</span>
+          <div style={{ color: "rgba(255,100,100,0.9)", fontSize: 10, letterSpacing: "1.5px",
+            textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>MISP Threat Intelligence</div>
+        </div>
+        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, marginBottom: 20, lineHeight: 1.6 }}>
+          Connect to your MISP instance. Discovered IPs from ASM Deep scans are checked
+          against MISP <strong style={{ color: "rgba(255,255,255,0.5)" }}>before AI enrichment</strong> —
+          IOC matches are attached to findings and included in the AI narrative.
+        </div>
+
+        {/* Enable toggle */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+          <input type="checkbox" id="misp-enabled" checked={!!misp.enabled}
+            onChange={e => setMisp(prev => ({ ...prev, enabled: e.target.checked }))}
+            style={{ accentColor: "#ff4444", width: 16, height: 16, cursor: "pointer" }} />
+          <label htmlFor="misp-enabled" style={{ color: "rgba(255,255,255,0.65)", fontSize: 12,
+            fontFamily: "monospace", cursor: "pointer" }}>
+            Enable MISP IOC enrichment on Deep scans
+          </label>
+        </div>
+
+        {/* URL */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={LABEL}>MISP Server URL</div>
+          <input type="text" value={misp.url || ""}
+            onChange={e => setMisp(prev => ({ ...prev, url: e.target.value }))}
+            placeholder="https://cymisp.yourdomain.com"
+            style={INPUT} />
+        </div>
+
+        {/* API Key */}
+        <div style={{ marginBottom: 22 }}>
+          <div style={LABEL}>MISP API Key</div>
+          <input type="password" value={misp.apiKey || ""}
+            onChange={e => setMisp(prev => ({ ...prev, apiKey: e.target.value }))}
+            placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            style={INPUT} />
+        </div>
+
+        {/* Test Connection */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+          <button onClick={testConnection} disabled={testStatus === "testing"}
+            style={{ background: "rgba(255,59,59,0.12)", color: "#ff6b6b",
+              border: "1px solid rgba(255,59,59,0.35)", borderRadius: 4,
+              padding: "8px 18px", fontFamily: "monospace", fontSize: 11,
+              fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px",
+              opacity: testStatus === "testing" ? 0.6 : 1 }}>
+            {testStatus === "testing" ? "Testing…" : "Test Connection"}
+          </button>
+          {testStatus === "ok"   && <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ {testMsg}</span>}
+          {testStatus === "fail" && <span style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace" }}>✗ {testMsg}</span>}
+        </div>
+
+        {/* Status summary */}
+        <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.25)" }}>
+          {misp.enabled && misp.url && misp.apiKey
+            ? <span style={{ color: "#ff6b6b" }}>✓ Configured — IOC lookups active on Deep scans</span>
+            : misp.enabled
+              ? <span style={{ color: "#ff8c00" }}>⚠ URL and API Key required to activate</span>
+              : "Disabled — enable above to activate IOC enrichment"}
+        </div>
+      </div>
+
+      {/* Save */}
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 20 }}>
+        <button onClick={handleSave} disabled={saving}
+          style={{ ...BTN(), opacity: saving ? 0.5 : 1 }}>
+          {saving ? "Saving…" : "Save MISP Configuration"}
+        </button>
+        {saved && <span style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace" }}>✓ Saved</span>}
+      </div>
+    </div>
+  );
+}
 
 export function SystemSettingsPage() {
   const [tab, setTab] = useState("updates");
@@ -383,8 +515,9 @@ export function SystemSettingsPage() {
         ))}
       </div>
 
-      {tab === "updates" && <UpdatesTab />}
-      {tab === "env"     && <EnvConfigTab />}
+      {tab === "updates"      && <UpdatesTab />}
+      {tab === "integrations" && <MispTab />}
+      {tab === "env"          && <EnvConfigTab />}
     </div>
   );
 }
