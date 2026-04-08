@@ -166,6 +166,8 @@ def ai_settings_get():
                 data["fields"]["apiKey"] = "••••••••"
             if "cymind_memory" in data and data["cymind_memory"].get("apiKey"):
                 data["cymind_memory"]["apiKey"] = "••••••••"
+            if "misp" in data and data["misp"].get("apiKey"):
+                data["misp"]["apiKey"] = "••••••••"
             return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -176,7 +178,7 @@ def ai_settings_get():
 def ai_settings_post():
     data = request.get_json() or {}
     # Only accept known top-level keys to prevent arbitrary data storage
-    allowed = {"provider", "fields", "prompts", "cymind_memory"}
+    allowed = {"provider", "fields", "prompts", "cymind_memory", "misp"}
     payload = {k: v for k, v in data.items() if k in allowed}
     if not payload:
         return jsonify({"error": "No valid settings provided"}), 400
@@ -201,6 +203,12 @@ def ai_settings_post():
             existing_cm_key = existing.get("cymind_memory", {}).get("apiKey", "")
             if existing_cm_key:
                 payload.setdefault("cymind_memory", {})["apiKey"] = existing_cm_key
+        # Same guard for the misp block
+        incoming_misp_key = payload.get("misp", {}).get("apiKey", "")
+        if not incoming_misp_key or incoming_misp_key == _MASK:
+            existing_misp_key = existing.get("misp", {}).get("apiKey", "")
+            if existing_misp_key:
+                payload.setdefault("misp", {})["apiKey"] = existing_misp_key
         existing.update(payload)
         AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         AI_SETTINGS_FILE.write_text(json.dumps(existing, indent=2))

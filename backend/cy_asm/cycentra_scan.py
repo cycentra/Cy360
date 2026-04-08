@@ -185,7 +185,65 @@ def _get_gemini_key() -> str:
         key = settings.get("fields", {}).get("apiKey", "").strip()
         if key:
             return key
-    return GOOGLE_GEMINI_KEY
+    return os.environ.get("GOOGLE_GEMINI_KEY", "")
+
+
+def _get_misp_config() -> dict | None:
+    """
+    Return MISP config from ai_settings.json under the 'misp' key, or None if not configured.
+    Expected structure: { "misp": { "enabled": true, "url": "...", "apiKey": "..." } }
+    """
+    settings = _load_ai_settings()
+    misp = settings.get("misp", {})
+    if not misp.get("enabled", False):
+        return None
+    url = misp.get("url", "").strip().rstrip("/")
+    key = misp.get("apiKey", "").strip()
+    if not url or not key:
+        logger.warning("⚠️ [MISP] 'misp' block found but url/apiKey are missing — skipping.")
+        return None
+    return {"url": url, "apiKey": key}
+
+
+async def lookup_misp_iocs(ips: list) -> dict:
+    """
+    Query MISP for each IP. Returns {ip: [attribute_dicts]} for hits only.
+    Never raises — always returns a (possibly empty) dict so the scan is never blocked.
+    """
+    config = _get_misp_config()
+    if not config or not ips:
+        return {}
+
+    unique_ips = list(dict.fromkeys(str(ip) for ip in ips if ip))
+    results_map: dict = {}
+    headers = {
+        "Authorization": config["apiKey"],
+        "Accept":        "application/json",
+        "Content-Type":  "application/json",
+    }
+    try:
+        timeout_cfg = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
+        async with httpx.AsyncClient(timeout=timeout_cfg, verify=False) as client:
+            for ip in unique_ips:
+                try:
+                    resp = await client.post(
+                        f"{config['url']}/attributes/restSearch",
+                        headers=headers,
+                        json={"returnFormat": "json", "value": ip,
+                              "type": "ip-src", "to_ids": 1, "limit": 5},
+                    )
+                    resp.raise_for_status()
+                    attrs = resp.json().get("response", {}).get("Attribute", [])
+                    if attrs:
+                        results_map[ip] = attrs
+                        logger.info(f"🔴 [MISP] IOC hit for {ip} — {len(attrs)} attribute(s).")
+                    else:
+                        logger.debug(f"[MISP] No hits for {ip}.")
+                except Exception as ip_err:
+                    logger.warning(f"⚠️ [MISP] Lookup failed for {ip}: {ip_err}")
+    except Exception as e:
+        logger.warning(f"⚠️ [MISP] Client setup failed: {e}")
+    return results_map
 
 
 def _get_cymind_config() -> tuple[str, str, str] | None:
@@ -733,6 +791,24 @@ def main():
     enriched_sub_entries = result["results"].get("subdomains", {}).get("results", [])
     _save_subdomain_state(final_tenant_id, domain, enriched_sub_entries)
 
+    # ── MISP IOC Lookup (runs BEFORE AI enrichment, never blocks scan) ────────
+    _all_scan_ips: list = []
+    _all_scan_ips += result["results"].get("dns", {}).get("results", {}).get("ips", [])
+    for _sub in enriched_sub_entries:
+        if isinstance(_sub, dict):
+            _all_scan_ips += _sub.get("resolved_ips", [])
+    misp_hit_map: dict = {}
+    if _all_scan_ips:
+        try:
+            misp_hit_map = asyncio.run(lookup_misp_iocs(_all_scan_ips))
+            if misp_hit_map:
+                logger.info(f"🔴 [MISP] {len(misp_hit_map)} IOC hit(s) across {len(_all_scan_ips)} IPs for {domain}.")
+            else:
+                logger.info(f"✅ [MISP] No IOC hits for {len(_all_scan_ips)} IPs for {domain}.")
+        except Exception as _misp_err:
+            logger.warning(f"⚠️ [MISP] Lookup block failed (scan continues): {_misp_err}")
+    # ─────────────────────────────────────────────────────────────────────────
+
     # AI Enrichment — only for Deep scan; skipped for Standard and Passive
     profile = SCAN_PROFILES[scan_type]
     if profile["ai_enrichment"]:
@@ -824,6 +900,25 @@ def main():
 
         # Use AI findings when available; fall back to raw module issues
         final_vulns = enriched_issues if enriched_issues else [_normalise_issue(i) for i in all_findings]
+
+        # Attach MISP IOC hits to findings whose description contains a known hit IP
+        if misp_hit_map:
+            for _finding in final_vulns:
+                _text = (_finding.get("description", "") + " " +
+                         _finding.get("vulnerability", "") + " " +
+                         _finding.get("recommendation", ""))
+                _matched = [hit for ip, hits in misp_hit_map.items()
+                            if ip in _text for hit in hits]
+                if _matched:
+                    _finding["misp_hits"] = _matched
+
+            # For findings without a direct IP match, attach a summary threat intel note
+            # so the AI narrative and portal always knows about MISP hits during the scan
+            hit_summary = [{"ip": ip, "count": len(hits), "event_ids": [h.get("event_id") for h in hits]}
+                           for ip, hits in misp_hit_map.items()]
+            for _finding in final_vulns:
+                if "misp_hits" not in _finding:
+                    _finding["misp_threat_intel"] = hit_summary
 
         ai_score = max(
             [severity_map.get(i.get('severity'), 0) for i in final_vulns] + [len(all_findings)]

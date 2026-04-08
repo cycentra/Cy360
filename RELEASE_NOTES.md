@@ -1,6 +1,32 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.81 — 2026-04-09
+
+### Feature — MISP threat intelligence for ASM + incident list intel badges
+
+**`backend/cy_asm/cycentra_scan.py`:**
+- Fixed `GOOGLE_GEMINI_KEY` NameError bug — variable was used but never defined; now reads `os.environ.get("GOOGLE_GEMINI_KEY", "")`
+- Added `_get_misp_config()` — reads `ai_settings.json["misp"]` block for `{ enabled, url, apiKey }`
+- Added `lookup_misp_iocs(ips)` — async MISP `/attributes/restSearch` lookup; fire-safe, never raises
+- MISP IOC lookup runs in `main()` after subdomain save, **before** AI enrichment so the AI narrative is MISP-aware
+- `misp_hits` list attached to findings whose IP matches a MISP attribute; `misp_threat_intel` summary passed to all other findings
+
+**`backend/blueprints/system/routes.py`:**
+- `misp` added to allowed POST keys (alongside `provider`, `fields`, `prompts`, `cymind_memory`)
+- `misp.apiKey` masked in GET responses; preserved on masked POST (same guard pattern as `cymind_memory.apiKey`)
+
+**`portal/src/pages/ai/AISettingsPage.jsx`:**
+- New "🔴 MISP Threat Intelligence" card — enable toggle, MISP Server URL, API Key (password), inline status indicator
+- Saved as `misp` key in `ai_settings.json`; configure once, runs on every Deep ASM scan
+
+**`portal/src/siem/SiemIncidentsPage.jsx`:**
+- Added **INTEL** column to incident list table (grid widened from 7 to 8 columns)
+- `🤖 AI` badge (green) when `llm_summary` is present — AI narrative has been generated
+- `🔴 IOC` badge (red) when MISP IOC hits are present — shows hit count in tooltip
+- Dash shown when neither enrichment has run
+
+---
 ## v1.0.80 — 2026-04-08
 
 ### Fix — CyMind episodic memory works with any active AI provider

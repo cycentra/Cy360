@@ -555,10 +555,10 @@ export function SiemIncidentsPage() {
             borderRadius: 4, overflow: "hidden" }}>
             {/* Table header */}
             <div style={{ display: "grid",
-              gridTemplateColumns: "130px 75px 1fr 110px 60px 75px 100px",
+              gridTemplateColumns: "130px 75px 1fr 110px 60px 75px 80px 100px",
               gap: 10, padding: "10px 16px",
               background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-              {["ID", "SEVERITY", "AFFECTED HOSTS", "TYPE / CATEGORY", "ALERTS", "STATUS", "LAST SEEN"].map(h => (
+              {["ID", "SEVERITY", "AFFECTED HOSTS", "TYPE / CATEGORY", "ALERTS", "STATUS", "INTEL", "LAST SEEN"].map(h => (
                 <div key={h} style={{ color: "rgba(255,255,255,0.3)", fontSize: 10,
                   fontFamily: "monospace", letterSpacing: "1px" }}>{h}</div>
               ))}
@@ -569,7 +569,7 @@ export function SiemIncidentsPage() {
               <div key={inc.id}
                 onClick={() => setSelected(inc)}
                 style={{ display: "grid",
-                  gridTemplateColumns: "130px 75px 1fr 110px 60px 75px 100px",
+                  gridTemplateColumns: "130px 75px 1fr 110px 60px 75px 80px 100px",
                   gap: 10, padding: "12px 16px", cursor: "pointer",
                   borderBottom: "1px solid rgba(255,255,255,0.04)",
                   background: selected?.id === inc.id ? "rgba(0,229,160,0.04)" : "transparent",
@@ -599,6 +599,29 @@ export function SiemIncidentsPage() {
                 <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 12,
                   fontFamily: "monospace" }}>{inc.alert_count}</div>
                 <div><StatBadge status={inc.status} /></div>
+                {/* Intel badges: AI narrative + MISP IOC hits */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  {inc.llm_summary && (
+                    <span title="AI narrative available" style={{ background: "rgba(0,229,160,0.1)",
+                      color: "#00e5a0", border: "1px solid rgba(0,229,160,0.25)",
+                      fontSize: 9, fontFamily: "monospace", padding: "1px 5px",
+                      borderRadius: 2, fontWeight: 700, letterSpacing: "0.5px" }}>
+                      🤖 AI
+                    </span>
+                  )}
+                  {(inc.misp_enrichment?.ioc_hits || []).length > 0 && (
+                    <span title={`${inc.misp_enrichment.ioc_hits.length} MISP IOC hit(s)`}
+                      style={{ background: "rgba(255,59,59,0.12)",
+                      color: "#ff6b6b", border: "1px solid rgba(255,59,59,0.3)",
+                      fontSize: 9, fontFamily: "monospace", padding: "1px 5px",
+                      borderRadius: 2, fontWeight: 700 }}>
+                      🔴 IOC
+                    </span>
+                  )}
+                  {!inc.llm_summary && !(inc.misp_enrichment?.ioc_hits || []).length && (
+                    <span style={{ color: "rgba(255,255,255,0.15)", fontSize: 10 }}>—</span>
+                  )}
+                </div>
                 <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace" }}>
                   {fmtTs(inc.last_seen)}
                 </div>
