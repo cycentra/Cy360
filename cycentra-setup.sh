@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.88"
+_SCRIPT_VERSION="v1.0.89"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -853,17 +853,19 @@ info "Installing ${PKG_NAME}==${PKG_VER} into system Python ..."
 info "Wheel: $(_mask_url "${WHEEL_URL}")"
 
 # Download wheel from GitHub Packages then install locally.
+# pip requires the filename to match the wheel naming convention; use the real WHL name.
 # --break-system-packages required on Ubuntu 24.04 (PEP 668 externally-managed env)
 # PIP_ROOT_USER_ACTION=ignore suppresses the "running as root" advisory — intentional here.
+_WHL_FILE="/tmp/cycentra_backend-${PKG_VER}-py3-none-any.whl"
 curl -fsSL \
     -H "Authorization: Bearer ${GH_TOKEN}" \
     "${WHEEL_URL}" \
-    -o /tmp/cycentra_backend.whl \
+    -o "${_WHL_FILE}" \
     || { error "Wheel download failed — check GH_TOKEN and version"; exit 1; }
 
 PIP_ROOT_USER_ACTION=ignore pip3 install \
     --extra-index-url https://pypi.org/simple/ \
-    /tmp/cycentra_backend.whl \
+    "${_WHL_FILE}" \
     --upgrade \
     --break-system-packages \
     --ignore-installed \
