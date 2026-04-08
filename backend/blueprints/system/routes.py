@@ -10,8 +10,8 @@ Routes:
   POST /api/ai/settings          persist AI settings (provider/model/keys)
   GET  /api/config               debug — dump non-secret env config
   GET  /api/system/version         current version + last 5 release notes
-  GET  /api/system/latest-version   query Cloudsmith for latest published version (csToken required)
-  POST /api/system/update           trigger cycentra-setup.sh --update (CS_TOKEN required)
+  GET  /api/system/latest-version   query GitHub Releases API for latest published version (ghToken required)
+  POST /api/system/update           trigger cycentra-setup.sh --update (GH_TOKEN required)
   GET  /api/system/env/<target>  read env file (global|cysiemstack|cyiris|cysoar|cymisp|cysiem)
   PUT  /api/system/env/<target>  write env file
 """
@@ -328,14 +328,14 @@ def system_version():
 
 # ── Trigger update ────────────────────────────────────────────────────────────
 
-# Pattern matching sensitive key names and Cloudsmith auth tokens in URLs
+# Pattern matching sensitive key names and GitHub tokens in log output
 _REDACT_KEY_RE  = re.compile(r'(?i)((?:password|secret|token|key|pass)\s*[=:]\s*)\S+')
-_REDACT_URL_RE  = re.compile(r'(dl\.cloudsmith\.io/)([A-Za-z0-9_\-]{8,128})(/)')
+_REDACT_GH_RE   = re.compile(r'(ghp_|github_pat_)[A-Za-z0-9_]{8,255}')
 
 def _redact_line(line: str) -> str:
-    """Strip secrets and Cloudsmith tokens from a log line before storing."""
+    """Strip secrets and GitHub tokens from a log line before storing."""
     line = _REDACT_KEY_RE.sub(r'\1[REDACTED]', line)
-    line = _REDACT_URL_RE.sub(r'\1[TOKEN]\3', line)
+    line = _REDACT_GH_RE.sub(r'[GH_TOKEN]', line)
     return line
 
 _update_log: list[str] = []
@@ -348,31 +348,31 @@ def update_options():
 
 @system_bp.route("/api/system/update", methods=["POST"])
 def system_update():
-    """Trigger sudo cycentra-setup.sh --update in a background thread."""
+    """Trigger sudo cycentra-setup.sh --update in a background thread. Requires GH_TOKEN."""
     global _update_running, _update_log
 
     if _update_running:
         return jsonify({"ok": False, "error": "Update already in progress"}), 409
 
     data      = request.get_json() or {}
-    cs_token  = data.get("csToken", "").strip()
-    if not cs_token:
-        return jsonify({"ok": False, "error": "CS_TOKEN is required"}), 400
-    # Basic format guard — tokens are alphanumeric+hyphen, no shell metacharacters
-    if not re.match(r'^[A-Za-z0-9_\-]{8,128}$', cs_token):
-        return jsonify({"ok": False, "error": "Invalid CS_TOKEN format"}), 400
+    gh_token  = data.get("ghToken", "").strip()
+    if not gh_token:
+        return jsonify({"ok": False, "error": "GH_TOKEN is required"}), 400
+    # Basic format guard — GitHub PATs: ghp_... or github_pat_... + fine-grained, no shell metacharacters
+    if not re.match(r'^[A-Za-z0-9_\-]{8,255}$', gh_token):
+        return jsonify({"ok": False, "error": "Invalid GH_TOKEN format"}), 400
 
     setup_script = "/opt/cycentra/cycentra-setup.sh"
     if not os.path.exists(setup_script):
         return jsonify({"ok": False, "error": "Setup script not found on server"}), 404
 
-    _update_log = ["[UPDATE] Starting update…"]
+    _update_log = ["[UPDATE] Starting update\u2026"]
     _update_running = True
 
     def _run():
         global _update_running, _update_log
         try:
-            env = {**os.environ, "CS_TOKEN": cs_token}
+            env = {**os.environ, "GH_TOKEN": gh_token}
             proc = subprocess.Popen(
                 ["sudo", "-E", "bash", setup_script, "--update"],
                 env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -408,17 +408,16 @@ def latest_version_options():
 
 @system_bp.route("/api/system/latest-version", methods=["GET"])
 def system_latest_version():
-    """Query the latest published version from Cloudsmith without downloading the bundle.
+    """Query the latest published release tag from GitHub Releases API.
 
-    Fetches the first 4 KB of cycentra-setup.sh (always on Cloudsmith) and reads
-    the _SCRIPT_VERSION variable that git-push.sh stamps before every release.
+    Uses GET /repos/cycentra/cycentra360/releases/latest — fast, no bundle download.
     Returns {current, latest, up_to_date} for the UI to act on.
     """
-    cs_token = request.args.get("csToken", "").strip()
-    if not cs_token:
-        return jsonify({"error": "csToken is required"}), 400
-    if not re.match(r'^[A-Za-z0-9_\-]{8,128}$', cs_token):
-        return jsonify({"error": "Invalid CS_TOKEN format"}), 400
+    gh_token = request.args.get("ghToken", "").strip()
+    if not gh_token:
+        return jsonify({"error": "ghToken is required"}), 400
+    if not re.match(r'^[A-Za-z0-9_\-]{8,255}$', gh_token):
+        return jsonify({"error": "Invalid GH_TOKEN format"}), 400
 
     # Read currently installed version
     current = "unknown"
@@ -427,30 +426,34 @@ def system_latest_version():
             current = open(vf).read().strip()
             break
 
-    # Fetch only the first 4 KB of setup.sh — enough to reach _SCRIPT_VERSION near the top
-    cs_url = (
-        f"https://dl.cloudsmith.io/{cs_token}/cycentra/cycentra360/raw/versions"
-        f"/latest/cycentra-setup.sh"
-    )
+    # Query GitHub Releases API for the latest tag — no bundle download needed
     latest = None
     try:
         resp = http_requests.get(
-            cs_url, timeout=15,
-            headers={"Range": "bytes=0-4095"},
+            "https://api.github.com/repos/cycentra/cycentra360/releases/latest",
+            headers={
+                "Authorization": f"Bearer {gh_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=15,
         )
-        if resp.status_code in (200, 206):
-            m = re.search(r'^_SCRIPT_VERSION="(v[\d.]+)"', resp.text, re.MULTILINE)
-            if m:
-                latest = m.group(1)
+        if resp.ok:
+            latest = resp.json().get("tag_name")   # e.g. "v1.0.90"
+        elif resp.status_code == 401:
+            return jsonify({
+                "current": current, "latest": None, "up_to_date": False,
+                "error": "Invalid GH_TOKEN (401 Unauthorized)",
+            })
     except Exception:
         pass
 
-    if latest is None:
+    if not latest:
         return jsonify({
             "current": current,
             "latest":  None,
             "up_to_date": False,
-            "error": "Could not read latest version — verify CS_TOKEN and connectivity",
+            "error": "Could not read latest release — verify GH_TOKEN and connectivity",
         })
 
     return jsonify({

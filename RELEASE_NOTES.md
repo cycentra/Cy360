@@ -1,6 +1,25 @@
 # CyCentra 360 — Release Notes
 
----## v1.0.90 — 2026-04-09
+---
+## v1.0.91 — 2026-04-09
+
+### Fix — Run Update migrated from Cloudsmith to GitHub, release notes now in bundle
+
+**`portal/src/pages/settings/SystemSettingsPage.jsx`:**
+- Token field renamed "Cloudsmith Token (CS_TOKEN)" → "GitHub Personal Access Token (GH_TOKEN)", placeholder `ghp_xxxx`
+- Validation error updated: "Enter your GitHub Token (GH_TOKEN) first"
+- `csToken` state/body key/query param renamed to `ghToken` throughout
+
+**`backend/blueprints/system/routes.py`:**
+- `POST /api/system/update`: reads `ghToken`, passes `GH_TOKEN` env var to setup script (was `CS_TOKEN`)
+- `GET /api/system/latest-version`: replaced Cloudsmith partial-download with GitHub Releases API (`GET /repos/cycentra/cycentra360/releases/latest`) — fast, no bundle download, handles 401 explicitly
+- Log redaction updated: Cloudsmith URL pattern replaced with GitHub PAT pattern (`ghp_`/`github_pat_`)
+
+**`.github/workflows/deploy.yml`:**
+- `cp RELEASE_NOTES.md cycentra-release/` added to bundle build — fixes release notes not appearing in System Settings after server update
+
+---
+## v1.0.90 — 2026-04-09
 
 ### Fix + Feature — MISP moved to System Settings, test connection, AI enrichment DB columns
 

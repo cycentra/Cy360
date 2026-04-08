@@ -31,7 +31,7 @@ const ENV_TARGETS = [
 
 function UpdatesTab() {
   const [versionData,  setVersionData]  = useState(null);
-  const [csToken,      setCsToken]      = useState("");
+  const [ghToken,      setGhToken]      = useState("");
   const [updating,     setUpdating]     = useState(false);
   const [updateLog,    setUpdateLog]    = useState([]);
   const [logRunning,   setLogRunning]   = useState(false);
@@ -75,7 +75,7 @@ function UpdatesTab() {
       const r = await fetch(`${API_BASE}/api/system/update`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ csToken: csToken.trim() }),
+        body: JSON.stringify({ ghToken: ghToken.trim() }),
       });
       const d = await r.json();
       if (!d.ok) { setError(d.error || "Update failed"); setUpdating(false); return; }
@@ -87,7 +87,7 @@ function UpdatesTab() {
 
   // Primary handler: version-check first, then update if needed
   const handleUpdate = async () => {
-    if (!csToken.trim()) { setError("Enter your CS_TOKEN first"); return; }
+    if (!ghToken.trim()) { setError("Enter your GitHub Token (GH_TOKEN) first"); return; }
     setError(null); setSuccess(null); setLatestInfo(null);
 
     // Step 1: lightweight version check
@@ -95,7 +95,7 @@ function UpdatesTab() {
     let vd = null;
     try {
       const vr = await fetch(
-        `${API_BASE}/api/system/latest-version?csToken=${encodeURIComponent(csToken.trim())}`,
+        `${API_BASE}/api/system/latest-version?ghToken=${encodeURIComponent(ghToken.trim())}`,
         { credentials: "include" },
       );
       vd = await vr.json();
@@ -150,16 +150,16 @@ function UpdatesTab() {
       <div style={CARD}>
         <div style={LABEL}>Pull Latest Update</div>
         <p style={{ color: "rgba(255,255,255,0.4)", fontSize: 12, marginBottom: 16, lineHeight: 1.6 }}>
-          Checks the latest published version against your installed version before running the update.
+          Checks the latest published version on GitHub Releases against your installed version before running the update.
           Runs <code style={{ color: "#00e5a0" }}>cycentra-setup.sh --update</code> on the server only when a newer version is available.
         </p>
         <div style={{ marginBottom: 12 }}>
-          <div style={LABEL}>Cloudsmith Token (CS_TOKEN)</div>
+          <div style={LABEL}>GitHub Personal Access Token (GH_TOKEN)</div>
           <input
             type="password"
-            placeholder="Enter CS_TOKEN…"
-            value={csToken}
-            onChange={e => { setCsToken(e.target.value); setLatestInfo(null); setSuccess(null); setError(null); }}
+            placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+            value={ghToken}
+            onChange={e => { setGhToken(e.target.value); setLatestInfo(null); setSuccess(null); setError(null); }}
             style={INPUT}
           />
         </div>

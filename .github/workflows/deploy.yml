@@ -107,6 +107,7 @@ jobs:
           mkdir -p cycentra-release/portal
           cp -r portal/dist/ cycentra-release/portal/dist/
           cp cycentra-setup.sh cycentra-release/
+          cp RELEASE_NOTES.md cycentra-release/
           echo "${TAG}" > cycentra-release/VERSION
 
           # Updated manifest for GitHub storage
