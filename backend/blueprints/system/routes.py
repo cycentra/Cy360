@@ -21,6 +21,7 @@ import re
 import json
 import subprocess
 import threading
+from pathlib import Path
 
 import requests as http_requests
 from flask import Blueprint, request, jsonify, make_response
@@ -151,6 +152,40 @@ def ai_test():
 
 # ── AI settings persistence ────────────────────────────────────────────────────
 
+def _sync_misp_to_siem_env(misp: dict) -> None:
+    """Write MISP_ENABLED / MISP_URL / MISP_API_KEY into cysiemstack.env so the
+    correlation engine picks them up without requiring a manual env edit."""
+    env_path = Path(_ENV_FILE_MAP["cysiemstack"])
+    if not env_path.parent.exists():
+        return  # Not installed yet — skip silently
+    try:
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
+    except Exception:
+        lines = []
+
+    updates = {
+        "MISP_ENABLED": "true" if misp.get("enabled") else "false",
+        "MISP_URL":     misp.get("url", ""),
+        "MISP_API_KEY": misp.get("apiKey", ""),
+    }
+    # Update existing keys in-place; append any that are missing
+    result, seen = [], set()
+    for line in lines:
+        key = line.split("=", 1)[0].strip()
+        if key in updates:
+            result.append(f'{key}={updates[key]}')
+            seen.add(key)
+        else:
+            result.append(line)
+    for k, v in updates.items():
+        if k not in seen:
+            result.append(f'{k}={v}')
+    try:
+        env_path.write_text("\n".join(result) + "\n")
+    except Exception:
+        pass  # Non-fatal — server may not have write permission in dev mode
+
+
 @system_bp.route("/api/ai/settings", methods=["OPTIONS"])
 def ai_settings_options():
     return add_cors_headers(make_response('', 204))
@@ -212,6 +247,10 @@ def ai_settings_post():
         existing.update(payload)
         AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         AI_SETTINGS_FILE.write_text(json.dumps(existing, indent=2))
+        # Sync MISP settings into cysiemstack.env so the correlation engine
+        # picks them up without requiring manual env file edits.
+        if "misp" in existing:
+            _sync_misp_to_siem_env(existing["misp"])
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
