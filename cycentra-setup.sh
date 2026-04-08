@@ -19,7 +19,7 @@
 #   apt repos          → PostgreSQL 16, Redis, nginx, certbot, python3
 #   packages.wazuh.com → Wazuh manager + indexer + dashboard
 #   GitHub Releases    → cycentra-release.tar.gz (portal, SQL, config, manifest)
-#   Cloudsmith         → cycentra-backend wheel (Flask + engine combined)
+#   GitHub Packages    → cycentra-backend wheel (Flask + engine combined)
 #   Let's Encrypt      → SSL certificates via certbot
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -73,10 +73,10 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.87"
+_SCRIPT_VERSION="v1.0.88"
 
-# Mask Cloudsmith auth tokens in URLs before printing to output
-_mask_url() { echo "$1" | sed 's|dl\.cloudsmith\.io/[A-Za-z0-9_-]\{8,\}/|dl.cloudsmith.io/[TOKEN]/|g'; }
+# Mask GIT auth tokens in URLs before printing to output
+_mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
 
 step=0
 _LAST_STEP="(initializing)"
@@ -522,20 +522,31 @@ systemctl is-active cysiem-to-redis >/dev/null 2>&1 \
 # ── Download release bundle ───────────────────────────────────────────────────
 step_header "DOWNLOAD RELEASE BUNDLE"
 
-CS_TOKEN="${CS_TOKEN:-}"
-if [[ -z "$CS_TOKEN" ]]; then
-    error "CS_TOKEN is not set. Run with: CS_TOKEN=your_token sudo -E bash cycentra-setup.sh"
+GH_TOKEN="${GH_TOKEN:-}"
+if [[ -z "$GH_TOKEN" ]]; then
+    error "GH_TOKEN is not set. Run with: GH_TOKEN=your_token sudo -E bash cycentra-setup.sh"
     exit 1
 fi
 
+GH_ORG="cycentra"
+GH_REPO="cycentra360"
+GH_BASE="https://maven.pkg.github.com/${GH_ORG}/${GH_REPO}"
 CYCENTRA_VERSION="${CYCENTRA_VERSION:-latest}"
-CS_BASE="https://dl.cloudsmith.io/${CS_TOKEN}/cycentra/cycentra360/raw/versions"
 
 if [[ "$CYCENTRA_VERSION" == "latest" ]]; then
-    CYCENTRA_RELEASE_URL="${CYCENTRA_RELEASE_URL:-${CS_BASE}/latest/cycentra-release.tar.gz}"
-else
-    CYCENTRA_RELEASE_URL="${CYCENTRA_RELEASE_URL:-${CS_BASE}/${CYCENTRA_VERSION}/cycentra-release.tar.gz}"
+    _latest_tag=$(curl -fsSL \
+        -H "Authorization: Bearer ${GH_TOKEN}" \
+        -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/repos/${GH_ORG}/${GH_REPO}/releases/latest" \
+        | jq -r '.tag_name')
+    [[ -z "$_latest_tag" || "$_latest_tag" == "null" ]] && \
+        { error "Could not resolve latest release from GitHub API"; exit 1; }
+    CYCENTRA_VERSION="$_latest_tag"
+    info "Latest release resolved: ${CYCENTRA_VERSION}"
 fi
+
+GH_VER="${CYCENTRA_VERSION#v}"
+CYCENTRA_RELEASE_URL="${CYCENTRA_RELEASE_URL:-${GH_BASE}/cycentra/bundle/${GH_VER}/bundle-${GH_VER}.tar.gz}"
 
 # ── Version pre-check (update mode only) ─────────────────────────────────────
 # The script itself IS the latest published artifact. Compare its embedded
@@ -558,9 +569,11 @@ rm -rf "$BUNDLE_DIR" /tmp/cycentra-release.tar.gz
 
 info "Downloading: $(_mask_url "${CYCENTRA_RELEASE_URL}")"
 if [[ "$CYCENTRA_RELEASE_URL" == http* ]]; then
-    curl -fsSL "$CYCENTRA_RELEASE_URL" -o /tmp/cycentra-release.tar.gz \
+    curl -fsSL \
+        -H "Authorization: Bearer ${GH_TOKEN}" \
+        "$CYCENTRA_RELEASE_URL" -o /tmp/cycentra-release.tar.gz \
         && success "Bundle downloaded" \
-        || { error "Download failed. Check CS_TOKEN and version."; exit 1; }
+        || { error "Download failed. Check GH_TOKEN and version."; exit 1; }
     tar -xzf /tmp/cycentra-release.tar.gz -C /tmp/
 else
     tar -xzf "$CYCENTRA_RELEASE_URL" -C /tmp/
@@ -569,10 +582,10 @@ fi
 MANIFEST="$BUNDLE_DIR/manifest.json"
 [[ ! -f "$MANIFEST" ]] && { error "manifest.json not found in bundle"; exit 1; }
 
-BUNDLE_VERSION=$(jq -r '.version'                             "$MANIFEST")
-PKG_NAME=$(jq     -r '.packages.cycentra_backend.name'        "$MANIFEST")
-PKG_VER=$(jq      -r '.packages.cycentra_backend.version'     "$MANIFEST")
-INDEX_URL=$(jq    -r '.packages.cycentra_backend.index_url'   "$MANIFEST")
+BUNDLE_VERSION=$(jq -r '.version'    "$MANIFEST")
+PKG_VER=$(jq        -r '.ver_number' "$MANIFEST")
+PKG_NAME="cycentra-backend"
+WHEEL_URL="${GH_BASE}/cycentra/backend/${PKG_VER}/cycentra_backend-${PKG_VER}-py3-none-any.whl"
 
 success "Bundle version  : ${BUNDLE_VERSION}"
 info    "Package         : ${PKG_NAME}==${PKG_VER}"
@@ -837,20 +850,26 @@ success "ASM log directories created"
 step_header "INSTALLING CYCENTRA-BACKEND PACKAGE"
 
 info "Installing ${PKG_NAME}==${PKG_VER} into system Python ..."
-info "Index: $(_mask_url "${INDEX_URL}")"
+info "Wheel: $(_mask_url "${WHEEL_URL}")"
 
+# Download wheel from GitHub Packages then install locally.
 # --break-system-packages required on Ubuntu 24.04 (PEP 668 externally-managed env)
 # PIP_ROOT_USER_ACTION=ignore suppresses the "running as root" advisory — intentional here.
+curl -fsSL \
+    -H "Authorization: Bearer ${GH_TOKEN}" \
+    "${WHEEL_URL}" \
+    -o /tmp/cycentra_backend.whl \
+    || { error "Wheel download failed — check GH_TOKEN and version"; exit 1; }
+
 PIP_ROOT_USER_ACTION=ignore pip3 install \
-    --index-url "$INDEX_URL" \
     --extra-index-url https://pypi.org/simple/ \
-    "${PKG_NAME}==${PKG_VER}" \
+    /tmp/cycentra_backend.whl \
     --upgrade \
     --break-system-packages \
     --ignore-installed \
     -q \
     && success "Installed: ${PKG_NAME}==${PKG_VER}" \
-    || { error "Package install failed — check Cloudsmith token in manifest.json"; \
+    || { error "Package install failed — check wheel download and dependencies"; \
          ERRORS+=("pip install failed"); }
 
 # Locate installed files for systemd service definitions

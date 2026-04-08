@@ -1,6 +1,19 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.82 — 2026-04-09
+
+### Fix — Migrated setup script from Cloudsmith to GitHub Packages
+
+`cycentra-setup.sh` fully updated to replace all Cloudsmith references:
+
+- **Token**: `CS_TOKEN` replaced by `GH_TOKEN` (GitHub personal access token) — run with `GH_TOKEN=your_token sudo -E bash cycentra-setup.sh`
+- **Bundle URL**: `dl.cloudsmith.io/.../raw/versions/...` → `maven.pkg.github.com/cycentra/cycentra360/cycentra/bundle/${VER}/bundle-${VER}.tar.gz`; "latest" resolved live via GitHub Releases API
+- **Wheel**: No longer installed via `--index-url` (pip).  Wheel downloaded directly from `maven.pkg.github.com/.../cycentra/backend/${VER}/cycentra_backend-${VER}-py3-none-any.whl` with `Authorization: Bearer ${GH_TOKEN}`, then installed as a local file
+- **Manifest parsing**: Updated for new GitHub manifest schema — reads `version` + `ver_number` directly; `PKG_NAME` is hardcoded to `cycentra-backend` (no longer read from manifest)
+- **Header comment** updated: `Cloudsmith → cycentra-backend wheel` → `GitHub Packages → cycentra-backend wheel`
+
+---
 ## v1.0.81 — 2026-04-09
 
 ### Feature — MISP threat intelligence for ASM + incident list intel badges
