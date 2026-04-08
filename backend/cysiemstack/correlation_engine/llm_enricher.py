@@ -14,12 +14,13 @@ Only triggers for critical/high incidents with ≥3 alerts.
 Falls back gracefully if the LLM service is unavailable.
 """
 from datetime import datetime, timezone
+import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from models import Incident, Alert
 from config import get_settings
-from ai_router import call_llm
+from ai_router import call_llm, _load as _load_ai_settings
 
 log = structlog.get_logger()
 settings = get_settings()
@@ -103,6 +104,61 @@ def _parse_response(raw: str) -> tuple[str, str]:
     return summary, remediation
 
 
+async def _store_to_cymind_memory(incident: Incident, summary: str, remediation: str) -> None:
+    """
+    Fire-and-forget: store a correlated SIEM incident into CyMind episodic memory
+    so analysts can query it via the CyMind chat window.
+    Only runs when CyMind is the configured AI provider (or always if CyMind
+    credentials are present in ai_settings.json).
+    Never blocks or raises — incident processing is never affected.
+    """
+    try:
+        cfg    = _load_ai_settings()
+        fields = cfg.get("fields", {})
+        # Support both cymind-as-primary-provider and cymind fields present in any config
+        base_url = fields.get("baseUrl", "").rstrip("/")
+        api_key  = fields.get("apiKey", "")
+        if not base_url or not api_key:
+            return  # CyMind not configured — skip silently
+
+        src_ips = [str(ip) for ip in (incident.src_ips or [])]
+        severity_raw = (incident.severity or "medium").lower()
+        severity_map = {"critical": "critical", "high": "high", "medium": "medium", "low": "low"}
+        severity = severity_map.get(severity_raw, "medium")
+
+        alert_type = (
+            (incident.correlated_rules or [{}])[0].get("name")
+            or (incident.mitre_tactics or ["unknown"])[0]
+        )
+
+        payload = {
+            "incident_id":    str(incident.id),
+            "alert_type":     alert_type,
+            "severity":       severity,
+            "source_ip":      src_ips[0] if src_ips else "",
+            "destination":    ", ".join(incident.affected_agents or []),
+            "rule_ids":       [str(r.get("rule_id", "")) for r in (incident.correlated_rules or [])],
+            "description":    f"Hosts: {', '.join(incident.affected_agents or [])} | Users: {', '.join(incident.affected_users or [])}",
+            "analyst_notes":  summary,
+            "outcome":        "open",
+            "resolution":     remediation,
+            "ttps":           list(incident.mitre_ids or []),
+            "tags":           ["wazuh", "correlation"] + list(incident.mitre_tactics or []),
+            "timestamp":      incident.first_seen.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base_url}/api/v1/rag/memory/incident",
+                json=payload,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            log.debug("cymind_memory_stored", incident_id=incident.id)
+    except Exception as e:
+        log.debug("cymind_memory_store_skipped", incident_id=getattr(incident, "id", "?"), reason=str(e))
+
+
 async def enrich_incident(db: AsyncSession, incident: Incident) -> dict:
     """Generate LLM narrative for an incident. Returns dict or empty dict."""
     if not settings.llm_enabled:
@@ -124,6 +180,9 @@ async def enrich_incident(db: AsyncSession, incident: Incident) -> dict:
         incident.llm_remediation  = remediation
         incident.llm_generated_at = datetime.now(timezone.utc)
         await db.flush()
+
+        # Store into CyMind episodic memory for analyst chat queries (fire-and-forget)
+        await _store_to_cymind_memory(incident, summary, remediation)
 
         log.info('llm_enrichment_done', incident_id=incident.id)
         return {'summary': summary, 'remediation': remediation}

@@ -2,6 +2,28 @@
 
 ---
 
+## v1.0.79 — 2026-06-13
+
+### Feature — cy360 → CyMind episodic memory integration
+
+Both the ASM enrichment pipeline and the SIEM correlation engine now automatically forward enriched findings into CyMind's episodic memory (`soc-episodic-memory` Qdrant collection) so analysts can query all incidents from the CyMind chat window.
+
+**`cycentra_scan.py` changes:**
+- Added `store_to_cymind_memory(findings, domain, provider)` async helper
+- Called after each successful enrichment provider (CyMind, Gemini, Ollama)
+- Maps ASM finding fields to CyMind `IncidentMemory` schema with `incident_id = ASM-{domain}-{module}-{i}`
+- Tags include `["asm", domain, module, provider]`; outcome set to `"open"`
+- Fire-and-forget — never blocks scan results
+
+**`llm_enricher.py` changes:**
+- Added `_store_to_cymind_memory(incident, summary, remediation)` async helper
+- Called after `db.flush()` in `enrich_incident()` for every enriched correlation engine incident
+- Reads CyMind `baseUrl`/`apiKey` from `/opt/cycentra/ai_settings.json` via `_load_ai_settings()`
+- Maps Wazuh incident fields: MITRE IDs → ttps, correlated rules → rule_ids, mitre_tactics → tags
+- Silently skips if CyMind is not configured; never blocks incident processing
+
+---
+
 ## v1.0.78 — 2026-04-08
 
 ### Feature — ASM scan levels (Standard / Deep / Passive) + subdomain toggle

@@ -332,6 +332,59 @@ async def resolve_ollama_model(desired: str) -> str | None:
     return None
 
 
+async def store_to_cymind_memory(findings: list, domain: str, provider: str) -> None:
+    """
+    Store completed ASM scan findings into CyMind's episodic memory
+    so analysts can query them from the CyMind chat window.
+    Each finding becomes a separate incident record in soc-episodic-memory.
+    Fire-and-forget — never blocks the scan result from being saved.
+    """
+    config = _get_cymind_config()
+    if config is None:
+        return   # CyMind not configured — skip silently
+
+    base_url, api_key, _ = config
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    from datetime import datetime, timezone
+    ts = datetime.now(timezone.utc).isoformat()
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)) as client:
+            for i, finding in enumerate(findings):
+                severity_raw = str(finding.get("severity", "medium")).lower()
+                severity = severity_raw if severity_raw in ("low", "medium", "high", "critical") else "medium"
+                incident_id = f"ASM-{domain}-{finding.get('module', 'UNKNOWN')}-{i}".upper()[:60]
+
+                payload = {
+                    "incident_id":   incident_id,
+                    "alert_type":    finding.get("vulnerability", finding.get("module", "ASM Finding")),
+                    "severity":      severity,
+                    "source_ip":     domain,
+                    "description":   finding.get("description", ""),
+                    "analyst_notes": finding.get("recommendation", ""),
+                    "outcome":       "open",
+                    "resolution":    None,
+                    "tags":          ["asm", domain, finding.get("module", "").lower(), provider.lower()],
+                    "ttps":          [],
+                    "timestamp":     ts,
+                }
+                try:
+                    resp = await client.post(
+                        f"{base_url}/api/v1/rag/memory/incident",
+                        headers=headers,
+                        json=payload,
+                    )
+                    if resp.status_code in (200, 201):
+                        logger.info(f"🧠 [CyMind Memory] Stored: {incident_id}")
+                    else:
+                        logger.warning(f"⚠️ [CyMind Memory] {incident_id} → HTTP {resp.status_code}")
+                except Exception as e:
+                    logger.warning(f"⚠️ [CyMind Memory] Failed to store {incident_id}: {e}")
+    except Exception as e:
+        logger.warning(f"⚠️ [CyMind Memory] store_to_cymind_memory failed: {e}")
+
+
 async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> tuple[List[Dict[str, Any]], str]:
     """Tries CyMind first, then Google Gemini, then local Ollama. Returns (findings, provider_name)."""
 
@@ -370,6 +423,7 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> 
     logger.info(f"[AI Enrichment] Starting...")
     cymind_result = await enrich_with_cymind(context_payload, domain, prompt)
     if cymind_result is not None:
+        await store_to_cymind_memory(cymind_result, domain, "CyMind")
         return cymind_result, "CyMind"
 
     # ── ATTEMPT 2: Google Gemini ──────────────────────────────────────────────
@@ -393,6 +447,7 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> 
             logger.warning(f"⚠️ [AI] Gemini returned non-list ({type(result).__name__}), discarding.")
             raise ValueError("Gemini response is not a JSON list")
         logger.info(f"✅ [AI] Gemini enrichment succeeded for {domain}.")
+        await store_to_cymind_memory(result, domain, "Gemini")
         return result, "Gemini (gemini-2.0-flash)"
 
     except Exception as gemini_err:
@@ -465,6 +520,7 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> 
 
         result = json.loads(full_response)
         logger.info(f"✅ [AI] Ollama ({resolved_model}) enrichment succeeded for {domain} ({chunk_count} chunks).")
+        await store_to_cymind_memory(result, domain, f"Ollama ({resolved_model})")
         return result, f"Ollama ({resolved_model})"
 
     except json.JSONDecodeError as e:
