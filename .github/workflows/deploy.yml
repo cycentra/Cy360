@@ -6,8 +6,13 @@ on:
     tags: ['v*.*.*']
   workflow_dispatch:
 
-jobs:
+# Prevents the "5 instances" issue. 
+# Only one run per commit (SHA) will execute at a time.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: true
 
+jobs:
   build-portal:
     runs-on: ubuntu-latest
     steps:
@@ -66,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write  # Critical for pushing to GitHub Packages
+      packages: write # Required for GitHub Packages
     steps:
       - uses: actions/checkout@v4
 
@@ -101,19 +106,16 @@ jobs:
           
           mkdir -p cycentra-release/portal
           cp -r portal/dist/ cycentra-release/portal/dist/
-          
-          # Copy migrations and configs if they exist
-          cp -r backend/cysiemstack/postgres/init.sql cycentra-release/db/ 2>/dev/null || true
           cp cycentra-setup.sh cycentra-release/
           echo "${TAG}" > cycentra-release/VERSION
 
-          # Updated manifest to reflect GitHub storage
+          # Updated manifest for GitHub storage
           printf '{\n  "version": "%s",\n  "ver_number": "%s",\n  "provider": "github-packages"\n}\n' \
             "$TAG" "$VER" > cycentra-release/manifest.json
 
           tar -czf cycentra-release.tar.gz cycentra-release/
 
-      # ── Publish to GitHub Packages (Maven Registry Workaround) ──────────
+      # ── Publish to GitHub Packages (Maven Workaround - No "com.") ────────
       - name: Publish files to GitHub Packages
         if: steps.version.outputs.is_release == 'true'
         run: |
@@ -121,24 +123,25 @@ jobs:
           REPO="cycentra360"
           VER=${{ steps.version.outputs.ver }}
           
-          echo "Uploading setup script to GitHub Packages..."
+          # We use "cycentra" as the group path instead of "com/cycentra"
+          echo "Uploading setup script..."
           curl -X PUT -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                -T cycentra-setup.sh \
                "https://maven.pkg.github.com/$OWNER/$REPO/cycentra/setup/$VER/setup-$VER.sh"
 
-          echo "Uploading release bundle to GitHub Packages..."
+          echo "Uploading release bundle..."
           curl -X PUT -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                -T cycentra-release.tar.gz \
                "https://maven.pkg.github.com/$OWNER/$REPO/cycentra/bundle/$VER/bundle-$VER.tar.gz"
 
-          echo "Uploading wheel to GitHub Packages..."
+          echo "Uploading wheel..."
           for wheel in dist/*.whl; do
             curl -X PUT -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                  -T "$wheel" \
                  "https://maven.pkg.github.com/$OWNER/$REPO/cycentra/backend/$VER/$(basename $wheel)"
           done
 
-      # ── Create GitHub Release (Standard UI) ────────────────────────────────
+      # ── Create GitHub Release ──────────────────────────────────────────
       - name: Create GitHub Release
         if: steps.version.outputs.is_release == 'true'
         uses: softprops/action-gh-release@v2
@@ -149,7 +152,7 @@ jobs:
             ## CyCentra 360 Release ${{ steps.version.outputs.tag }}
             
             ### Installation
-            Use your GitHub Personal Access Token (PAT) to download:
+            Download using your GitHub token:
             
             ```bash
             curl -L -H "Authorization: Bearer YOUR_TOKEN" \
