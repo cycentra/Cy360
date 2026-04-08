@@ -124,18 +124,18 @@ jobs:
           echo "Uploading setup script to GitHub Packages..."
           curl -X PUT -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                -T cycentra-setup.sh \
-               "https://maven.pkg.github.com/$OWNER/$REPO/com/cycentra/setup/$VER/setup-$VER.sh"
+               "https://maven.pkg.github.com/$OWNER/$REPO/cycentra/setup/$VER/setup-$VER.sh"
 
           echo "Uploading release bundle to GitHub Packages..."
           curl -X PUT -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                -T cycentra-release.tar.gz \
-               "https://maven.pkg.github.com/$OWNER/$REPO/com/cycentra/bundle/$VER/bundle-$VER.tar.gz"
+               "https://maven.pkg.github.com/$OWNER/$REPO/cycentra/bundle/$VER/bundle-$VER.tar.gz"
 
           echo "Uploading wheel to GitHub Packages..."
           for wheel in dist/*.whl; do
             curl -X PUT -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                  -T "$wheel" \
-                 "https://maven.pkg.github.com/$OWNER/$REPO/com/cycentra/backend/$VER/$(basename $wheel)"
+                 "https://maven.pkg.github.com/$OWNER/$REPO/cycentra/backend/$VER/$(basename $wheel)"
           done
 
       # ── Create GitHub Release (Standard UI) ────────────────────────────────
@@ -154,7 +154,7 @@ jobs:
             ```bash
             curl -L -H "Authorization: Bearer YOUR_TOKEN" \
                  -o cycentra-setup.sh \
-                 "[https://maven.pkg.github.com/cycentra/cycentra360/com/cycentra/setup/$](https://maven.pkg.github.com/cycentra/cycentra360/com/cycentra/setup/$){{ steps.version.outputs.ver }}/setup-${{ steps.version.outputs.ver }}.sh"
+                 "[https://maven.pkg.github.com/cycentra/cycentra360/cycentra/setup/$](https://maven.pkg.github.com/cycentra/cycentra360/cycentra/setup/$){{ steps.version.outputs.ver }}/setup-${{ steps.version.outputs.ver }}.sh"
             ```
           files: |
             cycentra-release.tar.gz
