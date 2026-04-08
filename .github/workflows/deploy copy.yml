@@ -1,0 +1,227 @@
+name: Build & Publish — CyCentra 360
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+jobs:
+
+  build-portal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build React SPA
+        run: cd portal && npm ci && npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portal-dist
+          path: portal/dist/
+          retention-days: 1
+
+  build-wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VER="${TAG#v}"
+          else
+            VER="0.0.${{ github.run_number }}"
+          fi
+          echo "ver=${VER}" >> $GITHUB_OUTPUT
+
+      # Stamp the version from the git tag into pyproject.toml before building.
+      # This ensures the wheel version always matches the tag — no manual edits needed.
+      - name: Stamp version into pyproject.toml
+        run: |
+          VER=${{ steps.version.outputs.ver }}
+          sed -i "s/^version = .*/version = \"${VER}\"/" backend/pyproject.toml
+          echo "Stamped version: ${VER}"
+          grep "^version" backend/pyproject.toml
+
+      - name: Install build tool
+        run: pip install build==1.2.1 -q
+
+      - name: Build cycentra-backend wheel
+        run: |
+          cd backend
+          python -m build --wheel --outdir ../dist/
+          echo "Wheel built: $(ls ../dist/*.whl)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel
+          path: dist/*.whl
+          retention-days: 1
+
+  publish:
+    needs: [build-portal, build-wheel]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: portal-dist
+          path: portal/dist/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-wheel
+          path: dist/
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "tag=${TAG}"      >> $GITHUB_OUTPUT
+            echo "ver=${TAG#v}"    >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "tag=dev-${{ github.run_number }}" >> $GITHUB_OUTPUT
+            echo "ver=0.0.${{ github.run_number }}"  >> $GITHUB_OUTPUT
+            echo "is_release=false"                  >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build customer release bundle
+        env:
+          CS_TOKEN: ${{ secrets.CLOUDSMITH_ENTITLEMENT_TOKEN }}
+        run: |
+          TAG=${{ steps.version.outputs.tag }}
+          VER=${{ steps.version.outputs.ver }}
+          SHA=${{ github.sha }}
+          BUILD=${{ github.run_number }}
+
+          mkdir -p cycentra-release/portal cycentra-release/db/migrations
+          mkdir -p cycentra-release/CYSIEM-Config cycentra-release/scripts cycentra-release/assets
+
+          cp -r portal/dist/ cycentra-release/portal/dist/
+
+          [[ -f backend/cysiemstack/postgres/init.sql ]] && \
+            cp backend/cysiemstack/postgres/init.sql cycentra-release/db/
+          [[ -d backend/cysiemstack/postgres/migrations ]] && \
+            cp -r backend/cysiemstack/postgres/migrations/. cycentra-release/db/migrations/
+          [[ -d CYSIEM-Config ]] && cp -r CYSIEM-Config/. cycentra-release/CYSIEM-Config/ || true
+          [[ -d scripts ]]       && cp -r scripts/. cycentra-release/scripts/ || true
+          [[ -d assets  ]]       && cp -r assets/.  cycentra-release/assets/  || true
+
+          cp cycentra-setup.sh cycentra-release/
+          chmod +x cycentra-release/cycentra-setup.sh
+          cp RELEASE_NOTES.md cycentra-release/
+          echo "${TAG}" > cycentra-release/VERSION
+
+          CS_PY_INDEX="https://dl.cloudsmith.io/${CS_TOKEN}/cycentra/cycentra360/python/simple/"
+          CS_RAW_BASE="https://dl.cloudsmith.io/${CS_TOKEN}/cycentra/cycentra360/raw/versions"
+
+          printf '{\n  "version": "%s",\n  "ver_number": "%s",\n  "commit": "%s",\n  "build_number": "%s",\n  "packages": {\n    "cycentra_backend": {\n      "name": "cycentra-backend",\n      "version": "%s",\n      "index_url": "%s"\n    }\n  },\n  "raw_base": "%s"\n}\n' \
+            "$TAG" "$VER" "$SHA" "$BUILD" "$VER" "$CS_PY_INDEX" "$CS_RAW_BASE" \
+            > cycentra-release/manifest.json
+
+          echo "=== manifest.json ===" && cat cycentra-release/manifest.json
+          tar -czf cycentra-release.tar.gz cycentra-release/
+          ls -lh cycentra-release.tar.gz
+
+      # ── Publish Python wheel ────────────────────────────────────────────────
+      # --republish allows overwriting the same version if re-tagging.
+      # Cloudsmith deduplicates by content hash so identical files are safe.
+      - name: Publish Python wheel to Cloudsmith
+        if: steps.version.outputs.is_release == 'true'
+        env:
+          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+        run: |
+          pip install cloudsmith-cli -q
+          VER=${{ steps.version.outputs.ver }}
+          for wheel in dist/*.whl; do
+            echo "Pushing wheel: $wheel (version ${VER})"
+            cloudsmith push python cycentra/cycentra360 "$wheel" \
+              --api-key "$CLOUDSMITH_API_KEY" \
+              --republish \
+              || { echo "Push failed for $wheel"; exit 1; }
+          done
+          echo "Wheel published successfully"
+
+      # ── Publish raw files ───────────────────────────────────────────────────
+      # Both setup.sh and the bundle are pushed with explicit version from the tag.
+      # --republish overwrites if the same version already exists on Cloudsmith.
+      # This means re-tagging (git tag -d vX; git tag vX; git push) always works.
+      - name: Publish raw files to Cloudsmith
+        if: steps.version.outputs.is_release == 'true'
+        env:
+          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+        run: |
+          pip install cloudsmith-cli -q
+          VER=${{ steps.version.outputs.ver }}
+
+          echo "Pushing cycentra-setup.sh version ${VER} ..."
+          cloudsmith push raw cycentra/cycentra360 cycentra-setup.sh \
+            --name "cycentra-setup.sh" \
+            --version "${VER}" \
+            --api-key "$CLOUDSMITH_API_KEY" \
+            --republish
+
+          echo "Pushing cycentra-release.tar.gz version ${VER} ..."
+          cloudsmith push raw cycentra/cycentra360 cycentra-release.tar.gz \
+            --name "cycentra-release.tar.gz" \
+            --version "${VER}" \
+            --api-key "$CLOUDSMITH_API_KEY" \
+            --republish
+
+          echo "All raw files published — version ${VER}"
+
+          # Print the exact download URLs for this release
+          echo ""
+          echo "=== Customer download URLs ==="
+          echo "setup.sh : https://dl.cloudsmith.io/TOKEN/cycentra/cycentra360/raw/versions/${VER}/cycentra-setup.sh"
+          echo "bundle   : https://dl.cloudsmith.io/TOKEN/cycentra/cycentra360/raw/versions/${VER}/cycentra-release.tar.gz"
+          echo "latest   : https://dl.cloudsmith.io/TOKEN/cycentra/cycentra360/raw/versions/latest/cycentra-setup.sh"
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.is_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "CyCentra 360 ${{ steps.version.outputs.tag }}"
+          draft: false
+          prerelease: false
+          body: |
+            ## CyCentra 360 ${{ steps.version.outputs.tag }}
+
+            **Commit:** `${{ github.sha }}`
+            **Package version:** `${{ steps.version.outputs.ver }}`
+
+            ### Customer install (replace TOKEN with entitlement token)
+
+                curl -1sLf "https://dl.cloudsmith.io/TOKEN/cycentra/cycentra360/raw/versions/${{ steps.version.outputs.ver }}/cycentra-setup.sh" -o cycentra-setup.sh
+                CS_TOKEN=TOKEN sudo -E bash cycentra-setup.sh
+
+            ### Update existing server
+
+                CS_TOKEN=TOKEN sudo -E bash cycentra-setup.sh --update
+
+            **Package:** `cycentra-backend==${{ steps.version.outputs.ver }}`
+          files: |
+            cycentra-release.tar.gz
+            cycentra-setup.sh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
