@@ -156,36 +156,6 @@ export function AISettingsPage({ aiConfig, onSave }) {
             </div>
           </div>
 
-          {/* MISP threat intelligence integration */}
-          <div style={{ background:"rgba(255,59,59,0.04)", border:"1px solid rgba(255,59,59,0.2)", borderRadius:6, padding:"18px 20px", marginTop:16 }}>
-            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
-              <span style={{ fontSize:14 }}>🔴</span>
-              <div style={{ color:"rgba(255,100,100,0.9)", fontSize:10, letterSpacing:"1.5px", textTransform:"uppercase", fontFamily:"monospace" }}>MISP Threat Intelligence</div>
-            </div>
-            <div style={{ color:"rgba(255,255,255,0.3)", fontSize:11, marginBottom:14 }}>If enabled, discovered IPs from ASM scans are checked against your MISP instance before AI enrichment. IOC matches are attached to findings and included in the AI narrative.</div>
-            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
-              <label style={{ color:"rgba(255,255,255,0.4)", fontSize:11, fontFamily:"monospace" }}>Enable MISP</label>
-              <input type="checkbox" checked={!!misp.enabled}
-                onChange={e => setMisp(prev => ({ ...prev, enabled: e.target.checked }))}
-                style={{ accentColor:"#ff3b3b", width:16, height:16 }} />
-            </div>
-            {[{ key:"url",    label:"MISP Server URL",    placeholder:"https://cymisp.yourdomain.com", type:"text" },
-              { key:"apiKey", label:"MISP API Key",        placeholder:"xxxxxxxxxxxxxxxxxxxxxxxx",           type:"password" }].map(f => (
-              <div key={f.key} style={{ marginBottom:12 }}>
-                <label style={{ color:"rgba(255,255,255,0.4)", fontSize:10, fontFamily:"monospace", letterSpacing:"1px", display:"block", marginBottom:5 }}>{f.label}</label>
-                <input type={f.type} value={misp[f.key] || ""}
-                  onChange={e => setMisp(prev => ({ ...prev, [f.key]: e.target.value }))}
-                  placeholder={f.placeholder}
-                  style={{ width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,59,59,0.25)", color:"white", padding:"9px 12px", borderRadius:4, fontSize:12, fontFamily:"monospace", outline:"none", boxSizing:"border-box" }}/>
-              </div>
-            ))}
-            <div style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace" }}>
-              {misp.enabled && misp.url && misp.apiKey
-                ? <span style={{ color:"#ff6b6b" }}>✓ Configured — IOC lookups will run before AI enrichment on Deep scans</span>
-                : misp.enabled ? <span style={{ color:"#ff8c00" }}>⚠ URL and API Key required</span>
-                : "MISP disabled — enable above to activate IOC enrichment"}
-            </div>
-          </div>
         </div>
 
         {/* Prompt configuration */}
