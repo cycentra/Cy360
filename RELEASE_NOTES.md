@@ -1,7 +1,22 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.80 — 2026-04-08
 
+### Fix — CyMind episodic memory works with any active AI provider
+
+Previously, ASM and SIEM incidents were only stored in CyMind memory when CyMind was the active LLM provider. If Gemini, Anthropic, Ollama, or DeepSeek was selected, the `store_to_cymind_memory` calls silently skipped because they tried to extract CyMind credentials from the active provider's `fields` block.
+
+**Changes:**
+- `ai_settings.json` gains a dedicated `cymind_memory: { baseUrl, apiKey }` block, stored independently of the active `provider`/`fields` keys
+- `backend/blueprints/system/routes.py`: `cymind_memory` added to allowed POST keys; `apiKey` within it is masked in GET responses; key-preservation guard also applies to `cymind_memory.apiKey`
+- `portal/src/pages/ai/AISettingsPage.jsx`: New "CyMind Episodic Memory" card below Module URL Overrides — purple-themed, shows configured/not-configured status inline. State saved as `cymind_memory` key alongside `provider`/`fields`/`prompts`
+- `backend/cy_asm/cycentra_scan.py`: New `_get_cymind_memory_config()` helper — checks `cymind_memory` block first, falls back to active cymind provider fields. `store_to_cymind_memory()` uses this instead of `_get_cymind_config()`
+- `backend/cysiemstack/correlation_engine/llm_enricher.py`: `_store_to_cymind_memory()` uses same priority logic — `cymind_memory` block first, then falls back to active provider fields only when `provider == "cymind"`
+
+**Result:** Set CyMind URL + API key once in the new Memory Integration card — incidents flow into CyMind memory regardless of whether the active LLM is Gemini, Anthropic, Ollama, or CyMind itself.
+
+---
 ## v1.0.79 — 2026-06-13
 
 ### Feature — cy360 → CyMind episodic memory integration

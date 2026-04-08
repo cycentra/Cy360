@@ -13,6 +13,7 @@ export function AISettingsPage({ aiConfig, onSave }) {
   const [provider,       setProvider]    = useState(aiConfig?.provider || "local");
   const [fields,         setFields]      = useState(aiConfig?.fields   || {});
   const [prompts,        setPrompts]     = useState(aiConfig?.prompts  || DEFAULT_PROMPTS);
+  const [cymindMemory,   setCymindMemory] = useState(aiConfig?.cymind_memory || {});
   const [activePromptTab,setActivePTab]  = useState("system");
   const [testStatus,     setTestStatus]  = useState(null);   // null | "testing" | "ok" | "fail"
   const [testMsg,        setTestMsg]     = useState("");
@@ -50,7 +51,7 @@ export function AISettingsPage({ aiConfig, onSave }) {
   };
 
   const handleSave = () => {
-    onSave({ provider, fields, prompts });
+    onSave({ provider, fields, prompts, cymind_memory: cymindMemory });
     try { Object.entries(moduleUrls).forEach(([id, url]) => localStorage.setItem(`cycentra_url_${id}`, url)); } catch {}
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -119,7 +120,7 @@ export function AISettingsPage({ aiConfig, onSave }) {
           </div>
 
           {/* Module URL overrides */}
-          <div style={{ background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:6, padding:"18px 20px" }}>
+          <div style={{ background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:6, padding:"18px 20px", marginBottom:16 }}>
             <div style={{ color:"rgba(255,255,255,0.35)", fontSize:10, letterSpacing:"1.5px", textTransform:"uppercase", fontFamily:"monospace", marginBottom:12 }}>Module URL Overrides</div>
             {[{ id:"cyiris",label:"CyIRIS URL" },{ id:"cysoar",label:"CySOAR URL" },{ id:"cysiem",label:"CySIEM URL" }].map(({ id, label }) => (
               <div key={id} style={{ display:"flex", gap:8, alignItems:"center", marginBottom:10 }}>
@@ -129,6 +130,30 @@ export function AISettingsPage({ aiConfig, onSave }) {
                   style={{ flex:1, background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)", color:"white", padding:"8px 12px", borderRadius:4, fontSize:12, fontFamily:"monospace", outline:"none" }}/>
               </div>
             ))}
+          </div>
+
+          {/* CyMind episodic memory — always-on, independent of active LLM provider */}
+          <div style={{ background:"rgba(168,85,247,0.04)", border:"1px solid rgba(168,85,247,0.2)", borderRadius:6, padding:"18px 20px" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+              <span style={{ fontSize:14 }}>🧠</span>
+              <div style={{ color:"rgba(168,85,247,0.9)", fontSize:10, letterSpacing:"1.5px", textTransform:"uppercase", fontFamily:"monospace" }}>CyMind Episodic Memory</div>
+            </div>
+            <div style={{ color:"rgba(255,255,255,0.3)", fontSize:11, marginBottom:14 }}>Store ASM and correlation engine incidents into CyMind for analyst chat queries. Works regardless of the active AI provider above.</div>
+            {[{ key:"baseUrl", label:"CyMind Server URL", placeholder:"http://172.16.0.2:8080", type:"text" },
+              { key:"apiKey",  label:"API Key (pak_...)", placeholder:"pak_xxxxxxxxxxxxxxxxxxxx", type:"password" }].map(f => (
+              <div key={f.key} style={{ marginBottom:12 }}>
+                <label style={{ color:"rgba(255,255,255,0.4)", fontSize:10, fontFamily:"monospace", letterSpacing:"1px", display:"block", marginBottom:5 }}>{f.label}</label>
+                <input type={f.type} value={cymindMemory[f.key] || ""}
+                  onChange={e => setCymindMemory(prev => ({ ...prev, [f.key]: e.target.value }))}
+                  placeholder={f.placeholder}
+                  style={{ width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(168,85,247,0.25)", color:"white", padding:"9px 12px", borderRadius:4, fontSize:12, fontFamily:"monospace", outline:"none", boxSizing:"border-box" }}/>
+              </div>
+            ))}
+            <div style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace" }}>
+              {cymindMemory.baseUrl && cymindMemory.apiKey
+                ? <span style={{ color:"#a855f7" }}>✓ Configured — incidents will be indexed automatically</span>
+                : "Leave blank to disable episodic memory integration"}
+            </div>
           </div>
         </div>
 

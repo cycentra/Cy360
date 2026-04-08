@@ -332,6 +332,25 @@ async def resolve_ollama_model(desired: str) -> str | None:
     return None
 
 
+def _get_cymind_memory_config() -> tuple[str, str] | None:
+    """
+    Return (base_url, api_key) for CyMind episodic memory storage,
+    regardless of which LLM provider is currently active.
+    Priority: dedicated 'cymind_memory' block → active cymind provider fields.
+    """
+    settings = _load_ai_settings()
+    cm = settings.get("cymind_memory") or {}
+    url = cm.get("baseUrl", "").strip()
+    key = cm.get("apiKey",  "").strip()
+    if url and key:
+        return url.rstrip("/"), key
+    # Fall back: only if CyMind is the active provider
+    config = _get_cymind_config()
+    if config:
+        return config[0], config[1]
+    return None
+
+
 async def store_to_cymind_memory(findings: list, domain: str, provider: str) -> None:
     """
     Store completed ASM scan findings into CyMind's episodic memory
@@ -339,11 +358,11 @@ async def store_to_cymind_memory(findings: list, domain: str, provider: str) -> 
     Each finding becomes a separate incident record in soc-episodic-memory.
     Fire-and-forget — never blocks the scan result from being saved.
     """
-    config = _get_cymind_config()
+    config = _get_cymind_memory_config()
     if config is None:
-        return   # CyMind not configured — skip silently
+        return   # CyMind memory not configured — skip silently
 
-    base_url, api_key, _ = config
+    base_url, api_key = config
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     from datetime import datetime, timezone

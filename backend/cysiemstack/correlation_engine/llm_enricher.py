@@ -113,13 +113,21 @@ async def _store_to_cymind_memory(incident: Incident, summary: str, remediation:
     Never blocks or raises — incident processing is never affected.
     """
     try:
-        cfg    = _load_ai_settings()
-        fields = cfg.get("fields", {})
-        # Support both cymind-as-primary-provider and cymind fields present in any config
-        base_url = fields.get("baseUrl", "").rstrip("/")
-        api_key  = fields.get("apiKey", "")
-        if not base_url or not api_key:
+        cfg = _load_ai_settings()
+        # Prefer the dedicated cymind_memory block (set independently of the active LLM provider).
+        # Fall back to active provider fields only when provider == 'cymind'.
+        cm = cfg.get("cymind_memory") or {}
+        if cm.get("baseUrl") and cm.get("apiKey"):
+            base_url = cm["baseUrl"].rstrip("/")
+            api_key  = cm["apiKey"]
+        elif cfg.get("provider") == "cymind":
+            fields   = cfg.get("fields", {})
+            base_url = fields.get("baseUrl", "").rstrip("/")
+            api_key  = fields.get("apiKey", "")
+        else:
             return  # CyMind not configured — skip silently
+        if not base_url or not api_key:
+            return
 
         src_ips = [str(ip) for ip in (incident.src_ips or [])]
         severity_raw = (incident.severity or "medium").lower()

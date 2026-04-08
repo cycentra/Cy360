@@ -161,9 +161,11 @@ def ai_settings_get():
     try:
         if AI_SETTINGS_FILE.exists():
             data = json.loads(AI_SETTINGS_FILE.read_text())
-            # Strip stored API key from response — return masked version
+            # Strip stored API keys from response — return masked versions
             if "fields" in data and "apiKey" in data["fields"] and data["fields"]["apiKey"]:
                 data["fields"]["apiKey"] = "••••••••"
+            if "cymind_memory" in data and data["cymind_memory"].get("apiKey"):
+                data["cymind_memory"]["apiKey"] = "••••••••"
             return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -174,7 +176,7 @@ def ai_settings_get():
 def ai_settings_post():
     data = request.get_json() or {}
     # Only accept known top-level keys to prevent arbitrary data storage
-    allowed = {"provider", "fields", "prompts"}
+    allowed = {"provider", "fields", "prompts", "cymind_memory"}
     payload = {k: v for k, v in data.items() if k in allowed}
     if not payload:
         return jsonify({"error": "No valid settings provided"}), 400
@@ -185,14 +187,20 @@ def ai_settings_post():
             existing = json.loads(AI_SETTINGS_FILE.read_text())
         # Guard: never overwrite a stored API key with an empty string or the
         # masked placeholder "••••••••" that the GET endpoint returns.
+        _MASK = "\u2022" * 8  # ••••••••
         incoming_fields = payload.get("fields", {})
         incoming_key    = incoming_fields.get("apiKey", "")
-        _MASK = "\u2022" * 8  # ••••••••
         if not incoming_key or incoming_key == _MASK:
             # Preserve whatever key is already on disk
             existing_key = existing.get("fields", {}).get("apiKey", "")
             if existing_key:
                 payload.setdefault("fields", {})["apiKey"] = existing_key
+        # Same guard for the separate cymind_memory block
+        incoming_cm_key = payload.get("cymind_memory", {}).get("apiKey", "")
+        if not incoming_cm_key or incoming_cm_key == _MASK:
+            existing_cm_key = existing.get("cymind_memory", {}).get("apiKey", "")
+            if existing_cm_key:
+                payload.setdefault("cymind_memory", {})["apiKey"] = existing_cm_key
         existing.update(payload)
         AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         AI_SETTINGS_FILE.write_text(json.dumps(existing, indent=2))
