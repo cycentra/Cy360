@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.92"
+_SCRIPT_VERSION="v1.0.93"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -549,18 +549,18 @@ GH_VER="${CYCENTRA_VERSION#v}"
 CYCENTRA_RELEASE_URL="${CYCENTRA_RELEASE_URL:-${GH_BASE}/cycentra/bundle/${GH_VER}/bundle-${GH_VER}.tar.gz}"
 
 # ── Version pre-check (update mode only) ─────────────────────────────────────
-# The script itself IS the latest published artifact. Compare its embedded
-# _SCRIPT_VERSION against the currently installed version on this server.
-# If they match, skip the full update unless FORCE_UPDATE=1 is set.
+# Compare the installed version against the latest published version resolved
+# from GitHub Releases API (CYCENTRA_VERSION).  Using _SCRIPT_VERSION here
+# would always match because the running script IS the installed one.
 if [[ "$MODE" == "update" && "${FORCE_UPDATE:-0}" != "1" ]]; then
     _installed_ver=$(cat /opt/cycentra/version 2>/dev/null | tr -d '[:space:]' || echo "")
-    if [[ -n "$_installed_ver" && "$_installed_ver" == "$_SCRIPT_VERSION" ]]; then
+    if [[ -n "$_installed_ver" && "$_installed_ver" == "$CYCENTRA_VERSION" ]]; then
         echo ""
-        success "Already at the latest version: ${_SCRIPT_VERSION}"
+        success "Already at the latest version: ${CYCENTRA_VERSION}"
         info    "Nothing to update. Run with FORCE_UPDATE=1 to re-apply the current version."
         exit 0
     elif [[ -n "$_installed_ver" ]]; then
-        info "Update available: ${_installed_ver} → ${_SCRIPT_VERSION}"
+        info "Update available: ${_installed_ver} → ${CYCENTRA_VERSION}"
     fi
 fi
 
