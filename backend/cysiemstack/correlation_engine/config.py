@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     wazuh_api_password: str = ""
 
     # MISP
+    # misp_mode is written by _sync_misp_to_siem_env() in system/routes.py whenever
+    # the portal saves MISP settings.  Values: "disabled" | "cloud" | "local"
+    misp_mode: str = "disabled"
     misp_url: str = "http://127.0.0.1:8200"
     misp_api_key: str = ""
     misp_enabled: bool = False

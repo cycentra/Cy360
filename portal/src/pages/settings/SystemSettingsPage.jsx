@@ -400,9 +400,23 @@ function MispTab() {
   useEffect(() => {
     fetch(`${API_BASE}/api/ai/settings`, { credentials: "include" })
       .then(r => r.json())
-      .then(d => { setMisp(d.misp || {}); setLoading(false); })
+      .then(d => {
+        const raw = d.misp || {};
+        // Backward compat: if old format had enabled=true but no mode, map to "local"
+        if (!raw.mode) raw.mode = raw.enabled ? "local" : "disabled";
+        setMisp(raw);
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
   }, []);
+
+  const mode = misp.mode || "disabled";
+
+  const setMode = (m) => {
+    setMisp(prev => ({ ...prev, mode: m }));
+    setTestStatus(null);
+    setTestMsg("");
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -437,79 +451,135 @@ function MispTab() {
 
   if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
 
-  const mispConfigured = misp.enabled && misp.url && misp.apiKey;
+  // Mode selector config
+  const MODES = [
+    { id: "disabled", label: "Disabled",      desc: "No MISP IOC lookups — all enrichment bypassed", icon: "⭕", color: "rgba(255,255,255,0.3)" },
+    { id: "cloud",    label: "Cloud CyMISP",  desc: "Connect to Cycentra-managed MISP at misp.cycentra.com", icon: "☁️", color: "#4d9eff" },
+    { id: "local",    label: "Local CyMISP",  desc: "Your self-hosted MISP instance — configure URL & key below", icon: "🏠", color: "#ff6b6b" },
+  ];
 
   return (
-    <div style={{ maxWidth: 620 }}>
-      {mispConfigured && (
-        <div style={{ display:"inline-flex", alignItems:"center", gap:6, background:"rgba(255,59,59,0.06)", border:"1px solid rgba(255,59,59,0.25)", borderRadius:4, padding:"4px 12px", marginBottom:16, fontSize:10, fontFamily:"monospace", color:"#ff6b6b" }}>
-          ✓ MISP previously configured and active
-        </div>
-      )}
-      <div style={{ background: "rgba(255,59,59,0.04)", border: "1px solid rgba(255,59,59,0.2)", borderRadius: 6, padding: "22px 24px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-          <span style={{ fontSize: 18 }}>🔴</span>
-          <div style={{ color: "rgba(255,100,100,0.9)", fontSize: 10, letterSpacing: "1.5px",
-            textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>MISP Threat Intelligence</div>
-        </div>
-        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, marginBottom: 20, lineHeight: 1.6 }}>
-          Connect to your MISP instance. Discovered IPs from ASM Deep scans are checked
-          against MISP <strong style={{ color: "rgba(255,255,255,0.5)" }}>before AI enrichment</strong> —
-          IOC matches are attached to findings and included in the AI narrative.
-        </div>
-
-        {/* Enable toggle */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
-          <input type="checkbox" id="misp-enabled" checked={!!misp.enabled}
-            onChange={e => setMisp(prev => ({ ...prev, enabled: e.target.checked }))}
-            style={{ accentColor: "#ff4444", width: 16, height: 16, cursor: "pointer" }} />
-          <label htmlFor="misp-enabled" style={{ color: "rgba(255,255,255,0.65)", fontSize: 12,
-            fontFamily: "monospace", cursor: "pointer" }}>
-            Enable MISP IOC enrichment on Deep scans
-          </label>
-        </div>
-
-        {/* URL */}
-        <div style={{ marginBottom: 14 }}>
-          <div style={LABEL}>MISP Server URL</div>
-          <input type="text" value={misp.url || ""}
-            onChange={e => setMisp(prev => ({ ...prev, url: e.target.value }))}
-            placeholder="https://cymisp.yourdomain.com"
-            style={INPUT} />
-        </div>
-
-        {/* API Key */}
-        <div style={{ marginBottom: 22 }}>
-          <div style={LABEL}>MISP API Key</div>
-          <input type="password" value={misp.apiKey || ""}
-            onChange={e => setMisp(prev => ({ ...prev, apiKey: e.target.value }))}
-            placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-            style={INPUT} />
-        </div>
-
-        {/* Test Connection */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-          <button onClick={testConnection} disabled={testStatus === "testing"}
-            style={{ background: "rgba(255,59,59,0.12)", color: "#ff6b6b",
-              border: "1px solid rgba(255,59,59,0.35)", borderRadius: 4,
-              padding: "8px 18px", fontFamily: "monospace", fontSize: 11,
-              fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px",
-              opacity: testStatus === "testing" ? 0.6 : 1 }}>
-            {testStatus === "testing" ? "Testing…" : "Test Connection"}
-          </button>
-          {testStatus === "ok"   && <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ {testMsg}</span>}
-          {testStatus === "fail" && <span style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace" }}>✗ {testMsg}</span>}
-        </div>
-
-        {/* Status summary */}
-        <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.25)" }}>
-          {misp.enabled && misp.url && misp.apiKey
-            ? <span style={{ color: "#ff6b6b" }}>✓ Configured — IOC lookups active on Deep scans</span>
-            : misp.enabled
-              ? <span style={{ color: "#ff8c00" }}>⚠ URL and API Key required to activate</span>
-              : "Disabled — enable above to activate IOC enrichment"}
+    <div style={{ maxWidth: 640 }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+        <span style={{ fontSize: 18 }}>🔴</span>
+        <div style={{ color: "rgba(255,100,100,0.9)", fontSize: 10, letterSpacing: "1.5px",
+          textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
+          MISP Threat Intelligence
         </div>
       </div>
+      <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, marginBottom: 20, lineHeight: 1.6 }}>
+        MISP settings apply to <strong style={{ color: "rgba(255,255,255,0.5)" }}>all modules</strong> —
+        CySIEM Correlation Engine, ASM Deep Scans, CySOAR, and CyIRIS all read from this single configuration.
+      </div>
+
+      {/* Mode selector */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+        {MODES.map(m => (
+          <button key={m.id} onClick={() => setMode(m.id)}
+            style={{
+              flex: 1, padding: "12px 10px", borderRadius: 5, cursor: "pointer",
+              border: `1px solid ${mode === m.id ? m.color : "rgba(255,255,255,0.08)"}`,
+              background: mode === m.id ? `${m.color}12` : "rgba(255,255,255,0.02)",
+              transition: "all 0.15s",
+            }}>
+            <div style={{ fontSize: 18, marginBottom: 4 }}>{m.icon}</div>
+            <div style={{ color: mode === m.id ? m.color : "rgba(255,255,255,0.5)", fontSize: 11,
+              fontFamily: "monospace", fontWeight: 700, marginBottom: 4 }}>
+              {m.label}
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, lineHeight: 1.4 }}>
+              {m.desc}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Mode: Disabled */}
+      {mode === "disabled" && (
+        <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "18px 20px" }}>
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, fontFamily: "monospace" }}>
+            ⭕ MISP is disabled — IOC lookups and threat intelligence enrichment are bypassed for all modules.
+          </div>
+        </div>
+      )}
+
+      {/* Mode: Cloud CyMISP */}
+      {mode === "cloud" && (
+        <div style={{ background: "rgba(77,158,255,0.04)", border: "1px solid rgba(77,158,255,0.2)", borderRadius: 6, padding: "18px 20px" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+            <span style={{ fontSize: 22 }}>☁️</span>
+            <div>
+              <div style={{ color: "#4d9eff", fontSize: 12, fontFamily: "monospace", fontWeight: 700, marginBottom: 6 }}>
+                Cycentra Cloud MISP — misp.cycentra.com
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>
+                Your platform will connect to the Cycentra-managed MISP instance using
+                pre-provisioned credentials. No configuration is required — credentials
+                are securely embedded in the server environment.
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+                All modules (CySIEM, ASM, CySOAR, CyIRIS) will use this connection automatically.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mode: Local CyMISP */}
+      {mode === "local" && (
+        <div style={{ background: "rgba(255,59,59,0.04)", border: "1px solid rgba(255,59,59,0.2)", borderRadius: 6, padding: "22px 24px" }}>
+          {/* URL */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={LABEL}>MISP Server URL</div>
+            <input type="text" value={misp.url || ""}
+              onChange={e => setMisp(prev => ({ ...prev, url: e.target.value }))}
+              placeholder="https://cymisp.yourdomain.com"
+              style={INPUT} />
+          </div>
+
+          {/* API Key */}
+          <div style={{ marginBottom: 22 }}>
+            <div style={LABEL}>MISP API Key</div>
+            <input type="password" value={misp.apiKey || ""}
+              onChange={e => setMisp(prev => ({ ...prev, apiKey: e.target.value }))}
+              placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+              style={INPUT} />
+          </div>
+
+          {/* Test Connection */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+            <button onClick={testConnection} disabled={testStatus === "testing"}
+              style={{ background: "rgba(255,59,59,0.12)", color: "#ff6b6b",
+                border: "1px solid rgba(255,59,59,0.35)", borderRadius: 4,
+                padding: "8px 18px", fontFamily: "monospace", fontSize: 11,
+                fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px",
+                opacity: testStatus === "testing" ? 0.6 : 1 }}>
+              {testStatus === "testing" ? "Testing…" : "Test Connection"}
+            </button>
+            {testStatus === "ok"   && <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ {testMsg}</span>}
+            {testStatus === "fail" && <span style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace" }}>✗ {testMsg}</span>}
+          </div>
+
+          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.25)" }}>
+            {misp.url && misp.apiKey
+              ? <span style={{ color: "#ff6b6b" }}>✓ Configured — IOC lookups active on Deep scans</span>
+              : <span style={{ color: "#ff8c00" }}>⚠ URL and API Key required to activate</span>}
+          </div>
+
+          {/* Install CyMISP locally */}
+          <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+            <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", marginBottom: 6 }}>
+              NEED A LOCAL MISP INSTANCE?
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, lineHeight: 1.5 }}>
+              Install CyMISP via <strong style={{ color: "rgba(255,255,255,0.5)" }}>Platform Modules</strong> — a fully containerised
+              MISP appliance will be deployed at{" "}
+              <code style={{ color: "#ff6b6b", fontSize: 10 }}>cymisp.{"{yourdomain}"}</code> with an auto-generated admin passphrase.
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Save */}
       <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 20 }}>
@@ -517,7 +587,7 @@ function MispTab() {
           style={{ ...BTN(), opacity: saving ? 0.5 : 1 }}>
           {saving ? "Saving…" : "Save MISP Configuration"}
         </button>
-        {saved && <span style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace" }}>✓ Saved</span>}
+        {saved && <span style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace" }}>✓ Saved — all modules updated</span>}
       </div>
     </div>
   );

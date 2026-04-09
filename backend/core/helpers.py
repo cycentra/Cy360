@@ -6,6 +6,7 @@ Import individual functions — do not import * from here.
 """
 
 import json
+import os
 import re
 import subprocess
 from datetime import datetime, timezone
@@ -92,3 +93,55 @@ def generate_tenant_id(domain: str) -> str:
     clean  = re.sub(r'^www\.', '', clean)
     prefix = re.sub(r'[^a-z0-9]', '', clean.lower())[:8]
     return f"{prefix}-ten-01"
+
+
+# ── MISP config resolver ───────────────────────────────────────────────────────
+
+_CLOUD_MISP_URL_DEFAULT = "https://misp.cycentra.com"
+
+
+def get_misp_config() -> dict | None:
+    """
+    Single source of truth for MISP connection configuration.
+
+    Reads ``misp.mode`` from ``/opt/cycentra/ai_settings.json`` and resolves
+    the effective URL + API key based on the selected mode.
+
+    Modes
+    -----
+    - ``disabled``  → returns None (all MISP calls should be skipped)
+    - ``cloud``     → returns Cloud CyMISP creds from ``CLOUD_MISP_URL`` and
+                      ``CLOUD_MISP_API_KEY`` in the environment (set by setup.sh)
+    - ``local``     → returns the customer-configured URL + key from ai_settings.json
+
+    Returns
+    -------
+    dict with keys ``url``, ``apiKey``, ``mode`` — or ``None`` if disabled /
+    credentials are missing.
+    """
+    from core.config import AI_SETTINGS_FILE  # lazy to avoid circular imports at module load
+    try:
+        raw = AI_SETTINGS_FILE.read_text() if AI_SETTINGS_FILE.exists() else "{}"
+        settings = json.loads(raw)
+    except Exception:
+        settings = {}
+
+    misp = settings.get("misp", {})
+    mode = misp.get("mode", "disabled")
+
+    if mode == "cloud":
+        url = os.environ.get("CLOUD_MISP_URL", _CLOUD_MISP_URL_DEFAULT).rstrip("/")
+        key = os.environ.get("CLOUD_MISP_API_KEY", "")
+        if not key:
+            return None  # Cloud key not yet provisioned on this server
+        return {"url": url, "apiKey": key, "mode": "cloud"}
+
+    if mode == "local":
+        url = misp.get("url", "").strip().rstrip("/")
+        key = misp.get("apiKey", "").strip()
+        if not url or not key:
+            return None
+        return {"url": url, "apiKey": key, "mode": "local"}
+
+    # "disabled" or any unrecognised value
+    return None

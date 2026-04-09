@@ -1,7 +1,55 @@
 # CyCentra 360 — Release Notes
 
 ---
-## v1.0.96 — 2026-04-15
+## v1.0.97 — 2026-04-09
+
+### Feature — MISP 3-Mode Selector: Disabled / Cloud CyMISP / Local CyMISP (single source of truth)
+
+**Overview:**
+Customers can now choose how MISP threat intelligence is delivered across all modules.
+The choice is made once in System Settings → Integrations and applies uniformly to
+CySIEM Correlation Engine, ASM Deep Scans, CySOAR, and CyIRIS.
+
+**`portal/src/pages/settings/SystemSettingsPage.jsx`:**
+- `MispTab` replaced the simple enable/disable checkbox with a **3-button mode selector**:
+  - **Disabled** — all MISP IOC lookups bypassed everywhere; no credentials required
+  - **Cloud CyMISP** — connects to `misp.cycentra.com` using pre-provisioned credentials
+    embedded in the server `.env`; no URL or key input required from the customer
+  - **Local CyMISP** — customer's own MISP instance; URL + API Key fields + Test Connection
+    button remain as before
+- Backward-compatible: existing configs with `enabled: true` are migrated to `mode: "local"` automatically on load
+- Save button confirmation updated to: "✓ Saved — all modules updated"
+
+**`backend/core/helpers.py`:**
+- New `get_misp_config() → dict | None` function — **single source of truth** for all modules
+  that need to talk to MISP.  Reads `misp.mode` from `ai_settings.json` and resolves:
+  - `"cloud"` → URL from `CLOUD_MISP_URL` env, key from `CLOUD_MISP_API_KEY` env
+  - `"local"` → URL + key from `ai_settings.json`
+  - `"disabled"` → returns `None` (callers should skip all MISP operations)
+
+**`backend/blueprints/system/routes.py`:**
+- `_sync_misp_to_siem_env()` updated: now writes `MISP_MODE`, resolves effective URL/key
+  for all three modes (cloud credentials from env, local from ai_settings.json, disabled
+  clears all), then writes to `cysiemstack.env`
+- New `GET /api/system/misp-config` endpoint: returns resolved MISP mode + URL (no API key)
+  for integration by CySOAR / CyIRIS / external modules
+
+**`backend/cy_asm/cycentra_scan.py`:**
+- `_get_misp_config()` now delegates to `core.helpers.get_misp_config()` instead of reading
+  `ai_settings.json` directly — honours all three modes including Cloud CyMISP
+
+**`backend/cysiemstack/correlation_engine/config.py`:**
+- Added `misp_mode: str = "disabled"` pydantic field — loaded from `cysiemstack.env` for
+  informational use; effective connection parameters (url + key) are always resolved
+  by `_sync_misp_to_siem_env()` before the correlation engine reads them
+
+**`cycentra-setup.sh`:**
+- `CLOUD_MISP_URL=https://misp.cycentra.com` and `CLOUD_MISP_API_KEY=` added to the
+  generated `/opt/cycentra/.env` template — the API key is populated from the
+  `CLOUD_MISP_API_KEY` environment variable at install time (vendor-provisioned per tenant)
+
+---
+## v1.0.96 — 2026-04-09
 
 ### Feature — UI Enhancement Batch: Navigation Restructure, AI Config Tab, Env Masking, Configured Indicators, Vulnerability Remediation Steps
 

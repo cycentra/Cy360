@@ -190,19 +190,16 @@ def _get_gemini_key() -> str:
 
 def _get_misp_config() -> dict | None:
     """
-    Return MISP config from ai_settings.json under the 'misp' key, or None if not configured.
-    Expected structure: { "misp": { "enabled": true, "url": "...", "apiKey": "..." } }
+    Return resolved MISP connection config based on the current mode
+    (disabled / cloud / local).  Delegates to core.helpers.get_misp_config()
+    which is the single source of truth for all modules.
     """
-    settings = _load_ai_settings()
-    misp = settings.get("misp", {})
-    if not misp.get("enabled", False):
+    try:
+        from core.helpers import get_misp_config
+        return get_misp_config()
+    except Exception as e:
+        logger.warning(f"⚠️ [MISP] Could not load MISP config: {e}")
         return None
-    url = misp.get("url", "").strip().rstrip("/")
-    key = misp.get("apiKey", "").strip()
-    if not url or not key:
-        logger.warning("⚠️ [MISP] 'misp' block found but url/apiKey are missing — skipping.")
-        return None
-    return {"url": url, "apiKey": key}
 
 
 async def lookup_misp_iocs(ips: list) -> dict:

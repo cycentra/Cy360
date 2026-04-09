@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.96"
+_SCRIPT_VERSION="v1.0.97"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -771,6 +771,13 @@ SUPPORT_EMAIL=${SUPPORT_EMAIL:-support@cycentra.com}
 SIEM_ENGINE_URL=http://127.0.0.1:8100
 SIEM_LLM_ENABLED=true
 SIEM_MISP_ENABLED=false
+
+# ── Cloud CyMISP (Cycentra-managed MISP at misp.cycentra.com) ─────────────────
+# When a customer selects "Cloud CyMISP" in System Settings > Integrations, the
+# backend uses these credentials automatically.  CLOUD_MISP_API_KEY must be set
+# to the vendor-issued API key for this installation.
+CLOUD_MISP_URL=https://misp.cycentra.com
+CLOUD_MISP_API_KEY=${CLOUD_MISP_API_KEY:-}
 ENVEOF
     chmod 600 /opt/cycentra/.env
    # mkdir -p /root/cy-asm && cp /opt/cycentra/.env /root/cy-asm/.env

@@ -8,6 +8,7 @@ Routes:
   POST /api/ai/test              test external AI provider connectivity
   GET  /api/ai/settings          retrieve persisted AI settings
   POST /api/ai/settings          persist AI settings (provider/model/keys)
+  GET  /api/system/misp-config   resolved MISP config (mode-aware, no secrets)
   GET  /api/config               debug — dump non-secret env config
   GET  /api/system/version         current version + last 5 release notes
   GET  /api/system/latest-version   query GitHub Releases API for latest published version (ghToken required)
@@ -26,7 +27,7 @@ from pathlib import Path
 import requests as http_requests
 from flask import Blueprint, request, jsonify, make_response
 
-from core.helpers import add_cors_headers
+from core.helpers import add_cors_headers, get_misp_config
 from core.config import AI_SETTINGS_FILE
 
 system_bp = Blueprint("system", __name__)
@@ -152,21 +153,39 @@ def ai_test():
 # ── AI settings persistence ────────────────────────────────────────────────────
 
 def _sync_misp_to_siem_env(misp: dict) -> None:
-    """Write MISP_ENABLED / MISP_URL / MISP_API_KEY into cysiemstack.env so the
-    correlation engine picks them up without requiring a manual env edit."""
+    """Resolve the effective MISP config (based on mode) and write it into
+    cysiemstack.env so the correlation engine picks it up without a manual
+    env file edit.  Also handles CLOUD and DISABLED modes."""
     env_path = Path(_ENV_FILE_MAP["cysiemstack"])
     if not env_path.parent.exists():
         return  # Not installed yet — skip silently
+
+    mode = misp.get("mode", "disabled")
+
+    if mode == "cloud":
+        # Cloud CyMISP — credentials come from global /opt/cycentra/.env
+        eff_url = os.environ.get("CLOUD_MISP_URL", "https://misp.cycentra.com").rstrip("/")
+        eff_key = os.environ.get("CLOUD_MISP_API_KEY", "")
+        enabled = "true" if eff_key else "false"
+    elif mode == "local":
+        eff_url = misp.get("url", "").rstrip("/")
+        eff_key = misp.get("apiKey", "")
+        enabled = "true" if (eff_url and eff_key) else "false"
+    else:  # disabled
+        eff_url, eff_key, enabled = "", "", "false"
+
+    updates = {
+        "MISP_MODE":    mode,
+        "MISP_ENABLED": enabled,
+        "MISP_URL":     eff_url,
+        "MISP_API_KEY": eff_key,
+    }
+
     try:
         lines = env_path.read_text().splitlines() if env_path.exists() else []
     except Exception:
         lines = []
 
-    updates = {
-        "MISP_ENABLED": "true" if misp.get("enabled") else "false",
-        "MISP_URL":     misp.get("url", ""),
-        "MISP_API_KEY": misp.get("apiKey", ""),
-    }
     # Update existing keys in-place; append any that are missing
     result, seen = [], set()
     for line in lines:
@@ -296,6 +315,34 @@ def misp_test():
         return jsonify({"ok": False, "error": "Connection timed out"}), 400
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ── MISP effective config (single source of truth for other modules) ──────────
+
+@system_bp.route("/api/system/misp-config", methods=["OPTIONS"])
+def misp_config_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/misp-config", methods=["GET"])
+def misp_config_get():
+    """
+    Return the resolved MISP connection parameters for the currently active mode.
+
+    Called by CySOAR / CyIRIS / external modules that need MISP creds — they
+    should use this endpoint rather than reading ai_settings.json directly.
+    The API key is never returned; callers receive url + mode only, and must
+    authenticate through the portal backend to perform MISP calls.
+    """
+    cfg = get_misp_config()
+    if cfg is None:
+        return jsonify({"mode": "disabled", "enabled": False})
+    return jsonify({
+        "mode":    cfg["mode"],
+        "enabled": True,
+        "url":     cfg["url"],
+        # API key intentionally omitted — do not expose secrets via this endpoint
+    })
 
 
 # ── Config debug ──────────────────────────────────────────────────────────────
