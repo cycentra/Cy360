@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 — Setup & Update Wizard v1.0.73 — 2026-04-06 21:31 UTC
+# CyCentra 360 — Setup & Update Wizard v1.0.112 — 2026-04-09 18:00 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.111"
+_SCRIPT_VERSION="v1.0.112"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -522,7 +522,12 @@ GH_REPO="cycentra360"
 # When the server runs:  tar -xzf bundle.tar.gz && sudo bash cycentra-setup.sh
 # manifest.json will be in the same directory as this script.  In that case
 # we skip the download entirely — GH_TOKEN is not required.
-_SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+#
+# Use BASH_SOURCE[0] — more reliable than $0 when invoked as:
+#   sudo bash cycentra-setup.sh          (relative path, $0 = 'cycentra-setup.sh')
+#   sudo bash /tmp/.../cycentra-setup.sh  (absolute path)
+#   sudo -E bash ...                      (with preserved env)
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 BUNDLE_DIR="/tmp/cycentra-release"
 
 if [[ -f "$_SCRIPT_DIR/manifest.json" ]]; then
@@ -876,8 +881,8 @@ if [[ -n "${WHEEL_URL:-}" && "$WHEEL_URL" != "null" ]]; then
         -o "${_WHL_FILE}" \
         && success "Wheel downloaded" \
         || { error "Wheel download failed — check GH_TOKEN permissions"; exit 1; }
-elif [[ -f "$BUNDLE_DIR"/*.whl ]]; then
-    _WHL_FILE=$(ls "$BUNDLE_DIR"/*.whl | head -1)
+elif _local_whl=$(ls "$BUNDLE_DIR"/*.whl 2>/dev/null | head -1) && [[ -n "$_local_whl" ]]; then
+    _WHL_FILE="$_local_whl"
     info "Using wheel from local bundle: ${_WHL_FILE}"
 else
     error "Wheel not found — no release asset URL and no .whl in bundle directory"

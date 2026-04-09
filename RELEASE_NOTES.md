@@ -1,6 +1,17 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.112 — 2026-04-09
+
+### Fix — Local bundle detection and wheel packaging
+
+- **`BASH_SOURCE[0]` instead of `$0`:** `realpath "$0"` fails when running as `sudo bash cycentra-setup.sh` (relative path in a new sudo environment). Changed to `cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd` — reliable across all invocation styles.
+- **Wheel included in bundle tarball:** `dist/*.whl` is now copied into `cycentra-release/` before `tar` in CI, so local installs (from extracted bundle) have the wheel available without a separate GitHub asset download — no GH_TOKEN required for fresh installs from the tarball.
+- **`manifest.json` stamped with wheel filename:** CI writes `"wheel": "<filename>"` into manifest.json so setup.sh can locate it by name if needed.
+- **Wheel glob fix:** replaced `[[ -f "$BUNDLE_DIR"/*.whl ]]` (unreliable glob in conditional) with `ls ... | head -1` pattern.
+- **Line 3 version header:** now kept in sync on every edit (v1.0.112 — 2026-04-09 18:00 UTC).
+
+---
 ## v1.0.111 — 2026-04-09
 
 ### Fix — Download, filebeat, nginx
