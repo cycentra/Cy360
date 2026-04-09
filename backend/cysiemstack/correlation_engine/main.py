@@ -507,6 +507,47 @@ async def get_incident(incident_id: str, db: AsyncSession = Depends(get_db)):
     return result
 
 
+@app.post("/incidents/{incident_id}/escalate")
+async def escalate_incident_to_iris(
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually escalate an incident to DFIR IRIS (CyIRIS).
+
+    Bypasses the automatic FP-threshold logic so an analyst can raise a ticket
+    for any incident regardless of confidence score.  If the incident already
+    has a CyIRIS case this returns the existing ticket info rather than creating
+    a duplicate.
+    """
+    from iris_connector import create_iris_case, _load_iris_config
+    inc = (await db.execute(
+        select(Incident).where(Incident.id == incident_id)
+    )).scalar_one_or_none()
+    if not inc:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    # Already has a ticket — return existing info
+    if inc.iris_case_id:
+        return {
+            "iris_case_id":     inc.iris_case_id,
+            "iris_case_url":    inc.iris_case_url,
+            "iris_case_status": inc.iris_case_status,
+            "already_existed":  True,
+        }
+
+    if not _load_iris_config():
+        raise HTTPException(
+            status_code=503,
+            detail="CyIRIS is not configured. Enable it in System Settings → Integrations → CyIRIS."
+        )
+
+    result = await create_iris_case(db, inc)
+    if not result:
+        raise HTTPException(status_code=502, detail="IRIS case creation failed — check IRIS connectivity and API key.")
+
+    return {**result, "already_existed": False}
+
+
 class IncidentPatch(BaseModel):
     status:                Optional[str] = None
     assigned_to:           Optional[str] = None

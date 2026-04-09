@@ -83,6 +83,8 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
   const [saving, setSaving]     = useState(false);
   const [saved, setSaved]       = useState(false);
   const [alertsExpanded, setAlertsExpanded] = useState(false);
+  const [raising, setRaising]   = useState(false);   // manual IRIS escalation
+  const [raiseErr, setRaiseErr] = useState("");
 
   // Fetch full incident detail (includes alerts array) on mount
   useEffect(() => {
@@ -111,6 +113,23 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
       setInc(updated);
       onPatched?.(updated);
     }
+  };
+
+  const handleRaise = async () => {
+    setRaising(true);
+    setRaiseErr("");
+    const data = await siemFetch(siemApi.escalateIncident(inc.id));
+    setRaising(false);
+    if (data._offline) { setRaiseErr("Engine offline — try again shortly."); return; }
+    if (data._error)   { setRaiseErr(data._error || "Escalation failed."); return; }
+    const updated = {
+      ...inc,
+      iris_case_id:     data.iris_case_id,
+      iris_case_url:    data.iris_case_url,
+      iris_case_status: data.iris_case_status || "open",
+    };
+    setInc(updated);
+    onPatched?.(updated);
   };
 
   // Derive Wazuh Dashboard URL from current hostname
@@ -371,13 +390,36 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
               )}
             </div>
           </>
-        ) : inc.status !== "closed" && inc.status !== "false_positive" && (
+        ) : (
           <>
             <SectionLabel>🎫 CYIRIS TICKET</SectionLabel>
-            <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)",
-              borderRadius: 4, padding: "12px 14px",
-              color: "rgba(255,255,255,0.25)", fontSize: 11, fontFamily: "monospace" }}>
-              No ticket raised — incident did not meet escalation criteria or CyIRIS is disabled.
+            <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+              borderRadius: 4, padding: "14px 16px", display: "flex",
+              alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, marginBottom: 4 }}>
+                  No ticket raised automatically for this incident.
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, fontFamily: "monospace" }}>
+                  Raise a ticket manually to assign this incident for analyst investigation in CyIRIS.
+                </div>
+                {raiseErr && (
+                  <div style={{ color: "#ff6464", fontSize: 11, fontFamily: "monospace", marginTop: 6 }}>
+                    ✗ {raiseErr}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={handleRaise}
+                disabled={raising}
+                style={{
+                  background: raising ? "rgba(77,158,255,0.05)" : "rgba(77,158,255,0.1)",
+                  border: "1px solid rgba(77,158,255,0.35)",
+                  color: "#4d9eff", padding: "8px 16px", borderRadius: 4, cursor: raising ? "wait" : "pointer",
+                  fontSize: 12, fontFamily: "monospace", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0,
+                }}>
+                {raising ? "Raising ticket…" : "🎫 Raise CyIRIS Ticket"}
+              </button>
             </div>
           </>
         )}

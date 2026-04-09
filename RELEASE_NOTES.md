@@ -1,6 +1,52 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.104 — 2026-04-09
+
+### Feature — Manual CyIRIS Ticket Creation: SIEM Incidents + ASM Findings
+
+Previously tickets were only raised automatically based on the FP confidence-score threshold.
+Analysts can now raise a ticket for any incident or ASM finding manually, bypassing the
+auto-escalation logic.
+
+#### SIEM Incidents — Incident Drawer
+
+**`correlation_engine/main.py`** — New `POST /incidents/{id}/escalate` engine endpoint.
+- Calls `create_iris_case()` directly regardless of FP confidence score or current status.
+- Returns existing ticket info (no duplicate) if the incident already has a CyIRIS case.
+- Returns HTTP 503 with a clear message if CyIRIS is not configured.
+
+**`siem_proxy.py`** — New proxy route `POST /api/siem/incidents/<id>/escalate` (analyst+ role).
+
+**`siemApi.js`** — New `escalateIncident(id)` method.
+
+**`SiemIncidentsPage.jsx` — `IncidentDrawer`:**
+- The `🎫 CYIRIS TICKET` section now always shows when no ticket exists (previously hidden for
+  closed/FP incidents).
+- New **`🎫 Raise CyIRIS Ticket`** button with inline loading state.
+- On success, the drawer updates live — the badge and case link appear immediately without
+  requiring a page refresh.
+- Error surfaced inline (e.g. CyIRIS not configured, connectivity failure).
+
+#### ASM Findings — Vulnerability Explorer
+
+**`blueprints/asm/scanner.py`** — New `POST /api/asm/escalate` Flask route (analyst+ role).
+- Reads CyIRIS config live from `ai_settings.json` via `get_iris_config()`.
+- Maps finding severity to IRIS severity ID (Critical → 1, High → 2, Medium → 3, Low → 4).
+- Derives a confidence-score proxy for display context in the ticket body:
+  Critical → 95, High → 80, Medium → 55, Low → 30.
+- Builds a structured IRIS case body including vulnerability, asset, module, CVE, description,
+  and remediation steps. Tags ticket with analyst email.
+- Returns `{ case_id, case_url, case_name }` on success.
+
+**`VulnerabilityPage.jsx`:**
+- Each finding card now has a **`🎫 Raise Ticket`** button next to the asset label.
+- Button shows inline loading state while the request is in-flight.
+- On success the button transforms into a green **`✓ Case #N ↗`** deep-link to the IRIS case.
+- Error shown inline below the finding header with a **`⚠ Retry`** state on the button.
+- No page reload required.
+
+---
 ## v1.0.103 — 2026-04-09
 
 ### Performance & Reliability — Incidents Page: DB Indexes, WS Debounce, Purge Button, Auto-Archive

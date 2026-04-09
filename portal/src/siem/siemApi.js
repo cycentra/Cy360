@@ -78,6 +78,12 @@ export const siemApi = {
   /** Escalate a UEBA anomaly to IRIS as a new case (analyst+ role) */
   escalateToIris: (body) => _post("/ueba/escalate", body),
 
+  /** Manually escalate a SIEM incident to CyIRIS (analyst+ role).
+   *  Creates a case regardless of FP confidence score.
+   *  If the incident already has a ticket, returns existing ticket info.
+   */
+  escalateIncident: (id) => _post(`/incidents/${id}/escalate`, {}),
+
   /** Returns integration URLs (iris_url, wazuh_url, iris_enabled, wazuh_enabled) */
   getUebaIntegrations: () => _get("/ueba/integrations"),
 

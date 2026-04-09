@@ -143,6 +143,13 @@ def siem_incident_patch(incident_id):
     return _proxy(f"/incidents/{incident_id}", method="PATCH")
 
 
+@siem_bp.route("/incidents/<incident_id>/escalate", methods=["POST"])
+@require_siem_analyst
+def siem_incident_escalate(incident_id):
+    """Manually escalate a SIEM incident to CyIRIS regardless of FP score."""
+    return _proxy(f"/incidents/{incident_id}/escalate", method="POST")
+
+
 @siem_bp.route("/risk-scores")
 @require_siem_auth
 def siem_risk_scores():
