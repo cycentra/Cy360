@@ -1,6 +1,29 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.100 — 2026-04-09
+
+### Fix — System Update: Private-Repo Asset Download 404
+
+**Root cause:** `curl -fsSL -H "Authorization: Bearer $TOKEN" https://github.com/.../releases/latest/download/FILE`
+works for public repos but fails with 404 on private repos. When GitHub redirects the browser URL
+to a CDN, curl drops the `Authorization` header on cross-domain redirects (standard security behaviour).
+The CDN receives an unauthenticated request and returns 404.
+
+**Fix — `backend/blueprints/system/routes.py` — `_run_setup_in_background()`:**
+- **Step 1:** Call `https://api.github.com/repos/cycentra/cycentra360/releases/latest` (with
+  `Authorization: Bearer` + `Accept: application/vnd.github+json`) to resolve the latest published
+  release and find the `cycentra-setup.sh` asset entry. Provides actionable error messages for:
+  - HTTP 401 → GH_TOKEN invalid/expired
+  - HTTP 404 → no published release found (CI hasn't run yet for this tag)
+  - Asset missing → lists available assets so the operator can diagnose
+- **Step 2:** Download via `asset["url"]` (`api.github.com/repos/.../releases/assets/{id}`)
+  with `Accept: application/octet-stream`. The GitHub API handles authentication before any CDN
+  redirect — the token never reaches a third-party domain.
+- Removed the old `github.com/releases/latest/download/` direct URL approach entirely.
+
+---
+
 ## v1.0.99 — 2026-04-09
 
 ### Feature — CyIRIS (DFIR IRIS) Integration: Incident Escalation, Auto-Close & Ticket Lifecycle Sync

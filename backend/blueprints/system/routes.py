@@ -557,6 +557,14 @@ def _get_server_gh_token() -> str:
 def _run_setup_in_background(flags: list[str], label: str) -> None:
     """Download the latest setup script and run it with the given flags.
     GH_TOKEN is read from the server environment — never from the HTTP request.
+
+    Download strategy (private repo safe):
+      1. Call the GitHub Releases API to resolve the latest release & asset URL.
+         This avoids the curl redirect-header-stripping issue where github.com
+         redirects to a CDN and curl drops the Authorization header, causing 404.
+      2. Download via api.github.com/releases/assets/{id} with
+         Accept: application/octet-stream — GitHub handles auth before the CDN
+         redirect, so the token is never exposed to third-party domains.
     """
     global _update_running, _update_log
     gh_token = _get_server_gh_token()
@@ -567,14 +575,67 @@ def _run_setup_in_background(flags: list[str], label: str) -> None:
         global _update_running, _update_log
         try:
             env = {**os.environ, "GH_TOKEN": gh_token}
-            # Step 1 — download the latest setup script
+
+            # ── Step 1: Resolve the asset URL via GitHub Releases API ────────
+            # Using the API (api.github.com) instead of the browser URL
+            # (github.com/releases/latest/download/) prevents the cross-domain
+            # redirect issue where curl drops the Authorization header en route
+            # to the CDN, producing a 404 on private repos.
+            _update_log.append(f"[{label}] Resolving latest release from GitHub API…")
+            api_headers = {
+                "Authorization": f"Bearer {gh_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            }
+            try:
+                rel_resp = http_requests.get(
+                    "https://api.github.com/repos/cycentra/cycentra360/releases/latest",
+                    headers=api_headers,
+                    timeout=15,
+                )
+            except Exception as e:
+                _update_log.append(f"[{label} ERROR] GitHub API unreachable: {e}")
+                _update_running = False
+                return
+
+            if rel_resp.status_code == 401:
+                _update_log.append(f"[{label} ERROR] GH_TOKEN is invalid or expired (401)")
+                _update_running = False
+                return
+            if rel_resp.status_code == 404:
+                _update_log.append(f"[{label} ERROR] No published release found — check GitHub Actions ran for this tag")
+                _update_running = False
+                return
+            if not rel_resp.ok:
+                _update_log.append(f"[{label} ERROR] GitHub API returned HTTP {rel_resp.status_code}")
+                _update_running = False
+                return
+
+            release = rel_resp.json()
+            tag_name = release.get("tag_name", "?")
+            assets   = release.get("assets", [])
+            asset    = next((a for a in assets if a["name"] == "cycentra-setup.sh"), None)
+
+            if not asset:
+                _update_log.append(
+                    f"[{label} ERROR] cycentra-setup.sh not found in release {tag_name} assets. "
+                    f"Available: {[a['name'] for a in assets]}"
+                )
+                _update_running = False
+                return
+
+            # ── Step 2: Download via the API asset URL ───────────────────────
+            # api.github.com/repos/.../releases/assets/{id} with
+            # Accept: application/octet-stream handles auth at the API layer
+            # before any redirect — the token never leaves GitHub infrastructure.
+            _update_log.append(f"[{label}] Downloading cycentra-setup.sh from release {tag_name}…")
             dl_cmd = [
                 "curl", "-fsSL",
                 "-H", f"Authorization: Bearer {gh_token}",
-                "https://github.com/cycentra/cycentra360/releases/latest/download/cycentra-setup.sh",
-                "-L", "-o", "/opt/cycentra/cycentra-setup.sh",
+                "-H", "Accept: application/octet-stream",
+                asset["url"],   # https://api.github.com/repos/cycentra/cycentra360/releases/assets/{id}
+                "-o", "/opt/cycentra/cycentra-setup.sh",
             ]
-            _update_log.append(f"[{label}] Downloading latest setup script…")
             dl = subprocess.run(dl_cmd, capture_output=True, text=True, timeout=60)
             if dl.returncode != 0:
                 _update_log.append(f"[{label} ERROR] Download failed: {_redact_line(dl.stderr)}")
