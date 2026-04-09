@@ -1,6 +1,24 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.114 — 2026-04-10
+
+### Change — Subdomain rename: cy360→cysoc, cyscan→cyasm
+
+- Portal subdomain renamed from `cy360` to `cysoc` across all configuration (nginx, certbot, self-signed cert, .env template, config.json, CORS origins, OIDC redirect URIs, ROLE_APPS).
+- Backend/OIDC subdomain renamed from `cyscan` to `cyasm`.
+- `_expand_ssl` base domain set updated: `cysoc + cyasm + cysiem` (was `cy360 + cyscan + cysiem`).
+- Frontend `constants.js` and `SiemIncidentsPage.jsx` updated to derive domain from `cysoc.` prefix.
+- The new cert identifier set (`cysoc.DOMAIN + cyasm.DOMAIN`) is distinct from the previously rate-limited set — Let's Encrypt will issue immediately on a fresh server.
+
+### Change — Unattended install: all interactive prompts removed
+
+- `setup.sh` no longer prompts for CLIENT_NAME, CLIENT_EMAIL, BASE_DOMAIN, DNS confirmation, OAuth provider, OAuth Client ID/Secret, or installation confirmation.
+- All values are read from environment variables (`BASE_DOMAIN=…`, `OAUTH_PROVIDER=…`, etc.) or fall back to safe defaults (`cycentra.com`, `skip`).
+- A `.env` with blank/default placeholders is written to `/opt/cycentra/.env`. Admin edits it post-install and restarts via `systemctl restart cycentra`.
+- REVIEW & CONFIRM step removed.
+
+---
 ## v1.0.113 — 2026-04-09
 
 ### Fix — Wheel download fallback for older bundles

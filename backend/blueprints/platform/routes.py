@@ -9,7 +9,7 @@ Key design decisions (matching original app.py exactly):
              DB table is "user" (lowercase) — DFIR-IRIS schema.
   - CyMISP: nginx block built as a plain string (no helper abstraction).
              compose template includes cymisp_data volume + misp-config.php mount.
-  - CySOAR: nginx injected as location /cysoar/ inside cy360 server block.
+  - CySOAR: nginx injected as location /cysoar/ inside cysoc server block.
   - Uninstall: only CyMISP and CySOAR have dynamic nginx. CyIRIS nginx is
                now also dynamic (added on install, removed on uninstall).
 """
@@ -232,7 +232,7 @@ def _nginx_remove_cysoar_location():
 
 def _nginx_inject_cysoar(base_domain: str, log_fn):
     """
-    Inject location /cysoar/ into the cy360.DOMAIN server block.
+    Inject location /cysoar/ into the cysoc.DOMAIN server block.
     CySOAR is path-based — not a subdomain.
     Looks for the comment anchor setup.sh writes, falls back to finding
     the closing brace of the server block containing /oidc/.
@@ -313,14 +313,14 @@ def _nginx_add_cyiris(base_domain: str, log_fn):
         "}\n"
         "server {\n"
         "    listen 443 ssl http2; server_name cyiris." + base_domain + ";\n"
-        "    ssl_certificate     /etc/letsencrypt/live/cy360." + base_domain + "/fullchain.pem;\n"
-        "    ssl_certificate_key /etc/letsencrypt/live/cy360." + base_domain + "/privkey.pem;\n"
+        "    ssl_certificate     /etc/letsencrypt/live/cysoc." + base_domain + "/fullchain.pem;\n"
+        "    ssl_certificate_key /etc/letsencrypt/live/cysoc." + base_domain + "/privkey.pem;\n"
         "    include             /etc/letsencrypt/options-ssl-nginx.conf;\n"
         "    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;\n"
         "    add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;\n"
         "    add_header X-Frame-Options \"\" always;\n"
-        "    add_header Content-Security-Policy \"frame-ancestors 'self' https://cy360." + base_domain + "\" always;\n"
-        "    add_header Access-Control-Allow-Origin \"https://cy360." + base_domain + "\" always;\n"
+        "    add_header Content-Security-Policy \"frame-ancestors 'self' https://cysoc." + base_domain + "\" always;\n"
+        "    add_header Access-Control-Allow-Origin \"https://cysoc." + base_domain + "\" always;\n"
         "    add_header Access-Control-Allow-Credentials \"true\" always;\n"
         "    if ($request_method = OPTIONS) { return 204; }\n"
         "    location / {\n"
@@ -362,8 +362,8 @@ def _nginx_add_cymisp(base_domain: str, log_fn):
         "}\n"
         "server {\n"
         "    listen 443 ssl http2; server_name cymisp." + base_domain + ";\n"
-        "    ssl_certificate     /etc/letsencrypt/live/cy360." + base_domain + "/fullchain.pem;\n"
-        "    ssl_certificate_key /etc/letsencrypt/live/cy360." + base_domain + "/privkey.pem;\n"
+        "    ssl_certificate     /etc/letsencrypt/live/cysoc." + base_domain + "/fullchain.pem;\n"
+        "    ssl_certificate_key /etc/letsencrypt/live/cysoc." + base_domain + "/privkey.pem;\n"
         "    include             /etc/letsencrypt/options-ssl-nginx.conf;\n"
         "    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;\n"
         "    add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;\n"
@@ -391,7 +391,7 @@ def _nginx_add_cymisp(base_domain: str, log_fn):
 def _expand_ssl(module_id: str, base_domain: str, log_fn):
     """Expand the Let's Encrypt cert to cover a new module subdomain."""
     existing = NGINX_CONF.read_text() if NGINX_CONF.exists() else ""
-    domains  = [f"cy360.{base_domain}", f"cyscan.{base_domain}", f"cysiem.{base_domain}"]
+    domains  = [f"cysoc.{base_domain}", f"cyasm.{base_domain}", f"cysiem.{base_domain}"]
     for mod in ("cyiris", "cymisp"):
         if f"{mod}.{base_domain}" in existing:
             domains.append(f"{mod}.{base_domain}")

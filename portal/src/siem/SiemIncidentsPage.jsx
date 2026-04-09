@@ -134,8 +134,8 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
 
   // Derive Wazuh Dashboard URL from current hostname
   const host = window.location.hostname;
-  const wazuhHost = host.startsWith("cy360.")
-    ? host.replace("cy360.", "cysiem.")
+  const wazuhHost = host.startsWith("cysoc.")
+    ? host.replace("cysoc.", "cysiem.")
     : `${host}:5601`;
   const wazuhUrl = `https://${wazuhHost}/app/wazuh`;
 

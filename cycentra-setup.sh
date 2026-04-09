@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.113"
+_SCRIPT_VERSION="v1.0.114"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -632,47 +632,20 @@ success "Setup script deployed to /opt/cycentra/cycentra-setup.sh"
 # ── Step 6-9: Interactive config (full install only) ─────────────────────────
 if [[ "$MODE" == "full" ]]; then
 
-    step_header "CLIENT INFORMATION"
-    ask CLIENT_NAME  "Client / Organisation name" "cycentra"
-    ask CLIENT_EMAIL "Primary admin email"        "admin@${CLIENT_NAME,,}.com"
-    ask BASE_DOMAIN  "Base domain"                "${CLIENT_NAME,,}.com"
-    echo ""
-    info "Subdomains: cy360 · cyscan · cysiem · cyiris · cysoar · cymind  (all on .${BASE_DOMAIN})"
-    echo ""
-    if ! ask_yn "Are all subdomains pointing at this server in DNS?"; then
-        SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
-        warn "Add DNS A records: cy360 cyscan cysiem cyiris cysoar → ${SERVER_IP}"
-        ask_yn "Continue anyway? (SSL will fail if DNS not ready)" "n" || exit 0
-    fi
-
-    INSTALL_CYSIEM=true; INSTALL_CYIRIS=true; INSTALL_CYSOAR=true
-    success "CySIEM selected"; success "CyIRIS selected"; success "CySOAR selected"
-
-    step_header "OAUTH / SSO CONFIGURATION"
-    echo -e "  ${DIM}Portal login via Google or Microsoft.${NC}"; echo ""
-    PS3="  Choose provider: "
-    select OAUTH_PROVIDER in "Google" "Microsoft Azure AD" "Skip"; do
-        case $REPLY in
-            1) OAUTH_PROVIDER="google";    break;;
-            2) OAUTH_PROVIDER="microsoft"; break;;
-            3) OAUTH_PROVIDER="skip";      break;;
-        esac
-    done
-    OAUTH_CLIENT_ID=""; OAUTH_CLIENT_SECRET=""
-    if [[ "$OAUTH_PROVIDER" != "skip" ]]; then
-        [[ "$OAUTH_PROVIDER" == "google" ]] \
-            && info "Redirect URI: https://cyscan.${BASE_DOMAIN}/auth/google/callback" \
-            || info "Redirect URI: https://cyscan.${BASE_DOMAIN}/auth/microsoft/callback"
-        echo ""
-        ask OAUTH_CLIENT_ID "OAuth Client ID" ""
-        ask_secret OAUTH_CLIENT_SECRET "OAuth Client Secret"
-    else
-        warn "OAuth skipped — configure later in /opt/cycentra/.env"
-    fi
-
-    # AI and SMTP are configured after install via the portal's Settings page.
+    # ── No interactive prompts — all config is set via environment variables or
+    # ── edited in /opt/cycentra/.env post-install.
+    CLIENT_NAME="${CLIENT_NAME:-cycentra}"
+    CLIENT_EMAIL="${CLIENT_EMAIL:-admin@cycentra.com}"
+    BASE_DOMAIN="${BASE_DOMAIN:-cycentra.com}"
+    OAUTH_PROVIDER="${OAUTH_PROVIDER:-skip}"
+    OAUTH_CLIENT_ID="${OAUTH_CLIENT_ID:-}"
+    OAUTH_CLIENT_SECRET="${OAUTH_CLIENT_SECRET:-}"
     AI_PROVIDER="none"; AI_API_KEY=""; AI_MODEL=""
     SMTP_HOST=""; SMTP_PORT=""; SMTP_USER=""; SMTP_PASS=""; SUPPORT_EMAIL="support@${BASE_DOMAIN}"
+    INSTALL_CYSIEM=true; INSTALL_CYIRIS=true; INSTALL_CYSOAR=true
+
+    info "Domain : ${BASE_DOMAIN}  |  OAuth: ${OAUTH_PROVIDER}"
+    info "Post-install → edit /opt/cycentra/.env and restart: systemctl restart cycentra"
 
     step_header "GENERATING SECRETS"
     _env="/opt/cycentra/.env"
@@ -694,15 +667,6 @@ if [[ "$MODE" == "full" ]]; then
     CYIRIS_OIDC_SECRET=$(gen_secret)
     CYSOAR_OIDC_SECRET=$(gen_secret)
     success "All secrets ready"
-
-    step_header "REVIEW & CONFIRM"
-    echo -e "  ${DIM}Client  :${NC} ${WHITE}${CLIENT_NAME}${NC}"
-    echo -e "  ${DIM}Email   :${NC} ${WHITE}${CLIENT_EMAIL}${NC}"
-    echo -e "  ${DIM}Domain  :${NC} ${WHITE}${BASE_DOMAIN}${NC}"
-    echo -e "  ${DIM}OAuth   :${NC} ${WHITE}${OAUTH_PROVIDER}${NC}"
-    echo -e "  ${DIM}Version :${NC} ${WHITE}${BUNDLE_VERSION}${NC}"
-    echo ""
-    ask_yn "Proceed with full installation?" || exit 0
 
 else
     # Update mode — read existing config from .env
@@ -734,8 +698,8 @@ CLIENT_NAME=${CLIENT_NAME}
 SECRET_KEY=${FLASK_SECRET}
 JWT_SECRET=${JWT_SECRET}
 ADMIN_API_KEY=${ADMIN_API_KEY}
-FRONTEND_URL=https://cy360.${BASE_DOMAIN}
-BASE_URL=https://cyscan.${BASE_DOMAIN}
+FRONTEND_URL=https://cysoc.${BASE_DOMAIN}
+BASE_URL=https://cyasm.${BASE_DOMAIN}
 OAUTH_PROVIDER=${OAUTH_PROVIDER:-skip}
 ENVEOF
 
@@ -759,7 +723,7 @@ IRIS_SECRET=${IRIS_SECRET}
 IRIS_DB_PASS=${IRIS_DB_PASS}
 IRIS_ADM_EMAIL=${CLIENT_EMAIL}
 IRIS_ADM_PASSWORD=CyIRIS@CHANGE
-CYCENTRA_PORTAL_URL=https://cy360.${BASE_DOMAIN}
+CYCENTRA_PORTAL_URL=https://cysoc.${BASE_DOMAIN}
 IRIS_SECRET_KEY=${IRIS_SECRET}
 POSTGRES_PASSWORD=${IRIS_DB_PASS}
 NODE_RED_CREDENTIAL_SECRET=${NODERED_SECRET}
@@ -1075,7 +1039,7 @@ done
 #   CyIRIS  → adds cyiris.DOMAIN server block + certbot expand on install
 #   CySOAR  → injects location CySOAR into portal server on install
 #   CyMISP  → was already routes.py-managed (unchanged)
-# Only permanent core services remain here: cy360, cyscan, cysiem.
+# Only permanent core services remain here: cysoc, cyasm, cysiem.
 if [[ "$MODE" == "full" ]]; then
 
     step_header "NGINX VHOST CONFIGURATION"
@@ -1092,12 +1056,12 @@ map \$http_upgrade \$connection_upgrade {
     ''      close;
 }
 
-# ── Portal (cy360) ───────────────────────────────────────────────────────────
-server { listen 80; server_name cy360.${BASE_DOMAIN}; return 301 https://\$host\$request_uri; }
+# ── Portal (cysoc) ───────────────────────────────────────────────────────────
+server { listen 80; server_name cysoc.${BASE_DOMAIN}; return 301 https://\$host\$request_uri; }
 server {
-    listen 443 ssl http2; server_name cy360.${BASE_DOMAIN};
-    ssl_certificate     /etc/letsencrypt/live/cy360.${BASE_DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/cy360.${BASE_DOMAIN}/privkey.pem;
+    listen 443 ssl http2; server_name cysoc.${BASE_DOMAIN};
+    ssl_certificate     /etc/letsencrypt/live/cysoc.${BASE_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/cysoc.${BASE_DOMAIN}/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
@@ -1112,17 +1076,17 @@ server {
     # location cysoar is injected here by routes.py when CySOAR is installed via portal
 }
 
-# ── Backend / OIDC IdP (cyscan) ──────────────────────────────────────────────
-server { listen 80; server_name cyscan.${BASE_DOMAIN}; return 301 https://\$host\$request_uri; }
+# ── Backend / OIDC IdP (cyasm) ──────────────────────────────────────────────
+server { listen 80; server_name cyasm.${BASE_DOMAIN}; return 301 https://\$host\$request_uri; }
 server {
-    listen 443 ssl http2; server_name cyscan.${BASE_DOMAIN};
-    ssl_certificate     /etc/letsencrypt/live/cy360.${BASE_DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/cy360.${BASE_DOMAIN}/privkey.pem;
+    listen 443 ssl http2; server_name cyasm.${BASE_DOMAIN};
+    ssl_certificate     /etc/letsencrypt/live/cysoc.${BASE_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/cysoc.${BASE_DOMAIN}/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
     add_header Strict-Transport-Security "max-age=31536000" always;
     set \$cors_origin "";
-    if (\$http_origin ~* "^https://(cy360|cysiem|cyiris|cysoar)\.${BASE_DOMAIN}\$") { set \$cors_origin \$http_origin; }
+    if (\$http_origin ~* "^https://(cysoc|cysiem|cyiris|cysoar)\.${BASE_DOMAIN}\$") { set \$cors_origin \$http_origin; }
     add_header Access-Control-Allow-Origin      \$cors_origin always;
     add_header Access-Control-Allow-Credentials "true" always;
     add_header Access-Control-Allow-Methods     "GET, POST, DELETE, OPTIONS" always;
@@ -1148,7 +1112,7 @@ server {
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
     add_header Strict-Transport-Security "max-age=31536000" always;
     add_header X-Frame-Options "" always;
-    add_header Content-Security-Policy "frame-ancestors 'self' https://cy360.${BASE_DOMAIN}" always;
+    add_header Content-Security-Policy "frame-ancestors 'self' https://cysoc.${BASE_DOMAIN}" always;
     location / {
         proxy_pass https://127.0.0.1:5601;
         proxy_ssl_verify off;
@@ -1251,7 +1215,7 @@ SSLOPTEOF
     # is common during initial testing / fresh installs on the same server.
     # Returns 0 if certbot was skipped (cert already fine), 1 if certbot ran.
     _certbot_if_needed() {
-        local primary_domain="$1"; shift   # e.g. cy360.cycentra.com
+        local primary_domain="$1"; shift   # e.g. cysoc.cycentra.com
         local log_file="$1";       shift   # temp log path
         local -a cb_args=("$@")            # remaining args passed to certbot
 
@@ -1295,11 +1259,11 @@ SSLOPTEOF
         return 1
     }
 
-    # ── certbot: cy360 + cyscan ───────────────────────────────────────────────
-    _CB_LOG_BASE="/tmp/certbot-cy360-$$.log"
-    _certbot_if_needed "cy360.${BASE_DOMAIN}" "$_CB_LOG_BASE" \
-        -m "$CLIENT_EMAIL" -d cy360.${BASE_DOMAIN} -d cyscan.${BASE_DOMAIN} \
-        && success "SSL cert ready (cy360, cyscan)" \
+    # ── certbot: cysoc + cyasm ───────────────────────────────────────────────
+    _CB_LOG_BASE="/tmp/certbot-cysoc-$$.log"
+    _certbot_if_needed "cysoc.${BASE_DOMAIN}" "$_CB_LOG_BASE" \
+        -m "$CLIENT_EMAIL" -d cysoc.${BASE_DOMAIN} -d cyasm.${BASE_DOMAIN} \
+        && success "SSL cert ready (cysoc, cyasm)" \
         || true   # self-signed fallback below handles missing cert
 
     # ── certbot: cysiem ───────────────────────────────────────────────────────
@@ -1323,26 +1287,26 @@ SSLOPTEOF
     # rate limit, etc.) generate a self-signed cert so nginx can start with SSL
     # and the portal / backend remain reachable.  When setup is re-run after DNS
     # resolves, certbot will obtain real certs and overwrite the live/ symlinks.
-    _BASE_CERT="/etc/letsencrypt/live/cy360.${BASE_DOMAIN}/fullchain.pem"
+    _BASE_CERT="/etc/letsencrypt/live/cysoc.${BASE_DOMAIN}/fullchain.pem"
     _SIEM_CERT="/etc/letsencrypt/live/cysiem.${BASE_DOMAIN}/fullchain.pem"
     _SELFSIGNED_DIR="/etc/ssl/cycentra/selfsigned"
 
     if [[ ! -f "$_BASE_CERT" ]]; then
-        info "Generating self-signed cert for cy360/cyscan (temporary — browser will show security warning)..."
-        mkdir -p "$_SELFSIGNED_DIR" "/etc/letsencrypt/live/cy360.${BASE_DOMAIN}"
+        info "Generating self-signed cert for cysoc/cyasm (temporary — browser will show security warning)..."
+        mkdir -p "$_SELFSIGNED_DIR" "/etc/letsencrypt/live/cysoc.${BASE_DOMAIN}"
         openssl req -x509 -nodes -newkey rsa:2048 \
-            -keyout "$_SELFSIGNED_DIR/cy360-privkey.pem" \
-            -out    "$_SELFSIGNED_DIR/cy360-fullchain.pem" \
+            -keyout "$_SELFSIGNED_DIR/cysoc-privkey.pem" \
+            -out    "$_SELFSIGNED_DIR/cysoc-fullchain.pem" \
             -days 90 \
-            -subj "/CN=cy360.${BASE_DOMAIN}/O=CyCentra/C=US" \
-            -addext "subjectAltName=DNS:cy360.${BASE_DOMAIN},DNS:cyscan.${BASE_DOMAIN}" \
+            -subj "/CN=cysoc.${BASE_DOMAIN}/O=CyCentra/C=US" \
+            -addext "subjectAltName=DNS:cysoc.${BASE_DOMAIN},DNS:cyasm.${BASE_DOMAIN}" \
             2>/dev/null \
-            && { ln -sf "$_SELFSIGNED_DIR/cy360-fullchain.pem" \
-                        "/etc/letsencrypt/live/cy360.${BASE_DOMAIN}/fullchain.pem"
-                 ln -sf "$_SELFSIGNED_DIR/cy360-privkey.pem" \
-                        "/etc/letsencrypt/live/cy360.${BASE_DOMAIN}/privkey.pem"
-                 warn "Self-signed cert installed for cy360/cyscan — re-run setup after DNS resolves to replace with Let's Encrypt"; } \
-            || warn "Self-signed cert generation failed for cy360/cyscan"
+            && { ln -sf "$_SELFSIGNED_DIR/cysoc-fullchain.pem" \
+                        "/etc/letsencrypt/live/cysoc.${BASE_DOMAIN}/fullchain.pem"
+                 ln -sf "$_SELFSIGNED_DIR/cysoc-privkey.pem" \
+                        "/etc/letsencrypt/live/cysoc.${BASE_DOMAIN}/privkey.pem"
+                 warn "Self-signed cert installed for cysoc/cyasm — re-run setup after DNS resolves to replace with Let's Encrypt"; } \
+            || warn "Self-signed cert generation failed for cysoc/cyasm"
     fi
 
     if [[ ! -f "$_SIEM_CERT" ]]; then
@@ -1480,8 +1444,8 @@ RBACEOF
   "base_domain": "${BASE_DOMAIN}",
   "client_name": "${CLIENT_NAME}",
   "version":     "${BUNDLE_VERSION}",
-  "portal_url":  "https://cy360.${BASE_DOMAIN}",
-  "cyscan_url":  "https://cyscan.${BASE_DOMAIN}",
+  "portal_url":  "https://cysoc.${BASE_DOMAIN}",
+  "cyasm_url":   "https://cyasm.${BASE_DOMAIN}",
   "generated":   "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 CFGJSON
@@ -1545,8 +1509,8 @@ chk "Engine /health" "http://127.0.0.1:8100/health"
 
 if [[ "$MODE" == "full" ]]; then
     echo ""; info "── External HTTPS ──"
-    chk "Portal"  "https://cy360.${BASE_DOMAIN}"
-    chk "Backend" "https://cyscan.${BASE_DOMAIN}/health"
+    chk "Portal"  "https://cysoc.${BASE_DOMAIN}"
+    chk "Backend" "https://cyasm.${BASE_DOMAIN}/health"
     chk "CySIEM"  "https://cysiem.${BASE_DOMAIN}"
     chk "CyIRIS"  "https://cyiris.${BASE_DOMAIN}/api/v2/ping"
 fi
@@ -1564,8 +1528,8 @@ echo -e "\n  ${BOLD}${WHITE}CyCentra 360 — ${MODE^^} Complete${NC}\n"
 divider; echo ""
 echo -e "  ${CYAN}Version        ${NC}  ${BUNDLE_VERSION}"
 if [[ "$MODE" == "full" ]]; then
-    echo -e "  ${CYAN}Portal         ${NC}  https://cy360.${BASE_DOMAIN}"
-    echo -e "  ${CYAN}Backend API    ${NC}  https://cyscan.${BASE_DOMAIN}"
+    echo -e "  ${CYAN}Portal         ${NC}  https://cysoc.${BASE_DOMAIN}"
+    echo -e "  ${CYAN}Backend API    ${NC}  https://cyasm.${BASE_DOMAIN}"
     echo -e "  ${CYAN}CySIEM         ${NC}  https://cysiem.${BASE_DOMAIN}"
     echo -e "  ${CYAN}CyIRIS         ${NC}  https://cyiris.${BASE_DOMAIN}"
     echo -e "  ${CYAN}CySOAR         ${NC}  https://cysoar.${BASE_DOMAIN}"
@@ -1625,8 +1589,8 @@ Domain : ${BASE_DOMAIN}
 Email  : ${CLIENT_EMAIL:-n/a}
 
 URLs:
-  Portal:   https://cy360.${BASE_DOMAIN}
-  Backend:  https://cyscan.${BASE_DOMAIN}
+  Portal:   https://cysoc.${BASE_DOMAIN}
+  Backend:  https://cyasm.${BASE_DOMAIN}
   CySIEM:   https://cysiem.${BASE_DOMAIN}
   CyIRIS:   https://cyiris.${BASE_DOMAIN}
   CySOAR:   https://cysoar.${BASE_DOMAIN}

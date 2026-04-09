@@ -24,8 +24,8 @@ except ImportError:
 
 # ── Domain & URL ───────────────────────────────────────────────────────────────
 BASE_DOMAIN  = os.environ.get("BASE_DOMAIN",  "cycentra.com")
-FRONTEND_URL = os.environ.get("FRONTEND_URL", f"https://cy360.{BASE_DOMAIN}")
-BASE_URL     = os.environ.get("BASE_URL",      f"https://cyscan.{BASE_DOMAIN}")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", f"https://cysoc.{BASE_DOMAIN}")
+BASE_URL     = os.environ.get("BASE_URL",      f"https://cyasm.{BASE_DOMAIN}")
 
 # ── Secrets ────────────────────────────────────────────────────────────────────
 SECRET_KEY   = os.environ.get("SECRET_KEY", "change_this_to_something_secure_32ch")
@@ -45,7 +45,7 @@ OIDC_CLIENTS = {
     "cyiris": {
         "client_secret": os.environ.get("CYIRIS_OIDC_SECRET", ""),
         "redirect_uris": [
-            f"https://cy360.{BASE_DOMAIN}/cyiris/auth/oidc/callback",
+            f"https://cysoc.{BASE_DOMAIN}/cyiris/auth/oidc/callback",
             f"https://cyiris.{BASE_DOMAIN}/auth/oidc/callback",
         ],
         "allowed_scopes": ["openid", "email", "profile"],
@@ -54,8 +54,8 @@ OIDC_CLIENTS = {
     "cysoar": {
         "client_secret": os.environ.get("CYSOAR_OIDC_SECRET", ""),
         "redirect_uris": [
-            f"https://cy360.{BASE_DOMAIN}/cysoar/auth/callback",
-            f"https://cy360.{BASE_DOMAIN}/node-red/auth/callback",
+            f"https://cysoc.{BASE_DOMAIN}/cysoar/auth/callback",
+            f"https://cysoc.{BASE_DOMAIN}/node-red/auth/callback",
             f"https://cysoar.{BASE_DOMAIN}/auth/callback",
         ],
         "allowed_scopes": ["openid", "email", "profile"],
@@ -65,11 +65,11 @@ OIDC_CLIENTS = {
 
 # ── RBAC ───────────────────────────────────────────────────────────────────────
 ROLE_APPS = {
-    "admin":   ["cy360", "cysiem", "cyiris", "cysoar", "cyasm"],
-    "analyst": ["cy360", "cysiem", "cyiris", "cysoar", "cyasm"],
-    "viewer":  ["cy360", "cysiem"],
-    "cyiris":  ["cy360", "cyiris"],
-    "cysoar":  ["cy360", "cysoar"],
+    "admin":   ["cysoc", "cysiem", "cyiris", "cysoar", "cyasm"],
+    "analyst": ["cysoc", "cysiem", "cyiris", "cysoar", "cyasm"],
+    "viewer":  ["cysoc", "cysiem"],
+    "cyiris":  ["cysoc", "cyiris"],
+    "cysoar":  ["cysoc", "cysoar"],
 }
 VALID_ROLES = set(ROLE_APPS.keys())
 
@@ -106,8 +106,8 @@ WAZUH_URL    = os.environ.get("WAZUH_URL", "")
 CORS_ALLOWED_ORIGINS = {
     FRONTEND_URL,
     BASE_URL,
-    f"https://cy360.{BASE_DOMAIN}",
-    f"https://cyscan.{BASE_DOMAIN}",
+    f"https://cysoc.{BASE_DOMAIN}",
+    f"https://cyasm.{BASE_DOMAIN}",
     f"https://cyiris.{BASE_DOMAIN}",
     f"https://cysoar.{BASE_DOMAIN}",
     f"https://cysiem.{BASE_DOMAIN}",
