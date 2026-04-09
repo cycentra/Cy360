@@ -1,6 +1,23 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.102 — 2026-04-09
+
+### Fix — Package Install: `httpx` Version Conflict Between Backend and Correlation Engine
+
+**Root cause:** `pyproject.toml` merges `backend/requirements.txt` and
+`backend/cysiemstack/correlation_engine/requirements.txt` into a single wheel dependency list.
+Both files pinned `httpx` to different exact versions:
+- `requirements.txt` → `httpx==0.28.1`
+- `correlation_engine/requirements.txt` → `httpx==0.27.2` (added in v1.0.99 for `iris_connector`)
+
+pip's resolver raised `ResolutionImpossible` and aborted the install.
+
+**Fix:** Updated `correlation_engine/requirements.txt` to `httpx==0.28.1` to match the baseline.
+`httpx 0.27.x → 0.28.x` is a backwards-compatible minor bump; no code changes required in
+`iris_connector.py` or any other engine module.
+
+---
 ## v1.0.101 — 2026-04-10
 
 ### Fix — System Update: GH_TOKEN Now Read from `.env` at Call-Time + Revert to Direct Download URL
