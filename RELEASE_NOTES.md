@@ -1,6 +1,15 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.113 — 2026-04-09
+
+### Fix — Wheel download fallback for older bundles
+
+- When the bundle has no `.whl` file (bundles built before v1.0.112 CI fix) and no `WHEEL_URL` was resolved (local bundle mode), setup.sh now makes a fresh Releases API call to find and download the wheel asset.
+- This makes the script resilient to stale bundles without requiring the user to re-download the tarball.
+- If GH_TOKEN is also absent in this scenario, a clear actionable error is shown: `Re-run with: GH_TOKEN=your_token sudo -E bash cycentra-setup.sh`
+
+---
 ## v1.0.112 — 2026-04-09
 
 ### Fix — Local bundle detection and wheel packaging

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 — Setup & Update Wizard v1.0.112 — 2026-04-09 18:00 UTC
+# CyCentra 360 — Setup & Update Wizard v1.0.113 — 2026-04-09 18:30 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.112"
+_SCRIPT_VERSION="v1.0.113"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -885,8 +885,32 @@ elif _local_whl=$(ls "$BUNDLE_DIR"/*.whl 2>/dev/null | head -1) && [[ -n "$_loca
     _WHL_FILE="$_local_whl"
     info "Using wheel from local bundle: ${_WHL_FILE}"
 else
-    error "Wheel not found — no release asset URL and no .whl in bundle directory"
-    exit 1
+    # Fallback: local bundle has no wheel (old bundle) — resolve from GitHub Releases API.
+    # This handles bundles built before CI started packaging the wheel inside the tarball.
+    if [[ -z "$GH_TOKEN" ]]; then
+        error "Wheel not in bundle and GH_TOKEN not set — cannot download wheel."
+        error "Re-run with: GH_TOKEN=your_token sudo -E bash cycentra-setup.sh"
+        exit 1
+    fi
+    info "Wheel not in bundle — fetching from GitHub Releases API (bundle pre-dates wheel packaging)..."
+    _whl_release_json=$(curl -fsSL \
+        -H "Authorization: Bearer ${GH_TOKEN}" \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "https://api.github.com/repos/${GH_ORG}/${GH_REPO}/releases/latest")
+    _whl_asset_url=$(echo "$_whl_release_json" | \
+        jq -r '.assets[] | select(.name | test("\\.whl$")) | .url' | head -1)
+    if [[ -z "$_whl_asset_url" || "$_whl_asset_url" == "null" ]]; then
+        error "Wheel asset not found in latest GitHub Release — check CI published the .whl"
+        exit 1
+    fi
+    curl -fsSL \
+        -H "Authorization: Bearer ${GH_TOKEN}" \
+        -H "Accept: application/octet-stream" \
+        "$_whl_asset_url" \
+        -o "${_WHL_FILE}" \
+        && success "Wheel downloaded from latest release" \
+        || { error "Wheel download failed — check GH_TOKEN permissions"; exit 1; }
 fi
 
 PIP_ROOT_USER_ACTION=ignore pip3 install \
