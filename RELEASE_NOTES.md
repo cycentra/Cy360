@@ -1,7 +1,44 @@
 # CyCentra 360 — Release Notes
 
 ---
-## v1.0.106 — 2026-04-09
+## v1.0.107 — 2026-04-09
+
+### Fix — No incidents after upgrade (missing DB columns)
+
+**Root cause:** `init.sql` (used for fresh installs) and the existing migration files (001,
+002) were missing four columns added by code in v1.0.103–v1.0.104:
+- `iris_case_id`, `iris_case_status`, `iris_case_url` (CyIRIS manual escalation — v1.0.104)
+- `confidence_score` (FP auto-scoring — v1.0.103)
+
+SQLAlchemy's `create_all` creates missing *tables* only — it does not add missing *columns*
+to existing tables.  After an upgrade the engine started without error but every incident
+query failed with `column "iris_case_id" does not exist`, causing the proxy to return 500s
+and the Incidents page to stay permanently stuck loading.
+
+**`backend/cysiemstack/postgres/migrations/003_iris_confidence.sql`** (new)
+- Idempotent `ALTER TABLE incidents ADD COLUMN IF NOT EXISTS` for all four missing columns.
+- Also covers `campaign_id`, `campaign_peers`, `kill_chain_stage*` (from 001_enhancements)
+  and `correlation_feedback` table/indexes in case migration 001 wasn't applied.
+- Added composite index `ix_incidents_status_last_seen` for the common filter+sort pattern.
+- Applied automatically by `cycentra-setup.sh` during upgrade (same path as 001 and 002).
+
+**`backend/cysiemstack/postgres/init.sql`**
+- Added all missing columns to `CREATE TABLE incidents` so fresh installs are fully correct
+  without needing to rely on migrations.
+- Added all indexes that models.py defines (`ix_*` and `idx_*` names both present).
+
+### Immediate fix for affected servers (run on the server)
+```bash
+PGPASSWORD=$(grep "^POSTGRES_PASSWORD=" /opt/cycentra/cysiemstack.env | cut -d= -f2) \
+  psql -h 127.0.0.1 -p 5433 -U corruser -d correlation \
+  -c "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS iris_case_id INTEGER;
+      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS iris_case_status TEXT;
+      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS iris_case_url TEXT;
+      ALTER TABLE incidents ADD COLUMN IF NOT EXISTS confidence_score NUMERIC(5,1);"
+sudo systemctl restart cysiemstack-engine
+```
+
+---
 
 ### Fix — Incidents page stuck on "Loading incidents…"
 

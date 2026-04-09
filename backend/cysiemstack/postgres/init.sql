@@ -67,12 +67,30 @@ CREATE TABLE IF NOT EXISTS incidents (
     assigned_to         TEXT,
     notes               TEXT,
     closed_at           TIMESTAMPTZ,
-    false_positive_reason TEXT
+    false_positive_reason TEXT,
+    -- ENH-1: campaign correlation
+    campaign_id         TEXT,
+    campaign_peers      TEXT[],
+    -- ENH-2: kill-chain tracking
+    kill_chain_stage      INTEGER DEFAULT 0,
+    kill_chain_stage_name TEXT,
+    -- CyIRIS integration (v1.0.104+)
+    iris_case_id        INTEGER,
+    iris_case_status    TEXT,
+    iris_case_url       TEXT,
+    -- FP auto-scoring (v1.0.103+)
+    confidence_score    NUMERIC(5,1)
 );
 
-CREATE INDEX IF NOT EXISTS idx_incidents_status    ON incidents (status);
-CREATE INDEX IF NOT EXISTS idx_incidents_severity  ON incidents (severity);
-CREATE INDEX IF NOT EXISTS idx_incidents_last_seen ON incidents (last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_incidents_status           ON incidents (status);
+CREATE INDEX IF NOT EXISTS idx_incidents_severity         ON incidents (severity);
+CREATE INDEX IF NOT EXISTS idx_incidents_last_seen        ON incidents (last_seen DESC);
+CREATE INDEX IF NOT EXISTS ix_incidents_status            ON incidents (status);
+CREATE INDEX IF NOT EXISTS ix_incidents_severity          ON incidents (severity);
+CREATE INDEX IF NOT EXISTS ix_incidents_last_seen         ON incidents (last_seen DESC);
+CREATE INDEX IF NOT EXISTS ix_incidents_status_last_seen  ON incidents (status, last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_incidents_campaign_id
+    ON incidents (campaign_id) WHERE campaign_id IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- UEBA BASELINES — rolling per-user behavioural profile
