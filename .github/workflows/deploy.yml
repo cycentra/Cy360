@@ -197,5 +197,6 @@ jobs:
           files: |
             cycentra-release.tar.gz
             cycentra-setup.sh
+            dist/*.whl
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

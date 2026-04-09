@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.110"
+_SCRIPT_VERSION="v1.0.111"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -493,14 +493,6 @@ StandardError=append:/opt/cycentra/engine.log
 WantedBy=multi-user.target
 UNITEOF
 
-# Remove Filebeat if installed — it crashes on kernel 6.x (seccomp pthread issue)
-if dpkg -l filebeat &>/dev/null 2>&1; then
-    systemctl disable --now filebeat 2>/dev/null || true
-    apt-get purge -y filebeat 2>/dev/null || true
-    rm -rf /etc/filebeat /var/lib/filebeat /var/log/filebeat
-    success "Filebeat removed (replaced by cysiem-to-redis)"
-fi
-
 # Ensure CySIEM alerts log is readable (may not exist yet if CySIEM not generating alerts)
 if [[ -f /var/ossec/logs/alerts/alerts.json ]]; then
     chmod o+r /var/ossec/logs/alerts/alerts.json 2>/dev/null || true
@@ -523,35 +515,62 @@ systemctl is-active cysiem-to-redis >/dev/null 2>&1 \
 step_header "DOWNLOAD RELEASE BUNDLE"
 
 GH_TOKEN="${GH_TOKEN:-}"
-if [[ -z "$GH_TOKEN" ]]; then
-    error "GH_TOKEN is not set. Run with: GH_TOKEN=your_token sudo -E bash cycentra-setup.sh"
-    exit 1
-fi
-
 GH_ORG="cycentra"
 GH_REPO="cycentra360"
-GH_BASE="https://maven.pkg.github.com/${GH_ORG}/${GH_REPO}"
-CYCENTRA_VERSION="${CYCENTRA_VERSION:-latest}"
 
-if [[ "$CYCENTRA_VERSION" == "latest" ]]; then
-    _latest_tag=$(curl -fsSL \
+# ── Detect local bundle (running from inside an already-extracted tarball) ────
+# When the server runs:  tar -xzf bundle.tar.gz && sudo bash cycentra-setup.sh
+# manifest.json will be in the same directory as this script.  In that case
+# we skip the download entirely — GH_TOKEN is not required.
+_SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+BUNDLE_DIR="/tmp/cycentra-release"
+
+if [[ -f "$_SCRIPT_DIR/manifest.json" ]]; then
+    info "Local bundle detected — skipping download"
+    BUNDLE_DIR="$_SCRIPT_DIR"
+    # Resolve version from local bundle for the update-mode pre-check below
+    CYCENTRA_VERSION=$(cat "$_SCRIPT_DIR/VERSION" 2>/dev/null || jq -r '.version' "$_SCRIPT_DIR/manifest.json" 2>/dev/null || echo "unknown")
+    _RELEASE_JSON=""
+else
+    # ── Remote download path: requires GH_TOKEN ───────────────────────────────
+    if [[ -z "$GH_TOKEN" ]]; then
+        error "GH_TOKEN is not set. Run with: GH_TOKEN=your_token sudo -E bash cycentra-setup.sh"
+        exit 1
+    fi
+
+    # Step 1: resolve latest release metadata (single API call — no maven)
+    info "Fetching latest release metadata from GitHub..."
+    _RELEASE_JSON=$(curl -fsSL \
         -H "Authorization: Bearer ${GH_TOKEN}" \
         -H "Accept: application/vnd.github+json" \
-        "https://api.github.com/repos/${GH_ORG}/${GH_REPO}/releases/latest" \
-        | jq -r '.tag_name')
-    [[ -z "$_latest_tag" || "$_latest_tag" == "null" ]] && \
-        { error "Could not resolve latest release from GitHub API"; exit 1; }
-    CYCENTRA_VERSION="$_latest_tag"
-    info "Latest release resolved: ${CYCENTRA_VERSION}"
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "https://api.github.com/repos/${GH_ORG}/${GH_REPO}/releases/latest")
+
+    CYCENTRA_VERSION=$(echo "$_RELEASE_JSON" | jq -r '.tag_name')
+    [[ -z "$CYCENTRA_VERSION" || "$CYCENTRA_VERSION" == "null" ]] && \
+        { error "Could not resolve latest release from GitHub API — check GH_TOKEN (needs repo scope)"; exit 1; }
+    info "Latest release: ${CYCENTRA_VERSION}"
+
+    # Step 2: find bundle asset URL from release metadata
+    _bundle_asset_url=$(echo "$_RELEASE_JSON" | \
+        jq -r '.assets[] | select(.name | contains("cycentra-release")) | .url' | head -1)
+    [[ -z "$_bundle_asset_url" || "$_bundle_asset_url" == "null" ]] && \
+        { error "Bundle asset not found in release ${CYCENTRA_VERSION} — check CI published correctly"; exit 1; }
+
+    # Step 3: download via asset API URL (required for private repos — direct URL returns 404)
+    rm -rf "$BUNDLE_DIR" /tmp/cycentra-release.tar.gz
+    info "Downloading release bundle..."
+    curl -fsSL \
+        -H "Authorization: Bearer ${GH_TOKEN}" \
+        -H "Accept: application/octet-stream" \
+        "$_bundle_asset_url" \
+        -o /tmp/cycentra-release.tar.gz \
+        && success "Bundle downloaded" \
+        || { error "Bundle download failed — check GH_TOKEN permissions"; exit 1; }
+    tar -xzf /tmp/cycentra-release.tar.gz -C /tmp/
 fi
 
-GH_VER="${CYCENTRA_VERSION#v}"
-CYCENTRA_RELEASE_URL="${CYCENTRA_RELEASE_URL:-${GH_BASE}/cycentra/bundle/${GH_VER}/bundle-${GH_VER}.tar.gz}"
-
 # ── Version pre-check (update mode only) ─────────────────────────────────────
-# Compare the installed version against the latest published version resolved
-# from GitHub Releases API (CYCENTRA_VERSION).  Using _SCRIPT_VERSION here
-# would always match because the running script IS the installed one.
 if [[ "$MODE" == "update" && "${FORCE_UPDATE:-0}" != "1" ]]; then
     _installed_ver=$(cat /opt/cycentra/version 2>/dev/null | tr -d '[:space:]' || echo "")
     if [[ -n "$_installed_ver" && "$_installed_ver" == "$CYCENTRA_VERSION" ]]; then
@@ -564,28 +583,22 @@ if [[ "$MODE" == "update" && "${FORCE_UPDATE:-0}" != "1" ]]; then
     fi
 fi
 
-BUNDLE_DIR="/tmp/cycentra-release"
-rm -rf "$BUNDLE_DIR" /tmp/cycentra-release.tar.gz
-
-info "Downloading: $(_mask_url "${CYCENTRA_RELEASE_URL}")"
-if [[ "$CYCENTRA_RELEASE_URL" == http* ]]; then
-    curl -fsSL \
-        -H "Authorization: Bearer ${GH_TOKEN}" \
-        "$CYCENTRA_RELEASE_URL" -o /tmp/cycentra-release.tar.gz \
-        && success "Bundle downloaded" \
-        || { error "Download failed. Check GH_TOKEN and version."; exit 1; }
-    tar -xzf /tmp/cycentra-release.tar.gz -C /tmp/
-else
-    tar -xzf "$CYCENTRA_RELEASE_URL" -C /tmp/
-fi
-
 MANIFEST="$BUNDLE_DIR/manifest.json"
-[[ ! -f "$MANIFEST" ]] && { error "manifest.json not found in bundle"; exit 1; }
+[[ ! -f "$MANIFEST" ]] && { error "manifest.json not found in bundle at ${BUNDLE_DIR}"; exit 1; }
 
 BUNDLE_VERSION=$(jq -r '.version'    "$MANIFEST")
 PKG_VER=$(jq        -r '.ver_number' "$MANIFEST")
 PKG_NAME="cycentra-backend"
-WHEEL_URL="${GH_BASE}/cycentra/backend/${PKG_VER}/cycentra_backend-${PKG_VER}-py3-none-any.whl"
+
+# Wheel asset URL — resolved from the same release metadata (no maven required).
+# Falls back to empty; the download step below handles missing asset gracefully.
+if [[ -n "${_RELEASE_JSON:-}" ]]; then
+    WHEEL_URL=$(echo "$_RELEASE_JSON" | \
+        jq -r --arg ver "$PKG_VER" \
+        '.assets[] | select(.name | test("cycentra.backend.*\\.whl")) | .url' | head -1)
+else
+    WHEEL_URL=""
+fi
 
 success "Bundle version  : ${BUNDLE_VERSION}"
 info    "Package         : ${PKG_NAME}==${PKG_VER}"
@@ -849,18 +862,27 @@ success "ASM log directories created"
 step_header "INSTALLING CYCENTRA-BACKEND PACKAGE"
 
 info "Installing ${PKG_NAME}==${PKG_VER} into system Python ..."
-info "Wheel: $(_mask_url "${WHEEL_URL}")"
 
-# Download wheel from GitHub Packages then install locally.
-# pip requires the filename to match the wheel naming convention; use the real WHL name.
-# --break-system-packages required on Ubuntu 24.04 (PEP 668 externally-managed env)
-# PIP_ROOT_USER_ACTION=ignore suppresses the "running as root" advisory — intentional here.
+# Download wheel — use the release asset URL resolved earlier if available,
+# otherwise fall back to the local bundle directory (pre-packaged wheel).
 _WHL_FILE="/tmp/cycentra_backend-${PKG_VER}-py3-none-any.whl"
-curl -fsSL \
-    -H "Authorization: Bearer ${GH_TOKEN}" \
-    "${WHEEL_URL}" \
-    -o "${_WHL_FILE}" \
-    || { error "Wheel download failed — check GH_TOKEN and version"; exit 1; }
+
+if [[ -n "${WHEEL_URL:-}" && "$WHEEL_URL" != "null" ]]; then
+    info "Downloading wheel from GitHub Release asset..."
+    curl -fsSL \
+        -H "Authorization: Bearer ${GH_TOKEN}" \
+        -H "Accept: application/octet-stream" \
+        "${WHEEL_URL}" \
+        -o "${_WHL_FILE}" \
+        && success "Wheel downloaded" \
+        || { error "Wheel download failed — check GH_TOKEN permissions"; exit 1; }
+elif [[ -f "$BUNDLE_DIR"/*.whl ]]; then
+    _WHL_FILE=$(ls "$BUNDLE_DIR"/*.whl | head -1)
+    info "Using wheel from local bundle: ${_WHL_FILE}"
+else
+    error "Wheel not found — no release asset URL and no .whl in bundle directory"
+    exit 1
+fi
 
 PIP_ROOT_USER_ACTION=ignore pip3 install \
     --extra-index-url https://pypi.org/simple/ \
@@ -1113,56 +1135,7 @@ server {
 }
 # cyiris.DOMAIN server block is added by routes.py when CyIRIS is installed via portal
 # cymisp.DOMAIN server block is added by routes.py when CyMISP is installed via portal
-
-# ── CyMind AI (cymind / cyq) ─────────────────────────────────────────────────
-server { listen 80; server_name cymind.${BASE_DOMAIN} cyq.${BASE_DOMAIN}; return 301 https://\$host\$request_uri; }
-server {
-    listen 443 ssl http2; server_name cymind.${BASE_DOMAIN} cyq.${BASE_DOMAIN};
-    ssl_certificate     /etc/letsencrypt/live/cy360.${BASE_DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/cy360.${BASE_DOMAIN}/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    client_max_body_size 500M;
-
-    # ── SSE streaming (chat/stream, model pull) — no buffering ────
-    location ~ ^/api/v1/(chat/stream|models/.*/pull) {
-        proxy_pass         http://127.0.0.1:${CYMIND_PORT:-8080};
-        proxy_http_version 1.1;
-        proxy_set_header   Host              \$host;
-        proxy_set_header   X-Real-IP         \$remote_addr;
-        proxy_set_header   X-Forwarded-For   \$proxy_add_x_forwarded_for;
-        proxy_set_header   X-Forwarded-Proto \$scheme;
-        proxy_set_header   Connection        "";
-        proxy_buffering    off;
-        proxy_cache        off;
-        proxy_read_timeout 3600s;
-        chunked_transfer_encoding on;
-    }
-
-    # ── All API requests ──────────────────────────────────────────
-    location /api/ {
-        proxy_pass         http://127.0.0.1:${CYMIND_PORT:-8080};
-        proxy_http_version 1.1;
-        proxy_set_header   Host              \$host;
-        proxy_set_header   X-Real-IP         \$remote_addr;
-        proxy_set_header   X-Forwarded-For   \$proxy_add_x_forwarded_for;
-        proxy_set_header   X-Forwarded-Proto \$scheme;
-        proxy_set_header   Connection        "";
-        proxy_read_timeout 300s;
-    }
-
-    # ── Frontend SPA ──────────────────────────────────────────────
-    location / {
-        proxy_pass         http://127.0.0.1:${CYMIND_PORT:-8080};
-        proxy_http_version 1.1;
-        proxy_set_header   Host              \$host;
-        proxy_set_header   X-Real-IP         \$remote_addr;
-        proxy_set_header   X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 60s;
-    }
-}
+# cymind.DOMAIN server block is added by cymind/install.sh when CyMind is installed
 NGINXEOF
 
     cp "$SSL_CONF" "$SSL_CONF_BACKUP"

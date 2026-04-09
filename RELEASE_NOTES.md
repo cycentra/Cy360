@@ -1,6 +1,18 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.111 — 2026-04-09
+
+### Fix — Download, filebeat, nginx
+
+- **Filebeat removal removed:** setup.sh no longer purges filebeat. Filebeat is a Wazuh component and must not be touched by the platform installer.
+- **Bundle download — GitHub Releases API:** replaced broken `maven.pkg.github.com` bundle URL with proper 2-step GitHub Releases API download (same approach as routes.py). Single `releases/latest` call resolves both bundle and wheel asset URLs.
+- **Local bundle detection:** if setup.sh is run from within an already-extracted tarball directory (manifest.json present alongside the script), download is skipped entirely — GH_TOKEN not required for initial install.
+- **Wheel via release asset:** wheel now downloaded as a GitHub Release asset (no maven). Also added `dist/*.whl` to CI release `files:` so the asset is always attached.
+- **CyMind nginx removed from setup.sh:** `cymind/cyq` server block removed from the nginx heredoc. It belongs in `cymind/install.sh` (managed by cyra-ai). A comment is left pointing install.sh as the owner.
+- **UI update button:** already correct in routes.py (2-step Releases API). No change needed.
+
+---
 ## v1.0.110 — 2026-04-09
 
 ### Fix — Install command uses GitHub Releases API instead of Maven
