@@ -1,6 +1,15 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.110 — 2026-04-09
+
+### Fix — Install command uses GitHub Releases API instead of Maven
+
+- Maven registry (`maven.pkg.github.com`) does not support `latest` as a version — requests redirected to a blank host causing `curl: (6) Could not resolve host`.
+- Install instructions now use `GET /repos/.../releases/latest` + asset API URL with `Accept: application/octet-stream` — works reliably for private repos.
+- CI Release body updated with the corrected one-liner.
+
+---
 ## v1.0.109 — 2026-04-09
 
 ### CI — Always-latest package aliases

@@ -177,15 +177,23 @@ jobs:
 
             ```bash
             PAT="YOUR_GITHUB_PAT"
-            curl -L -u "cycentra:$PAT" \
-              "https://maven.pkg.github.com/cycentra/cycentra360/cycentra/bundle/latest/bundle-latest.tar.gz" \
+
+            ASSET_URL=$(curl -sf \
+              -H "Authorization: token $PAT" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/cycentra/cycentra360/releases/latest" \
+              | grep -o '"url": *"https://api.github.com/repos/cycentra/cycentra360/releases/assets/[0-9]*"' \
+              | head -1 | grep -o 'https://[^"]*')
+
+            curl -L \
+              -H "Authorization: token $PAT" \
+              -H "Accept: application/octet-stream" \
+              "$ASSET_URL" \
               -o /tmp/cycentra-release.tar.gz && \
             mkdir -p /tmp/cycentra-install && \
             tar -xzf /tmp/cycentra-release.tar.gz -C /tmp/cycentra-install --strip-components=1 && \
             cd /tmp/cycentra-install && sudo bash cycentra-setup.sh
             ```
-
-            This release is also available at the versioned path `${{ steps.version.outputs.ver }}`.
           files: |
             cycentra-release.tar.gz
             cycentra-setup.sh
