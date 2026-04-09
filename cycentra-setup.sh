@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.97"
+_SCRIPT_VERSION="v1.0.98"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -771,6 +771,10 @@ SUPPORT_EMAIL=${SUPPORT_EMAIL:-support@cycentra.com}
 SIEM_ENGINE_URL=http://127.0.0.1:8100
 SIEM_LLM_ENABLED=true
 SIEM_MISP_ENABLED=false
+
+# GitHub token — used by the portal backend to download updates/upgrades without
+# requiring the customer to enter it in the UI.  Set via GH_TOKEN env var at install time.
+GH_TOKEN=${GH_TOKEN:-}
 
 # ── Cloud CyMISP (Cycentra-managed MISP at misp.cycentra.com) ─────────────────
 # When a customer selects "Cloud CyMISP" in System Settings > Integrations, the

@@ -12,7 +12,8 @@ Routes:
   GET  /api/config               debug — dump non-secret env config
   GET  /api/system/version         current version + last 5 release notes
   GET  /api/system/latest-version   query GitHub Releases API for latest published version (ghToken required)
-  POST /api/system/update           trigger cycentra-setup.sh --update (GH_TOKEN required)
+  POST /api/system/update           trigger cycentra-setup.sh --update (GH_TOKEN read from server .env)
+  POST /api/system/upgrade          trigger cycentra-setup.sh full install (major upgrade)
   GET  /api/system/env/<target>  read env file (global|cysiemstack|cyiris|cysoar|cymisp|cysiem)
   PUT  /api/system/env/<target>  write env file
 """
@@ -431,51 +432,92 @@ def update_options():
     return add_cors_headers(make_response('', 204))
 
 
-@system_bp.route("/api/system/update", methods=["POST"])
-def system_update():
-    """Trigger sudo cycentra-setup.sh --update in a background thread. Requires GH_TOKEN."""
+def _get_server_gh_token() -> str:
+    """Read GH_TOKEN from the server environment (set from /opt/cycentra/.env at startup)."""
+    return os.environ.get("GH_TOKEN", "").strip()
+
+
+def _run_setup_in_background(flags: list[str], label: str) -> None:
+    """Download the latest setup script and run it with the given flags.
+    GH_TOKEN is read from the server environment — never from the HTTP request.
+    """
     global _update_running, _update_log
-
-    if _update_running:
-        return jsonify({"ok": False, "error": "Update already in progress"}), 409
-
-    data      = request.get_json() or {}
-    gh_token  = data.get("ghToken", "").strip()
-    if not gh_token:
-        return jsonify({"ok": False, "error": "GH_TOKEN is required"}), 400
-    # Basic format guard — GitHub PATs: ghp_... or github_pat_... + fine-grained, no shell metacharacters
-    if not re.match(r'^[A-Za-z0-9_\-]{8,255}$', gh_token):
-        return jsonify({"ok": False, "error": "Invalid GH_TOKEN format"}), 400
-
-    setup_script = "/opt/cycentra/cycentra-setup.sh"
-    if not os.path.exists(setup_script):
-        return jsonify({"ok": False, "error": "Setup script not found on server"}), 404
-
-    _update_log = ["[UPDATE] Starting update\u2026"]
+    gh_token = _get_server_gh_token()
+    _update_log = [f"[{label}] Starting…"]
     _update_running = True
 
     def _run():
         global _update_running, _update_log
         try:
             env = {**os.environ, "GH_TOKEN": gh_token}
+            # Step 1 — download the latest setup script
+            dl_cmd = [
+                "curl", "-fsSL",
+                "-H", f"Authorization: Bearer {gh_token}",
+                "https://github.com/cycentra/cycentra360/releases/latest/download/cycentra-setup.sh",
+                "-L", "-o", "/opt/cycentra/cycentra-setup.sh",
+            ]
+            _update_log.append(f"[{label}] Downloading latest setup script…")
+            dl = subprocess.run(dl_cmd, capture_output=True, text=True, timeout=60)
+            if dl.returncode != 0:
+                _update_log.append(f"[{label} ERROR] Download failed: {_redact_line(dl.stderr)}")
+                _update_running = False
+                return
+
+            # Step 2 — execute with the requested flags
+            cmd = ["sudo", "-E", "bash", "/opt/cycentra/cycentra-setup.sh"] + flags
             proc = subprocess.Popen(
-                ["sudo", "-E", "bash", setup_script, "--update"],
-                env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
             )
             for line in proc.stdout:
                 _update_log.append(_redact_line(line.rstrip()))
-                if len(_update_log) > 500:       # cap buffer
+                if len(_update_log) > 500:
                     _update_log = _update_log[-500:]
             proc.wait()
-            _update_log.append(f"[UPDATE] Finished with exit code {proc.returncode}")
+            _update_log.append(f"[{label}] Finished with exit code {proc.returncode}")
         except Exception as e:
-            _update_log.append(f"[UPDATE ERROR] {e}")
+            _update_log.append(f"[{label} ERROR] {e}")
         finally:
             _update_running = False
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+@system_bp.route("/api/system/update", methods=["POST"])
+def system_update():
+    """Trigger sudo cycentra-setup.sh --update in a background thread.
+    GH_TOKEN is read from the server .env — not the HTTP request.
+    """
+    global _update_running
+    if _update_running:
+        return jsonify({"ok": False, "error": "Update already in progress"}), 409
+    if not os.path.exists("/opt/cycentra/cycentra-setup.sh"):
+        return jsonify({"ok": False, "error": "Setup script not found on server"}), 404
+    if not _get_server_gh_token():
+        return jsonify({"ok": False, "error": "GH_TOKEN not configured on server (check /opt/cycentra/.env)"}), 400
+    _run_setup_in_background(["--update"], "UPDATE")
     return jsonify({"ok": True, "message": "Update started"})
+
+
+@system_bp.route("/api/system/upgrade", methods=["OPTIONS"])
+def upgrade_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/upgrade", methods=["POST"])
+def system_upgrade():
+    """Trigger a full sudo cycentra-setup.sh (no --update flag) in a background thread.
+    This is a major re-install/upgrade — all services are re-configured.
+    GH_TOKEN is read from the server .env — not the HTTP request.
+    """
+    global _update_running
+    if _update_running:
+        return jsonify({"ok": False, "error": "An update/upgrade is already in progress"}), 409
+    if not _get_server_gh_token():
+        return jsonify({"ok": False, "error": "GH_TOKEN not configured on server (check /opt/cycentra/.env)"}), 400
+    _run_setup_in_background([], "UPGRADE")
+    return jsonify({"ok": True, "message": "Upgrade started"})
 
 
 @system_bp.route("/api/system/update/log")
@@ -497,12 +539,11 @@ def system_latest_version():
 
     Uses GET /repos/cycentra/cycentra360/releases/latest — fast, no bundle download.
     Returns {current, latest, up_to_date} for the UI to act on.
+    GH_TOKEN is read from the server environment (/opt/cycentra/.env).
     """
-    gh_token = request.args.get("ghToken", "").strip()
+    gh_token = _get_server_gh_token()
     if not gh_token:
-        return jsonify({"error": "ghToken is required"}), 400
-    if not re.match(r'^[A-Za-z0-9_\-]{8,255}$', gh_token):
-        return jsonify({"error": "Invalid GH_TOKEN format"}), 400
+        return jsonify({"error": "GH_TOKEN not configured on server (check /opt/cycentra/.env)"}), 400
 
     # Read currently installed version
     current = "unknown"

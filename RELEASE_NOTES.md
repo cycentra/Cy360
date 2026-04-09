@@ -1,6 +1,48 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.98 — 2026-04-09
+
+### Feature — Updates & Version Tab: Server-Side GH_TOKEN + Run Upgrade Button
+
+**Overview:**
+The PAT / GH_TOKEN input field has been removed from the Updates & Version UI.
+The token is now read exclusively from the server's `/opt/cycentra/.env` file, eliminating
+the need for customers to paste credentials into the portal. A new **Run Upgrade** button
+sits next to Run Update and triggers a full re-installation rather than an incremental patch.
+
+**`portal/src/pages/settings/SystemSettingsPage.jsx` — `UpdatesTab`:**
+- Removed `ghToken` state and `localStorage` persistence; no token input field displayed
+- Added `upgrading` state tracking (mirrors existing `updating`)
+- Added `handleUpgrade()` — calls `POST /api/system/upgrade`; polls live log
+- `handleUpdate()` — version check via `GET /api/system/latest-version` (no query params);
+  then calls `POST /api/system/update` with empty JSON body
+- Two side-by-side action cards:
+  - **RUN UPDATE** (green) — incremental patch via `cycentra-setup.sh --update`
+  - **RUN UPGRADE** (orange) — full re-installation via `cycentra-setup.sh` (no flags)
+- Footer note: "GitHub credentials are configured server-side in `/opt/cycentra/.env` — no token entry required."
+- Live log header shows `UPGRADE` or `UPDATE` label dynamically
+
+**`backend/blueprints/system/routes.py`:**
+- New `_get_server_gh_token()` helper — reads `GH_TOKEN` from `os.environ`; returns `None`
+  if unset; callers return HTTP 400 with a descriptive message guiding the operator to `.env`
+- New `_run_setup_in_background(flags: list[str], label: str)` — downloads the latest
+  `cycentra-setup.sh` from GitHub Releases using Bearer auth, then executes
+  `sudo -E bash /opt/cycentra/cycentra-setup.sh [flags]` in a background thread while
+  streaming output lines into the shared `_update_log` buffer
+- `POST /api/system/update` rewritten: reads token from server env; no request body
+  fields consumed; calls `_run_setup_in_background(["--update"], "UPDATE")`
+- **New** `POST /api/system/upgrade` endpoint: calls `_run_setup_in_background([], "UPGRADE")`
+  — runs the full setup script without `--update`, performing a complete re-installation
+- `GET /api/system/latest-version` updated: token now sourced from `_get_server_gh_token()`
+  instead of `request.args.get("ghToken")`
+
+**`cycentra-setup.sh`:**
+- Added `GH_TOKEN=${GH_TOKEN:-}` to the generated `/opt/cycentra/.env` template so the
+  token is persisted at install time and automatically loaded by the systemd service via
+  `EnvironmentFile=/opt/cycentra/.env`
+
+---
 ## v1.0.97 — 2026-04-09
 
 ### Feature — MISP 3-Mode Selector: Disabled / Cloud CyMISP / Local CyMISP (single source of truth)
