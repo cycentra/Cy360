@@ -577,10 +577,11 @@ def _run_setup_in_background(flags: list[str], label: str) -> None:
     GH_TOKEN is read fresh from /opt/cycentra/.env at call-time (never from
     the HTTP request) so changes to .env after service start are always picked up.
 
-    Download command mirrors the confirmed-working manual approach:
-      curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-        https://github.com/cycentra/cycentra360/releases/latest/download/cycentra-setup.sh \
-        -L -o /opt/cycentra/cycentra-setup.sh
+    For private repos the GitHub API 2-step approach is required:
+      1. GET /repos/cycentra/cycentra360/releases/latest  → find asset URL
+      2. GET <asset_api_url>  Accept: application/octet-stream  → binary download
+    The direct browser download URL (github.com/releases/latest/download/…) returns
+    404 for private repos when accessed via Bearer token.
     """
     global _update_running, _update_log
     _update_log = [f"[{label}] Starting…"]
@@ -598,20 +599,79 @@ def _run_setup_in_background(flags: list[str], label: str) -> None:
             return
         try:
             env = {**os.environ, "GH_TOKEN": gh_token}
+            api_headers = {
+                "Authorization": f"Bearer {gh_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            }
 
-            # ── Download latest setup script ─────────────────────────────────
-            _update_log.append(f"[{label}] Downloading latest cycentra-setup.sh…")
-            dl_cmd = [
-                "curl", "-fsSL",
-                "-H", f"Authorization: Bearer {gh_token}",
-                "https://github.com/cycentra/cycentra360/releases/latest/download/cycentra-setup.sh",
-                "-L", "-o", "/opt/cycentra/cycentra-setup.sh",
-            ]
-            dl = subprocess.run(dl_cmd, capture_output=True, text=True, timeout=60)
-            if dl.returncode != 0:
-                _update_log.append(f"[{label} ERROR] Download failed: {_redact_line(dl.stderr)}")
+            # ── Step 1: resolve the asset URL from the latest release ────────
+            _update_log.append(f"[{label}] Fetching latest release metadata…")
+            try:
+                rel_resp = http_requests.get(
+                    "https://api.github.com/repos/cycentra/cycentra360/releases/latest",
+                    headers=api_headers,
+                    timeout=30,
+                )
+            except Exception as exc:
+                _update_log.append(f"[{label} ERROR] GitHub API unreachable: {exc}")
                 _update_running = False
                 return
+            if rel_resp.status_code != 200:
+                _update_log.append(
+                    f"[{label} ERROR] GitHub API returned HTTP {rel_resp.status_code} — "
+                    "check GH_TOKEN permissions (needs repo scope)"
+                )
+                _update_running = False
+                return
+            release = rel_resp.json()
+            tag = release.get("tag_name", "?")
+            assets = release.get("assets", [])
+            asset = next((a for a in assets if a["name"] == "cycentra-setup.sh"), None)
+            if not asset:
+                _update_log.append(
+                    f"[{label} ERROR] cycentra-setup.sh not found in release {tag} — "
+                    "verify the asset was uploaded to the release"
+                )
+                _update_running = False
+                return
+
+            # ── Step 2: download the asset via the API URL ───────────────────
+            _update_log.append(f"[{label}] Downloading cycentra-setup.sh from release {tag}…")
+            try:
+                dl_resp = http_requests.get(
+                    asset["url"],
+                    headers={**api_headers, "Accept": "application/octet-stream"},
+                    timeout=120,
+                    allow_redirects=True,
+                )
+            except Exception as exc:
+                _update_log.append(f"[{label} ERROR] Download request failed: {exc}")
+                _update_running = False
+                return
+            if dl_resp.status_code != 200:
+                _update_log.append(
+                    f"[{label} ERROR] Asset download returned HTTP {dl_resp.status_code}"
+                )
+                _update_running = False
+                return
+
+            # Write to /tmp first (always writable), then sudo-copy into place
+            tmp_path = "/tmp/cycentra-setup.sh"
+            Path(tmp_path).write_bytes(dl_resp.content)
+            cp = subprocess.run(
+                ["sudo", "cp", tmp_path, "/opt/cycentra/cycentra-setup.sh"],
+                capture_output=True, text=True, timeout=15,
+            )
+            if cp.returncode != 0:
+                _update_log.append(f"[{label} ERROR] Failed to copy script: {cp.stderr.strip()}")
+                _update_running = False
+                return
+            subprocess.run(
+                ["sudo", "chmod", "+x", "/opt/cycentra/cycentra-setup.sh"],
+                capture_output=True, text=True, timeout=10,
+            )
+            _update_log.append(f"[{label}] Script downloaded successfully ({len(dl_resp.content)} bytes)")
 
             # ── Execute with requested flags (GH_TOKEN visible via sudo -E) ──
             cmd = ["sudo", "-E", "bash", "/opt/cycentra/cycentra-setup.sh"] + flags
@@ -641,8 +701,6 @@ def system_update():
     global _update_running
     if _update_running:
         return jsonify({"ok": False, "error": "Update already in progress"}), 409
-    if not os.path.exists("/opt/cycentra/cycentra-setup.sh"):
-        return jsonify({"ok": False, "error": "Setup script not found on server"}), 404
     if not _get_server_gh_token():
         return jsonify({"ok": False, "error": "GH_TOKEN not configured on server (check /opt/cycentra/.env)"}), 400
     _run_setup_in_background(["--update"], "UPDATE")

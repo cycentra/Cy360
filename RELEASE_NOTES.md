@@ -1,7 +1,32 @@
 # CyCentra 360 — Release Notes
 
 ---
-## v1.0.104 — 2026-04-09
+## v1.0.105 — 2026-04-09
+
+### Fix — Update / Upgrade 404 Download Failure
+
+**Root cause:** The direct browser download URL
+(`github.com/.../releases/latest/download/cycentra-setup.sh`) returns HTTP 404 for private
+repos when accessed via a Bearer token. GitHub requires the 2-step API approach for private
+release assets.
+
+**`backend/blueprints/system/routes.py`**
+- `_run_setup_in_background()`: replaced single `curl` call with a 2-step download using
+  `requests` (already imported):
+  1. `GET https://api.github.com/repos/cycentra/cycentra360/releases/latest` → locate the
+     `cycentra-setup.sh` asset entry (`asset["url"]`).
+  2. `GET <asset_api_url>` with `Accept: application/octet-stream` → stream the binary.
+- Writes to `/tmp/cycentra-setup.sh` first (always writable), then `sudo cp` into
+  `/opt/cycentra/cycentra-setup.sh` and `sudo chmod +x`.
+- Log messages now show the release tag being downloaded and the byte count on success.
+- Better error messages: distinguishes API auth failures, missing asset, and download errors.
+- Removed stale pre-check `os.path.exists(setup_script)` from `system_update()` — script is
+  now always downloaded fresh so the check was blocking first-run updates needlessly.
+
+Applies to both **Update** (`--update` flag) and **Upgrade** (no flags) — both use the same
+`_run_setup_in_background()` function.
+
+---
 
 ### Feature — Manual CyIRIS Ticket Creation: SIEM Incidents + ASM Findings
 
