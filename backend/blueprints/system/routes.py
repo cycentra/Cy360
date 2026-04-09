@@ -38,7 +38,6 @@ _ENV_FILE_MAP = {
     "cyiris":      "/opt/cycentra/modules/cyiris/.env",
     "cysoar":      "/opt/cycentra/modules/cysoar/.env",
     "cymisp":      "/opt/cycentra/modules/cymisp/.env",
-    "cysiem":      "/opt/cycentra/.env",
 }
 
 # Keys that must never be returned or overwritten via the API (security)

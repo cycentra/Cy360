@@ -22,7 +22,6 @@ const ENV_TARGETS = [
   { id: "cyiris",      label: "CyIRIS",                desc: "Incident response platform config" },
   { id: "cysoar",      label: "CySOAR",                desc: "SOAR / Node-RED automation settings" },
   { id: "cymisp",      label: "CyMISP",                desc: "MISP threat intelligence platform" },
-  { id: "cysiem",      label: "CySIEM Engine",         desc: "Correlation engine tuning parameters" },
 ];
 
 // ════════════════════════════════════════════════════════════════════════════
