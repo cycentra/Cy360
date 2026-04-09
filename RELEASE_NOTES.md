@@ -1,7 +1,35 @@
 # CyCentra 360 — Release Notes
 
 ---
-## v1.0.105 — 2026-04-09
+## v1.0.106 — 2026-04-09
+
+### Fix — Incidents page stuck on "Loading incidents…"
+
+**`portal/src/siem/SiemIncidentsPage.jsx`**
+- `fetchIncidents()`: when the API returned `_offline` or `_error` the early-return path
+  never called `setLoading(false)`, leaving the page permanently stuck on the spinner.
+  Fixed to always settle `loading` state regardless of error path.
+
+### Fix — UEBA "Escalate to IRIS" button not visible
+
+**Root cause:** `siem_ueba_integrations()` checked `bool(IRIS_URL)` from `core/config.py`
+env var. If IRIS is configured via `ai_settings.json` (local or cloud mode) that env var is
+empty → `iris_enabled = False` → the button is hidden in every AnomalyCard.
+
+**`backend/siem_proxy.py`** — `siem_ueba_integrations()`
+- Now uses `get_iris_config()` (same helper as ASM and correlation engine) to determine
+  `iris_enabled` — works with local, cloud, and legacy env-var IRIS configs.
+- `iris_url` in the response now comes from the resolved config, not the raw env var.
+
+**`backend/siem_proxy.py`** — `siem_ueba_escalate()`
+- Replaced raw `IRIS_URL` / `IRIS_API_KEY` env-var reads with `get_iris_config()` so it
+  honours all IRIS modes (local / cloud).
+- Updated API call from deprecated `/api/v1/cases/add` → `/api/v2/cases` to match the
+  correlation engine `iris_connector.py` and ASM escalate route.
+- Case payload now includes `case_severity_id` (maps high-risk/critical-risk anomaly types).
+- Error messages updated to reference AI & Integration Settings instead of raw env vars.
+
+---
 
 ### Fix — Update / Upgrade 404 Download Failure
 

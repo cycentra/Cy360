@@ -175,12 +175,16 @@ def siem_ueba_detail(username):
 @siem_bp.route("/ueba/escalate", methods=["POST"])
 @require_siem_analyst
 def siem_ueba_escalate():
-    """Create a case in IRIS from a UEBA anomaly. Requires IRIS_URL + IRIS_API_KEY in .env."""
-    import json as _json
-    from core.config import IRIS_URL, IRIS_API_KEY
+    """Create a case in IRIS from a UEBA anomaly.
 
-    if not IRIS_URL or not IRIS_API_KEY:
-        return jsonify({"error": "IRIS integration not configured. Set IRIS_URL and IRIS_API_KEY in .env."}), 503
+    Uses get_iris_config() so it works with all three IRIS modes: local,
+    cloud (CLOUD_IRIS_*), and the legacy IRIS_URL / IRIS_API_KEY env vars.
+    Calls /api/v2/cases to match the engine iris_connector and ASM escalate routes.
+    """
+    from core.helpers import get_iris_config
+    cfg = get_iris_config()
+    if not cfg:
+        return jsonify({"error": "CyIRIS not configured. Enable it in AI & Integration Settings."}), 503
 
     body = request.get_json(silent=True) or {}
     username     = body.get("username", "unknown")
@@ -224,33 +228,39 @@ def siem_ueba_escalate():
         case_description += f"\n### Raw Log\n```\n{raw_log[:1000]}\n```\n"
     case_description += f"\n---\n*Escalated by {analyst_email} via CyCentra360 UEBA*"
 
+    # Severity: UEBA anomalies don't have a simple severity field so default to medium (3)
+    _UEBA_SEV_MAP = {"high_risk": 2, "critical_risk": 1}
+    case_sev = _UEBA_SEV_MAP.get(anomaly_type, 3)
+
     try:
         resp = _req.post(
-            f"{IRIS_URL.rstrip('/')}/api/v1/cases/add",
+            f"{cfg['url'].rstrip('/')}/api/v2/cases",
             headers={
-                "Authorization": f"Bearer {IRIS_API_KEY}",
+                "Authorization": f"Bearer {cfg['apiKey']}",
                 "Content-Type":  "application/json",
+                "Accept":        "application/json",
             },
             json={
                 "case_name":         case_name,
                 "case_description":  case_description,
-                "case_customer":     1,
-                "case_classification": 0,
-                "soc_id":            "",
+                "case_customer":     cfg.get("customerId", 1),
+                "case_severity_id":  case_sev,
+                "case_soc_id":       incident_id or "",
             },
             timeout=10,
             verify=False,  # self-signed certs common on internal IRIS installs
         )
         if resp.status_code in (200, 201):
             data = resp.json()
-            case_id = (data.get("data") or {}).get("case_id") or data.get("case_id")
-            case_url = f"{IRIS_URL.rstrip('/')}/case?cid={case_id}" if case_id else IRIS_URL
+            case = data if "case_id" in data else data.get("data", data)
+            case_id  = case.get("case_id")
+            case_url = f"{cfg['url'].rstrip('/')}/case?cid={case_id}" if case_id else cfg["url"]
             return jsonify({"case_id": case_id, "case_url": case_url, "case_name": case_name})
         return jsonify({"error": f"IRIS returned HTTP {resp.status_code}", "detail": resp.text[:300]}), 502
     except _req.exceptions.ConnectionError:
-        return jsonify({"error": "Cannot reach IRIS. Check IRIS_URL in .env."}), 503
+        return jsonify({"error": "Cannot reach CyIRIS. Check the URL in AI & Integration Settings."}), 503
     except _req.exceptions.Timeout:
-        return jsonify({"error": "IRIS request timed out"}), 504
+        return jsonify({"error": "CyIRIS request timed out"}), 504
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -258,12 +268,18 @@ def siem_ueba_escalate():
 @siem_bp.route("/ueba/integrations")
 @require_siem_auth
 def siem_ueba_integrations():
-    """Return public integration URLs (no secrets) for the frontend to construct deep-links."""
-    from core.config import IRIS_URL, WAZUH_URL
+    """Return public integration URLs (no secrets) for the frontend to construct deep-links.
+
+    Uses get_iris_config() so iris_enabled is True for local, cloud, and legacy
+    IRIS_URL/IRIS_API_KEY configs — not just the old env-var path.
+    """
+    from core.config import WAZUH_URL
+    from core.helpers import get_iris_config
+    iris_cfg = get_iris_config()
     return jsonify({
-        "iris_url":   IRIS_URL   or None,
-        "wazuh_url":  WAZUH_URL  or None,
-        "iris_enabled":  bool(IRIS_URL),
+        "iris_url":      iris_cfg["url"] if iris_cfg else None,
+        "wazuh_url":     WAZUH_URL or None,
+        "iris_enabled":  bool(iris_cfg),
         "wazuh_enabled": bool(WAZUH_URL),
     })
 

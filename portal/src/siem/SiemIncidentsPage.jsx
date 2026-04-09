@@ -568,7 +568,10 @@ export function SiemIncidentsPage() {
 
   const fetchIncidents = useCallback(async () => {
     const data = await siemFetch(siemApi.getIncidents({ ...filters, limit: 100 }));
-    if (data._offline || data._error) return;
+    if (data._offline || data._error) {
+      setLoading(false);   // don't leave the spinner up on engine error / offline
+      return;
+    }
     setIncidents(data.incidents || []);
     setTotal(data.total || 0);
     setLoading(false);
