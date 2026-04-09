@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.107"
+_SCRIPT_VERSION="v1.0.108"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -652,19 +652,9 @@ if [[ "$MODE" == "full" ]]; then
         warn "OAuth skipped — configure later in /opt/cycentra/.env"
     fi
 
-    # AI provider is configured after install via the portal's AI Settings page.
+    # AI and SMTP are configured after install via the portal's Settings page.
     AI_PROVIDER="none"; AI_API_KEY=""; AI_MODEL=""
-
-    step_header "SMTP CONFIGURATION (OPTIONAL)"
-    SMTP_HOST=""; SMTP_PORT=""; SMTP_USER=""; SMTP_PASS=""; SUPPORT_EMAIL=""
-    if ask_yn "Configure SMTP for support emails?" "n"; then
-        ask SMTP_HOST     "SMTP hostname"          "smtp.gmail.com"
-        ask SMTP_PORT     "SMTP port"              "587"
-        ask SMTP_USER     "SMTP username"          ""
-        ask_secret SMTP_PASS "SMTP password"
-        ask SUPPORT_EMAIL "Support destination"    "support@${BASE_DOMAIN}"
-        success "SMTP configured → ${SUPPORT_EMAIL}"
-    fi
+    SMTP_HOST=""; SMTP_PORT=""; SMTP_USER=""; SMTP_PASS=""; SUPPORT_EMAIL="support@${BASE_DOMAIN}"
 
     step_header "GENERATING SECRETS"
     _env="/opt/cycentra/.env"
@@ -692,8 +682,6 @@ if [[ "$MODE" == "full" ]]; then
     echo -e "  ${DIM}Email   :${NC} ${WHITE}${CLIENT_EMAIL}${NC}"
     echo -e "  ${DIM}Domain  :${NC} ${WHITE}${BASE_DOMAIN}${NC}"
     echo -e "  ${DIM}OAuth   :${NC} ${WHITE}${OAUTH_PROVIDER}${NC}"
-    echo -e "  ${DIM}AI      :${NC} ${WHITE}${AI_PROVIDER}${NC}"
-    echo -e "  ${DIM}SMTP    :${NC} ${WHITE}${SMTP_HOST:-not configured}${NC}"
     echo -e "  ${DIM}Version :${NC} ${WHITE}${BUNDLE_VERSION}${NC}"
     echo ""
     ask_yn "Proceed with full installation?" || exit 0
@@ -1200,14 +1188,52 @@ STUBEOF
     ln -sf /etc/nginx/sites-available/cycentra-modules \
            /etc/nginx/sites-enabled/cycentra-modules 2>/dev/null || true
     rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+
+    # Remove any other site configs in sites-enabled that may reference non-existent
+    # cert files from a previous partial install — they would cause nginx -t to fail
+    # even though our stub config is valid.
+    for _stale_site in /etc/nginx/sites-enabled/*; do
+        [[ "$_stale_site" == "/etc/nginx/sites-enabled/cycentra-modules" ]] && continue
+        [[ -e "$_stale_site" ]] && { rm -f "$_stale_site"; info "Removed stale nginx site: $_stale_site"; }
+    done
+
+    # Also clear any conf.d configs that may have a conflicting default_server on port 80.
+    # These are not managed by sites-enabled and can intercept ACME challenges.
+    for _stale_conf in /etc/nginx/conf.d/*.conf; do
+        [[ -e "$_stale_conf" ]] && { mv "$_stale_conf" "${_stale_conf}.certbot-bak"; info "Temporarily moved conflicting conf.d: $_stale_conf"; }
+    done
+
     nginx -t 2>/dev/null \
         && { systemctl reload nginx 2>/dev/null || systemctl start nginx; \
              success "nginx started (HTTP stub for certbot)"; } \
-        || { error "nginx config invalid"; ERRORS+=("nginx failed"); }
+        || { error "nginx config invalid — run: nginx -t"; ERRORS+=("nginx failed"); }
 
+    # Wait for nginx workers to fully reload before certbot tries the ACME challenge.
+    # systemctl reload returns as soon as SIGHUP is sent — workers take a moment.
+    sleep 3
+
+    # Verify nginx is actually serving the ACME path before invoking certbot.
+    if ! curl -s --max-time 5 "http://127.0.0.1/.well-known/acme-challenge/test" -o /dev/null; then
+        warn "nginx not responding on port 80 — ACME challenge will likely fail"
+    fi
+
+    # Ensure options-ssl-nginx.conf exists — try download, fall back to local minimal copy.
     if [[ ! -f /etc/letsencrypt/options-ssl-nginx.conf ]]; then
-        curl -s https://raw.githubusercontent.com/certbot/certbot/master/certbot-nginx/certbot_nginx/_internal/tls_configs/options-ssl-nginx.conf \
+        mkdir -p /etc/letsencrypt
+        curl -s --max-time 15 \
+            https://raw.githubusercontent.com/certbot/certbot/master/certbot-nginx/certbot_nginx/_internal/tls_configs/options-ssl-nginx.conf \
             -o /etc/letsencrypt/options-ssl-nginx.conf 2>/dev/null || true
+        if [[ ! -s /etc/letsencrypt/options-ssl-nginx.conf ]]; then
+            cat > /etc/letsencrypt/options-ssl-nginx.conf << 'SSLOPTEOF'
+ssl_session_cache shared:le_nginx_SSL:10m;
+ssl_session_timeout 1440m;
+ssl_session_tickets off;
+ssl_protocols TLSv1.2 TLSv1.3;
+ssl_prefer_server_ciphers off;
+ssl_ciphers "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384";
+SSLOPTEOF
+            info "options-ssl-nginx.conf: used local fallback (curl unavailable)"
+        fi
     fi
 
     if [[ ! -f /etc/letsencrypt/ssl-dhparams.pem ]]; then
@@ -1216,26 +1242,157 @@ STUBEOF
         DHPARAM_PID=$!
     fi
 
-    certbot certonly --webroot -w /var/www/html --non-interactive --agree-tos \
-        -m "$CLIENT_EMAIL" -d cy360.${BASE_DOMAIN} -d cyscan.${BASE_DOMAIN} 2>/dev/null \
-        && success "SSL cert obtained (cy360, cyscan)" \
-        || warn "Certbot failed for base domains — DNS may not be ready yet"
+    # ── helper: run certbot only when needed ─────────────────────────────────
+    # If a valid (non-expired, >30 days remaining) LE cert already exists for the
+    # primary domain, skip certbot entirely.  This avoids hitting the LE rate limit
+    # (5 certs per exact set of identifiers per 168h) on repeated setup runs, which
+    # is common during initial testing / fresh installs on the same server.
+    # Returns 0 if certbot was skipped (cert already fine), 1 if certbot ran.
+    _certbot_if_needed() {
+        local primary_domain="$1"; shift   # e.g. cy360.cycentra.com
+        local log_file="$1";       shift   # temp log path
+        local -a cb_args=("$@")            # remaining args passed to certbot
 
-    certbot certonly --webroot -w /var/www/html --non-interactive --agree-tos \
-        -m "$CLIENT_EMAIL" -d cysiem.${BASE_DOMAIN} 2>/dev/null \
-        && success "CySIEM SSL cert obtained" || warn "Certbot failed for cysiem"
+        local live_cert="/etc/letsencrypt/live/${primary_domain}/fullchain.pem"
+
+        # Check cert exists AND has >30 days remaining validity.
+        if [[ -f "$live_cert" ]] && \
+           openssl x509 -checkend 2592000 -noout -in "$live_cert" 2>/dev/null; then
+            success "SSL cert for ${primary_domain} already valid — skipping certbot"
+            return 0
+        fi
+
+        certbot certonly --webroot -w /var/www/html --non-interactive --agree-tos \
+            --preferred-challenges http-01 --keep-until-expiring \
+            "${cb_args[@]}" \
+            >"$log_file" 2>&1
+        local rc=$?
+        if [[ $rc -eq 0 ]]; then
+            return 0
+        fi
+
+        # Detect rate-limit specifically and surface the retry-after time.
+        if grep -q "too many certificates" "$log_file" 2>/dev/null; then
+            local retry_after
+            retry_after=$(grep -oE "retry after [0-9]+-[0-9]+-[0-9]+ [0-9]+:[0-9]+:[0-9]+ UTC" \
+                "$log_file" 2>/dev/null | head -1)
+            warn "Certbot hit Let's Encrypt rate limit (5 certs/7 days for this exact domain set)"
+            [[ -n "$retry_after" ]] && warn "  → ${retry_after}"
+            warn "  → Tip: use --staging flag on test runs to avoid consuming rate-limit quota"
+            # If an older cert exists (even if expired), reuse it rather than self-signed.
+            if [[ -f "$live_cert" ]]; then
+                warn "  → Reusing existing (possibly expired) LE cert from previous run"
+                return 0
+            fi
+        else
+            warn "Certbot failed for ${primary_domain} — details:"
+            grep -E "Error|error|WARN|failed|challenge|refused|Timeout|rate.limit|DNS|problem|detail" \
+                "$log_file" 2>/dev/null | head -10 | sed 's/^/    /'
+        fi
+        rm -f "$log_file"
+        return 1
+    }
+
+    # ── certbot: cy360 + cyscan ───────────────────────────────────────────────
+    _CB_LOG_BASE="/tmp/certbot-cy360-$$.log"
+    _certbot_if_needed "cy360.${BASE_DOMAIN}" "$_CB_LOG_BASE" \
+        -m "$CLIENT_EMAIL" -d cy360.${BASE_DOMAIN} -d cyscan.${BASE_DOMAIN} \
+        && success "SSL cert ready (cy360, cyscan)" \
+        || true   # self-signed fallback below handles missing cert
+
+    # ── certbot: cysiem ───────────────────────────────────────────────────────
+    _CB_LOG_SIEM="/tmp/certbot-cysiem-$$.log"
+    _certbot_if_needed "cysiem.${BASE_DOMAIN}" "$_CB_LOG_SIEM" \
+        -m "$CLIENT_EMAIL" -d cysiem.${BASE_DOMAIN} \
+        && success "SSL cert ready (cysiem)" \
+        || true
     # NOTE: cyiris.DOMAIN cert is obtained by routes.py via certbot --expand when CyIRIS is installed.
     # NOTE: cymisp.DOMAIN cert is obtained by routes.py via certbot --expand when CyMISP is installed.
 
     [[ -n "${DHPARAM_PID:-}" ]] && wait "$DHPARAM_PID" 2>/dev/null || true
 
-    # Restore full SSL nginx config now that certs exist
-    cp "$SSL_CONF_BACKUP" "$SSL_CONF"
-    nginx -t 2>/dev/null \
-        && systemctl reload nginx && success "nginx reloaded with full SSL config" \
-        || { warn "nginx SSL config pending — re-run after DNS resolves"; \
-             ERRORS+=("nginx SSL pending"); }
-             
+    # Restore any conf.d configs that were temporarily moved aside for certbot.
+    for _bak_conf in /etc/nginx/conf.d/*.certbot-bak; do
+        [[ -e "$_bak_conf" ]] && mv "$_bak_conf" "${_bak_conf%.certbot-bak}"
+    done
+
+    # ── Self-signed fallback ──────────────────────────────────────────────────
+    # If certbot could not obtain a cert (DNS not propagated, port 80 blocked,
+    # rate limit, etc.) generate a self-signed cert so nginx can start with SSL
+    # and the portal / backend remain reachable.  When setup is re-run after DNS
+    # resolves, certbot will obtain real certs and overwrite the live/ symlinks.
+    _BASE_CERT="/etc/letsencrypt/live/cy360.${BASE_DOMAIN}/fullchain.pem"
+    _SIEM_CERT="/etc/letsencrypt/live/cysiem.${BASE_DOMAIN}/fullchain.pem"
+    _SELFSIGNED_DIR="/etc/ssl/cycentra/selfsigned"
+
+    if [[ ! -f "$_BASE_CERT" ]]; then
+        info "Generating self-signed cert for cy360/cyscan (temporary — browser will show security warning)..."
+        mkdir -p "$_SELFSIGNED_DIR" "/etc/letsencrypt/live/cy360.${BASE_DOMAIN}"
+        openssl req -x509 -nodes -newkey rsa:2048 \
+            -keyout "$_SELFSIGNED_DIR/cy360-privkey.pem" \
+            -out    "$_SELFSIGNED_DIR/cy360-fullchain.pem" \
+            -days 90 \
+            -subj "/CN=cy360.${BASE_DOMAIN}/O=CyCentra/C=US" \
+            -addext "subjectAltName=DNS:cy360.${BASE_DOMAIN},DNS:cyscan.${BASE_DOMAIN}" \
+            2>/dev/null \
+            && { ln -sf "$_SELFSIGNED_DIR/cy360-fullchain.pem" \
+                        "/etc/letsencrypt/live/cy360.${BASE_DOMAIN}/fullchain.pem"
+                 ln -sf "$_SELFSIGNED_DIR/cy360-privkey.pem" \
+                        "/etc/letsencrypt/live/cy360.${BASE_DOMAIN}/privkey.pem"
+                 warn "Self-signed cert installed for cy360/cyscan — re-run setup after DNS resolves to replace with Let's Encrypt"; } \
+            || warn "Self-signed cert generation failed for cy360/cyscan"
+    fi
+
+    if [[ ! -f "$_SIEM_CERT" ]]; then
+        info "Generating self-signed cert for cysiem (temporary)..."
+        mkdir -p "$_SELFSIGNED_DIR" "/etc/letsencrypt/live/cysiem.${BASE_DOMAIN}"
+        openssl req -x509 -nodes -newkey rsa:2048 \
+            -keyout "$_SELFSIGNED_DIR/cysiem-privkey.pem" \
+            -out    "$_SELFSIGNED_DIR/cysiem-fullchain.pem" \
+            -days 90 \
+            -subj "/CN=cysiem.${BASE_DOMAIN}/O=CyCentra/C=US" \
+            2>/dev/null \
+            && { ln -sf "$_SELFSIGNED_DIR/cysiem-fullchain.pem" \
+                        "/etc/letsencrypt/live/cysiem.${BASE_DOMAIN}/fullchain.pem"
+                 ln -sf "$_SELFSIGNED_DIR/cysiem-privkey.pem" \
+                        "/etc/letsencrypt/live/cysiem.${BASE_DOMAIN}/privkey.pem"
+                 warn "Self-signed cert installed for cysiem — re-run setup to replace with Let's Encrypt"; } \
+            || warn "Self-signed cert generation failed for cysiem"
+    fi
+
+    # Restore full SSL nginx config now that certs exist (real or self-signed).
+    if [[ -f "$_BASE_CERT" && -f "$_SIEM_CERT" ]]; then
+        cp "$SSL_CONF_BACKUP" "$SSL_CONF"
+
+        # Detect whether any cert in live/ is self-signed (issuer == subject).
+        # If so, strip the HSTS header from the nginx config.
+        # HSTS with a self-signed cert causes Chrome to block the site with no
+        # bypass option once it has cached the HSTS policy from a prior real cert.
+        # The header is restored automatically on the next run when a real LE cert
+        # is in place and the server block is regenerated.
+        _is_selfsigned=false
+        if openssl x509 -noout -in "$_BASE_CERT" 2>/dev/null | true; then
+            _issuer=$(openssl x509 -noout -issuer  -in "$_BASE_CERT" 2>/dev/null)
+            _subject=$(openssl x509 -noout -subject -in "$_BASE_CERT" 2>/dev/null)
+            [[ "$_issuer" == "$_subject" ]] && _is_selfsigned=true
+        fi
+
+        if [[ "$_is_selfsigned" == "true" ]]; then
+            # Replace HSTS header with max-age=0 so browsers clear any cached policy.
+            sed -i 's/add_header Strict-Transport-Security "[^"]*" always;/add_header Strict-Transport-Security "max-age=0" always;/g' "$SSL_CONF"
+            warn "Self-signed cert active — HSTS set to max-age=0 to prevent browser lockout"
+            warn "  → Re-run setup after LE rate limit expires to restore full HSTS"
+        fi
+
+        nginx -t 2>/dev/null \
+            && systemctl reload nginx && success "nginx reloaded with full SSL config" \
+            || { warn "nginx SSL config invalid — check /etc/nginx/sites-available/cycentra-modules"; \
+                 ERRORS+=("nginx SSL pending"); }
+    else
+        warn "nginx SSL config NOT restored — HTTP stub remains active"
+        ERRORS+=("nginx SSL pending")
+    fi
+
 fi  # end SSL block
 
 # ── Step 18: Wazuh rules, decoders, ossec.conf ────────────────────────────────

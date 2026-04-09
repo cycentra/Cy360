@@ -1,6 +1,20 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.108 — 2026-04-09
+
+### Fix — SSL certificate handling for fresh installs
+
+- **Certbot skip logic:** cert is now skipped if already valid with >30 days remaining, avoiding the Let's Encrypt 5-certs/7-days rate limit on repeated setup runs.
+- **Rate limit detection:** surfaces the exact `retry after` timestamp and suggests `--dry-run` for test installs.
+- **Self-signed fallback:** when certbot fails (rate limit, DNS not ready, port 80 blocked), a self-signed cert is auto-generated and symlinked into `/etc/letsencrypt/live/` so nginx can load the full SSL config and the portal remains accessible.
+- **HSTS lockout prevention:** when a self-signed cert is active, HSTS is set to `max-age=0` — prevents Chrome from caching HSTS and blocking the site with no bypass option.
+- **nginx timing fix:** added `sleep 3` + localhost ACME path probe after `systemctl reload` before certbot runs — eliminates race where nginx workers hadn't restarted yet.
+- **Stale site cleanup:** removes all `sites-enabled/*` (except `cycentra-modules`) and temporarily moves `conf.d/*.conf` aside before certbot, preventing a secondary `listen 80 default_server` from intercepting ACME challenges.
+- **`options-ssl-nginx.conf` fallback:** if the GitHub download fails, a minimal TLS-hardened copy is written locally so nginx config is always valid.
+- **SMTP & AI setup removed from wizard:** both are now configured post-install via the portal Settings page; variables still written to `.env` with safe defaults.
+
+---
 ## v1.0.107 — 2026-04-09
 
 ### Fix — No incidents after upgrade (missing DB columns)
