@@ -34,15 +34,20 @@ export function buildNavSections({ installedModules = {}, data = null }) {
 
   return [
     {
-      section: "MONITOR",
+      section: "THREAT INTELLIGENCE",
       items: [
-        { id: "dashboard",      label: "Threat Overview",       icon: SvgDash  },
-        { id: "assets",         label: "Asset Inventory",       icon: SvgAsset },
-        { id: "vulns",          label: "Findings",              icon: SvgVuln  },
-        { id: "cysiemfeed",     label: "Alert Feed",            icon: SvgSIEM, badge: data?.cysiemAlerts?.length || 0 },
-        { id: "siem-incidents", label: "Active Incidents",      icon: <span style={{ fontSize: 13 }}>🔥</span>, accent: "#ff3b3b" },
-        { id: "siem-risk",      label: "Entity Risk",           icon: <span style={{ fontSize: 13 }}>⚡</span>, accent: "#ff8c00" },
-        { id: "siem-ueba",      label: "Behaviour Analytics",   icon: <span style={{ fontSize: 13 }}>👤</span>, accent: "#b06eff" },
+        { id: "dashboard",  label: "External Threat Overview", icon: SvgDash  },
+        { id: "assets",     label: "Asset Inventory",          icon: SvgAsset },
+        { id: "vulns",      label: "Findings",                 icon: SvgVuln  },
+        { id: "cysiemfeed", label: "Alert Feed",               icon: SvgSIEM, badge: data?.cysiemAlerts?.length || 0 },
+      ],
+    },
+    {
+      section: "CORRELATION ENGINE",
+      items: [
+        { id: "siem-incidents", label: "Active Incidents",     icon: <span style={{ fontSize: 13 }}>🔥</span>, accent: "#ff3b3b" },
+        { id: "siem-risk",      label: "Entity Risk",          icon: <span style={{ fontSize: 13 }}>⚡</span>, accent: "#ff8c00" },
+        { id: "siem-ueba",      label: "Behaviour Analytics",  icon: <span style={{ fontSize: 13 }}>👤</span>, accent: "#b06eff" },
       ],
     },
     {
@@ -56,7 +61,6 @@ export function buildNavSections({ installedModules = {}, data = null }) {
       section: "PLATFORM",
       items: [
         { id: "platform",         label: "Platform Modules", icon: SvgMods, badge: addonInstalled.length || 0, accent: "#b06eff" },
-        { id: "ai-settings",      label: "AI Settings",      icon: SvgAI,   accent: "#4d9eff" },
         { id: "system-settings",  label: "System Settings",  icon: SvgGear, accent: "#00e5a0" },
       ],
     },

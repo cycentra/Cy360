@@ -154,8 +154,8 @@ export default function App() {
             {activeTab==="siem-ueba"      && <SiemUebaPage/>}
             {activeTab==="usecases"       && <UseCasesPage/>}
             {activeTab==="platform"       && <PlatformPage installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
-            {activeTab==="ai-settings"    && <AISettingsPage aiConfig={aiConfig} onSave={handleSaveAIConfig}/>}
-            {activeTab==="system-settings" && <SystemSettingsPage />}
+            {activeTab==="ai-settings"    && setActiveTab("system-settings") /* redirect to system-settings AI Config tab */}
+            {activeTab==="system-settings" && <SystemSettingsPage aiConfig={aiConfig} onSaveAIConfig={handleSaveAIConfig} />}
 
           </div>
         </div>

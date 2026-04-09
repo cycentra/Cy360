@@ -162,7 +162,7 @@ export function WorldMapWidget({ assets }) {
         <div>
           <div style={{ color:"rgba(255,255,255,0.3)", fontSize:10, letterSpacing:"1.5px", fontFamily:"monospace", textTransform:"uppercase" }}>Asset Geo-Location</div>
           <div style={{ color:"rgba(255,255,255,0.45)", fontSize:11, marginTop:2 }}>
-            {dots.length} location{dots.length !== 1 ? "s" : ""} mapped
+            {assets.length} asset{assets.length !== 1 ? "s" : ""} · {dots.length} location{dots.length !== 1 ? "s" : ""} mapped
             {loading && <span style={{ color:"rgba(255,255,255,0.2)", marginLeft:8, fontFamily:"monospace", fontSize:10 }}>resolving…</span>}
           </div>
         </div>

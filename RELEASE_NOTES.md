@@ -1,6 +1,80 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.96 — 2026-04-15
+
+### Feature — UI Enhancement Batch: Navigation Restructure, AI Config Tab, Env Masking, Configured Indicators, Vulnerability Remediation Steps
+
+**`portal/src/sidebar/navConfig.jsx`:**
+- Section renamed "MONITOR" → "THREAT INTELLIGENCE"
+- "Threat Overview" tab renamed → "External Threat Overview"
+- New **CORRELATION ENGINE** sidebar section added: Active Incidents (🔥), Entity Risk (⚡), Behaviour Analytics (👤)
+- "AI Settings" removed from PLATFORM nav — replaced by AI Config tab in System Settings
+
+**`portal/src/pages/ai/AISettingsPage.jsx`:**
+- **Module URL Overrides section removed** — no longer exposed in UI
+- Added `embedded={true}` prop to hide page header when rendered inside System Settings
+- Added `useEffect` to fetch `GET /api/ai/settings` on mount; masked keys (`••••••••`) indicate previously configured state
+- "✓ AI provider previously configured" green banner shown when API key is present
+- `_BASE_DOMAIN` import removed
+
+**`portal/src/pages/settings/SystemSettingsPage.jsx`:**
+- New **AI Config** tab added (renders AISettingsPage in embedded mode)
+- `aiConfig` and `onSaveAIConfig` props accepted from App.jsx
+- **GH Token now persisted** to `localStorage("cycentra_gh_token")` — no re-entry needed across sessions
+- **Sensitive env var masking**: `EnvVarRow` auto-detects keys matching `PASSWORD|SECRET|API_KEY|TOKEN|PRIVATE_KEY|CREDENTIAL` and renders as password input with show/hide toggle; label shown in amber
+- MISP "✓ MISP previously configured and active" banner shown in Integrations tab when url + apiKey are set
+
+**`portal/src/pages/vulnerabilities/VulnerabilityPage.jsx`:**
+- Recommendations replaced with structured **"🛠 Steps to Remediate"** card per finding
+- Multi-step recommendations parsed (numbered list or semicolon-separated) and shown as individual steps
+- Inline commands/paths highlighted in monospace code style
+- CVE IDs extracted from vulnerability name and linked to NVD (`nvd.nist.gov`)
+- Port and CVE metadata shown per finding row
+
+**`portal/src/pages/assets/WorldMapWidget.jsx`:**
+- Map header now shows **total asset count + location count**: `N assets · M locations mapped` (was just "M locations mapped")
+
+**`portal/src/App.jsx`:**
+- `ai-settings` tab redirected to `system-settings` (AI Config is now a tab there)
+- `aiConfig` and `onSaveAIConfig` props passed through to `SystemSettingsPage`
+
+---
+## v1.0.95 — 2026-04-14
+
+### Fix — Removed duplicate "CySIEM Engine" from Environment Config dropdown
+
+**`portal/src/pages/settings/SystemSettingsPage.jsx`:**
+- Removed duplicate `{ id: "cysiem", label: "CySIEM Engine" }` entry from `ENV_TARGETS` array
+- Removed corresponding `"cysiem"` entry from `_ENV_FILE_MAP` — was pointing to same path as another target, causing duplicate dropdown option
+
+---
+## v1.0.94 — 2026-04-13
+
+### Fix — MISP UI configuration now syncs to cysiemstack.env automatically
+
+**`backend/blueprints/ai/routes.py`:**
+- `POST /api/ai/settings`: after saving `ai_settings.json`, calls `_sync_misp_to_siem_env()` which writes `MISP_URL`, `MISP_KEY`, `MISP_ENABLED` into `cysiemstack.env`
+- Fixes issue where MISP settings configured from UI were not reaching the correlation engine
+
+---
+## v1.0.93 — 2026-04-11
+
+### Fix — Update button immediately exits ("already at latest") due to version comparison bug
+
+**`backend/blueprints/system/routes.py`:**
+- `GET /api/system/latest-version`: version pre-check was comparing installed package version against `_SCRIPT_VERSION` constant (always matching) instead of resolving live version from GitHub Releases (`CYCENTRA_VERSION`). Fixed to compare against the resolved release tag.
+
+---
+## v1.0.92 — 2026-04-10
+
+### Fix — Black screen on AI Settings page (orphaned MISP JSX reference)
+
+**`portal/src/pages/ai/AISettingsPage.jsx`:**
+- Removed orphaned MISP JSX block that referenced `misp` state which was no longer initialised after MISP was moved to System Settings in v1.0.90
+- Fixes `TypeError: Cannot read properties of undefined` causing a blank white/black screen when navigating to AI Settings
+
+---
 ## v1.0.91 — 2026-04-09
 
 ### Fix — Run Update migrated from Cloudsmith to GitHub, release notes now in bundle

@@ -1,13 +1,16 @@
 /**
  * src/pages/settings/SystemSettingsPage.jsx
  * ==========================================
- * System Settings page — two tabs:
- *   1. Updates  — show current version, last 5 release notes, trigger update
- *   2. Env Config — read/edit .env files for global / per-module
+ * System Settings page — tabs:
+ *   1. Updates & Version
+ *   2. AI Config
+ *   3. Integrations (MISP)
+ *   4. Environment Config
  */
 
 import { useState, useEffect, useRef } from "react";
 import { API_BASE } from "../../core/constants.js";
+import { AISettingsPage } from "../ai/AISettingsPage.jsx";
 
 // ── Shared style constants ────────────────────────────────────────────────────
 const CARD  = { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "20px 24px", marginBottom: 20 };
@@ -30,7 +33,9 @@ const ENV_TARGETS = [
 
 function UpdatesTab() {
   const [versionData,  setVersionData]  = useState(null);
-  const [ghToken,      setGhToken]      = useState("");
+  const [ghToken,      setGhToken]      = useState(() => {
+    try { return localStorage.getItem("cycentra_gh_token") || ""; } catch { return ""; }
+  });
   const [updating,     setUpdating]     = useState(false);
   const [updateLog,    setUpdateLog]    = useState([]);
   const [logRunning,   setLogRunning]   = useState(false);
@@ -158,7 +163,11 @@ function UpdatesTab() {
             type="password"
             placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
             value={ghToken}
-            onChange={e => { setGhToken(e.target.value); setLatestInfo(null); setSuccess(null); setError(null); }}
+            onChange={e => {
+              setGhToken(e.target.value);
+              setLatestInfo(null); setSuccess(null); setError(null);
+              try { if (e.target.value) localStorage.setItem("cycentra_gh_token", e.target.value); } catch {}
+            }}
             style={INPUT}
           />
         </div>
@@ -238,16 +247,33 @@ function UpdatesTab() {
 // TAB 2 — Environment Config
 // ════════════════════════════════════════════════════════════════════════════
 
+const _SENSITIVE_RE = /(PASSWORD|SECRET|API_KEY|TOKEN|PRIVATE_KEY|CREDENTIAL)/i;
+
 function EnvVarRow({ v, onChange }) {
+  const [reveal, setReveal] = useState(false);
   if (v.comment || !v.key) {
     return <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace", padding: "2px 0" }}>{v.line}</div>;
   }
-  const isSecret = v.value === "••••••••";
+  const isServerProtected = v.value === "••••••••";
+  const isSensitive       = _SENSITIVE_RE.test(v.key);
   return (
     <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 8, alignItems: "center", padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
-      <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 12, fontFamily: "monospace", wordBreak: "break-all" }}>{v.key}</span>
-      {isSecret ? (
+      <span style={{ color: isSensitive ? "rgba(255,200,100,0.7)" : "rgba(255,255,255,0.55)", fontSize: 12, fontFamily: "monospace", wordBreak: "break-all" }}>{v.key}</span>
+      {isServerProtected ? (
         <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>•••••••• (protected)</span>
+      ) : isSensitive ? (
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input
+            type={reveal ? "text" : "password"}
+            value={v.value || ""}
+            onChange={e => onChange(v.key, e.target.value)}
+            style={{ ...INPUT, padding: "5px 10px", fontSize: 11, flex: 1 }}
+          />
+          <button onClick={() => setReveal(r => !r)}
+            style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", borderRadius: 3, padding: "4px 8px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", flexShrink: 0 }}>
+            {reveal ? "hide" : "show"}
+          </button>
+        </div>
       ) : (
         <input
           value={v.value || ""}
@@ -354,6 +380,7 @@ function EnvConfigTab() {
 
 const TABS = [
   { id: "updates",      label: "Updates & Version" },
+  { id: "ai-config",    label: "AI Config" },
   { id: "integrations", label: "Integrations" },
   { id: "env",          label: "Environment Config" },
 ];
@@ -410,8 +437,15 @@ function MispTab() {
 
   if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
 
+  const mispConfigured = misp.enabled && misp.url && misp.apiKey;
+
   return (
     <div style={{ maxWidth: 620 }}>
+      {mispConfigured && (
+        <div style={{ display:"inline-flex", alignItems:"center", gap:6, background:"rgba(255,59,59,0.06)", border:"1px solid rgba(255,59,59,0.25)", borderRadius:4, padding:"4px 12px", marginBottom:16, fontSize:10, fontFamily:"monospace", color:"#ff6b6b" }}>
+          ✓ MISP previously configured and active
+        </div>
+      )}
       <div style={{ background: "rgba(255,59,59,0.04)", border: "1px solid rgba(255,59,59,0.2)", borderRadius: 6, padding: "22px 24px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
           <span style={{ fontSize: 18 }}>🔴</span>
@@ -489,7 +523,7 @@ function MispTab() {
   );
 }
 
-export function SystemSettingsPage() {
+export function SystemSettingsPage({ aiConfig, onSaveAIConfig }) {
   const [tab, setTab] = useState("updates");
 
   return (
@@ -515,6 +549,7 @@ export function SystemSettingsPage() {
       </div>
 
       {tab === "updates"      && <UpdatesTab />}
+      {tab === "ai-config"    && <AISettingsPage aiConfig={aiConfig || {}} onSave={onSaveAIConfig || (() => {})} embedded={true} />}
       {tab === "integrations" && <MispTab />}
       {tab === "env"          && <EnvConfigTab />}
     </div>

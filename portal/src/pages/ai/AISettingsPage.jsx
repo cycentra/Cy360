@@ -2,14 +2,18 @@
  * src/pages/ai/AISettingsPage.jsx
  * =================================
  * AI provider configuration — provider selection, API key, model,
- * system prompt templates, and module URL overrides.
+ * system prompt templates, and CyMind episodic memory.
+ *
+ * When `embedded={true}` the page header is hidden (used inside SystemSettings).
+ * On mount, fetches from GET /api/ai/settings so server-configured values are
+ * reflected even if localStorage was cleared — apiKey shows as ●●●●●●●● when set.
  */
 
-import { useState } from "react";
-import { API_BASE, _BASE_DOMAIN } from '../../core/constants.js';
+import { useState, useEffect } from "react";
+import { API_BASE } from '../../core/constants.js';
 import { AI_PROVIDERS, DEFAULT_PROMPTS } from '../../registry/aiProviders.js';
 
-export function AISettingsPage({ aiConfig, onSave }) {
+export function AISettingsPage({ aiConfig, onSave, embedded = false }) {
   const [provider,       setProvider]    = useState(aiConfig?.provider || "local");
   const [fields,         setFields]      = useState(aiConfig?.fields   || {});
   const [prompts,        setPrompts]     = useState(aiConfig?.prompts  || DEFAULT_PROMPTS);
@@ -18,25 +22,33 @@ export function AISettingsPage({ aiConfig, onSave }) {
   const [testStatus,     setTestStatus]  = useState(null);   // null | "testing" | "ok" | "fail"
   const [testMsg,        setTestMsg]     = useState("");
   const [saved,          setSaved]       = useState(false);
-  const [moduleUrls,     setModuleUrls]  = useState(() => {
-    try {
-      return {
-        cyiris: localStorage.getItem("cycentra_url_cyiris") || "",
-        cysoar: localStorage.getItem("cycentra_url_cysoar") || "",
-        cysiem: localStorage.getItem("cycentra_url_cysiem") || "",
-      };
-    } catch { return { cyiris: "", cysoar: "", cysiem: "" }; }
-  });
+  const _MASK = "\u2022".repeat(8);
+
+  // On mount: fetch server-side config so configured keys show as masked ●●●●●●●●
+  useEffect(() => {
+    fetch(`${API_BASE}/api/ai/settings`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return;
+        if (d.provider) setProvider(d.provider);
+        if (d.fields)   setFields(prev => ({ ...d.fields, ...Object.fromEntries(Object.entries(prev).filter(([,v]) => v)) }));
+        if (d.prompts)  setPrompts(p => ({ ...d.prompts, ...Object.fromEntries(Object.entries(p).filter(([,v]) => v && v !== DEFAULT_PROMPTS[Object.keys(DEFAULT_PROMPTS)[0]])) }));
+        if (d.cymind_memory) setCymindMemory(cm => Object.keys(cm).some(k => cm[k]) ? cm : d.cymind_memory);
+      })
+      .catch(() => {});
+  }, []);  // eslint-disable-line
 
   const currentProvider = AI_PROVIDERS[provider];
   const updateField     = (k, v) => setFields(prev  => ({ ...prev, [k]: v }));
   const updatePrompt    = (k, v) => setPrompts(prev  => ({ ...prev, [k]: v }));
   const resetPrompt     = (k)    => setPrompts(prev  => ({ ...prev, [k]: DEFAULT_PROMPTS[k] }));
 
+  const isConfigured = fields.apiKey && fields.apiKey !== "" || (provider === "local" && fields.baseUrl);
+
   const testConnection = async () => {
     setTestStatus("testing"); setTestMsg("");
     if (provider === "local" && !fields.baseUrl) { setTestStatus("fail"); setTestMsg("Server URL is required"); return; }
-    if (provider !== "local" && !fields.apiKey)  { setTestStatus("fail"); setTestMsg("API key is required");    return; }
+    if (provider !== "local" && (!fields.apiKey || fields.apiKey === _MASK))  { setTestStatus("fail"); setTestMsg("Enter your API key (currently masked)"); return; }
     try {
       const res = await fetch(`${API_BASE}/api/ai/test`, {
         method: "POST",
@@ -52,17 +64,23 @@ export function AISettingsPage({ aiConfig, onSave }) {
 
   const handleSave = () => {
     onSave({ provider, fields, prompts, cymind_memory: cymindMemory });
-    try { Object.entries(moduleUrls).forEach(([id, url]) => localStorage.setItem(`cycentra_url_${id}`, url)); } catch {}
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
 
   return (
     <div>
-      <div style={{ marginBottom:28 }}>
-        <h1 style={{ fontSize:22, fontWeight:700, color:"white" }}>AI Settings</h1>
-        <p style={{ color:"rgba(255,255,255,0.35)", fontSize:13, marginTop:4 }}>Configure AI provider and customise how CyCentra AI interprets security findings.</p>
-      </div>
+      {!embedded && (
+        <div style={{ marginBottom:28 }}>
+          <h1 style={{ fontSize:22, fontWeight:700, color:"white" }}>AI Settings</h1>
+          <p style={{ color:"rgba(255,255,255,0.35)", fontSize:13, marginTop:4 }}>Configure AI provider and customise how CyCentra AI interprets security findings.</p>
+        </div>
+      )}
+      {isConfigured && (
+        <div style={{ display:"inline-flex", alignItems:"center", gap:6, background:"rgba(0,229,160,0.06)", border:"1px solid rgba(0,229,160,0.2)", borderRadius:4, padding:"4px 12px", marginBottom:16, fontSize:10, fontFamily:"monospace", color:"#00e5a0" }}>
+          ✓ AI provider previously configured — enter a new key only to change it
+        </div>
+      )}
 
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:24, alignItems:"start" }}>
         {/* Provider selection */}
@@ -119,19 +137,6 @@ export function AISettingsPage({ aiConfig, onSave }) {
             </div>
           </div>
 
-          {/* Module URL overrides */}
-          <div style={{ background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:6, padding:"18px 20px", marginBottom:16 }}>
-            <div style={{ color:"rgba(255,255,255,0.35)", fontSize:10, letterSpacing:"1.5px", textTransform:"uppercase", fontFamily:"monospace", marginBottom:12 }}>Module URL Overrides</div>
-            {[{ id:"cyiris",label:"CyIRIS URL" },{ id:"cysoar",label:"CySOAR URL" },{ id:"cysiem",label:"CySIEM URL" }].map(({ id, label }) => (
-              <div key={id} style={{ display:"flex", gap:8, alignItems:"center", marginBottom:10 }}>
-                <label style={{ color:"rgba(255,255,255,0.4)", fontSize:11, fontFamily:"monospace", width:110, flexShrink:0 }}>{label}</label>
-                <input value={moduleUrls[id] || ""} onChange={e => setModuleUrls(prev => ({ ...prev, [id]: e.target.value }))}
-                  placeholder={`https://${id}.${_BASE_DOMAIN}`}
-                  style={{ flex:1, background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)", color:"white", padding:"8px 12px", borderRadius:4, fontSize:12, fontFamily:"monospace", outline:"none" }}/>
-              </div>
-            ))}
-          </div>
-
           {/* CyMind episodic memory — always-on, independent of active LLM provider */}
           <div style={{ background:"rgba(168,85,247,0.04)", border:"1px solid rgba(168,85,247,0.2)", borderRadius:6, padding:"18px 20px" }}>
             <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
@@ -152,7 +157,9 @@ export function AISettingsPage({ aiConfig, onSave }) {
             <div style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace" }}>
               {cymindMemory.baseUrl && cymindMemory.apiKey
                 ? <span style={{ color:"#a855f7" }}>✓ Configured — incidents will be indexed automatically</span>
-                : "Leave blank to disable episodic memory integration"}
+                : cymindMemory.baseUrl
+                  ? <span style={{ color:"#ff8c00" }}>⚠ API Key required to activate memory indexing</span>
+                  : "Leave blank to disable episodic memory integration"}
             </div>
           </div>
 
