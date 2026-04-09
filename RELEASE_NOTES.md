@@ -1,6 +1,40 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.101 — 2026-04-10
+
+### Fix — System Update: GH_TOKEN Now Read from `.env` at Call-Time + Revert to Direct Download URL
+
+**Root cause:** `_get_server_gh_token()` relied solely on `os.environ.get("GH_TOKEN")`.
+This is set once when the Flask process starts — if `/opt/cycentra/.env` contained `GH_TOKEN`
+but the process was started without it already loaded (e.g., `source .env` not run before
+`systemctl start cycentra-portal`), the function returned an empty string, which caused
+every `curl` call to fail with **404** on the private GitHub repo (GitHub treats unauthenticated
+requests to private assets as 404, not 401).
+
+**Fixes — `backend/blueprints/system/routes.py`:**
+
+- **`_get_server_gh_token()` rewritten to read `/opt/cycentra/.env` directly at call-time.**
+  Parses the file line-by-line looking for `GH_TOKEN=...`, strips surrounding quotes, and returns
+  the value. Falls back to `os.environ` for dev/container environments without the file.
+  This means the token is always picked up even if `.env` was edited or the token was added
+  after the Flask service started — no service restart required.
+
+- **`_run_setup_in_background()` reverted to the confirmed-working direct URL approach.**
+  The GitHub API 2-step resolution added in v1.0.100 was unnecessary once the token is
+  correctly loaded. The function now matches the working manual command exactly:
+  ```
+  curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+    https://github.com/cycentra/cycentra360/releases/latest/download/cycentra-setup.sh \
+    -L -o /opt/cycentra/cycentra-setup.sh
+  sudo -E bash /opt/cycentra/cycentra-setup.sh --update
+  ```
+  - Token is read **inside the background thread** (not before it starts) so it always reflects
+    the most current value in `.env`.
+  - Clear error message logged when `GH_TOKEN` is absent:
+    `[UPDATE ERROR] GH_TOKEN not found — add GH_TOKEN=ghp_... to /opt/cycentra/.env`
+
+---
 ## v1.0.100 — 2026-04-09
 
 ### Fix — System Update: Private-Repo Asset Download 404
