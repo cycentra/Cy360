@@ -1,6 +1,18 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.109 — 2026-04-09
+
+### CI — Always-latest package aliases
+
+- `deploy.yml` now publishes `latest` aliases alongside every versioned release:
+  - `cycentra/bundle/latest/bundle-latest.tar.gz`
+  - `cycentra/setup/latest/setup-latest.sh`
+  - `cycentra/backend/latest/cycentra_backend-latest-*.whl`
+- Servers can now install/update without knowing the version number.
+- GitHub Release body updated with the version-free install command.
+
+---
 ## v1.0.108 — 2026-04-09
 
 ### Fix — SSL certificate handling for fresh installs

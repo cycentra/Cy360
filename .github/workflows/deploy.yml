@@ -142,6 +142,26 @@ jobs:
                  "https://maven.pkg.github.com/$OWNER/$REPO/cycentra/backend/$VER/$(basename $wheel)"
           done
 
+          # ── Publish 'latest' aliases — overwrite on every release so
+          #    servers can always pull without knowing the version number.
+          echo "Updating 'latest' aliases..."
+          curl -s -X PUT -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+               -T cycentra-setup.sh \
+               "https://maven.pkg.github.com/$OWNER/$REPO/cycentra/setup/latest/setup-latest.sh"
+
+          curl -s -X PUT -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+               -T cycentra-release.tar.gz \
+               "https://maven.pkg.github.com/$OWNER/$REPO/cycentra/bundle/latest/bundle-latest.tar.gz"
+
+          for wheel in dist/*.whl; do
+            # Rename wheel to a stable filename (strip version suffix) for the latest slot.
+            stable_name=$(basename "$wheel" | sed "s/-${VER}-/-latest-/")
+            curl -s -X PUT -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                 -T "$wheel" \
+                 "https://maven.pkg.github.com/$OWNER/$REPO/cycentra/backend/latest/${stable_name}"
+          done
+          echo "All packages published (versioned + latest)."
+
       # ── Create GitHub Release ──────────────────────────────────────────
       - name: Create GitHub Release
         if: steps.version.outputs.is_release == 'true'
@@ -153,13 +173,19 @@ jobs:
             ## CyCentra 360 Release ${{ steps.version.outputs.tag }}
             
             ### Installation
-            Download using your GitHub token:
-            
+            Always pulls the latest version — no version number needed:
+
             ```bash
-            curl -L -H "Authorization: Bearer YOUR_TOKEN" \
-                 -o cycentra-setup.sh \
-                 "[https://maven.pkg.github.com/cycentra/cycentra360/cycentra/setup/$](https://maven.pkg.github.com/cycentra/cycentra360/cycentra/setup/$){{ steps.version.outputs.ver }}/setup-${{ steps.version.outputs.ver }}.sh"
+            PAT="YOUR_GITHUB_PAT"
+            curl -L -u "cycentra:$PAT" \
+              "https://maven.pkg.github.com/cycentra/cycentra360/cycentra/bundle/latest/bundle-latest.tar.gz" \
+              -o /tmp/cycentra-release.tar.gz && \
+            mkdir -p /tmp/cycentra-install && \
+            tar -xzf /tmp/cycentra-release.tar.gz -C /tmp/cycentra-install --strip-components=1 && \
+            cd /tmp/cycentra-install && sudo bash cycentra-setup.sh
             ```
+
+            This release is also available at the versioned path `${{ steps.version.outputs.ver }}`.
           files: |
             cycentra-release.tar.gz
             cycentra-setup.sh
