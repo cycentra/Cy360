@@ -124,6 +124,13 @@ def siem_incidents():
     return _proxy("/incidents")
 
 
+@siem_bp.route("/incidents", methods=["DELETE"])
+@require_siem_admin
+def siem_incidents_purge():
+    """Hard-delete incidents by status. Admin only."""
+    return _proxy("/incidents", method="DELETE")
+
+
 @siem_bp.route("/incidents/<incident_id>", methods=["GET"])
 @require_siem_auth
 def siem_incident_detail(incident_id):

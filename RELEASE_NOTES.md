@@ -1,6 +1,49 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.103 — 2026-04-09
+
+### Performance & Reliability — Incidents Page: DB Indexes, WS Debounce, Purge Button, Auto-Archive
+
+**Problem:** Incidents page took minutes to load (or showed "Loading incidents…" indefinitely)
+when the incidents table had accumulated thousands of rows. Root causes:
+
+1. No database indexes — every `GET /incidents` did a full table scan ordered by `last_seen`.
+2. WebSocket `alert_processed` events fired `fetchIncidents()` directly on every message.
+   During active alert ingestion this hammered the API dozens of times per minute, with
+   concurrent requests queuing behind each other.
+3. No housekeeping — resolved / false_positive incidents accumulated forever.
+
+**Fixes:**
+
+- **DB indexes** (`correlation_engine/models.py`):
+  Added composite and single-column indexes on `Incident`:
+  - `ix_incidents_status` on `status`
+  - `ix_incidents_severity` on `severity`
+  - `ix_incidents_last_seen` on `last_seen`
+  - `ix_incidents_status_last_seen` on `(status, last_seen)` — covers the most common filter+sort
+  SQLAlchemy's `create_all` / init_db will create these on the next engine restart.
+
+- **WS debounce** (`portal/src/siem/SiemIncidentsPage.jsx`):
+  Instead of calling `fetchIncidents()` on every `alert_processed` WS message, the handler
+  now uses a 4-second trailing debounce. A burst of 50 alerts now costs exactly 1 API call
+  instead of 50 concurrent requests.
+
+- **Manual purge button** (`SiemIncidentsPage.jsx`, `siem_proxy.py`, `siemApi.js`,
+  `correlation_engine/main.py`):
+  - New `⊘ Clear Resolved / FP` button in the incidents filter bar (admin role only at the
+    proxy layer). Clicking it shows an inline confirm step before deleting.
+  - Sends `DELETE /api/siem/incidents?status=resolved,false_positive`.
+  - The engine endpoint deletes matching `Alert` child rows first, then `Incident` rows,
+    then refreshes the view in place \u2014 no page reload needed.
+
+- **Auto-archive scheduler** (`correlation_engine/main.py`):
+  New background task `_auto_archive_scheduler()` runs every 6 hours. Hard-deletes
+  `resolved` and `false_positive` incidents (and their child alerts) whose `updated_at`
+  is older than **30 days** (`ARCHIVE_AFTER_DAYS = 30`). Keeps the table permanently lean
+  without any manual intervention. Logs `auto_archive_complete` with a count on each run.
+
+---
 ## v1.0.102 — 2026-04-09
 
 ### Fix — Package Install: `httpx` Version Conflict Between Backend and Correlation Engine

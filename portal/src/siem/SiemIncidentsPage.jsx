@@ -519,7 +519,10 @@ export function SiemIncidentsPage() {
   const [filters, setFilters]       = useState({ status: "", severity: "" });
   const [selected, setSelected]     = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
-  const wsRef = useRef(null);
+  const [purgeConfirm, setPurgeConfirm] = useState(false); // show confirm bar
+  const [purging, setPurging]       = useState(false);
+  const wsRef       = useRef(null);
+  const wsDebounce  = useRef(null); // timer ref for WS-triggered refetch debounce
 
   const fetchIncidents = useCallback(async () => {
     const data = await siemFetch(siemApi.getIncidents({ ...filters, limit: 100 }));
@@ -548,17 +551,32 @@ export function SiemIncidentsPage() {
       try {
         const e = JSON.parse(evt.data);
         if (e.type === "alert_processed") {
-          // Refresh incident list on new event
-          fetchIncidents();
+          // Debounce: coalesce rapid bursts of alerts into a single refetch
+          // so a flood of incoming alerts doesn't hammer the API on every message.
+          clearTimeout(wsDebounce.current);
+          wsDebounce.current = setTimeout(fetchIncidents, 4000);
         }
       } catch {}
     };
-    return () => { ws.close(); };
+    return () => {
+      ws.close();
+      clearTimeout(wsDebounce.current);
+    };
   }, [fetchIncidents]);
 
   const handlePatched = (updated) => {
     setIncidents(prev => prev.map(inc => inc.id === updated.id ? { ...inc, ...updated } : inc));
     setSelected(prev => prev?.id === updated.id ? { ...prev, ...updated } : prev);
+  };
+
+  const handlePurge = async () => {
+    setPurging(true);
+    const data = await siemFetch(siemApi.purgeIncidents("resolved,false_positive"));
+    setPurging(false);
+    setPurgeConfirm(false);
+    if (!data._error && !data._offline) {
+      await fetchIncidents();
+    }
   };
 
   const sortedIncidents = [...incidents].sort((a, b) =>
@@ -604,6 +622,34 @@ export function SiemIncidentsPage() {
               fontSize: 12, fontFamily: "monospace" }}>
             ↻ Refresh
           </button>
+          {/* Purge resolved / FP — shows confirm step before deleting */}
+          {!purgeConfirm ? (
+            <button onClick={() => setPurgeConfirm(true)}
+              style={{ background: "rgba(255,59,59,0.06)", border: "1px solid rgba(255,59,59,0.25)",
+                color: "rgba(255,100,100,0.8)", padding: "8px 16px", borderRadius: 4, cursor: "pointer",
+                fontSize: 12, fontFamily: "monospace" }}>
+              ⊘ Clear Resolved / FP
+            </button>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 8,
+              background: "rgba(255,59,59,0.08)", border: "1px solid rgba(255,59,59,0.35)",
+              borderRadius: 4, padding: "6px 12px" }}>
+              <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 11, fontFamily: "monospace" }}>
+                Delete all Resolved &amp; False Positive incidents?
+              </span>
+              <button onClick={handlePurge} disabled={purging}
+                style={{ background: "rgba(255,59,59,0.3)", border: "1px solid rgba(255,59,59,0.6)",
+                  color: "#ff6464", padding: "4px 12px", borderRadius: 3, cursor: "pointer",
+                  fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>
+                {purging ? "Deleting…" : "Confirm"}
+              </button>
+              <button onClick={() => setPurgeConfirm(false)}
+                style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)",
+                  cursor: "pointer", fontSize: 11, fontFamily: "monospace" }}>
+                Cancel
+              </button>
+            </div>
+          )}
         </div>
 
         {loading ? (

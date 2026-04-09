@@ -7,6 +7,7 @@ Endpoints:
   GET   /incidents
   GET   /incidents/{id}
   PATCH /incidents/{id}
+  DELETE /incidents
   GET   /risk-scores
   GET   /ueba/users
   GET   /ueba/{username}
@@ -30,7 +31,7 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, delete
 from pydantic import BaseModel
 
 from config import get_settings
@@ -94,6 +95,35 @@ async def _campaign_scheduler():
         await asyncio.sleep(300)
 
 
+# ── Auto-archive scheduler ────────────────────────────────────────────────────
+# Every 6 hours, hard-delete resolved / false_positive incidents that haven't
+# been updated in more than ARCHIVE_AFTER_DAYS days, and their child alerts.
+# This keeps the incidents table lean and queries fast without any manual action.
+ARCHIVE_AFTER_DAYS = 30
+
+async def _auto_archive_scheduler():
+    from datetime import timedelta
+    from models import AsyncSessionLocal
+    await asyncio.sleep(60)  # let the engine fully boot before first check
+    while True:
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=ARCHIVE_AFTER_DAYS)
+            async with AsyncSessionLocal() as db:
+                stale_ids = list((await db.execute(
+                    select(Incident.id)
+                    .where(Incident.status.in_(["resolved", "false_positive"]))
+                    .where(Incident.updated_at < cutoff)
+                )).scalars().all())
+                if stale_ids:
+                    await db.execute(delete(Alert).where(Alert.incident_id.in_(stale_ids)))
+                    await db.execute(delete(Incident).where(Incident.id.in_(stale_ids)))
+                    await db.commit()
+                    log.info("auto_archive_complete", deleted=len(stale_ids),
+                             cutoff_days=ARCHIVE_AFTER_DAYS)
+        except Exception as e:
+            log.error("auto_archive_error", error=str(e))
+        await asyncio.sleep(6 * 3600)
+
 # CyIRIS sync scheduler: poll open-linked incidents every 5 minutes
 async def _iris_sync_scheduler():
     from iris_connector import sync_closed_cases
@@ -132,6 +162,8 @@ async def lifespan(app: FastAPI):
     log.info("campaign_scheduler_started")
     asyncio.create_task(_iris_sync_scheduler())
     log.info("iris_sync_scheduler_started")
+    asyncio.create_task(_auto_archive_scheduler())
+    log.info("auto_archive_scheduler_started")
     yield
     if ingestor_task:
         ingestor_task.cancel()
@@ -506,6 +538,33 @@ async def patch_incident(
     inc.updated_at = datetime.now(timezone.utc)
     await db.commit()
     return _incident_to_dict(inc)
+
+
+@app.delete("/incidents")
+async def purge_incidents(
+    status: Optional[str] = Query(
+        None,
+        description="Comma-separated statuses to purge, e.g. 'resolved,false_positive'. "
+                    "Omit to purge ALL incidents.",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """Hard-delete incidents (and their child alerts) filtered by status.
+    This is an admin-only destructive operation — the proxy layer enforces RBAC.
+    """
+    statuses = [s.strip() for s in status.split(",") if s.strip()] if status else None
+    # Collect IDs first so we can clean child alerts
+    id_q = select(Incident.id)
+    if statuses:
+        id_q = id_q.where(Incident.status.in_(statuses))
+    incident_ids = list((await db.execute(id_q)).scalars().all())
+    if not incident_ids:
+        return {"deleted": 0}
+    await db.execute(delete(Alert).where(Alert.incident_id.in_(incident_ids)))
+    await db.execute(delete(Incident).where(Incident.id.in_(incident_ids)))
+    await db.commit()
+    log.info("incidents_purged", count=len(incident_ids), status_filter=statuses)
+    return {"deleted": len(incident_ids)}
 
 
 @app.get("/risk-scores")

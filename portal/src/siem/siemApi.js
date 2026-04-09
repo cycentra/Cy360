@@ -91,6 +91,15 @@ export const siemApi = {
   getEngineStatus: () => _get("/engine/status"),
 
   /**
+   * Hard-delete incidents by status. Admin role required.
+   * @param {string} [status] Comma-separated statuses e.g. 'resolved,false_positive'. Omit for ALL.
+   */
+  purgeIncidents: (status) => {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+    return fetch(`${SIEM}/incidents${qs}`, { method: "DELETE", credentials: "include" });
+  },
+
+  /**
    * Create a WebSocket connection to the engine live feed.
    * Authenticated via same-origin cookie.
    * Returns a native WebSocket instance.

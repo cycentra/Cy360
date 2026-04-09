@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Column, BigInteger, Text, Integer, Numeric, Boolean,
-    TIMESTAMP, ARRAY, UniqueConstraint
+    TIMESTAMP, ARRAY, UniqueConstraint, Index
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -92,6 +92,14 @@ class Incident(Base):
     iris_case_status = Column(Text, nullable=True)       # "open" | "closed"
     iris_case_url    = Column(Text, nullable=True)       # deep link to case in IRIS UI
     confidence_score = Column(Numeric(5, 1), nullable=True)  # FP confidence 0-100
+
+    __table_args__ = (
+        # Speed up the common WHERE/ORDER BY patterns used by GET /incidents
+        Index("ix_incidents_status",          "status"),
+        Index("ix_incidents_severity",        "severity"),
+        Index("ix_incidents_last_seen",       "last_seen"),
+        Index("ix_incidents_status_last_seen", "status", "last_seen"),
+    )
 
 
 class UEBABaseline(Base):
