@@ -94,6 +94,27 @@ async def _campaign_scheduler():
         await asyncio.sleep(300)
 
 
+# CyIRIS sync scheduler: poll open-linked incidents every 5 minutes
+async def _iris_sync_scheduler():
+    from iris_connector import sync_closed_cases
+    from models import AsyncSessionLocal
+    await asyncio.sleep(60)   # initial delay — let ingestor settle
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                closed = await sync_closed_cases(db)
+                await db.commit()
+                if closed:
+                    await manager.broadcast(_DUMPS({
+                        'type':      'iris_cases_synced',
+                        'closed':    closed,
+                        'timestamp': datetime.now(timezone.utc).isoformat(),
+                    }))
+        except Exception as e:
+            log.error('iris_sync_scheduler_error', error=str(e))
+        await asyncio.sleep(300)  # every 5 minutes
+
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -109,6 +130,8 @@ async def lifespan(app: FastAPI):
     log.info("ws_listener_started")
     asyncio.create_task(_campaign_scheduler())   # ENH-1
     log.info("campaign_scheduler_started")
+    asyncio.create_task(_iris_sync_scheduler())
+    log.info("iris_sync_scheduler_started")
     yield
     if ingestor_task:
         ingestor_task.cancel()
@@ -197,6 +220,10 @@ def _incident_to_dict(i: Incident) -> dict:
         "kill_chain_stage":      i.kill_chain_stage or 0,
         "kill_chain_stage_name": i.kill_chain_stage_name,
         "notes":             i.notes,
+        "iris_case_id":      i.iris_case_id,
+        "iris_case_status":  i.iris_case_status,
+        "iris_case_url":     i.iris_case_url,
+        "confidence_score":  float(i.confidence_score) if i.confidence_score is not None else None,
     }
 
 

@@ -172,6 +172,12 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
                   fontWeight: 700 }}>{inc.risk_score?.toFixed(1)}</span>
               </span>
             )}
+            {inc.confidence_score != null && (
+              <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11 }}>
+                FP Score: <span style={{ color: inc.confidence_score >= 90 ? "#ff8c00" : "#4d9eff",
+                  fontWeight: 700 }}>{inc.confidence_score?.toFixed(1)}%</span>
+              </span>
+            )}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0, marginLeft: 12 }}>
@@ -314,6 +320,64 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
                   {" — "}{hit.threat_level} threat · MISP events: {(hit.events || []).join(", ")}
                 </div>
               ))}
+            </div>
+          </>
+        )}
+
+        {/* CyIRIS ticket */}
+        {inc.iris_case_id ? (
+          <>
+            <SectionLabel>🎫 CYIRIS TICKET</SectionLabel>
+            <div style={{
+              background: inc.iris_case_status === "closed"
+                ? "rgba(0,229,160,0.04)" : "rgba(77,158,255,0.04)",
+              border: `1px solid ${inc.iris_case_status === "closed" ? "rgba(0,229,160,0.2)" : "rgba(77,158,255,0.2)"}`,
+              borderRadius: 4, padding: "14px 16px",
+              display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12,
+            }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <span style={{
+                    background: inc.iris_case_status === "closed" ? "rgba(0,229,160,0.15)" : "rgba(77,158,255,0.15)",
+                    color: inc.iris_case_status === "closed" ? "#00e5a0" : "#4d9eff",
+                    border: `1px solid ${inc.iris_case_status === "closed" ? "rgba(0,229,160,0.4)" : "rgba(77,158,255,0.4)"}`,
+                    fontSize: 10, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 2,
+                    letterSpacing: "0.5px",
+                  }}>
+                    {inc.iris_case_status === "closed" ? "✓ CLOSED" : "● OPEN"}
+                  </span>
+                  <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, fontFamily: "monospace" }}>
+                    Case #{inc.iris_case_id}
+                  </span>
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11 }}>
+                  {inc.iris_case_status === "closed"
+                    ? "Analyst closed this ticket in DFIR IRIS — incident auto-closed."
+                    : "Ticket raised in DFIR IRIS and assigned to an analyst for investigation."}
+                </div>
+              </div>
+              {inc.iris_case_url && (
+                <a href={inc.iris_case_url} target="_blank" rel="noopener noreferrer"
+                  style={{
+                    background: inc.iris_case_status === "closed" ? "rgba(0,229,160,0.1)" : "rgba(77,158,255,0.1)",
+                    border: `1px solid ${inc.iris_case_status === "closed" ? "rgba(0,229,160,0.3)" : "rgba(77,158,255,0.3)"}`,
+                    color: inc.iris_case_status === "closed" ? "#00e5a0" : "#4d9eff",
+                    padding: "6px 12px", borderRadius: 4, fontSize: 11,
+                    fontFamily: "monospace", textDecoration: "none", whiteSpace: "nowrap", flexShrink: 0,
+                    fontWeight: 700,
+                  }}>
+                  ↗ Open in CyIRIS
+                </a>
+              )}
+            </div>
+          </>
+        ) : inc.status !== "closed" && inc.status !== "false_positive" && (
+          <>
+            <SectionLabel>🎫 CYIRIS TICKET</SectionLabel>
+            <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)",
+              borderRadius: 4, padding: "12px 14px",
+              color: "rgba(255,255,255,0.25)", fontSize: 11, fontFamily: "monospace" }}>
+              No ticket raised — incident did not meet escalation criteria or CyIRIS is disabled.
             </div>
           </>
         )}
@@ -618,7 +682,23 @@ export function SiemIncidentsPage() {
                       🔴 IOC
                     </span>
                   )}
-                  {!inc.llm_summary && !(inc.misp_enrichment?.ioc_hits || []).length && (
+                  {inc.iris_case_id && (
+                    <span
+                      title={`CyIRIS Ticket #${inc.iris_case_id} — ${(inc.iris_case_status || "open").toUpperCase()}`}
+                      style={{
+                        background: inc.iris_case_status === "closed"
+                          ? "rgba(0,229,160,0.1)" : "rgba(77,158,255,0.12)",
+                        color: inc.iris_case_status === "closed" ? "#00e5a0" : "#4d9eff",
+                        border: `1px solid ${inc.iris_case_status === "closed" ? "rgba(0,229,160,0.3)" : "rgba(77,158,255,0.3)"}`,
+                        fontSize: 9, fontFamily: "monospace", padding: "1px 5px",
+                        borderRadius: 2, fontWeight: 700, cursor: inc.iris_case_url ? "pointer" : "default",
+                      }}
+                      onClick={e => { e.stopPropagation(); if (inc.iris_case_url) window.open(inc.iris_case_url, "_blank", "noopener"); }}
+                    >
+                      {inc.iris_case_status === "closed" ? "✓ IRIS" : "🎫 IRIS"}
+                    </span>
+                  )}
+                  {!inc.llm_summary && !(inc.misp_enrichment?.ioc_hits || []).length && !inc.iris_case_id && (
                     <span style={{ color: "rgba(255,255,255,0.15)", fontSize: 10 }}>—</span>
                   )}
                 </div>

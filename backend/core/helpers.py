@@ -145,3 +145,58 @@ def get_misp_config() -> dict | None:
 
     # "disabled" or any unrecognised value
     return None
+
+
+_CLOUD_IRIS_URL_DEFAULT = "https://cyiris.cycentra.com"
+
+
+def get_iris_config() -> dict | None:
+    """
+    Single source of truth for CyIRIS (DFIR IRIS) connection configuration.
+
+    Modes
+    -----
+    - ``disabled``  → returns None
+    - ``cloud``     → returns Cloud CyIRIS creds from ``CLOUD_IRIS_URL`` /
+                      ``CLOUD_IRIS_API_KEY`` in the environment
+    - ``local``     → returns the customer-configured URL + key from ai_settings.json
+
+    Returns dict with keys: url, apiKey, customerId, fpThreshold, mode — or None.
+    """
+    from core.config import AI_SETTINGS_FILE
+    try:
+        raw = AI_SETTINGS_FILE.read_text() if AI_SETTINGS_FILE.exists() else "{}"
+        stored = json.loads(raw)
+    except Exception:
+        stored = {}
+
+    iris = stored.get("iris", {})
+    mode = iris.get("mode", "disabled")
+
+    if mode == "cloud":
+        url = os.environ.get("CLOUD_IRIS_URL", _CLOUD_IRIS_URL_DEFAULT).rstrip("/")
+        key = os.environ.get("CLOUD_IRIS_API_KEY", "")
+        if not key:
+            return None
+        return {
+            "url":         url,
+            "apiKey":      key,
+            "customerId":  int(os.environ.get("CLOUD_IRIS_CUSTOMER_ID", "1")),
+            "fpThreshold": float(iris.get("fpThreshold", 90.0)),
+            "mode":        "cloud",
+        }
+
+    if mode == "local":
+        url = iris.get("url", "").strip().rstrip("/")
+        key = iris.get("apiKey", "").strip()
+        if not url or not key:
+            return None
+        return {
+            "url":         url,
+            "apiKey":      key,
+            "customerId":  int(iris.get("customerId", 1)),
+            "fpThreshold": float(iris.get("fpThreshold", 90.0)),
+            "mode":        "local",
+        }
+
+    return None

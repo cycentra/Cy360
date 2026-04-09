@@ -401,7 +401,7 @@ const TABS = [
 ];
 
 // ════════════════════════════════════════════════════════════════════════════
-// TAB 3 — Integrations (MISP)
+// TAB 3 — Integrations (MISP + CyIRIS)
 // ════════════════════════════════════════════════════════════════════════════
 
 function MispTab() {
@@ -608,6 +608,261 @@ function MispTab() {
   );
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// TAB 3b — CyIRIS (DFIR IRIS Integration)
+// ════════════════════════════════════════════════════════════════════════════
+
+function CyIrisTab() {
+  const [iris,       setIris]       = useState({});
+  const [loading,    setLoading]    = useState(true);
+  const [saving,     setSaving]     = useState(false);
+  const [saved,      setSaved]      = useState(false);
+  const [testStatus, setTestStatus] = useState(null);   // null | "testing" | "ok" | "fail"
+  const [testMsg,    setTestMsg]    = useState("");
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/ai/settings`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => {
+        const raw = d.iris || {};
+        if (!raw.mode) raw.mode = "disabled";
+        if (raw.fpThreshold === undefined) raw.fpThreshold = 90;
+        setIris(raw);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, []);
+
+  const mode    = iris.mode || "disabled";
+  const setMode = (m) => { setIris(prev => ({ ...prev, mode: m })); setTestStatus(null); setTestMsg(""); };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/api/ai/settings`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ iris }),
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } finally { setSaving(false); }
+  };
+
+  const testConnection = async () => {
+    if (!iris.url) { setTestStatus("fail"); setTestMsg("CyIRIS URL is required"); return; }
+    if (!iris.apiKey || iris.apiKey === "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022") {
+      setTestStatus("fail"); setTestMsg("Enter your API Key (currently showing masked placeholder)"); return;
+    }
+    setTestStatus("testing"); setTestMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/system/iris/test`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: iris.url, apiKey: iris.apiKey }),
+      });
+      const d = await r.json();
+      if (d.ok) { setTestStatus("ok");   setTestMsg(d.message || "Connected"); }
+      else       { setTestStatus("fail"); setTestMsg(d.error  || "Connection failed"); }
+    } catch { setTestStatus("fail"); setTestMsg("Cannot reach backend"); }
+  };
+
+  if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
+
+  const MODES = [
+    { id: "disabled", label: "No CyIRIS",      desc: "Incident escalation disabled — no tickets will be raised in DFIR IRIS", icon: "⭕", color: "rgba(255,255,255,0.3)" },
+    { id: "cloud",    label: "Cloud CyIRIS",    desc: "Connect to Cycentra-managed DFIR IRIS at cyiris.cycentra.com", icon: "☁️",  color: "#4d9eff" },
+    { id: "local",    label: "Local CyIRIS",    desc: "Your self-hosted DFIR IRIS instance — configure URL, API key, and customer ID below", icon: "🏠", color: "#00e5a0" },
+  ];
+
+  return (
+    <div style={{ maxWidth: 640 }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+        <span style={{ fontSize: 18 }}>🔵</span>
+        <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px",
+          textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
+          CyIRIS — DFIR IRIS Incident Response
+        </div>
+      </div>
+      <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, marginBottom: 20, lineHeight: 1.6 }}>
+        When enabled, <strong style={{ color: "rgba(255,255,255,0.5)" }}>CySIEM Correlation Engine</strong> will
+        automatically raise tickets in DFIR IRIS for incidents that require analyst investigation.
+        Incidents with a high false-positive confidence score are auto-closed without a ticket.
+      </div>
+
+      {/* Mode selector */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+        {MODES.map(m => (
+          <button key={m.id} onClick={() => setMode(m.id)}
+            style={{
+              flex: 1, padding: "12px 10px", borderRadius: 5, cursor: "pointer",
+              border: `1px solid ${mode === m.id ? m.color : "rgba(255,255,255,0.08)"}`,
+              background: mode === m.id ? `${m.color}12` : "rgba(255,255,255,0.02)",
+              transition: "all 0.15s",
+            }}>
+            <div style={{ fontSize: 18, marginBottom: 4 }}>{m.icon}</div>
+            <div style={{ color: mode === m.id ? m.color : "rgba(255,255,255,0.5)", fontSize: 11,
+              fontFamily: "monospace", fontWeight: 700, marginBottom: 4 }}>
+              {m.label}
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, lineHeight: 1.4 }}>
+              {m.desc}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Mode: Disabled */}
+      {mode === "disabled" && (
+        <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "18px 20px" }}>
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, fontFamily: "monospace" }}>
+            ⭕ CyIRIS is disabled — incidents will not escalate to DFIR IRIS. False-positive auto-close still active based on threshold.
+          </div>
+        </div>
+      )}
+
+      {/* Mode: Cloud CyIRIS */}
+      {mode === "cloud" && (
+        <div style={{ background: "rgba(77,158,255,0.04)", border: "1px solid rgba(77,158,255,0.2)", borderRadius: 6, padding: "18px 20px" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+            <span style={{ fontSize: 22 }}>☁️</span>
+            <div>
+              <div style={{ color: "#4d9eff", fontSize: 12, fontFamily: "monospace", fontWeight: 700, marginBottom: 6 }}>
+                Cycentra Cloud CyIRIS — cyiris.cycentra.com
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>
+                Your platform will connect to the Cycentra-managed DFIR IRIS instance using
+                pre-provisioned credentials embedded securely in the server environment. No
+                configuration is required.
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+                Incidents from CySIEM Correlation Engine will be escalated automatically.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mode: Local CyIRIS */}
+      {mode === "local" && (
+        <div style={{ background: "rgba(0,229,160,0.03)", border: "1px solid rgba(0,229,160,0.2)", borderRadius: 6, padding: "22px 24px" }}>
+          {/* URL */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={LABEL}>CyIRIS Server URL</div>
+            <input type="text" value={iris.url || ""}
+              onChange={e => setIris(prev => ({ ...prev, url: e.target.value }))}
+              placeholder="https://cyiris.yourdomain.com  or  http://127.0.0.1"
+              style={INPUT} />
+          </div>
+
+          {/* API Key */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={LABEL}>API Key</div>
+            <input type="password" value={iris.apiKey || ""}
+              onChange={e => setIris(prev => ({ ...prev, apiKey: e.target.value }))}
+              placeholder="IRIS Bearer token — from IRIS → My Profile → API Key"
+              style={INPUT} />
+            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
+              In DFIR IRIS: click your avatar → My Settings → scroll to API Key → copy or generate
+            </div>
+          </div>
+
+          {/* Customer ID */}
+          <div style={{ marginBottom: 22 }}>
+            <div style={LABEL}>Customer ID</div>
+            <input type="number" value={iris.customerId || 1} min={1}
+              onChange={e => setIris(prev => ({ ...prev, customerId: parseInt(e.target.value) || 1 }))}
+              placeholder="1"
+              style={{ ...INPUT, width: 120 }} />
+            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
+              In DFIR IRIS: Global Settings → Customers → copy the numeric ID
+            </div>
+          </div>
+
+          {/* Test Connection */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+            <button onClick={testConnection} disabled={testStatus === "testing"}
+              style={{ background: "rgba(0,229,160,0.1)", color: "#00e5a0",
+                border: "1px solid rgba(0,229,160,0.35)", borderRadius: 4,
+                padding: "8px 18px", fontFamily: "monospace", fontSize: 11,
+                fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px",
+                opacity: testStatus === "testing" ? 0.6 : 1 }}>
+              {testStatus === "testing" ? "Testing…" : "Test Connection"}
+            </button>
+            {testStatus === "ok"   && <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ {testMsg}</span>}
+            {testStatus === "fail" && <span style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace" }}>✗ {testMsg}</span>}
+          </div>
+
+          {/* Status hint */}
+          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.25)" }}>
+            {iris.url && iris.apiKey
+              ? <span style={{ color: "#00e5a0" }}>✓ Configured — incidents will be escalated to CyIRIS</span>
+              : <span style={{ color: "#ff8c00" }}>⚠ URL and API Key required to activate</span>}
+          </div>
+        </div>
+      )}
+
+      {/* False-positive threshold slider — always visible */}
+      <div style={{ marginTop: 24, background: "rgba(255,255,255,0.02)",
+        border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "18px 20px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div style={LABEL}>FALSE POSITIVE AUTO-CLOSE THRESHOLD</div>
+          <span style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 14, fontWeight: 700 }}>
+            {iris.fpThreshold ?? 90}%
+          </span>
+        </div>
+        <input
+          type="range" min={50} max={99} step={1}
+          value={iris.fpThreshold ?? 90}
+          onChange={e => setIris(prev => ({ ...prev, fpThreshold: parseInt(e.target.value) }))}
+          style={{ width: "100%", accentColor: "#00e5a0", cursor: "pointer", marginBottom: 8 }}
+        />
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>50% (more tickets)</span>
+          <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>99% (fewer tickets)</span>
+        </div>
+        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, marginTop: 8, lineHeight: 1.5 }}>
+          Incidents where the AI confidence score is{" "}
+          <strong style={{ color: "#00e5a0" }}>≥ {iris.fpThreshold ?? 90}%</strong>{" "}
+          false positive are <strong style={{ color: "#ff8c00" }}>auto-closed</strong> without raising a ticket.
+          All others are escalated to CyIRIS for analyst review.
+        </div>
+      </div>
+
+      {/* Save */}
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 20 }}>
+        <button onClick={handleSave} disabled={saving}
+          style={{ ...BTN(), opacity: saving ? 0.5 : 1 }}>
+          {saving ? "Saving…" : "Save CyIRIS Configuration"}
+        </button>
+        {saved && <span style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace" }}>✓ Saved — correlation engine updated</span>}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// TAB 3 wrapper — Integrations (MISP + CyIRIS)
+// ════════════════════════════════════════════════════════════════════════════
+
+function IntegrationsTab() {
+  return (
+    <div>
+      {/* MISP Section */}
+      <div style={{ marginBottom: 40 }}>
+        <MispTab />
+      </div>
+
+      {/* Divider */}
+      <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", marginBottom: 40 }} />
+
+      {/* CyIRIS Section */}
+      <CyIrisTab />
+    </div>
+  );
+}
+
 export function SystemSettingsPage({ aiConfig, onSaveAIConfig }) {
   const [tab, setTab] = useState("updates");
 
@@ -635,7 +890,7 @@ export function SystemSettingsPage({ aiConfig, onSaveAIConfig }) {
 
       {tab === "updates"      && <UpdatesTab />}
       {tab === "ai-config"    && <AISettingsPage aiConfig={aiConfig || {}} onSave={onSaveAIConfig || (() => {})} embedded={true} />}
-      {tab === "integrations" && <MispTab />}
+      {tab === "integrations" && <IntegrationsTab />}
       {tab === "env"          && <EnvConfigTab />}
     </div>
   );

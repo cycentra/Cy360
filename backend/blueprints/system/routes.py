@@ -205,6 +205,59 @@ def _sync_misp_to_siem_env(misp: dict) -> None:
         pass  # Non-fatal — server may not have write permission in dev mode
 
 
+def _sync_iris_to_siem_env(iris: dict) -> None:
+    """Resolve effective CyIRIS config and write it into cysiemstack.env so the
+    correlation engine picks it up immediately without a restart."""
+    env_path = Path(_ENV_FILE_MAP["cysiemstack"])
+    if not env_path.parent.exists():
+        return
+
+    mode = iris.get("mode", "disabled")
+
+    if mode == "cloud":
+        eff_url = os.environ.get("CLOUD_IRIS_URL", "https://cyiris.cycentra.com").rstrip("/")
+        eff_key = os.environ.get("CLOUD_IRIS_API_KEY", "")
+        customer_id = os.environ.get("CLOUD_IRIS_CUSTOMER_ID", "1")
+        enabled = "true" if eff_key else "false"
+    elif mode == "local":
+        eff_url = iris.get("url", "").rstrip("/")
+        eff_key = iris.get("apiKey", "")
+        customer_id = str(iris.get("customerId", "1"))
+        enabled = "true" if (eff_url and eff_key) else "false"
+    else:  # disabled
+        eff_url, eff_key, customer_id, enabled = "", "", "1", "false"
+
+    updates = {
+        "IRIS_MODE":        mode,
+        "IRIS_ENABLED":     enabled,
+        "IRIS_URL":         eff_url,
+        "IRIS_API_KEY":     eff_key,
+        "IRIS_CUSTOMER_ID": customer_id,
+        "IRIS_FP_THRESHOLD": str(iris.get("fpThreshold", "90.0")),
+    }
+
+    try:
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
+    except Exception:
+        lines = []
+
+    result, seen = [], set()
+    for line in lines:
+        key = line.split("=", 1)[0].strip()
+        if key in updates:
+            result.append(f'{key}={updates[key]}')
+            seen.add(key)
+        else:
+            result.append(line)
+    for k, v in updates.items():
+        if k not in seen:
+            result.append(f'{k}={v}')
+    try:
+        env_path.write_text("\n".join(result) + "\n")
+    except Exception:
+        pass
+
+
 @system_bp.route("/api/ai/settings", methods=["OPTIONS"])
 def ai_settings_options():
     return add_cors_headers(make_response('', 204))
@@ -222,6 +275,8 @@ def ai_settings_get():
                 data["cymind_memory"]["apiKey"] = "••••••••"
             if "misp" in data and data["misp"].get("apiKey"):
                 data["misp"]["apiKey"] = "••••••••"
+            if "iris" in data and data["iris"].get("apiKey"):
+                data["iris"]["apiKey"] = "••••••••"
             return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -232,7 +287,7 @@ def ai_settings_get():
 def ai_settings_post():
     data = request.get_json() or {}
     # Only accept known top-level keys to prevent arbitrary data storage
-    allowed = {"provider", "fields", "prompts", "cymind_memory", "misp"}
+    allowed = {"provider", "fields", "prompts", "cymind_memory", "misp", "iris"}
     payload = {k: v for k, v in data.items() if k in allowed}
     if not payload:
         return jsonify({"error": "No valid settings provided"}), 400
@@ -263,13 +318,21 @@ def ai_settings_post():
             existing_misp_key = existing.get("misp", {}).get("apiKey", "")
             if existing_misp_key:
                 payload.setdefault("misp", {})["apiKey"] = existing_misp_key
+        # Same guard for the iris block
+        incoming_iris_key = payload.get("iris", {}).get("apiKey", "")
+        if not incoming_iris_key or incoming_iris_key == _MASK:
+            existing_iris_key = existing.get("iris", {}).get("apiKey", "")
+            if existing_iris_key:
+                payload.setdefault("iris", {})["apiKey"] = existing_iris_key
         existing.update(payload)
         AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         AI_SETTINGS_FILE.write_text(json.dumps(existing, indent=2))
-        # Sync MISP settings into cysiemstack.env so the correlation engine
-        # picks them up without requiring manual env file edits.
+        # Sync MISP settings into cysiemstack.env
         if "misp" in existing:
             _sync_misp_to_siem_env(existing["misp"])
+        # Sync CyIRIS settings into cysiemstack.env
+        if "iris" in existing:
+            _sync_iris_to_siem_env(existing["iris"])
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -312,6 +375,60 @@ def misp_test():
         return jsonify({"ok": False, "error": f"SSL error — {e}"}), 400
     except http_requests.exceptions.ConnectionError:
         return jsonify({"ok": False, "error": "Cannot reach MISP server — check URL and network"}), 400
+    except http_requests.exceptions.Timeout:
+        return jsonify({"ok": False, "error": "Connection timed out"}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ── CyIRIS connectivity test ──────────────────────────────────────────────────
+
+@system_bp.route("/api/system/iris/test", methods=["OPTIONS"])
+def iris_test_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/iris/test", methods=["POST"])
+def iris_test():
+    """Test connectivity to a DFIR IRIS instance using its REST API."""
+    data    = request.get_json() or {}
+    url     = data.get("url", "").rstrip("/")
+    api_key = data.get("apiKey", "")
+
+    if not url:
+        return jsonify({"ok": False, "error": "CyIRIS URL is required"}), 400
+    if not api_key or api_key == "\u2022" * 8:
+        return jsonify({"ok": False, "error": "CyIRIS API Key is required"}), 400
+
+    try:
+        # GET /api/ping — lightweight auth-required ping endpoint built into IRIS
+        resp = http_requests.get(
+            f"{url}/api/ping",
+            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+            timeout=8,
+            verify=False,   # IRIS commonly runs with self-signed certs on-premise
+        )
+        if resp.status_code == 401:
+            return jsonify({"ok": False, "error": "Invalid API key (401 Unauthorized)"}), 400
+        if resp.status_code == 403:
+            return jsonify({"ok": False, "error": "Access denied (403 Forbidden)"}), 400
+        if resp.ok:
+            # Also fetch version info for a richer confirmation message
+            ver_resp = http_requests.get(
+                f"{url}/api/versions",
+                headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+                timeout=5, verify=False,
+            )
+            version = "unknown"
+            if ver_resp.ok:
+                ver_data = ver_resp.json()
+                version = ver_data.get("data", {}).get("iris_current", "unknown")
+            return jsonify({"ok": True, "message": f"DFIR IRIS v{version} — connected"})
+        return jsonify({"ok": False, "error": f"IRIS returned HTTP {resp.status_code}"}), 400
+    except http_requests.exceptions.SSLError as e:
+        return jsonify({"ok": False, "error": f"SSL error — {e}"}), 400
+    except http_requests.exceptions.ConnectionError:
+        return jsonify({"ok": False, "error": "Cannot reach CyIRIS server — check URL and network"}), 400
     except http_requests.exceptions.Timeout:
         return jsonify({"ok": False, "error": "Connection timed out"}), 400
     except Exception as e:

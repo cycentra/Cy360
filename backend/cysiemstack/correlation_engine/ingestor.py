@@ -24,6 +24,7 @@ from ueba import analyse_alert
 from risk_scorer import calculate_entity_risk
 from misp_enricher import enrich_incident
 from llm_enricher import enrich_incident as llm_enrich_incident
+from iris_connector import create_iris_case, auto_close_fp
 from ueba_ml import ml_analyse_alert
 from config import get_settings
 
@@ -139,9 +140,32 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                     not incident.llm_summary):
                 llm_result = await llm_enrich_incident(db, incident)
 
+            # 7. CyIRIS integration — false-positive auto-close OR ticket creation
+            iris_result = {}
+            iris_auto_closed = False
+            # Use correlated rule confidence values to derive an FP score.
+            # A simple heuristic: average rule confidence inverted (high rule
+            # confidence = low FP probability).  Incidents with no rules or
+            # very low severity get a higher FP score.
+            if incident.status not in ("closed", "false_positive"):
+                rules = incident.correlated_rules or []
+                if rules:
+                    avg_conf = sum(
+                        float(r.get("confidence", 0.5)) for r in rules
+                    ) / len(rules)
+                    fp_score = round((1.0 - avg_conf) * 100, 1)
+                else:
+                    # No correlation rules fired → likely noise → higher FP score
+                    fp_score = 70.0 if incident.severity in ("low", "medium") else 30.0
+
+                iris_auto_closed = await auto_close_fp(db, incident, fp_score)
+
+                if not iris_auto_closed and (created or new_rules):
+                    iris_result = await create_iris_case(db, incident)
+
             await db.commit()
 
-            # 7. Push live event to WebSocket clients
+            # 8. Push live event to WebSocket clients
             event = {
                 "type":              "alert_processed",
                 "timestamp":         datetime.now(timezone.utc).isoformat(),
@@ -154,6 +178,8 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                 "ueba_anomalies":    len(ueba_anomalies),
                 "misp_hits":         len(misp_result.get("ioc_hits", [])),
                 "llm_ready":         bool(llm_result),
+                "iris_case_id":      iris_result.get("iris_case_id"),
+                "iris_auto_closed":  iris_auto_closed,
                 "agent_name":        alert.get("agent_name"),
                 "rule_desc":         alert.get("rule_desc"),
             }

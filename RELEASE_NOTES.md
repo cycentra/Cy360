@@ -1,6 +1,100 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.99 — 2026-04-09
+
+### Feature — CyIRIS (DFIR IRIS) Integration: Incident Escalation, Auto-Close & Ticket Lifecycle Sync
+
+**Overview:**
+Full end-to-end integration between the CySIEM Correlation Engine and DFIR IRIS (CyIRIS).
+Incidents with a low false-positive confidence score are automatically escalated to DFIR IRIS
+as tickets. Incidents with a high FP confidence score (configurable threshold, default 90%) are
+auto-closed without raising a ticket. When an analyst closes a ticket in DFIR IRIS, the
+corresponding incident is automatically closed in cycentra360. The dashboard shows ticket
+status and a direct deep-link into CyIRIS.
+
+---
+
+**`backend/cysiemstack/correlation_engine/iris_connector.py` — New file:**
+- `create_iris_case()` — POSTs a fully enriched case to DFIR IRIS `/api/v2/cases`; includes
+  incident ID, severity, MITRE ATT&CK IDs, affected hosts/users, MISP IOC hits, and AI narrative
+  from the LLM enricher; stores returned `case_id`, `case_url`, `case_status` on the Incident
+- `get_iris_case_status()` — GETs `/api/v2/cases/{id}` and returns `"open"` or `"closed"`
+- `sync_closed_cases()` — batch poller; fetches all open IRIS-linked incidents and closes any
+  whose IRIS case is now closed; called every 5 minutes by `_iris_sync_scheduler`
+- `auto_close_fp()` — closes an incident as false positive if `confidence_score >= iris_fp_threshold`;
+  writes `false_positive_reason` with score and threshold for audit
+- `_load_iris_config()` — reads `ai_settings.json` for mode (`disabled` / `cloud` / `local`);
+  cloud mode reads `CLOUD_IRIS_URL` / `CLOUD_IRIS_API_KEY` from server env
+
+**`backend/cysiemstack/correlation_engine/ingestor.py`:**
+- Pipeline step 7 (after LLM enrichment): compute FP confidence score from rule confidence values;
+  low-rule-confidence incidents score higher (more likely FP); no-rule incidents in low/medium
+  severity get 70% FP score
+- Calls `auto_close_fp()` first — if score ≥ threshold, incident is closed, no ticket raised
+- If not auto-closed and incident is new or has new correlation rules, calls `create_iris_case()`
+- WebSocket live event extended with `iris_case_id` and `iris_auto_closed` fields
+
+**`backend/cysiemstack/correlation_engine/main.py`:**
+- `_iris_sync_scheduler()` — polls `sync_closed_cases()` every 5 minutes; broadcasts
+  `iris_cases_synced` WebSocket event when cases are closed
+- `_incident_to_dict()` extended with `iris_case_id`, `iris_case_status`, `iris_case_url`,
+  `confidence_score` fields — exposed via `GET /incidents` and `GET /incidents/{id}`
+
+**`backend/cysiemstack/correlation_engine/models.py`:**
+- `Incident` model: added `iris_case_id` (Integer), `iris_case_status` (Text),
+  `iris_case_url` (Text), `confidence_score` (Numeric 5,1)
+
+**`backend/cysiemstack/correlation_engine/config.py`:**
+- Added `iris_mode`, `iris_url`, `iris_api_key`, `iris_enabled`, `iris_customer_id`,
+  `iris_fp_threshold` (default 90.0) to Settings
+
+**`backend/cysiemstack/correlation_engine/requirements.txt`:**
+- Added `httpx==0.27.2` (was used by `misp_enricher.py` but missing from requirements)
+
+**`backend/cysiemstack/.env.example`:**
+- Added `IRIS_MODE`, `IRIS_ENABLED`, `IRIS_URL`, `IRIS_API_KEY`, `IRIS_CUSTOMER_ID`,
+  `IRIS_FP_THRESHOLD` with inline documentation
+
+**`backend/blueprints/system/routes.py`:**
+- `_sync_iris_to_siem_env()` — mirrors `_sync_misp_to_siem_env()`; writes resolved CyIRIS
+  config (mode-aware: cloud reads from env, local uses user-entered values) into
+  `cysiemstack.env` on every portal Save action
+- `POST /api/ai/settings` — `iris` added to allowed top-level keys; `iris.apiKey` masked
+  in GET response; api key guard prevents overwriting with masked placeholder on re-save
+- `POST /api/system/iris/test` — test endpoint; calls IRIS `/api/ping` then `/api/versions`
+  to confirm auth and return version string; OPTIONS preflight handled
+
+**`backend/core/helpers.py`:**
+- `get_iris_config()` — mirrors `get_misp_config()`; single source of truth for CyIRIS
+  connection parameters; returns `url`, `apiKey`, `customerId`, `fpThreshold`, `mode`
+
+---
+
+**`portal/src/pages/settings/SystemSettingsPage.jsx` — `CyIrisTab` (new) + `IntegrationsTab` (new):**
+- `CyIrisTab` follows identical design pattern to `MispTab`:
+  - Three-mode card selector: **No CyIRIS** / **Cloud CyIRIS** (cyiris.cycentra.com) / **Local CyIRIS**
+  - Cloud mode: informational card, no user input required
+  - Local mode: URL field, API Key (password), Customer ID (numeric), Test Connection button
+    with inline pass/fail feedback; helper text guides user to find API key and Customer ID in IRIS
+  - **False Positive Auto-Close Threshold slider** (50–99%, default 90) — always visible
+    regardless of mode; shows live percentage; explains auto-close vs escalation behaviour
+  - Save persists to `ai_settings.json` via `POST /api/ai/settings`; triggers
+    `_sync_iris_to_siem_env()` server-side
+- `IntegrationsTab` wrapper renders MispTab + divider + CyIrisTab in a single scrollable view
+- Tab render updated: `{tab === "integrations" && <IntegrationsTab />}`
+
+**`portal/src/siem/SiemIncidentsPage.jsx`:**
+- Incidents list **INTEL column**: new `🎫 IRIS` badge (blue = open ticket) / `✓ IRIS` badge
+  (green = ticket closed by analyst); clicking badge opens IRIS case in new tab
+- `IncidentDrawer` header: **FP Score** displayed next to Risk score (orange if ≥ 90%)
+- `IncidentDrawer` body: new **🎫 CYIRIS TICKET** section between MISP hits and AI Narrative:
+  - Shows case number, open/closed status badge, descriptive message
+  - "↗ Open in CyIRIS" button deep-links to the exact case in IRIS UI
+  - If no ticket: shows "No ticket raised" message for non-closed incidents
+
+---
+
 ## v1.0.98 — 2026-04-09
 
 ### Feature — Updates & Version Tab: Server-Side GH_TOKEN + Run Upgrade Button

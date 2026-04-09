@@ -87,6 +87,11 @@ class Incident(Base):
     # ENH-2: kill chain tracking
     kill_chain_stage      = Column(Integer, default=0)
     kill_chain_stage_name = Column(Text, nullable=True)
+    # CyIRIS integration
+    iris_case_id     = Column(Integer, nullable=True)   # DFIR IRIS case ID
+    iris_case_status = Column(Text, nullable=True)       # "open" | "closed"
+    iris_case_url    = Column(Text, nullable=True)       # deep link to case in IRIS UI
+    confidence_score = Column(Numeric(5, 1), nullable=True)  # FP confidence 0-100
 
 
 class UEBABaseline(Base):

@@ -42,6 +42,18 @@ class Settings(BaseSettings):
     ueba_ml_model_dir: str = "/opt/cycentra/ml_models"
     ueba_ml_contamination: float = 0.05
 
+    # ── DFIR IRIS (CyIRIS) Integration ───────────────────────────────────────
+    # Written by _sync_iris_to_siem_env() in system/routes.py whenever the
+    # portal saves CyIRIS settings.  Values: "disabled" | "cloud" | "local"
+    iris_mode: str = "disabled"
+    iris_url: str = "https://cyiris.cycentra.com"
+    iris_api_key: str = ""
+    iris_enabled: bool = False
+    iris_customer_id: int = 1
+    # False-positive auto-close threshold (0–100).  Incidents with a
+    # confidence_score >= this value are closed automatically without a ticket.
+    iris_fp_threshold: float = 90.0
+
     model_config = SettingsConfigDict(
         env_file="/opt/cycentra/cysiemstack.env",
         case_sensitive=False,
