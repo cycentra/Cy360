@@ -48,7 +48,7 @@ echo -e "\n${BOLD}  CyCentra 360 — Package Builder${NC}\n"
 command -v shc  >/dev/null 2>&1 || error "shc not installed. Install with: brew install shc  /  apt install shc"
 command -v gcc  >/dev/null 2>&1 || error "gcc not installed"
 [[ -f "$SETUP_SH" ]]       || error "cycentra-setup.sh not found at $SETUP_SH"
-[[ -f "$VALIDATOR_PY" ]]   || error "license_validator.py not found at $VALIDATOR_PY"
+# Note: license_validator.py is embedded inside setup.sh as a heredoc — no external file needed
 
 # Read version from line 3
 VERSION=$(sed -n '3p' "$SETUP_SH" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
@@ -76,7 +76,7 @@ PKG_DIR="$BUILD_DIR/package"
 mkdir -p "$PKG_DIR"
 
 cp "$BUILD_DIR/cycentra-setup"    "$PKG_DIR/cycentra-setup"
-cp "$VALIDATOR_PY"                "$PKG_DIR/license_validator.py"
+# Validator is embedded in the binary — no separate file needed
 
 if [[ -n "$LICENSE_FILE" && -f "$LICENSE_FILE" ]]; then
     cp "$LICENSE_FILE" "$PKG_DIR/cycentra.lic"
@@ -91,20 +91,24 @@ cat > "$PKG_DIR/README-INSTALLER.txt" << 'README'
 CyCentra 360 Installer
 ======================
 
-1. If you have a license file, place cycentra.lic in this directory.
-   Without it, a 15-day demo will be installed automatically.
+QUICK START
+-----------
+1. (Optional) Place your cycentra.lic in this directory.
+   Without a license file, a 15-day demo is installed automatically.
 
 2. Run the installer as root:
        sudo BASE_DOMAIN=your.domain.com ./cycentra-setup
 
 Optional environment variables:
-   BASE_DOMAIN        Your company's base domain (required)
-   OAUTH_PROVIDER     google | microsoft | skip  (default: google)
+   BASE_DOMAIN      Your company's base domain (required)
+   OAUTH_PROVIDER   google | microsoft | skip  (default: google)
 
 After install:
-   - Edit /opt/cycentra/.env for any configuration changes
+   - Portal:      https://cysoc.YOUR_DOMAIN
+   - Backend API: https://cyasm.YOUR_DOMAIN
+   - Edit /opt/cycentra/.env to change any config
    - systemctl restart cycentra-backend to apply changes
-   - Portal: https://cysoc.BASE_DOMAIN
+   - Upload or renew your license from Portal → System Settings → License
 
 Support: support@cycentra.com
 README
@@ -116,10 +120,22 @@ ARCHIVE_PATH="$DIST_DIR/$ARCHIVE_NAME"
 
 tar -czf "$ARCHIVE_PATH" -C "$PKG_DIR" .
 success "Package created: $ARCHIVE_PATH"
+
+# Also copy a standalone binary for single-file distribution
+STANDALONE="$DIST_DIR/cycentra-setup-${VERSION}"
+cp "$BUILD_DIR/cycentra-setup" "$STANDALONE"
+chmod +x "$STANDALONE"
+success "Standalone binary: $STANDALONE"
+
 echo ""
-echo -e "  ${BOLD}Archive size :${NC} $(du -sh "$ARCHIVE_PATH" | cut -f1)"
-echo -e "  ${BOLD}Contents     :${NC}"
+echo -e "  ${BOLD}Tarball size    :${NC} $(du -sh "$ARCHIVE_PATH" | cut -f1)  ← for licensed customers"
+echo -e "  ${BOLD}Binary size     :${NC} $(du -sh "$STANDALONE"   | cut -f1)  ← single-file distribution"
+echo -e "  ${BOLD}Tarball contents:${NC}"
 tar -tzf "$ARCHIVE_PATH" | sed 's/^/      /'
 echo ""
-echo -e "  ${CYAN}Distribute this archive to the customer.${NC}"
-echo -e "  ${CYAN}They extract it and run: sudo BASE_DOMAIN=example.com ./cycentra-setup${NC}"
+echo -e "  ${CYAN}Customer flow (tarball with license):${NC}"
+echo -e "  ${CYAN}  tar -xzf $(basename "$ARCHIVE_PATH") && sudo BASE_DOMAIN=example.com ./cycentra-setup${NC}"
+echo ""
+echo -e "  ${CYAN}Customer flow (single-file download):${NC}"
+echo -e "  ${CYAN}  curl -LO <release-url>/cycentra-setup-${VERSION} && chmod +x cycentra-setup-${VERSION}${NC}"
+echo -e "  ${CYAN}  sudo BASE_DOMAIN=example.com ./cycentra-setup-${VERSION}${NC}"

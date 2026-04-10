@@ -28,6 +28,118 @@ const ENV_TARGETS = [
 ];
 
 // ════════════════════════════════════════════════════════════════════════════
+// License status + upload card
+// ════════════════════════════════════════════════════════════════════════════
+
+function LicenseCard() {
+  const [info,      setInfo]      = useState(null);
+  const [loading,   setLoading]   = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [msg,       setMsg]       = useState(null);
+  const fileRef = useRef(null);
+
+  const fetchLicense = () => {
+    setLoading(true);
+    fetch(`${API_BASE}/api/system/license`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { setInfo(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  };
+
+  useEffect(() => { fetchLicense(); }, []);
+
+  const handleUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.name.endsWith(".lic")) {
+      setMsg({ ok: false, text: "File must be a .lic file" }); return;
+    }
+    setUploading(true); setMsg(null);
+    const body = new FormData();
+    body.append("license", file);
+    try {
+      const r = await fetch(`${API_BASE}/api/system/license/upload`, {
+        method: "POST", credentials: "include", body,
+      });
+      const d = await r.json();
+      if (d.ok) { setMsg({ ok: true, text: d.message }); fetchLicense(); }
+      else       { setMsg({ ok: false, text: d.error || "Upload failed" }); }
+    } catch (ex) { setMsg({ ok: false, text: String(ex) }); }
+    finally { setUploading(false); if (fileRef.current) fileRef.current.value = ""; }
+  };
+
+  const licType    = info?.type;
+  const typeColor  = licType === "full" ? "#00e5a0" : licType === "demo" ? "#ffd93d" : "#ff3b3b";
+  const daysLeft   = info?.days_remaining ?? 0;
+  const daysColor  = daysLeft <= 5 ? "#ff3b3b" : daysLeft <= 15 ? "#ffd93d" : "#00e5a0";
+
+  return (
+    <div style={CARD}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+        <div style={LABEL}>License</div>
+        {!loading && info && (
+          <span style={{ background: `${typeColor}18`, color: typeColor, border: `1px solid ${typeColor}40`,
+            borderRadius: 4, padding: "2px 10px", fontSize: 10, fontFamily: "monospace", letterSpacing: "1px" }}>
+            {licType?.toUpperCase() || "UNKNOWN"}
+          </span>
+        )}
+      </div>
+
+      {loading && <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>}
+
+      {!loading && info && (
+        <div style={{ display: "flex", gap: 32, flexWrap: "wrap", marginBottom: 16 }}>
+          <div>
+            <div style={{ ...LABEL, marginBottom: 3 }}>Customer</div>
+            <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 12, fontFamily: "monospace" }}>
+              {info.customer || "—"}
+            </div>
+          </div>
+          <div>
+            <div style={{ ...LABEL, marginBottom: 3 }}>Days Remaining</div>
+            <div style={{ color: daysColor, fontSize: 18, fontFamily: "monospace", fontWeight: 700 }}>
+              {daysLeft}
+            </div>
+          </div>
+          <div style={{ flex: 1, minWidth: 180 }}>
+            <div style={{ ...LABEL, marginBottom: 3 }}>Status</div>
+            <div style={{ color: info.valid ? "#00e5a0" : "#ff3b3b", fontSize: 11, fontFamily: "monospace", lineHeight: 1.5 }}>
+              {info.valid ? "✓" : "✗"} {info.message || "—"}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Upload section */}
+      <div style={{ borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: 14 }}>
+        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, marginBottom: 12, lineHeight: 1.6 }}>
+          Received a new <code style={{ color: "#00e5a0", fontFamily: "monospace" }}>.lic</code> file from Cycentra?
+          Upload it here — the license activates immediately, no restart required.
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <input ref={fileRef} type="file" accept=".lic" onChange={handleUpload}
+            style={{ display: "none" }} id="lic-upload-input" />
+          <button onClick={() => fileRef.current?.click()} disabled={uploading}
+            style={{ ...BTN(), opacity: uploading ? 0.5 : 1 }}>
+            {uploading ? "Applying…" : "Upload License (.lic)"}
+          </button>
+          {!info?.valid && !loading && (
+            <span style={{ color: "#ffd93d", fontSize: 10, fontFamily: "monospace" }}>
+              ↑ Apply a full license to unlock all features
+            </span>
+          )}
+        </div>
+        {msg && (
+          <div style={{ color: msg.ok ? "#00e5a0" : "#ff3b3b", fontSize: 12, fontFamily: "monospace", marginTop: 10 }}>
+            {msg.ok ? "✓" : "✗"} {msg.text}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // TAB 1 — Updates
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -187,6 +299,9 @@ function UpdatesTab() {
           )}
         </div>
       </div>
+
+      {/* License status + upload */}
+      <LicenseCard />
 
       {/* Action buttons */}
       <div style={CARD}>

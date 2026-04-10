@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 — Setup & Update Wizard v1.0.117 — 2026-04-10 10:30 UTC
+# CyCentra 360 — Setup & Update Wizard v1.0.118 — 2026-04-10 11:00 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -35,38 +35,124 @@ for arg in "$@"; do
 done
 
 # ── License check (full install only — updates are always allowed) ────────────
-# The license validator is deployed to /opt/cycentra/ on every install.
-# For the very first run it ships inside the bundle or alongside this script.
-_LIC_VALIDATOR="${_SCRIPT_DIR:-$(dirname "${BASH_SOURCE[0]:-$0}")}/license_validator.py"
+# Validator is embedded as a heredoc — single-file installer, no external
+# license_validator.py required alongside the script or binary.
 _LIC_FILE="/opt/cycentra/cycentra.lic"
-# Also check alongside this script (useful when running from an installer tarball)
+# Also accept a .lic placed alongside this script (for licensed one-file installs)
 [[ ! -f "$_LIC_FILE" ]] && \
     _LIC_FILE_LOCAL="${_SCRIPT_DIR:-$(dirname "${BASH_SOURCE[0]:-$0}")}/cycentra.lic" && \
     [[ -f "$_LIC_FILE_LOCAL" ]] && _LIC_FILE="$_LIC_FILE_LOCAL"
 
 if [[ "$MODE" == "full" ]]; then
-    _VALIDATOR_SRC="${_SCRIPT_DIR:-$(dirname "${BASH_SOURCE[0]:-$0}")}/license_validator.py"
-    [[ ! -f "$_VALIDATOR_SRC" ]] && \
-        _VALIDATOR_SRC="$(dirname "$(realpath "${BASH_SOURCE[0]:-$0}")")/license_validator.py"
+    # Write embedded validator to a secure temp file
     _VALIDATOR_DEST="/tmp/cycentra_license_validator_$$.py"
-    cp "$_VALIDATOR_SRC" "$_VALIDATOR_DEST" 2>/dev/null || true
+    cat > "$_VALIDATOR_DEST" << 'CYCENTRA_VALIDATOR_EOF'
+#!/usr/bin/env python3
+import base64, json, os, subprocess, sys, tempfile
+from datetime import date
+from pathlib import Path
 
-    _LIC_JSON=""
-    if [[ -f "$_VALIDATOR_DEST" ]]; then
-        _LIC_JSON=$(python3 "$_VALIDATOR_DEST" --license "$_LIC_FILE" 2>/dev/null)
-        _LIC_CODE=$?
-        _LIC_TYPE=$(echo "$_LIC_JSON"    | python3 -c "import sys,json;print(json.load(sys.stdin).get('type','none'))" 2>/dev/null || echo "none")
-        _LIC_DAYS=$(echo "$_LIC_JSON"    | python3 -c "import sys,json;print(json.load(sys.stdin).get('days_remaining',0))" 2>/dev/null || echo "0")
-        _LIC_MSG=$(echo "$_LIC_JSON"     | python3 -c "import sys,json;print(json.load(sys.stdin).get('message',''))" 2>/dev/null || echo "")
-        _LIC_CUST=$(echo "$_LIC_JSON"    | python3 -c "import sys,json;print(json.load(sys.stdin).get('customer',''))" 2>/dev/null || echo "")
-        rm -f "$_VALIDATOR_DEST"
-    else
-        warn "License validator not found — proceeding in demo mode"
-        _LIC_CODE=4
-        _LIC_TYPE="demo"
-        _LIC_DAYS=15
-        _LIC_MSG="Demo mode (validator missing)"
-    fi
+CYCENTRA_PUBLIC_KEY = b"""-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3PWTGpjM9/RTMTA4FMmj
+coYBxAEtckGxiv/Vf9vtZHbZBsoqaZk+Fx30DeiHCD2x0P//xkLxb/+yhY4vGsx5
+cYEJpUHCxlskxFaBlBOQmZGIqgq6BHicfEnAiRCmmX6GznmCNPzqIIgXXtTOVILz
+ez/oTDQkfNp5z3qrHK9XAqleqHehyJR3genS9XAPB8sNey6RfjYPa4FZixm4O7DI
+i0nQeWeGjhPeZLaWo+BIGeMzCZQZpLOg4HBvsdNQZ9Jp4ktHnPKAFqyLzI+4BctE
+o6cG5hWtmCcvUXWwzB+5YTPmMDp28kRNNOyMLo9DPsS6LHcW5R96uEXsyE8G1lZo
+oQIDAQAB
+-----END PUBLIC KEY-----
+"""
+DEMO_MAX_DAYS = 15
+DEMO_STATE    = Path("/opt/cycentra/.demo_start")
+LICENSE_PATH  = Path("/opt/cycentra/cycentra.lic")
+
+def _verify_signature(payload_str, sig_b64):
+    try: sig_bytes = base64.b64decode(sig_b64)
+    except Exception: return False
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pem") as kf:
+        kf.write(CYCENTRA_PUBLIC_KEY); kf_path = kf.name
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".sig") as sf:
+        sf.write(sig_bytes); sf_path = sf.name
+    try:
+        p = subprocess.run(["openssl","dgst","-sha256","-verify",kf_path,"-signature",sf_path],
+                           input=payload_str.encode(), capture_output=True)
+        return p.returncode == 0
+    except FileNotFoundError: return False
+    finally: os.unlink(kf_path); os.unlink(sf_path)
+
+def _parse_lic_file(path):
+    try: text = path.read_text()
+    except Exception: return None, None
+    try:
+        pb64 = text.split("-----BEGIN CYCENTRA LICENSE-----")[1].split("-----END CYCENTRA LICENSE-----")[0].strip()
+        sb64 = text.split("-----BEGIN CYCENTRA SIGNATURE-----")[1].split("-----END CYCENTRA SIGNATURE-----")[0].strip()
+        ps   = base64.b64decode(pb64).decode()
+        return json.loads(ps), sb64, ps
+    except Exception: return None, None, None
+
+def _days_remaining(exp): return (date.fromisoformat(exp) - date.today()).days
+
+def _demo_days_remaining():
+    if not DEMO_STATE.exists():
+        DEMO_STATE.parent.mkdir(parents=True, exist_ok=True)
+        DEMO_STATE.write_text(date.today().isoformat())
+        return DEMO_MAX_DAYS
+    return max(0, DEMO_MAX_DAYS - (date.today() - date.fromisoformat(DEMO_STATE.read_text().strip())).days)
+
+def validate(lic_path=LICENSE_PATH):
+    p = Path(lic_path)
+    if not p.exists():
+        d = _demo_days_remaining()
+        if d <= 0:
+            return {"valid":False,"type":"demo","days_remaining":0,"features":[],"customer":"Demo",
+                    "message":"Demo period expired. Purchase a license at cycentra.com"}
+        return {"valid":True,"type":"demo","days_remaining":d,"features":["cysiem"],
+                "customer":"Demo","message":f"Demo mode — {d} day(s) remaining"}
+    r = _parse_lic_file(p)
+    if len(r) == 2:
+        return {"valid":False,"type":"none","days_remaining":0,"features":[],"customer":"unknown",
+                "message":"License file is corrupt or unreadable"}
+    payload, sig_b64, payload_str = r
+    if payload is None:
+        return {"valid":False,"type":"none","days_remaining":0,"features":[],"customer":"unknown",
+                "message":"License file could not be parsed"}
+    if not _verify_signature(payload_str, sig_b64):
+        return {"valid":False,"type":"none","days_remaining":0,"features":[],
+                "customer":payload.get("customer","unknown"),
+                "message":"License signature is invalid — file may have been tampered"}
+    days = _days_remaining(payload["expires"])
+    if days < 0:
+        return {"valid":False,"type":payload["type"],"days_remaining":0,
+                "features":payload.get("features",[]),"customer":payload["customer"],
+                "message":f"License expired on {payload['expires']}"}
+    return {"valid":True,"type":payload["type"],"days_remaining":days,
+            "features":payload.get("features",[]),"customer":payload["customer"],
+            "message":f"License valid — {days} day(s) remaining (expires {payload['expires']})"}
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--license", default=str(LICENSE_PATH))
+    ap.add_argument("--quiet", action="store_true")
+    args = ap.parse_args()
+    lic = Path(args.license)
+    result = validate(lic)
+    if not args.quiet: print(json.dumps(result, indent=2))
+    # Exit codes: 0=full, 1=demo, 2=expired, 3=tampered/invalid, 4=no license (auto-demo)
+    if not lic.exists(): sys.exit(4)
+    if result.get("valid"):
+        sys.exit(0 if result.get("type") == "full" else 1)
+    sys.exit(2 if result.get("days_remaining", 1) <= 0 else 3)
+CYCENTRA_VALIDATOR_EOF
+    chmod 600 "$_VALIDATOR_DEST"
+
+    _LIC_JSON=$(python3 "$_VALIDATOR_DEST" --license "$_LIC_FILE" 2>/dev/null)
+    _LIC_CODE=$?
+    _LIC_TYPE=$(echo "$_LIC_JSON"  | python3 -c "import sys,json;print(json.load(sys.stdin).get('type','none'))" 2>/dev/null || echo "none")
+    _LIC_DAYS=$(echo "$_LIC_JSON"  | python3 -c "import sys,json;print(json.load(sys.stdin).get('days_remaining',0))" 2>/dev/null || echo "0")
+    _LIC_MSG=$(echo "$_LIC_JSON"   | python3 -c "import sys,json;print(json.load(sys.stdin).get('message',''))" 2>/dev/null || echo "")
+    _LIC_CUST=$(echo "$_LIC_JSON"  | python3 -c "import sys,json;print(json.load(sys.stdin).get('customer',''))" 2>/dev/null || echo "")
+    rm -f "$_VALIDATOR_DEST"
 
     case $_LIC_CODE in
         0) success "License: FULL — ${_LIC_CUST} — ${_LIC_DAYS} day(s) remaining"
@@ -129,7 +215,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.117"
+_SCRIPT_VERSION="v1.0.118"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }

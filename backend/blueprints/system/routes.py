@@ -16,11 +16,14 @@ Routes:
   POST /api/system/upgrade          trigger cycentra-setup.sh full install (major upgrade)
   GET  /api/system/env/<target>  read env file (global|cysiemstack|cyiris|cysoar|cymisp|cysiem)
   PUT  /api/system/env/<target>  write env file
+  GET  /api/system/license         current license status (type, days, customer, valid)
+  POST /api/system/license/upload  upload a .lic file — validates and activates immediately
 """
 
 import os
 import re
 import json
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -893,6 +896,95 @@ def env_put(target):
         return jsonify({"error": "Permission denied — backend may need write access to env file"}), 403
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── License management ────────────────────────────────────────────────────────
+
+_LIC_PATH       = Path("/opt/cycentra/cycentra.lic")
+_LIC_LOCKFILE   = Path("/opt/cycentra/.license_expired")
+_LIC_VALIDATOR  = Path("/opt/cycentra/license_validator.py")   # deployed copy
+
+
+def _run_validator(lic_path: Path) -> dict:
+    """Run license_validator.py against a .lic file. Falls back to the copy
+    inside the backend package if the deployed one is not present yet."""
+    validator = _LIC_VALIDATOR
+    if not validator.exists():
+        # During initial install the deployed copy may not exist yet — use source
+        validator = Path(__file__).parent.parent.parent / "core" / "license_validator.py"
+    if not validator.exists():
+        return {"valid": False, "type": "none", "days_remaining": 0,
+                "customer": "unknown", "message": "Validator not available on server"}
+    try:
+        result = subprocess.run(
+            ["python3", str(validator), "--license", str(lic_path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        return json.loads(result.stdout) if result.stdout.strip() else {
+            "valid": False, "type": "none", "days_remaining": 0,
+            "customer": "unknown", "message": "Validator returned no output",
+        }
+    except Exception as exc:
+        return {"valid": False, "type": "none", "days_remaining": 0,
+                "customer": "unknown", "message": str(exc)}
+
+
+@system_bp.route("/api/system/license", methods=["GET"])
+def get_license():
+    """Return current license status — reads /opt/cycentra/cycentra.lic."""
+    result = _run_validator(_LIC_PATH)
+    return add_cors_headers(jsonify(result))
+
+
+@system_bp.route("/api/system/license/upload", methods=["OPTIONS"])
+def license_upload_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/license/upload", methods=["POST"])
+def upload_license():
+    """Accept a .lic file, validate it, and save to /opt/cycentra/cycentra.lic.
+    The license activates immediately — no restart required.
+    """
+    uploaded = request.files.get("license")
+    if not uploaded:
+        return jsonify({"ok": False, "error": "No file provided"}), 400
+
+    filename = uploaded.filename or ""
+    if not filename.endswith(".lic"):
+        return jsonify({"ok": False, "error": "File must have a .lic extension"}), 400
+
+    tmp_path = Path(f"/tmp/cycentra_license_upload_{os.getpid()}.lic")
+    try:
+        uploaded.save(str(tmp_path))
+
+        # Validate before committing
+        result = _run_validator(tmp_path)
+        if not result.get("valid"):
+            return jsonify({"ok": False, "error": result.get("message", "Invalid license file")}), 400
+
+        # Commit the license
+        _LIC_PATH.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(str(tmp_path), str(_LIC_PATH))
+        _LIC_PATH.chmod(0o600)
+
+        # Clear any expired lockfile so services can restart cleanly
+        if _LIC_LOCKFILE.exists():
+            _LIC_LOCKFILE.unlink(missing_ok=True)
+
+        lic_type = result.get("type", "").upper()
+        days     = result.get("days_remaining", "?")
+        return add_cors_headers(jsonify({
+            "ok":      True,
+            "message": f"{lic_type} license applied — {days} day(s) remaining",
+            **result,
+        }))
+    except PermissionError:
+        return jsonify({"ok": False, "error": "Permission denied — backend needs write access to /opt/cycentra/"}), 403
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 # ── IP Geolocation (for world map) ────────────────────────────────────────────

@@ -1,6 +1,34 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.118 — 2026-04-10
+
+### Feature — Single-file installer: no external dependencies
+
+- `license_validator.py` is now **embedded as a heredoc** inside `cycentra-setup.sh`. The installer is fully self-contained — no need to download or extract a tarball alongside the script.
+- Customer install flow: download `cycentra-setup` (binary) or `cycentra-setup.sh` → run it. Done.
+- Fixed: validator previously always returned exit code 0 (no `sys.exit()` calls). Exit codes are now correct: 0=full, 1=demo, 2=expired, 3=tampered, 4=no license (auto-demo). The license gate in setup.sh now behaves correctly for all scenarios.
+
+### Feature — Automated GitHub Release publishing on every push
+
+- `git-push.sh` now automatically creates a GitHub Release, compiles the installer binary with SHC, and uploads two release assets: a `.tar.gz` tarball (for licensed customers with a `.lic` file) and a standalone binary (`cycentra-setup-vX.X.X`) for single-file distribution.
+- Requires: `gh` CLI (GitHub CLI) and `shc` installed on the dev machine. Steps are skipped with a helpful message if either tool is missing.
+- `build-package.sh` updated: no longer requires `license_validator.py` as a separate file (it is embedded in the script). Now outputs both a tarball and a standalone binary to `dist/`.
+
+### Feature — License upload via browser UI (System Settings)
+
+- New **License** card in **System Settings → Updates & Version** shows current license type, customer name, days remaining, and status message.
+- **Upload License (.lic)** button: customer selects their `.lic` file in the browser → backend validates the signature immediately → applies to `/opt/cycentra/cycentra.lic` → license activates with no restart.
+- Also clears any expired lockfile automatically, so previously stopped services can be restarted immediately after applying a renewed license.
+- New backend endpoints: `GET /api/system/license` (current status) and `POST /api/system/license/upload` (validate + save).
+
+### Confirmed — Update & Upgrade buttons fully aligned
+
+- **Run Update** → calls `cycentra-setup.sh --update`: incremental patch, all config preserved.
+- **Run Upgrade** → calls `cycentra-setup.sh` (no flags): full re-install from latest release.
+- Both buttons are compatible with the new single-file installer model. The live log stream and version-check-before-update flow are unchanged.
+
+---
 ## v1.0.117 — 2026-04-10
 
 ### Fix — Dynamic version in installer banner
