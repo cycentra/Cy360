@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 — Setup & Update Wizard v1.0.121 — 2026-04-10 13:00 UTC
+# CyCentra 360 — Setup & Update Wizard v1.0.122 — 2026-04-10 14:00 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -218,7 +218,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.121"
+_SCRIPT_VERSION="v1.0.122"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -771,9 +771,14 @@ fi
 
 # Copy this script to /opt/cycentra/ so the portal can invoke it for --update
 _SELF="$(realpath "$0")"
-cp "$_SELF" /opt/cycentra/cycentra-setup.sh
-chmod 750  /opt/cycentra/cycentra-setup.sh
-success "Setup script deployed to /opt/cycentra/cycentra-setup.sh"
+_SETUP_DEST="/opt/cycentra/cycentra-setup.sh"
+if [[ "$_SELF" != "$_SETUP_DEST" ]]; then
+    cp "$_SELF" "$_SETUP_DEST"
+    chmod 750  "$_SETUP_DEST"
+    success "Setup script deployed to $_SETUP_DEST"
+else
+    success "Setup script already at $_SETUP_DEST — no copy needed"
+fi
 
 # Deploy license validator + watchdog scripts
 _SCRIPT_BASE="$(dirname "$(realpath "${BASH_SOURCE[0]:-$0}")")"
@@ -852,8 +857,9 @@ else
     success "Loaded existing configuration (domain: ${BASE_DOMAIN})"
 
     # ── Patch .env for update mode ────────────────────────────────────────────
-    # Adds new vars introduced since the last full install, and removes vars
-    # that were orphaned during the refactor.  Safe to run on every --update.
+    # SAFE: only removes specific dead/orphaned vars by name, and only appends
+    # vars that are missing entirely.  Customer custom entries ARE preserved.
+    # The full .env is NEVER rewritten in update mode — only surgical edits.
     step_header "PATCHING /opt/cycentra/.env"
     _env="/opt/cycentra/.env"
 

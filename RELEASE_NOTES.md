@@ -1,6 +1,18 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.122 — 2026-04-10
+
+### Fix — Update via UI button crashes with "same file" cp error
+
+- When the portal triggers `cycentra-setup.sh --update`, the script is already running from `/opt/cycentra/cycentra-setup.sh`. The unconditional `cp "$_SELF" /opt/cycentra/cycentra-setup.sh` then fails with `cp: same file` (exit code 1), killing the entire update under `set -e`.
+- Fixed by checking `realpath "$0"` against the destination before copying — skips the copy if already in place.
+
+### Confirmed — Update mode does not touch customer .env customisations
+
+- The `--update` `.env` patch block (added in v1.0.121) only removes specific known-dead vars by name (`USE_CUSTOM_IMAGES`, `SIEM_LLM_ENABLED`, `SIEM_MISP_ENABLED`, `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`) and appends new vars if absent. The `.env` is never rewritten — all customer custom entries are preserved.
+
+---
 ## v1.0.121 — 2026-04-10
 
 ### Fix — Cloud CyIRIS credentials missing from .env on existing installs

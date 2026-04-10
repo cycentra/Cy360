@@ -62,10 +62,12 @@ trap "rm -rf $BUILD_DIR" EXIT
 cp "$SETUP_SH" "$BUILD_DIR/cycentra-setup.sh"
 info "Compiling cycentra-setup.sh with SHC..."
 
-# -r = allow running without expiry
-# -T = bypass timeout
-shc -r -T -f "$BUILD_DIR/cycentra-setup.sh" -o "$BUILD_DIR/cycentra-setup" 2>&1 || \
-    error "SHC compilation failed"
+# -r = allow running without expiry; -T = bypass timeout (Linux SHC only)
+# Try with -T first (Linux), fall back to without -T (macOS homebrew SHC)
+if ! shc -r -T -f "$BUILD_DIR/cycentra-setup.sh" -o "$BUILD_DIR/cycentra-setup" 2>/dev/null; then
+    shc -r -f "$BUILD_DIR/cycentra-setup.sh" -o "$BUILD_DIR/cycentra-setup" 2>&1 || \
+        error "SHC compilation failed"
+fi
 
 strip "$BUILD_DIR/cycentra-setup" 2>/dev/null || true
 chmod +x "$BUILD_DIR/cycentra-setup"
