@@ -168,7 +168,7 @@ def _sync_misp_to_siem_env(misp: dict) -> None:
 
     if mode == "cloud":
         # Cloud CyMISP — key from env var, falling back to stored misp.apiKey
-        eff_url = os.environ.get("CLOUD_MISP_URL", "https://misp.cycentra.com").rstrip("/")
+        eff_url = os.environ.get("CLOUD_MISP_URL", "https://cymisp.cycentra.com").rstrip("/")
         eff_key = os.environ.get("CLOUD_MISP_API_KEY", "").strip() or misp.get("apiKey", "").strip()
         enabled = "true" if eff_key else "false"
     elif mode == "local":

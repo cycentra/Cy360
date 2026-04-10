@@ -596,7 +596,7 @@ function MispTab() {
   const testConnection = async () => {
     const _MASK = "\u2022".repeat(8);
     // For cloud mode, use the known cloud URL; for local, require user-entered URL
-    const effectiveUrl = mode === "cloud" ? "https://misp.cycentra.com" : (misp.url || "");
+    const effectiveUrl = mode === "cloud" ? "https://cymisp.cycentra.com" : (misp.url || "");
     if (!effectiveUrl) { setTestStatus("fail"); setTestMsg("MISP Server URL is required"); return; }
     if (!misp.apiKey || misp.apiKey === _MASK) {
       setTestStatus("fail"); setTestMsg("Enter your API Key (currently showing masked placeholder)"); return;
@@ -619,7 +619,7 @@ function MispTab() {
   // Mode selector config
   const MODES = [
     { id: "disabled", label: "Disabled",      desc: "No MISP IOC lookups — all enrichment bypassed", icon: "⭕", color: "rgba(255,255,255,0.3)" },
-    { id: "cloud",    label: "Cloud CyMISP",  desc: "Connect to Cycentra-managed MISP at misp.cycentra.com", icon: "☁️", color: "#4d9eff" },
+    { id: "cloud",    label: "Cloud CyMISP",  desc: "Connect to Cycentra-managed MISP at cymisp.cycentra.com", icon: "☁️", color: "#4d9eff" },
     { id: "local",    label: "Local CyMISP",  desc: "Your self-hosted MISP instance — configure URL & key below", icon: "🏠", color: "#ff6b6b" },
   ];
 
@@ -673,7 +673,7 @@ function MispTab() {
       {mode === "cloud" && (
         <div style={{ background: "rgba(77,158,255,0.04)", border: "1px solid rgba(77,158,255,0.2)", borderRadius: 6, padding: "18px 20px" }}>
           <div style={{ color: "#4d9eff", fontSize: 11, fontFamily: "monospace", fontWeight: 700, marginBottom: 4 }}>
-            ☁️ Cycentra Cloud MISP — misp.cycentra.com
+            ☁️ Cycentra Cloud MISP — cymisp.cycentra.com
           </div>
           <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginBottom: 16 }}>
             Enter your Cycentra-issued Cloud MISP API key. The server URL is managed automatically.
@@ -700,7 +700,7 @@ function MispTab() {
           </div>
           <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.25)" }}>
             {misp.apiKey
-              ? <span style={{ color: "#4d9eff" }}>✓ API key configured — IOC lookups will use misp.cycentra.com</span>
+              ? <span style={{ color: "#4d9eff" }}>✓ API key configured — IOC lookups will use cymisp.cycentra.com</span>
               : <span style={{ color: "#ff8c00" }}>⚠ API key required to activate Cloud CyMISP</span>}
           </div>
         </div>

@@ -97,7 +97,7 @@ def generate_tenant_id(domain: str) -> str:
 
 # ── MISP config resolver ───────────────────────────────────────────────────────
 
-_CLOUD_MISP_URL_DEFAULT = "https://misp.cycentra.com"
+_CLOUD_MISP_URL_DEFAULT = "https://cymisp.cycentra.com"
 
 
 def get_misp_config() -> dict | None:

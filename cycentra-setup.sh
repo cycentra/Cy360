@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 — Setup & Update Wizard v1.0.126 — 2026-04-11 12:00 UTC
+# CyCentra 360 — Setup & Update Wizard v1.0.127 — 2026-04-11 14:00 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -218,7 +218,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.126"
+_SCRIPT_VERSION="v1.0.127"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -876,8 +876,8 @@ else
     if ! grep -q "^CLOUD_MISP_URL=" "$_env" 2>/dev/null; then
         cat >> "$_env" << PATCHEOF
 
-# ── Cloud CyMISP (Cycentra-managed MISP at misp.cycentra.com) ─────────────────
-CLOUD_MISP_URL=https://misp.cycentra.com
+# ── Cloud CyMISP (Cycentra-managed MISP at cymisp.cycentra.com) ────────────────
+CLOUD_MISP_URL=https://cymisp.cycentra.com
 CLOUD_MISP_API_KEY=${CLOUD_MISP_API_KEY:-}
 PATCHEOF
         info "Added CLOUD_MISP_* to .env"
@@ -957,11 +957,11 @@ SIEM_ENGINE_URL=http://127.0.0.1:8100
 # requiring the customer to enter it in the UI.  Set via GH_TOKEN env var at install time.
 GH_TOKEN=${GH_TOKEN:-}
 
-# ── Cloud CyMISP (Cycentra-managed MISP at misp.cycentra.com) ─────────────────
+# ── Cloud CyMISP (Cycentra-managed MISP at cymisp.cycentra.com) ────────────────
 # When a customer selects "Cloud CyMISP" in System Settings > Integrations, the
 # backend uses these credentials automatically.  CLOUD_MISP_API_KEY must be set
 # to the vendor-issued API key for this installation.
-CLOUD_MISP_URL=https://misp.cycentra.com
+CLOUD_MISP_URL=https://cymisp.cycentra.com
 CLOUD_MISP_API_KEY=${CLOUD_MISP_API_KEY:-}
 
 # ── Cloud CyIRIS (Cycentra-managed DFIR IRIS at cyiris.cycentra.com) ──────────

@@ -1,6 +1,28 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.127 — 2026-04-11
+
+### Fix — Correct Cloud MISP URL (`misp.cycentra.com` → `cymisp.cycentra.com`)
+
+**Root cause:** The Cloud MISP server is hosted at `cymisp.cycentra.com` (`204.168.193.23`), but
+all code and configuration had `misp.cycentra.com` hardcoded — a subdomain that has never existed
+in DNS (NXDOMAIN). Any customer using Cloud CyMISP mode received "server not reachable".
+
+#### Files changed
+- **`backend/core/helpers.py`** — `_CLOUD_MISP_URL_DEFAULT` updated to `https://cymisp.cycentra.com`
+- **`backend/blueprints/system/routes.py`** — `_sync_misp_to_siem_env()` default URL updated
+- **`portal/src/pages/settings/SystemSettingsPage.jsx`** — `testConnection` effective URL, mode card
+  description, panel heading, and status label all updated to `cymisp.cycentra.com`
+- **`cycentra-setup.sh`** — both `.env` write blocks (patch and full install) updated
+
+#### Impact
+- Cloud CyMISP test connection now resolves and authenticates correctly
+- `CLOUD_MISP_URL` in `.env` is set to the correct address on fresh installs and `--update` patches
+- Existing servers with the old value in `/opt/cycentra/.env` should update the line manually or
+  run `--update` to trigger the patch block
+
+---
 ## v1.0.126 — 2026-04-11
 
 ### Fix — SHC compilation now runs in CI producing Linux binaries; Python wheel ships bytecode
