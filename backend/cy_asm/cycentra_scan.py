@@ -208,7 +208,11 @@ async def lookup_misp_iocs(ips: list) -> dict:
     Never raises — always returns a (possibly empty) dict so the scan is never blocked.
     """
     config = _get_misp_config()
-    if not config or not ips:
+    if not config:
+        # _get_misp_config() already logs the reason — no duplicate warning here
+        return {}
+    if not ips:
+        logger.debug("[MISP] No IPs to look up — skipping IOC query.")
         return {}
 
     unique_ips = list(dict.fromkeys(str(ip) for ip in ips if ip))
@@ -807,6 +811,8 @@ def main():
                 logger.info(f"✅ [MISP] No IOC hits for {len(_all_scan_ips)} IPs for {domain}.")
         except Exception as _misp_err:
             logger.warning(f"⚠️ [MISP] Lookup block failed (scan continues): {_misp_err}")
+    else:
+        logger.debug(f"[MISP] No IPs collected from DNS/subdomains for {domain} — IOC lookup skipped.")
     # ─────────────────────────────────────────────────────────────────────────
 
     # AI Enrichment — only for Deep scan; skipped for Standard and Passive

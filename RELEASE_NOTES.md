@@ -1,6 +1,21 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.124 — 2026-04-11
+
+### Fix — MISP cloud mode silent failure + CyMind baseUrl missing logging improvements
+
+- **`backend/core/helpers.py` `get_misp_config()`:**
+  - **Backward-compat inference**: when `mode` field is absent but `apiKey` is present without a `url`, the settings were saved via cloud-mode before the `mode` field existed — now correctly inferred as `"cloud"` instead of defaulting to `"disabled"`.
+  - **Cloud key fallback**: for `mode: "cloud"`, resolves key from `CLOUD_MISP_API_KEY` env var first, then falls back to stored `misp.apiKey` in `ai_settings.json` (fixes deployments where the cloud key was configured via UI, not env).
+  - **Visibility logging**: returns `None` with an explicit `WARNING` log (naming the missing field) instead of silently returning `None`. Disabled mode now logs an `INFO` line so scan logs show MISP was intentionally off.
+- **`backend/blueprints/system/routes.py` `_sync_misp_to_siem_env()`:** same cloud key fallback applied — cloud mode now syncs the stored `misp.apiKey` to `cysiemstack.env` when `CLOUD_MISP_API_KEY` env var is not set.
+- **`backend/cy_asm/cycentra_scan.py`:**
+  - `lookup_misp_iocs()`: removed duplicate silent return; logs `DEBUG` when IP list is empty.
+  - MISP scan block: added `else` branch logging when `_all_scan_ips` is empty (was completely silent before).
+- **`portal/src/pages/settings/SystemSettingsPage.jsx` `MispTab`:** backward-compat inference aligned with backend — `apiKey` present + no `url` + no `mode` now pre-selects **Cloud CyMISP** in the UI instead of showing Disabled.
+
+---
 ## v1.0.123 — 2026-04-11
 
 ### Fix — AI Config: CyMind baseUrl missing causes silent "api keys missing" scan failure

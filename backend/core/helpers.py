@@ -110,15 +110,22 @@ def get_misp_config() -> dict | None:
     Modes
     -----
     - ``disabled``  → returns None (all MISP calls should be skipped)
-    - ``cloud``     → returns Cloud CyMISP creds from ``CLOUD_MISP_URL`` and
-                      ``CLOUD_MISP_API_KEY`` in the environment (set by setup.sh)
-    - ``local``     → returns the customer-configured URL + key from ai_settings.json
+    - ``cloud``     → URL from ``CLOUD_MISP_URL`` env / default; key from
+                      ``CLOUD_MISP_API_KEY`` env, falling back to stored
+                      ``misp.apiKey`` (set via UI cloud-mode save)
+    - ``local``     → customer-configured URL + key from ai_settings.json
+
+    Backward-compat: if ``mode`` is absent but ``apiKey`` is stored without a
+    ``url``, the settings were saved in cloud mode before the mode field was
+    added — treat as ``cloud``.
 
     Returns
     -------
     dict with keys ``url``, ``apiKey``, ``mode`` — or ``None`` if disabled /
     credentials are missing.
     """
+    import logging as _log
+    _logger = _log.getLogger(__name__)
     from core.config import AI_SETTINGS_FILE  # lazy to avoid circular imports at module load
     try:
         raw = AI_SETTINGS_FILE.read_text() if AI_SETTINGS_FILE.exists() else "{}"
@@ -127,23 +134,40 @@ def get_misp_config() -> dict | None:
         settings = {}
 
     misp = settings.get("misp", {})
-    mode = misp.get("mode", "disabled")
+    mode = misp.get("mode", "")
+
+    # Backward-compat: mode missing + apiKey present + no url → old cloud-mode save
+    if not mode:
+        stored_key = misp.get("apiKey", "").strip()
+        if stored_key and not misp.get("url", "").strip():
+            mode = "cloud"
+        else:
+            mode = "disabled"
 
     if mode == "cloud":
         url = os.environ.get("CLOUD_MISP_URL", _CLOUD_MISP_URL_DEFAULT).rstrip("/")
-        key = os.environ.get("CLOUD_MISP_API_KEY", "")
+        # Prefer env var; fall back to key stored in ai_settings.json by the UI
+        key = os.environ.get("CLOUD_MISP_API_KEY", "").strip() or misp.get("apiKey", "").strip()
         if not key:
-            return None  # Cloud key not yet provisioned on this server
+            _logger.warning("⚠️ [MISP] Cloud mode selected but no API key found "
+                            "(set CLOUD_MISP_API_KEY env var or configure via System Settings → CyMISP).")
+            return None
         return {"url": url, "apiKey": key, "mode": "cloud"}
 
     if mode == "local":
         url = misp.get("url", "").strip().rstrip("/")
         key = misp.get("apiKey", "").strip()
         if not url or not key:
+            missing = []
+            if not url: missing.append("url")
+            if not key: missing.append("apiKey")
+            _logger.warning(f"⚠️ [MISP] Local mode selected but missing: {', '.join(missing)}. "
+                            "Configure via System Settings → CyMISP.")
             return None
         return {"url": url, "apiKey": key, "mode": "local"}
 
-    # "disabled" or any unrecognised value
+    # "disabled" or unrecognised
+    _logger.info("⏭️  [MISP] MISP is disabled — IOC lookups skipped.")
     return None
 
 

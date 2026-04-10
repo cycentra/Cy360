@@ -557,8 +557,15 @@ function MispTab() {
       .then(r => r.json())
       .then(d => {
         const raw = d.misp || {};
-        // Backward compat: if old format had enabled=true but no mode, map to "local"
-        if (!raw.mode) raw.mode = raw.enabled ? "local" : "disabled";
+        // Backward compat: infer mode when absent
+        // - old enabled=true (pre-mode field) → "local"
+        // - apiKey present + no url → was saved as cloud (matches get_misp_config() inference)
+        // - anything else → "disabled"
+        if (!raw.mode) {
+          if (raw.enabled) raw.mode = "local";
+          else if (raw.apiKey && !raw.url) raw.mode = "cloud";
+          else raw.mode = "disabled";
+        }
         setMisp(raw);
         setLoading(false);
       })

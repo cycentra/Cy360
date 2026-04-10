@@ -167,9 +167,9 @@ def _sync_misp_to_siem_env(misp: dict) -> None:
     mode = misp.get("mode", "disabled")
 
     if mode == "cloud":
-        # Cloud CyMISP — credentials come from global /opt/cycentra/.env
+        # Cloud CyMISP — key from env var, falling back to stored misp.apiKey
         eff_url = os.environ.get("CLOUD_MISP_URL", "https://misp.cycentra.com").rstrip("/")
-        eff_key = os.environ.get("CLOUD_MISP_API_KEY", "")
+        eff_key = os.environ.get("CLOUD_MISP_API_KEY", "").strip() or misp.get("apiKey", "").strip()
         enabled = "true" if eff_key else "false"
     elif mode == "local":
         eff_url = misp.get("url", "").rstrip("/")
