@@ -1,6 +1,28 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.126 — 2026-04-11
+
+### Fix — SHC compilation now runs in CI producing Linux binaries; Python wheel ships bytecode
+
+**Root causes identified:**
+1. SHC was installed locally (macOS) and `git-push.sh` ran `build-package.sh` to produce a binary — but this produced a **macOS ARM64 binary** which cannot execute on Linux servers.
+2. **CI (`deploy.yml`) never ran SHC** — it bundled the raw `cycentra-setup.sh` plain text into `cycentra-release.tar.gz`, which is what servers download via `--update`. Every update therefore deployed readable source.
+3. The Python wheel shipped plain `.py` source files, readable by anyone who unpacked it.
+
+#### `deploy.yml` changes
+- **Install SHC in CI** (`ubuntu-latest` → Linux x86_64 binary that executes on production servers)
+- **Compile `cycentra-setup.sh` → `cycentra-setup-bin`** (SHC binary) before bundling
+- **`cycentra-release.tar.gz`** now contains `cycentra-setup` (the binary) instead of `cycentra-setup.sh` (plain text)
+- **GitHub Release files**: replaced `cycentra-setup.sh` upload with `cycentra-setup-bin`
+- **GitHub Packages**: setup asset now uploads the binary, not the `.sh`
+- **`build-wheel` job**: added post-build step that unpacks the wheel, compiles all `.py` → `.pyc` bytecode (co-located, not `__pycache__`), overwrites source with bytecode, and repacks the wheel — Python source is no longer included in distributed wheel
+
+#### `git-push.sh` changes
+- Removed local `build-package.sh` invocation (was silently uploading a macOS binary to GitHub Releases)
+- Now prints an informational note that CI handles the production Linux binary
+
+---
 ## v1.0.125 — 2026-04-11
 
 ### Fix — Cloud CyIRIS and Cloud CyMISP not working: missing API key input + env-only key lookup
