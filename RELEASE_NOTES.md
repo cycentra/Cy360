@@ -1,6 +1,28 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.128 — 2026-04-11
+
+### Fix — Update button: asset name mismatch + SHC binary execution
+
+**Root causes:**
+1. CI (`deploy.yml` v1.0.126) started uploading the compiled binary as `cycentra-setup-bin`,
+   but the backend asset lookup searched for `cycentra-setup.sh` → "not found in release" error.
+2. Backend ran the downloaded file via `bash` — an SHC-compiled ELF binary cannot be
+   bash-interpreted; it must be executed directly as a standalone program.
+
+#### `deploy.yml` changes
+- SHC compile step now does `cp cycentra-setup-bin cycentra-setup.sh` after compilation so the
+  binary is uploaded under the well-known `.sh` asset name the backend expects
+- Release `files:` changed from `cycentra-setup-bin` → `cycentra-setup.sh`
+
+#### `backend/blueprints/system/routes.py` changes
+- Asset lookup now accepts both `cycentra-setup.sh` and `cycentra-setup-bin` for backward
+  compatibility with any older releases still in flight
+- Execution changed from `["sudo", "-E", "bash", "/opt/cycentra/cycentra-setup.sh"]` to
+  `["sudo", "-E", "/opt/cycentra/cycentra-setup.sh"]` — runs the binary directly
+
+---
 ## v1.0.127 — 2026-04-11
 
 ### Fix — Correct Cloud MISP URL (`misp.cycentra.com` → `cymisp.cycentra.com`)

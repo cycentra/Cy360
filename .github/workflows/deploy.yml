@@ -135,6 +135,9 @@ jobs:
           strip cycentra-setup-bin 2>/dev/null || true
           chmod +x cycentra-setup-bin
           echo "SHC binary size: $(du -sh cycentra-setup-bin | cut -f1)"
+          # Overwrite plain source with binary so the release asset keeps the .sh name
+          # (backend asset lookup expects "cycentra-setup.sh" and runs it as an executable)
+          cp cycentra-setup-bin cycentra-setup.sh
 
       - name: Build customer release bundle
         run: |
@@ -239,7 +242,7 @@ jobs:
             ```
           files: |
             cycentra-release.tar.gz
-            cycentra-setup-bin
+            cycentra-setup.sh
             dist/*.whl
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

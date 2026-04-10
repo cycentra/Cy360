@@ -631,7 +631,10 @@ def _run_setup_in_background(flags: list[str], label: str) -> None:
             release = rel_resp.json()
             tag = release.get("tag_name", "?")
             assets = release.get("assets", [])
-            asset = next((a for a in assets if a["name"] == "cycentra-setup.sh"), None)
+            asset = next(
+                (a for a in assets if a["name"] in ("cycentra-setup.sh", "cycentra-setup-bin")),
+                None,
+            )
             if not asset:
                 _update_log.append(
                     f"[{label} ERROR] cycentra-setup.sh not found in release {tag} — "
@@ -678,7 +681,8 @@ def _run_setup_in_background(flags: list[str], label: str) -> None:
             _update_log.append(f"[{label}] Script downloaded successfully ({len(dl_resp.content)} bytes)")
 
             # ── Execute with requested flags (GH_TOKEN visible via sudo -E) ──
-            cmd = ["sudo", "-E", "bash", "/opt/cycentra/cycentra-setup.sh"] + flags
+            # Execute as a standalone binary (SHC-compiled ELF, not bash-interpreted text)
+            cmd = ["sudo", "-E", "/opt/cycentra/cycentra-setup.sh"] + flags
             proc = subprocess.Popen(
                 cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
