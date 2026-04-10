@@ -1,6 +1,15 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.119 — 2026-04-10
+
+### Fix — Setup script exits silently with no output
+
+- `warn`, `success`, `error` helper functions were defined after the license check block. With `set -e` active, calling an undefined function exits with code 127 (command not found) and no output — causing the script to appear to do nothing.
+- Fixed by moving all colour variables and helper function definitions to immediately after `set -euo pipefail`, before any logic runs.
+- Also fixed orphaned `ask()` function body (the opening `ask() {` line was lost in the v1.0.118 refactor) and removed duplicate helper definitions.
+
+---
 ## v1.0.118 — 2026-04-10
 
 ### Feature — Single-file installer: no external dependencies

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 — Setup & Update Wizard v1.0.118 — 2026-04-10 11:00 UTC
+# CyCentra 360 — Setup & Update Wizard v1.0.119 — 2026-04-10 11:30 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -24,6 +24,20 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
+
+# ── Colours & helpers (defined early — used by license check below) ───────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; WHITE='\033[1;37m'; DIM='\033[2m'; NC='\033[0m'; BOLD='\033[1m'
+
+info()    { echo -e "${CYAN}  ▸ ${NC}$*"; }
+success() { echo -e "${GREEN}  ✓ ${NC}$*"; }
+warn()    { echo -e "${YELLOW}  ⚠ ${NC}$*"; }
+error()   { echo -e "${RED}  ✗ ${NC}$*"; }
+divider() { echo -e "${DIM}  ────────────────────────────────────────────────${NC}"; }
+
+gen_secret() { openssl rand -hex 24; }
+gen_pass()   { openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 20; }
+_port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
 MODE="full"
@@ -176,16 +190,7 @@ CYCENTRA_VALIDATOR_EOF
     export CYCENTRA_LICENSE_TYPE="${_LIC_TYPE}"
 fi
 
-# ── Colours ───────────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; WHITE='\033[1;37m'; DIM='\033[2m'; NC='\033[0m'; BOLD='\033[1m'
-
-info()    { echo -e "${CYAN}  ▸ ${NC}$*"; }
-success() { echo -e "${GREEN}  ✓ ${NC}$*"; }
-warn()    { echo -e "${YELLOW}  ⚠ ${NC}$*"; }
-error()   { echo -e "${RED}  ✗ ${NC}$*"; }
-divider() { echo -e "${DIM}  ────────────────────────────────────────────────${NC}"; }
-
+# ── ask / ask_secret / ask_yn helpers (interactive fallbacks) ────────────────
 ask() {
     local varname=$1 prompt=$2 default=${3:-}
     local disp=""; [[ -n "$default" ]] && disp=" ${DIM}[${default}]${NC}"
@@ -209,13 +214,9 @@ ask_yn() {
     [[ "$value" =~ ^[Yy] ]] && return 0 || return 1
 }
 
-gen_secret() { openssl rand -hex 24; }
-gen_pass()   { openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 20; }
-_port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
-
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.118"
+_SCRIPT_VERSION="v1.0.119"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
