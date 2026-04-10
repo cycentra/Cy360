@@ -1,6 +1,15 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.121 — 2026-04-10
+
+### Fix — Cloud CyIRIS credentials missing from .env on existing installs
+
+- `get_iris_config()` cloud mode reads `CLOUD_IRIS_URL` / `CLOUD_IRIS_API_KEY` / `CLOUD_IRIS_CUSTOMER_ID` from the server env. These vars were never written by `setup.sh`, so "Cloud CyIRIS" mode silently returned `None` on all existing deployments.
+- Added `CLOUD_IRIS_URL`, `CLOUD_IRIS_API_KEY`, `CLOUD_IRIS_CUSTOMER_ID` to the full-install `.env` heredoc (mirrors the existing `CLOUD_MISP_*` block).
+- Added a `.env` patch block in `--update` mode: runs on every `--update` (including from the UI Update button) and idempotently adds missing `CLOUD_IRIS_*` / `CLOUD_MISP_*` vars and removes 6 orphaned dead vars left over from the pre-refactor monolith: `USE_CUSTOM_IMAGES`, `SIEM_LLM_ENABLED`, `SIEM_MISP_ENABLED`, `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`.
+
+---
 ## v1.0.120 — 2026-04-10
 
 ### Fix — Setup script exits silently after license validator runs

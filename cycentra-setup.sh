@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 — Setup & Update Wizard v1.0.120 — 2026-04-10 12:00 UTC
+# CyCentra 360 — Setup & Update Wizard v1.0.121 — 2026-04-10 13:00 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -218,7 +218,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.120"
+_SCRIPT_VERSION="v1.0.121"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -850,6 +850,47 @@ else
     BASE_DOMAIN="${BASE_DOMAIN:-cycentra.com}"
     INSTALL_CYSIEM=true; INSTALL_CYIRIS=true; INSTALL_CYSOAR=true
     success "Loaded existing configuration (domain: ${BASE_DOMAIN})"
+
+    # ── Patch .env for update mode ────────────────────────────────────────────
+    # Adds new vars introduced since the last full install, and removes vars
+    # that were orphaned during the refactor.  Safe to run on every --update.
+    step_header "PATCHING /opt/cycentra/.env"
+    _env="/opt/cycentra/.env"
+
+    # Remove dead / orphaned variables
+    for _dead in USE_CUSTOM_IMAGES SIEM_LLM_ENABLED SIEM_MISP_ENABLED \
+                 AI_PROVIDER AI_API_KEY AI_MODEL; do
+        if grep -q "^${_dead}=" "$_env" 2>/dev/null; then
+            sed -i "/^${_dead}=/d" "$_env"
+            info "Removed orphaned var: ${_dead}"
+        fi
+    done
+
+    # Add CLOUD_MISP_* if missing (introduced in v1.0.X)
+    if ! grep -q "^CLOUD_MISP_URL=" "$_env" 2>/dev/null; then
+        cat >> "$_env" << PATCHEOF
+
+# ── Cloud CyMISP (Cycentra-managed MISP at misp.cycentra.com) ─────────────────
+CLOUD_MISP_URL=https://misp.cycentra.com
+CLOUD_MISP_API_KEY=${CLOUD_MISP_API_KEY:-}
+PATCHEOF
+        info "Added CLOUD_MISP_* to .env"
+    fi
+
+    # Add CLOUD_IRIS_* if missing (introduced in v1.0.X)
+    if ! grep -q "^CLOUD_IRIS_URL=" "$_env" 2>/dev/null; then
+        cat >> "$_env" << PATCHEOF
+
+# ── Cloud CyIRIS (Cycentra-managed DFIR IRIS at cyiris.cycentra.com) ──────────
+CLOUD_IRIS_URL=https://cyiris.cycentra.com
+CLOUD_IRIS_API_KEY=${CLOUD_IRIS_API_KEY:-}
+CLOUD_IRIS_CUSTOMER_ID=${CLOUD_IRIS_CUSTOMER_ID:-1}
+PATCHEOF
+        info "Added CLOUD_IRIS_* to .env"
+    fi
+
+    chmod 600 "$_env"
+    success ".env patched"
 fi
 
 # ── Step 10: Write .env files (full install only) ─────────────────────────────
@@ -888,7 +929,6 @@ ENVEOF
 
 CYIRIS_OIDC_SECRET=${CYIRIS_OIDC_SECRET}
 CYSOAR_OIDC_SECRET=${CYSOAR_OIDC_SECRET}
-USE_CUSTOM_IMAGES=no
 
 IRIS_SECRET=${IRIS_SECRET}
 IRIS_DB_PASS=${IRIS_DB_PASS}
@@ -899,10 +939,6 @@ IRIS_SECRET_KEY=${IRIS_SECRET}
 POSTGRES_PASSWORD=${IRIS_DB_PASS}
 NODE_RED_CREDENTIAL_SECRET=${NODERED_SECRET}
 
-AI_PROVIDER=${AI_PROVIDER:-none}
-AI_API_KEY=${AI_API_KEY:-}
-AI_MODEL=${AI_MODEL:-}
-
 SMTP_HOST=${SMTP_HOST:-}
 SMTP_PORT=${SMTP_PORT:-}
 SMTP_USER=${SMTP_USER:-}
@@ -910,8 +946,6 @@ SMTP_PASS=${SMTP_PASS:-}
 SUPPORT_EMAIL=${SUPPORT_EMAIL:-support@cycentra.com}
 
 SIEM_ENGINE_URL=http://127.0.0.1:8100
-SIEM_LLM_ENABLED=true
-SIEM_MISP_ENABLED=false
 
 # GitHub token — used by the portal backend to download updates/upgrades without
 # requiring the customer to enter it in the UI.  Set via GH_TOKEN env var at install time.
@@ -923,6 +957,14 @@ GH_TOKEN=${GH_TOKEN:-}
 # to the vendor-issued API key for this installation.
 CLOUD_MISP_URL=https://misp.cycentra.com
 CLOUD_MISP_API_KEY=${CLOUD_MISP_API_KEY:-}
+
+# ── Cloud CyIRIS (Cycentra-managed DFIR IRIS at cyiris.cycentra.com) ──────────
+# When a customer selects "Cloud CyIRIS" in System Settings > Integrations, the
+# backend uses these credentials automatically.  CLOUD_IRIS_API_KEY must be set
+# to the vendor-issued API key for this installation.
+CLOUD_IRIS_URL=https://cyiris.cycentra.com
+CLOUD_IRIS_API_KEY=${CLOUD_IRIS_API_KEY:-}
+CLOUD_IRIS_CUSTOMER_ID=${CLOUD_IRIS_CUSTOMER_ID:-1}
 ENVEOF
     chmod 600 /opt/cycentra/.env
    # mkdir -p /root/cy-asm && cp /opt/cycentra/.env /root/cy-asm/.env
