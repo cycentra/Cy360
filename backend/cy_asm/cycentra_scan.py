@@ -256,7 +256,10 @@ def _get_cymind_config() -> tuple[str, str, str] | None:
     api_key = fields.get("apiKey",  "").strip()
     model   = fields.get("model",   "").strip() or "mistral:7b"
     if not url or not api_key:
-        logger.warning("⚠️ [CyMind] Provider set to cymind but baseUrl or apiKey is missing.")
+        missing = []
+        if not url:     missing.append("baseUrl (Server URL)")
+        if not api_key: missing.append("apiKey")
+        logger.warning(f"⚠️ [CyMind] Provider set to cymind but missing: {', '.join(missing)}. Configure these in System Settings → AI Config.")
         return None
     return url.rstrip("/"), api_key, model
 

@@ -178,16 +178,20 @@ export function useAppState() {
     }).catch(() => {});
   }
 
-  function handleSaveAIConfig(config) {
+  async function handleSaveAIConfig(config) {
     setAiConfig(config);
     try { localStorage.setItem("cycentra_ai_config", JSON.stringify(config)); } catch {}
     // Persist to backend so the ASM enrichment pipeline can read it server-side
-    fetch(`${API_BASE}/api/ai/settings`, {
+    const res = await fetch(`${API_BASE}/api/ai/settings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
       body: JSON.stringify(config),
-    }).catch(() => {});
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Server returned ${res.status}`);
+    }
   }
 
   function handleScanComplete(raw) {

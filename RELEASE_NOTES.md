@@ -1,6 +1,19 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.123 — 2026-04-11
+
+### Fix — AI Config: CyMind baseUrl missing causes silent "api keys missing" scan failure
+
+- **Root cause:** `ai_settings.json` stored `fields.apiKey` and `cymind_memory.apiKey` but never persisted `fields.baseUrl` / `cymind_memory.baseUrl`. Both `_get_cymind_config()` and `_get_cymind_memory_config()` require a URL and return `None` when absent, triggering the misleading "CyMind api keys missing" log in `cycentra_scan.py`.
+- **`backend/cy_asm/cycentra_scan.py`:** Improved warning message in `_get_cymind_config()` — now logs exactly which field(s) are missing (`baseUrl (Server URL)` vs `apiKey`) with a pointer to System Settings → AI Config.
+- **`portal/src/pages/ai/AISettingsPage.jsx`:**
+  - `isConfigured` now correctly requires `baseUrl` for `cymind` and `local` providers (previously only checked `apiKey`, masking missing URL).
+  - `handleSave` blocks save with inline error when Server URL is absent for URL-required providers.
+  - `saveError` state added — backend write failures now show red ⚠ message inline instead of always showing green "✓ Saved".
+- **`portal/src/hooks/useAppState.js`:** `handleSaveAIConfig` converted to `async` — throws on non-OK backend response so `AISettingsPage` can surface the error to the user.
+
+---
 ## v1.0.122 — 2026-04-10
 
 ### Fix — Update via UI button crashes with "same file" cp error

@@ -22,6 +22,7 @@ export function AISettingsPage({ aiConfig, onSave, embedded = false }) {
   const [testStatus,     setTestStatus]  = useState(null);   // null | "testing" | "ok" | "fail"
   const [testMsg,        setTestMsg]     = useState("");
   const [saved,          setSaved]       = useState(false);
+  const [saveError,      setSaveError]   = useState("");
   const _MASK = "\u2022".repeat(8);
 
   // On mount: fetch server-side config so configured keys show as masked ●●●●●●●●
@@ -43,12 +44,14 @@ export function AISettingsPage({ aiConfig, onSave, embedded = false }) {
   const updatePrompt    = (k, v) => setPrompts(prev  => ({ ...prev, [k]: v }));
   const resetPrompt     = (k)    => setPrompts(prev  => ({ ...prev, [k]: DEFAULT_PROMPTS[k] }));
 
-  const isConfigured = fields.apiKey && fields.apiKey !== "" || (provider === "local" && fields.baseUrl);
+  // Both local and cymind require a baseUrl; API-key-only providers (gemini, anthropic, deepseek) do not
+  const _needsUrl    = provider === "local" || provider === "cymind";
+  const isConfigured = (_needsUrl ? !!fields.baseUrl : !!(fields.apiKey && fields.apiKey !== ""));
 
   const testConnection = async () => {
     setTestStatus("testing"); setTestMsg("");
-    if (provider === "local" && !fields.baseUrl) { setTestStatus("fail"); setTestMsg("Server URL is required"); return; }
-    if (provider !== "local" && (!fields.apiKey || fields.apiKey === _MASK))  { setTestStatus("fail"); setTestMsg("Enter your API key (currently masked)"); return; }
+    if (_needsUrl && !fields.baseUrl) { setTestStatus("fail"); setTestMsg("Server URL is required"); return; }
+    if (!_needsUrl && (!fields.apiKey || fields.apiKey === _MASK))  { setTestStatus("fail"); setTestMsg("Enter your API key (currently masked)"); return; }
     try {
       const res = await fetch(`${API_BASE}/api/ai/test`, {
         method: "POST",
@@ -62,10 +65,19 @@ export function AISettingsPage({ aiConfig, onSave, embedded = false }) {
     } catch { setTestStatus("fail"); setTestMsg("Cannot reach backend"); }
   };
 
-  const handleSave = () => {
-    onSave({ provider, fields, prompts, cymind_memory: cymindMemory });
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  const handleSave = async () => {
+    setSaveError("");
+    if (_needsUrl && !fields.baseUrl) {
+      setSaveError(`Server URL is required for ${currentProvider.name}`);
+      return;
+    }
+    try {
+      await onSave({ provider, fields, prompts, cymind_memory: cymindMemory });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setSaveError(e?.message || "Failed to save — check server logs");
+    }
   };
 
   return (
@@ -195,7 +207,8 @@ export function AISettingsPage({ aiConfig, onSave, embedded = false }) {
           style={{ background:"#00e5a0", color:"#0d0f14", border:"none", borderRadius:4, padding:"12px 32px", fontFamily:"monospace", fontSize:13, fontWeight:700, cursor:"pointer", letterSpacing:"1px", textTransform:"uppercase" }}>
           Save AI Configuration
         </button>
-        {saved && <span style={{ color:"#00e5a0", fontSize:12, fontFamily:"monospace" }}>✓ Saved</span>}
+        {saved     && <span style={{ color:"#00e5a0", fontSize:12, fontFamily:"monospace" }}>✓ Saved</span>}
+        {saveError && <span style={{ color:"#ff4444", fontSize:12, fontFamily:"monospace" }}>⚠ {saveError}</span>}
         <div style={{ flex:1 }}/>
         <div style={{ background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:4, padding:"8px 14px" }}>
           <span style={{ color:"rgba(255,255,255,0.3)", fontSize:11, fontFamily:"monospace" }}>Active: </span>
