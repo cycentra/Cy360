@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 — Setup & Update Wizard v1.0.119 — 2026-04-10 11:30 UTC
+# CyCentra 360 — Setup & Update Wizard v1.0.120 — 2026-04-10 12:00 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -160,8 +160,10 @@ if __name__ == "__main__":
 CYCENTRA_VALIDATOR_EOF
     chmod 600 "$_VALIDATOR_DEST"
 
+    set +e
     _LIC_JSON=$(python3 "$_VALIDATOR_DEST" --license "$_LIC_FILE" 2>/dev/null)
     _LIC_CODE=$?
+    set -e
     _LIC_TYPE=$(echo "$_LIC_JSON"  | python3 -c "import sys,json;print(json.load(sys.stdin).get('type','none'))" 2>/dev/null || echo "none")
     _LIC_DAYS=$(echo "$_LIC_JSON"  | python3 -c "import sys,json;print(json.load(sys.stdin).get('days_remaining',0))" 2>/dev/null || echo "0")
     _LIC_MSG=$(echo "$_LIC_JSON"   | python3 -c "import sys,json;print(json.load(sys.stdin).get('message',''))" 2>/dev/null || echo "")
@@ -216,7 +218,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.119"
+_SCRIPT_VERSION="v1.0.120"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }

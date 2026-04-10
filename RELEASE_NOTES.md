@@ -1,6 +1,15 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.120 — 2026-04-10
+
+### Fix — Setup script exits silently after license validator runs
+
+- `python3 license_validator.py` exits with code 4 when no `.lic` file is present (auto-demo mode). With `set -e` active, bash treats the non-zero exit code from the command substitution `_LIC_JSON=$(python3 ...)` as a fatal error and kills the script before `_LIC_CODE=$?` can be read.
+- Fixed by wrapping the python3 call with `set +e` / `set -e` so the exit code is safely captured regardless of the validator result.
+- This was the root cause of the script silently doing nothing on a clean server with no license file.
+
+---
 ## v1.0.119 — 2026-04-10
 
 ### Fix — Setup script exits silently with no output
