@@ -35,6 +35,7 @@ function UpdatesTab() {
   const [versionData,  setVersionData]  = useState(null);
   const [updating,     setUpdating]     = useState(false);
   const [upgrading,    setUpgrading]    = useState(false);
+  const [upgradeConfirm, setUpgradeConfirm] = useState(false);
   const [updateLog,    setUpdateLog]    = useState([]);
   const [logRunning,   setLogRunning]   = useState(false);
   const [error,        setError]        = useState(null);
@@ -89,7 +90,7 @@ function UpdatesTab() {
   };
 
   // Trigger upgrade (no flag = full re-install / major upgrade)
-  const handleUpgrade = async () => {
+  const _triggerUpgrade = async () => {
     if (updating || upgrading) return;
     setError(null); setSuccess(null); setLatestInfo(null);
     setUpdateLog([]); setUpgrading(true); setLogRunning(true);
@@ -132,6 +133,10 @@ function UpdatesTab() {
     await _triggerUpdate();
   };
 
+  // Upgrade: show confirmation modal first, only proceed on confirm
+  const handleUpgrade = () => { if (!updating && !upgrading) setUpgradeConfirm(true); };
+  const handleUpgradeConfirm = () => { setUpgradeConfirm(false); _triggerUpgrade(); };
+
   useEffect(() => () => clearInterval(pollRef.current), []);
 
   const isUpToDate  = latestInfo?.up_to_date === true;
@@ -140,6 +145,26 @@ function UpdatesTab() {
 
   return (
     <div>
+      {/* Upgrade confirmation modal */}
+      {upgradeConfirm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div style={{ background: "#13151a", border: "1px solid rgba(255,140,0,0.45)", borderRadius: 8, padding: "28px 32px", width: 460, maxWidth: "90vw" }}>
+            <div style={{ color: "#ff8c00", fontSize: 12, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1.5px", marginBottom: 16 }}>⚠ CONFIRM FULL UPGRADE</div>
+            <p style={{ color: "rgba(255,255,255,0.7)", fontSize: 13, lineHeight: 1.8, marginBottom: 8 }}>
+              This will perform a <span style={{ color: "#ff8c00", fontWeight: 700 }}>full reinstall</span> from the latest release.
+            </p>
+            <p style={{ color: "#ff3b3b", fontSize: 12, fontFamily: "monospace", lineHeight: 1.7, marginBottom: 24 }}>
+              ✗ All custom configuration and existing data will be wiped.<br/>
+              ✗ This action cannot be undone.
+            </p>
+            <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
+              <button onClick={() => setUpgradeConfirm(false)} style={{ ...BTN("#4d9eff") }}>Cancel</button>
+              <button onClick={handleUpgradeConfirm} style={{ ...BTN("#ff3b3b") }}>Yes, Wipe &amp; Upgrade</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Current version + latest available */}
       <div style={CARD}>
         <div style={LABEL}>Current Version</div>

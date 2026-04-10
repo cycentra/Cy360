@@ -73,7 +73,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.114"
+_SCRIPT_VERSION="v1.0.115"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -514,7 +514,7 @@ systemctl is-active cysiem-to-redis >/dev/null 2>&1 \
 # ── Download release bundle ───────────────────────────────────────────────────
 step_header "DOWNLOAD RELEASE BUNDLE"
 
-GH_TOKEN="${GH_TOKEN:-}"
+GH_TOKEN="${GH_TOKEN:-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}"
 GH_ORG="cycentra"
 GH_REPO="cycentra360"
 
@@ -539,7 +539,7 @@ if [[ -f "$_SCRIPT_DIR/manifest.json" ]]; then
 else
     # ── Remote download path: requires GH_TOKEN ───────────────────────────────
     if [[ -z "$GH_TOKEN" ]]; then
-        error "GH_TOKEN is not set. Run with: GH_TOKEN=your_token sudo -E bash cycentra-setup.sh"
+        error "GH_TOKEN is not set and could not be resolved. Ensure it is exported or set in the environment."
         exit 1
     fi
 
@@ -637,9 +637,12 @@ if [[ "$MODE" == "full" ]]; then
     CLIENT_NAME="${CLIENT_NAME:-cycentra}"
     CLIENT_EMAIL="${CLIENT_EMAIL:-admin@cycentra.com}"
     BASE_DOMAIN="${BASE_DOMAIN:-cycentra.com}"
-    OAUTH_PROVIDER="${OAUTH_PROVIDER:-skip}"
-    OAUTH_CLIENT_ID="${OAUTH_CLIENT_ID:-}"
-    OAUTH_CLIENT_SECRET="${OAUTH_CLIENT_SECRET:-}"
+    OAUTH_PROVIDER="${OAUTH_PROVIDER:-google}"
+    # ── OAuth credentials (both providers embedded — switch via OAUTH_PROVIDER in .env)
+    GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-285657730533-82thtcs7mav8a4m3ei531uojq25kr8tn.apps.googleusercontent.com}"
+    GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-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}"
+    MICROSOFT_CLIENT_ID="${MICROSOFT_CLIENT_ID:-eb1f7367-fdd9-4f33-aa86-2a812a0292ff}"
+    MICROSOFT_CLIENT_SECRET="${MICROSOFT_CLIENT_SECRET:-rWM8Q~eehhadOmY_atOJTOxScCxa~qsye9yX_cGO}"
     AI_PROVIDER="none"; AI_API_KEY=""; AI_MODEL=""
     SMTP_HOST=""; SMTP_PORT=""; SMTP_USER=""; SMTP_PASS=""; SUPPORT_EMAIL="support@${BASE_DOMAIN}"
     INSTALL_CYSIEM=true; INSTALL_CYIRIS=true; INSTALL_CYSOAR=true
@@ -700,17 +703,19 @@ JWT_SECRET=${JWT_SECRET}
 ADMIN_API_KEY=${ADMIN_API_KEY}
 FRONTEND_URL=https://cysoc.${BASE_DOMAIN}
 BASE_URL=https://cyasm.${BASE_DOMAIN}
-OAUTH_PROVIDER=${OAUTH_PROVIDER:-skip}
+OAUTH_PROVIDER=${OAUTH_PROVIDER}
 ENVEOF
 
-    [[ "${OAUTH_PROVIDER:-skip}" == "google" ]] && cat >> /opt/cycentra/.env << ENVEOF
-GOOGLE_CLIENT_ID=${OAUTH_CLIENT_ID}
-GOOGLE_CLIENT_SECRET=${OAUTH_CLIENT_SECRET}
-ENVEOF
+    # Always write all OAuth credentials so admins can switch provider by
+    # editing a single OAUTH_PROVIDER line in /opt/cycentra/.env
+    cat >> /opt/cycentra/.env << ENVEOF
+# OAuth — Google SSO
+GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
 
-    [[ "${OAUTH_PROVIDER:-skip}" == "microsoft" ]] && cat >> /opt/cycentra/.env << ENVEOF
-MICROSOFT_CLIENT_ID=${OAUTH_CLIENT_ID}
-MICROSOFT_CLIENT_SECRET=${OAUTH_CLIENT_SECRET}
+# OAuth — Microsoft Azure AD
+MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID}
+MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET}
 ENVEOF
 
     cat >> /opt/cycentra/.env << ENVEOF

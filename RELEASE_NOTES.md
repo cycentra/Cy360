@@ -1,6 +1,21 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.115 — 2026-04-10
+
+### Enhancement — Zero-touch install: credentials embedded as overridable defaults
+
+- `setup.sh` now embeds `GH_TOKEN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` as `${VAR:-default}` entries — the platform is fully functional immediately after the first run with no manual token entry.
+- `OAUTH_PROVIDER` defaults to `google`. Switch to `microsoft` (or `skip`) by setting the env var before running, or editing `/opt/cycentra/.env` post-install.
+- All OAuth credentials (both Google and Microsoft) are always written to `/opt/cycentra/.env` so admins can switch provider without re-running setup.
+- GH_TOKEN default set — remote bundle download and portal Update button work out of the box.
+
+### Enhancement — UI: Upgrade confirmation warning
+
+- Clicking **Run Upgrade** in System Settings → Updates & Versions now shows a blocking confirmation modal warning that all custom configuration and existing data will be wiped.
+- **Run Update** (incremental patch) proceeds without a confirmation prompt — data is preserved.
+
+---
 ## v1.0.114 — 2026-04-10
 
 ### Change — Subdomain rename: cy360→cysoc, cyscan→cyasm
