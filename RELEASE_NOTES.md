@@ -1,6 +1,15 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.117 — 2026-04-10
+
+### Fix — Dynamic version in installer banner
+
+- The **Setup & Update Wizard** banner (displayed at launch) now shows the version dynamically via `${_SCRIPT_VERSION}` and a live UTC timestamp instead of a hardcoded string.
+- Previously, this line was accidentally left on `v1.0.73 — 2026-04-06` regardless of the actual installed version. It now always reflects the true version stamped by `git-push.sh`.
+- No customer action required — purely an internal display correctness fix.
+
+---
 ## v1.0.116 — 2026-04-10
 
 ### Feature — Licensing system
