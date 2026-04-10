@@ -1,6 +1,24 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.116 — 2026-04-10
+
+### Feature — Licensing system
+
+- **License generator** (`tools/cy-license-gen.py`): Vendor-side CLI tool. Generates RSA-SHA256 signed `.lic` files. Supports `--type full|demo`, `--days N`, `--features`, and `--demo` shortcut. Private key (`tools/cycentra_license_private.pem`) is gitignored — never distributed.
+- **License validator** (`backend/core/license_validator.py`): Embedded in every installer package. Contains only the public key. Validates signature, expiry, and feature list. Exit codes: `0`=full valid, `1`=demo valid, `2`=expired, `3`=tampered, `4`=no license.
+- **setup.sh license gate**: License is checked at the start of every full install. Valid full → proceed; valid demo → proceed (15-day limit); expired/tampered → abort with message; no license → auto-demo mode (15-day countdown from first run).
+- **License watchdog** (`/opt/cycentra/license-watchdog.sh`): Deployed by setup.sh. Runs daily via `cycentra-license-check.timer`. Stops `cycentra-backend`, `cysiemstack-engine`, `cysiem-to-redis` if license expires. Writes `/opt/cycentra/.license_expired` lockfile. Services refuse to start if lockfile is present.
+- **Lockfile guard**: `ExecStartPre` added to `cycentra-backend.service` and `cysiemstack-engine.service` — services exit immediately if expired lockfile exists. Admin can verify/renew license then remove lockfile + restart.
+
+### Feature — Distributable installer package builder
+
+- **`build-package.sh`**: Compiles `cycentra-setup.sh` to a binary with SHC (not human-readable), bundles `license_validator.py`, optional `cycentra.lic`, and a README into `dist/cycentra-360-installer-vX.Y.Z.tar.gz`.
+- Customer flow: download tarball → extract → `sudo BASE_DOMAIN=example.com ./cycentra-setup` → done.
+- To include a specific license: `bash build-package.sh --license /path/to/customer.lic`
+- Install shc first: `brew install shc` (macOS) / `apt install shc` (Linux)
+
+---
 ## v1.0.115 — 2026-04-10
 
 ### Enhancement — Zero-touch install: credentials embedded as overridable defaults

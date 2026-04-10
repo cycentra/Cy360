@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 — Setup & Update Wizard v1.0.113 — 2026-04-09 18:30 UTC
+# CyCentra 360 — Setup & Update Wizard v1.0.116 — 2026-04-10 10:00 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -33,6 +33,62 @@ for arg in "$@"; do
         --infra)  MODE="infra"  ;;
     esac
 done
+
+# ── License check (full install only — updates are always allowed) ────────────
+# The license validator is deployed to /opt/cycentra/ on every install.
+# For the very first run it ships inside the bundle or alongside this script.
+_LIC_VALIDATOR="${_SCRIPT_DIR:-$(dirname "${BASH_SOURCE[0]:-$0}")}/license_validator.py"
+_LIC_FILE="/opt/cycentra/cycentra.lic"
+# Also check alongside this script (useful when running from an installer tarball)
+[[ ! -f "$_LIC_FILE" ]] && \
+    _LIC_FILE_LOCAL="${_SCRIPT_DIR:-$(dirname "${BASH_SOURCE[0]:-$0}")}/cycentra.lic" && \
+    [[ -f "$_LIC_FILE_LOCAL" ]] && _LIC_FILE="$_LIC_FILE_LOCAL"
+
+if [[ "$MODE" == "full" ]]; then
+    _VALIDATOR_SRC="${_SCRIPT_DIR:-$(dirname "${BASH_SOURCE[0]:-$0}")}/license_validator.py"
+    [[ ! -f "$_VALIDATOR_SRC" ]] && \
+        _VALIDATOR_SRC="$(dirname "$(realpath "${BASH_SOURCE[0]:-$0}")")/license_validator.py"
+    _VALIDATOR_DEST="/tmp/cycentra_license_validator_$$.py"
+    cp "$_VALIDATOR_SRC" "$_VALIDATOR_DEST" 2>/dev/null || true
+
+    _LIC_JSON=""
+    if [[ -f "$_VALIDATOR_DEST" ]]; then
+        _LIC_JSON=$(python3 "$_VALIDATOR_DEST" --license "$_LIC_FILE" 2>/dev/null)
+        _LIC_CODE=$?
+        _LIC_TYPE=$(echo "$_LIC_JSON"    | python3 -c "import sys,json;print(json.load(sys.stdin).get('type','none'))" 2>/dev/null || echo "none")
+        _LIC_DAYS=$(echo "$_LIC_JSON"    | python3 -c "import sys,json;print(json.load(sys.stdin).get('days_remaining',0))" 2>/dev/null || echo "0")
+        _LIC_MSG=$(echo "$_LIC_JSON"     | python3 -c "import sys,json;print(json.load(sys.stdin).get('message',''))" 2>/dev/null || echo "")
+        _LIC_CUST=$(echo "$_LIC_JSON"    | python3 -c "import sys,json;print(json.load(sys.stdin).get('customer',''))" 2>/dev/null || echo "")
+        rm -f "$_VALIDATOR_DEST"
+    else
+        warn "License validator not found — proceeding in demo mode"
+        _LIC_CODE=4
+        _LIC_TYPE="demo"
+        _LIC_DAYS=15
+        _LIC_MSG="Demo mode (validator missing)"
+    fi
+
+    case $_LIC_CODE in
+        0) success "License: FULL — ${_LIC_CUST} — ${_LIC_DAYS} day(s) remaining"
+           CYCENTRA_DEMO_MODE=0 ;;
+        1) warn "License: DEMO — ${_LIC_DAYS} day(s) remaining"
+           warn "Full platform features will be limited. Place cycentra.lic in the installer"
+           warn "directory to activate a full license."
+           CYCENTRA_DEMO_MODE=1 ;;
+        2) error "License EXPIRED — ${_LIC_MSG}"
+           error "Purchase or renew at https://cycentra.com"
+           exit 1 ;;
+        3) error "License INVALID — ${_LIC_MSG}"
+           error "The license file may have been tampered. Contact support@cycentra.com"
+           exit 1 ;;
+        4|*)
+           warn "No license found — installing 15-day demo"
+           warn "Place cycentra.lic alongside this script to install the full platform."
+           CYCENTRA_DEMO_MODE=1 ;;
+    esac
+    export CYCENTRA_DEMO_MODE
+    export CYCENTRA_LICENSE_TYPE="${_LIC_TYPE}"
+fi
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -73,7 +129,7 @@ _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.115"
+_SCRIPT_VERSION="v1.0.116"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -629,6 +685,27 @@ _SELF="$(realpath "$0")"
 cp "$_SELF" /opt/cycentra/cycentra-setup.sh
 chmod 750  /opt/cycentra/cycentra-setup.sh
 success "Setup script deployed to /opt/cycentra/cycentra-setup.sh"
+
+# Deploy license validator + watchdog scripts
+_SCRIPT_BASE="$(dirname "$(realpath "${BASH_SOURCE[0]:-$0}")")"
+if [[ -f "$_SCRIPT_BASE/license_validator.py" ]]; then
+    cp "$_SCRIPT_BASE/license_validator.py" /opt/cycentra/license_validator.py
+    chmod 755 /opt/cycentra/license_validator.py
+    success "License validator deployed → /opt/cycentra/license_validator.py"
+elif [[ -f "$BUNDLE_DIR/license_validator.py" ]]; then
+    cp "$BUNDLE_DIR/license_validator.py" /opt/cycentra/license_validator.py
+    chmod 755 /opt/cycentra/license_validator.py
+    success "License validator deployed from bundle"
+else
+    warn "license_validator.py not found — license enforcement disabled"
+fi
+
+# If a license file is present alongside the installer, copy it in
+if [[ -f "$_SCRIPT_BASE/cycentra.lic" && ! -f /opt/cycentra/cycentra.lic ]]; then
+    cp "$_SCRIPT_BASE/cycentra.lic" /opt/cycentra/cycentra.lic
+    chmod 600 /opt/cycentra/cycentra.lic
+    success "License file installed → /opt/cycentra/cycentra.lic"
+fi
 # ── Step 6-9: Interactive config (full install only) ─────────────────────────
 if [[ "$MODE" == "full" ]]; then
 
@@ -1008,8 +1085,73 @@ StandardError=append:/opt/cycentra/engine.log
 WantedBy=multi-user.target
 UNITEOF
 
+# ── License watchdog timer (checks + enforces expiry daily) ──────────────────
+cat > /opt/cycentra/license-watchdog.sh << 'WATCHEOF'
+#!/bin/bash
+LOG="/var/log/cycentra/license-watchdog.log"
+SERVICES=(cycentra-backend cysiemstack-engine cysiem-to-redis)
+_log() { echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ")  $*" | tee -a "$LOG"; }
+mkdir -p "$(dirname "$LOG")"
+_LIC_JSON=$(python3 /opt/cycentra/license_validator.py --license /opt/cycentra/cycentra.lic 2>/dev/null)
+_CODE=$?
+_TYPE=$(echo "$_LIC_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin).get('type','none'))" 2>/dev/null)
+_DAYS=$(echo "$_LIC_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin).get('days_remaining',0))" 2>/dev/null)
+_MSG=$(echo "$_LIC_JSON"  | python3 -c "import sys,json;print(json.load(sys.stdin).get('message',''))" 2>/dev/null)
+if [[ $_CODE -eq 2 ]]; then
+    _log "LICENSE EXPIRED — stopping all CyCentra services"
+    for svc in "${SERVICES[@]}"; do
+        systemctl is-active --quiet "$svc" && systemctl stop "$svc" && _log "Stopped: $svc"
+    done
+    echo "EXPIRED $(date -u)" > /opt/cycentra/.license_expired
+    _log "Renew at https://cycentra.com"
+elif [[ $_CODE -eq 0 || $_CODE -eq 1 ]]; then
+    rm -f /opt/cycentra/.license_expired
+    _log "License OK — type=${_TYPE} days_remaining=${_DAYS}"
+    if [[ $_DAYS -le 7 && $_DAYS -gt 0 ]]; then
+        _log "WARNING: license expires in ${_DAYS} day(s)"
+    fi
+fi
+WATCHEOF
+chmod 750 /opt/cycentra/license-watchdog.sh
+
+cat > /etc/systemd/system/cycentra-license-check.service << 'LICUNITEOF'
+[Unit]
+Description=CyCentra 360 License Watchdog
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/cycentra/license-watchdog.sh
+StandardOutput=journal
+StandardError=journal
+LICUNITEOF
+
+cat > /etc/systemd/system/cycentra-license-check.timer << 'LICTIMEREOF'
+[Unit]
+Description=CyCentra 360 License Watchdog — daily check
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=24h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+LICTIMEREOF
+
+# Patch cycentra-backend and cysiemstack-engine to refuse start if license expired
+for _SVC_FILE in /etc/systemd/system/cycentra-backend.service \
+                 /etc/systemd/system/cysiemstack-engine.service; do
+    if [[ -f "$_SVC_FILE" ]] && ! grep -q "license-check" "$_SVC_FILE"; then
+        sed -i '/^\[Service\]/a ExecStartPre=/bin/bash -c "[ ! -f /opt/cycentra/.license_expired ] || { echo LICENSE_EXPIRED; exit 1; }"' \
+            "$_SVC_FILE"
+    fi
+done
+
 systemctl daemon-reload
-systemctl enable cycentra-backend cysiemstack-engine
+systemctl enable cycentra-backend cysiemstack-engine cycentra-license-check.timer
+systemctl start  cycentra-license-check.timer
+success "License watchdog timer enabled (daily)"
 
 # Start Flask backend
 pkill -f "python3.*app.py" 2>/dev/null || true
