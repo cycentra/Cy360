@@ -199,13 +199,18 @@ def get_iris_config() -> dict | None:
 
     if mode == "cloud":
         url = os.environ.get("CLOUD_IRIS_URL", _CLOUD_IRIS_URL_DEFAULT).rstrip("/")
-        key = os.environ.get("CLOUD_IRIS_API_KEY", "")
+        # Prefer env var; fall back to key stored in ai_settings.json by the UI
+        key = os.environ.get("CLOUD_IRIS_API_KEY", "").strip() or iris.get("apiKey", "").strip()
         if not key:
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "⚠️ [CyIRIS] Cloud mode selected but no API key found "
+                "(set CLOUD_IRIS_API_KEY env var or configure via System Settings → CyIRIS).")
             return None
         return {
             "url":         url,
             "apiKey":      key,
-            "customerId":  int(os.environ.get("CLOUD_IRIS_CUSTOMER_ID", "1")),
+            "customerId":  int(os.environ.get("CLOUD_IRIS_CUSTOMER_ID", "") or iris.get("customerId", 1)),
             "fpThreshold": float(iris.get("fpThreshold", 90.0)),
             "mode":        "cloud",
         }

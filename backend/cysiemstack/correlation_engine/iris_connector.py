@@ -75,13 +75,14 @@ def _load_iris_config() -> dict | None:
 
     if mode == "cloud":
         url = os.environ.get("CLOUD_IRIS_URL", _CLOUD_IRIS_URL_DEFAULT).rstrip("/")
-        key = os.environ.get("CLOUD_IRIS_API_KEY", "")
+        # Prefer env var; fall back to key stored in ai_settings.json by the UI
+        key = os.environ.get("CLOUD_IRIS_API_KEY", "").strip() or iris.get("apiKey", "").strip()
         if not key:
             return None
         return {
             "url":          url,
             "api_key":      key,
-            "customer_id":  int(os.environ.get("CLOUD_IRIS_CUSTOMER_ID", "1")),
+            "customer_id":  int(os.environ.get("CLOUD_IRIS_CUSTOMER_ID", "") or iris.get("customerId", settings.iris_customer_id)),
             "fp_threshold": float(iris.get("fpThreshold", settings.iris_fp_threshold)),
             "mode":         "cloud",
         }

@@ -1,6 +1,24 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.125 — 2026-04-11
+
+### Fix — Cloud CyIRIS and Cloud CyMISP not working: missing API key input + env-only key lookup
+
+**Root cause:** Cloud mode panels in System Settings showed "No configuration required — credentials embedded in environment" with no input fields. The backend read the cloud API key exclusively from `CLOUD_IRIS_API_KEY` / `CLOUD_MISP_API_KEY` env vars (set by setup.sh only for Cycentra-managed servers). Customers who configured cloud credentials via UI had no field to enter them, and the backend ignored any key stored in `ai_settings.json` for cloud mode.
+
+#### Backend (3 files)
+- **`backend/core/helpers.py` `get_iris_config()`:** cloud mode now falls back to stored `iris.apiKey` when `CLOUD_IRIS_API_KEY` env var is absent; `customerId` similarly falls back to stored value. Logs `WARNING` when key is still missing after both lookups.
+- **`backend/cysiemstack/correlation_engine/iris_connector.py` `_load_iris_config()`:** same cloud key + customer ID fallback applied.
+- **`backend/blueprints/system/routes.py` `_sync_iris_to_siem_env()`:** same cloud key + customer ID fallback so `cysiemstack.env` is correctly populated when key comes from UI.
+
+#### Frontend (`portal/src/pages/settings/SystemSettingsPage.jsx`)
+- **Cloud CyMISP panel:** replaced static "no config needed" message with an **API Key input field** + inline Test Connection button. Shows configured/unconfigured indicator.
+- **Cloud CyIRIS panel:** replaced static message with **API Key** + **Customer ID** input fields + inline Test Connection button.
+- **`MispTab.testConnection()`:** uses `https://misp.cycentra.com` as effective URL when mode is `"cloud"` (previously blocked with "URL required" since cloud panel has no URL field).
+- **`CyIrisTab.testConnection()`:** same pattern — uses `https://cyiris.cycentra.com` as effective URL in cloud mode.
+
+---
 ## v1.0.124 — 2026-04-11
 
 ### Fix — MISP cloud mode silent failure + CyMind baseUrl missing logging improvements

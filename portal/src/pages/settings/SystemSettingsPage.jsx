@@ -594,8 +594,11 @@ function MispTab() {
   };
 
   const testConnection = async () => {
-    if (!misp.url) { setTestStatus("fail"); setTestMsg("MISP Server URL is required"); return; }
-    if (!misp.apiKey || misp.apiKey === "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022") {
+    const _MASK = "\u2022".repeat(8);
+    // For cloud mode, use the known cloud URL; for local, require user-entered URL
+    const effectiveUrl = mode === "cloud" ? "https://misp.cycentra.com" : (misp.url || "");
+    if (!effectiveUrl) { setTestStatus("fail"); setTestMsg("MISP Server URL is required"); return; }
+    if (!misp.apiKey || misp.apiKey === _MASK) {
       setTestStatus("fail"); setTestMsg("Enter your API Key (currently showing masked placeholder)"); return;
     }
     setTestStatus("testing"); setTestMsg("");
@@ -603,7 +606,7 @@ function MispTab() {
       const r = await fetch(`${API_BASE}/api/system/misp/test`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: misp.url, apiKey: misp.apiKey }),
+        body: JSON.stringify({ url: effectiveUrl, apiKey: misp.apiKey }),
       });
       const d = await r.json();
       if (d.ok) { setTestStatus("ok");   setTestMsg(d.message || "Connected"); }
@@ -669,21 +672,36 @@ function MispTab() {
       {/* Mode: Cloud CyMISP */}
       {mode === "cloud" && (
         <div style={{ background: "rgba(77,158,255,0.04)", border: "1px solid rgba(77,158,255,0.2)", borderRadius: 6, padding: "18px 20px" }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-            <span style={{ fontSize: 22 }}>☁️</span>
-            <div>
-              <div style={{ color: "#4d9eff", fontSize: 12, fontFamily: "monospace", fontWeight: 700, marginBottom: 6 }}>
-                Cycentra Cloud MISP — misp.cycentra.com
-              </div>
-              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>
-                Your platform will connect to the Cycentra-managed MISP instance using
-                pre-provisioned credentials. No configuration is required — credentials
-                are securely embedded in the server environment.
-              </div>
-              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
-                All modules (CySIEM, ASM, CySOAR, CyIRIS) will use this connection automatically.
-              </div>
-            </div>
+          <div style={{ color: "#4d9eff", fontSize: 11, fontFamily: "monospace", fontWeight: 700, marginBottom: 4 }}>
+            ☁️ Cycentra Cloud MISP — misp.cycentra.com
+          </div>
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginBottom: 16 }}>
+            Enter your Cycentra-issued Cloud MISP API key. The server URL is managed automatically.
+          </div>
+          <div style={{ marginBottom: 14 }}>
+            <div style={LABEL}>Cloud MISP API Key</div>
+            <input type="password" value={misp.apiKey || ""}
+              onChange={e => setMisp(prev => ({ ...prev, apiKey: e.target.value }))}
+              placeholder="Your Cycentra-issued CyMISP API key"
+              style={INPUT} />
+          </div>
+          {/* Test Connection */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+            <button onClick={testConnection} disabled={testStatus === "testing"}
+              style={{ background: "rgba(77,158,255,0.12)", color: "#4d9eff",
+                border: "1px solid rgba(77,158,255,0.35)", borderRadius: 4,
+                padding: "8px 18px", fontFamily: "monospace", fontSize: 11,
+                fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px",
+                opacity: testStatus === "testing" ? 0.6 : 1 }}>
+              {testStatus === "testing" ? "Testing\u2026" : "Test Connection"}
+            </button>
+            {testStatus === "ok"   && <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ {testMsg}</span>}
+            {testStatus === "fail" && <span style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace" }}>✗ {testMsg}</span>}
+          </div>
+          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.25)" }}>
+            {misp.apiKey
+              ? <span style={{ color: "#4d9eff" }}>✓ API key configured — IOC lookups will use misp.cycentra.com</span>
+              : <span style={{ color: "#ff8c00" }}>⚠ API key required to activate Cloud CyMISP</span>}
           </div>
         </div>
       )}
@@ -797,8 +815,11 @@ function CyIrisTab() {
   };
 
   const testConnection = async () => {
-    if (!iris.url) { setTestStatus("fail"); setTestMsg("CyIRIS URL is required"); return; }
-    if (!iris.apiKey || iris.apiKey === "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022") {
+    const _MASK = "\u2022".repeat(8);
+    // For cloud mode use the known cloud URL; for local require user-entered URL
+    const effectiveUrl = mode === "cloud" ? "https://cyiris.cycentra.com" : (iris.url || "");
+    if (!effectiveUrl) { setTestStatus("fail"); setTestMsg("CyIRIS URL is required"); return; }
+    if (!iris.apiKey || iris.apiKey === _MASK) {
       setTestStatus("fail"); setTestMsg("Enter your API Key (currently showing masked placeholder)"); return;
     }
     setTestStatus("testing"); setTestMsg("");
@@ -806,7 +827,7 @@ function CyIrisTab() {
       const r = await fetch(`${API_BASE}/api/system/iris/test`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: iris.url, apiKey: iris.apiKey }),
+        body: JSON.stringify({ url: effectiveUrl, apiKey: iris.apiKey }),
       });
       const d = await r.json();
       if (d.ok) { setTestStatus("ok");   setTestMsg(d.message || "Connected"); }
@@ -872,21 +893,48 @@ function CyIrisTab() {
       {/* Mode: Cloud CyIRIS */}
       {mode === "cloud" && (
         <div style={{ background: "rgba(77,158,255,0.04)", border: "1px solid rgba(77,158,255,0.2)", borderRadius: 6, padding: "18px 20px" }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-            <span style={{ fontSize: 22 }}>☁️</span>
-            <div>
-              <div style={{ color: "#4d9eff", fontSize: 12, fontFamily: "monospace", fontWeight: 700, marginBottom: 6 }}>
-                Cycentra Cloud CyIRIS — cyiris.cycentra.com
-              </div>
-              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>
-                Your platform will connect to the Cycentra-managed DFIR IRIS instance using
-                pre-provisioned credentials embedded securely in the server environment. No
-                configuration is required.
-              </div>
-              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
-                Incidents from CySIEM Correlation Engine will be escalated automatically.
-              </div>
+          <div style={{ color: "#4d9eff", fontSize: 11, fontFamily: "monospace", fontWeight: 700, marginBottom: 4 }}>
+            ☁️ Cycentra Cloud CyIRIS — cyiris.cycentra.com
+          </div>
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginBottom: 16 }}>
+            Enter your Cycentra-issued Cloud CyIRIS API key. The server URL is managed automatically.
+          </div>
+          {/* API Key */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={LABEL}>Cloud CyIRIS API Key</div>
+            <input type="password" value={iris.apiKey || ""}
+              onChange={e => setIris(prev => ({ ...prev, apiKey: e.target.value }))}
+              placeholder="Your Cycentra-issued CyIRIS Bearer token"
+              style={INPUT} />
+          </div>
+          {/* Customer ID */}
+          <div style={{ marginBottom: 18 }}>
+            <div style={LABEL}>Customer ID</div>
+            <input type="number" value={iris.customerId || 1} min={1}
+              onChange={e => setIris(prev => ({ ...prev, customerId: parseInt(e.target.value) || 1 }))}
+              placeholder="1"
+              style={{ ...INPUT, width: 120 }} />
+            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
+              Provided by Cycentra with your cloud subscription
             </div>
+          </div>
+          {/* Test Connection */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+            <button onClick={testConnection} disabled={testStatus === "testing"}
+              style={{ background: "rgba(77,158,255,0.12)", color: "#4d9eff",
+                border: "1px solid rgba(77,158,255,0.35)", borderRadius: 4,
+                padding: "8px 18px", fontFamily: "monospace", fontSize: 11,
+                fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px",
+                opacity: testStatus === "testing" ? 0.6 : 1 }}>
+              {testStatus === "testing" ? "Testing\u2026" : "Test Connection"}
+            </button>
+            {testStatus === "ok"   && <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ {testMsg}</span>}
+            {testStatus === "fail" && <span style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace" }}>✗ {testMsg}</span>}
+          </div>
+          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.25)" }}>
+            {iris.apiKey
+              ? <span style={{ color: "#4d9eff" }}>✓ API key configured — incidents will escalate to cyiris.cycentra.com</span>
+              : <span style={{ color: "#ff8c00" }}>⚠ API key required to activate Cloud CyIRIS</span>}
           </div>
         </div>
       )}

@@ -219,8 +219,9 @@ def _sync_iris_to_siem_env(iris: dict) -> None:
 
     if mode == "cloud":
         eff_url = os.environ.get("CLOUD_IRIS_URL", "https://cyiris.cycentra.com").rstrip("/")
-        eff_key = os.environ.get("CLOUD_IRIS_API_KEY", "")
-        customer_id = os.environ.get("CLOUD_IRIS_CUSTOMER_ID", "1")
+        # Prefer env var; fall back to key stored in ai_settings.json by the UI
+        eff_key = os.environ.get("CLOUD_IRIS_API_KEY", "").strip() or iris.get("apiKey", "").strip()
+        customer_id = os.environ.get("CLOUD_IRIS_CUSTOMER_ID", "") or str(iris.get("customerId", "1"))
         enabled = "true" if eff_key else "false"
     elif mode == "local":
         eff_url = iris.get("url", "").rstrip("/")
