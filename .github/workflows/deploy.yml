@@ -107,9 +107,10 @@ jobs:
           strip cycentra-setup-bin 2>/dev/null || true
           chmod +x cycentra-setup-bin
           echo "SHC binary size: $(du -sh cycentra-setup-bin | cut -f1)"
-          # Overwrite plain source with binary so the release asset keeps the .sh name
-          # (backend asset lookup expects "cycentra-setup.sh" and runs it as an executable)
-          cp cycentra-setup-bin cycentra-setup.sh
+          # NOTE: cycentra-setup.sh (plain script) is kept as-is for the GitHub Release
+          # asset — the update mechanism downloads it and the OS reads the #!/bin/bash
+          # shebang when the backend executes it directly (no 'bash' prefix needed).
+          # The SHC binary (cycentra-setup-bin) is included only in the bundle tarball.
 
       - name: Build customer release bundle
         run: |

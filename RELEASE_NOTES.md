@@ -1,6 +1,30 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.130 — 2026-04-11
+
+### Fix — Update button: ship plain `.sh` as release asset, not SHC binary
+
+**Root cause (chicken-and-egg):** v1.0.128 made CI upload the SHC binary renamed as
+`cycentra-setup.sh`. Old backends (v1.0.125, running when v1.0.128 wheel failed to install
+due to bytecode corruption) still executed it via `bash` — bash cannot interpret an ELF
+binary, producing `cannot execute binary file` (exit 126). The update button was therefore
+unusable to bootstrap to the new backend that executes the file directly.
+
+**Fix:** The GitHub Release asset `cycentra-setup.sh` is now the **plain bash script** again.
+A `#!/bin/bash` script executed without the `bash` prefix (backend v1.0.128+ change) works
+correctly — the OS reads the shebang automatically. The SHC binary (`cycentra-setup-bin`)
+continues to be compiled in CI and is included in `cycentra-release.tar.gz` (the install
+bundle) for direct execution, but is no longer uploaded as the standalone release asset.
+
+This eliminates the bootstrap dependency: any backend version can update via the button,
+and no manual wheel install is ever needed to recover from a bad release.
+
+#### `deploy.yml` changes
+- Removed `cp cycentra-setup-bin cycentra-setup.sh` after SHC compile step
+- Release asset `cycentra-setup.sh` is now the plain script (bundle still ships the binary)
+
+---
 ## v1.0.129 — 2026-04-11
 
 ### Fix — Remove broken Python bytecode compilation step; restore working wheel
