@@ -598,7 +598,10 @@ function MispTab() {
     // For cloud mode, use the known cloud URL; for local, require user-entered URL
     const effectiveUrl = mode === "cloud" ? "https://cymisp.cycentra.com" : (misp.url || "");
     if (!effectiveUrl) { setTestStatus("fail"); setTestMsg("MISP Server URL is required"); return; }
-    if (!misp.apiKey || misp.apiKey === _MASK) {
+    // Cloud mode: if apiKey is still the masked placeholder, send empty string —
+    // the backend test endpoint will fall back to the key stored in ai_settings.json
+    const effectiveKey = (misp.apiKey && misp.apiKey !== _MASK) ? misp.apiKey : "";
+    if (!effectiveKey && mode !== "cloud") {
       setTestStatus("fail"); setTestMsg("Enter your API Key (currently showing masked placeholder)"); return;
     }
     setTestStatus("testing"); setTestMsg("");
@@ -606,7 +609,7 @@ function MispTab() {
       const r = await fetch(`${API_BASE}/api/system/misp/test`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: effectiveUrl, apiKey: misp.apiKey }),
+        body: JSON.stringify({ url: effectiveUrl, apiKey: effectiveKey, useStored: !effectiveKey }),
       });
       const d = await r.json();
       if (d.ok) { setTestStatus("ok");   setTestMsg(d.message || "Connected"); }
@@ -819,7 +822,10 @@ function CyIrisTab() {
     // For cloud mode use the known cloud URL; for local require user-entered URL
     const effectiveUrl = mode === "cloud" ? "https://cyiris.cycentra.com" : (iris.url || "");
     if (!effectiveUrl) { setTestStatus("fail"); setTestMsg("CyIRIS URL is required"); return; }
-    if (!iris.apiKey || iris.apiKey === _MASK) {
+    // Cloud mode: if apiKey is still the masked placeholder, send empty string —
+    // the backend test endpoint will fall back to the key stored in ai_settings.json
+    const effectiveKey = (iris.apiKey && iris.apiKey !== _MASK) ? iris.apiKey : "";
+    if (!effectiveKey && mode !== "cloud") {
       setTestStatus("fail"); setTestMsg("Enter your API Key (currently showing masked placeholder)"); return;
     }
     setTestStatus("testing"); setTestMsg("");
@@ -827,7 +833,7 @@ function CyIrisTab() {
       const r = await fetch(`${API_BASE}/api/system/iris/test`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: effectiveUrl, apiKey: iris.apiKey }),
+        body: JSON.stringify({ url: effectiveUrl, apiKey: effectiveKey, useStored: !effectiveKey }),
       });
       const d = await r.json();
       if (d.ok) { setTestStatus("ok");   setTestMsg(d.message || "Connected"); }

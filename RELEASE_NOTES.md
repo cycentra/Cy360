@@ -1,6 +1,36 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.132 — 2026-04-11
+
+### Fix — Cloud CyMISP / Cloud CyIRIS Test Connection fails with masked API key
+
+**Root cause:** When System Settings loads, the GET endpoint returns API keys masked as
+`••••••••`. In cloud mode, the user clicks "Test Connection" without re-entering the key.
+The frontend blocked with *"Enter your API Key (currently showing masked placeholder)"*
+before the request even reached the backend. Local mode worked because users naturally
+re-type both URL and key when configuring it for the first time.
+
+#### `portal/src/pages/settings/SystemSettingsPage.jsx`
+- Cloud mode `testConnection` (MispTab + CyIrisTab): if the field still shows the masked
+  placeholder, sends `{ useStored: true, apiKey: "" }` instead of blocking the user
+- Non-cloud modes still require the key to be explicitly entered
+
+#### `backend/blueprints/system/routes.py` (`misp_test` + `iris_test`)
+- When `useStored: true` is sent and `apiKey` is empty or masked, reads the real key from
+  `/opt/cycentra/ai_settings.json` directly, so the test runs against the stored credential
+  without the UI ever receiving the plaintext key
+
+#### Server-side action required
+The `/opt/cycentra/.env` on existing servers still has the old
+`CLOUD_MISP_URL=https://misp.cycentra.com` line. This env var overrides the correct default.
+Fix with:
+```bash
+sed -i 's|CLOUD_MISP_URL=https://misp.cycentra.com|CLOUD_MISP_URL=https://cymisp.cycentra.com|' /opt/cycentra/.env
+systemctl restart cycentra-backend
+```
+
+---
 ## v1.0.131 — 2026-04-11
 
 ### Fix — AI Settings: `baseUrl` silently wiped on re-save; provider switch clears live fields

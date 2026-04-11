@@ -362,10 +362,19 @@ def misp_test():
     url     = data.get("url", "").rstrip("/")
     api_key = data.get("apiKey", "")
 
+    # If the UI sent an empty key with useStored=True (cloud mode, masked placeholder),
+    # fall back to the key stored in ai_settings.json
+    if (not api_key or api_key == "\u2022" * 8) and data.get("useStored"):
+        try:
+            stored = json.loads(AI_SETTINGS_FILE.read_text()) if AI_SETTINGS_FILE.exists() else {}
+            api_key = stored.get("misp", {}).get("apiKey", "")
+        except Exception:
+            pass
+
     if not url:
         return jsonify({"ok": False, "error": "MISP Server URL is required"}), 400
     if not api_key or api_key == "\u2022" * 8:
-        return jsonify({"ok": False, "error": "MISP API Key is required"}), 400
+        return jsonify({"ok": False, "error": "MISP API Key is required — enter your key in the field above"}), 400
 
     try:
         # GET /servers/getPyMISPVersion.json — fast, unauthenticated fields still need a valid key
@@ -405,10 +414,19 @@ def iris_test():
     url     = data.get("url", "").rstrip("/")
     api_key = data.get("apiKey", "")
 
+    # If the UI sent an empty key with useStored=True (cloud mode, masked placeholder),
+    # fall back to the key stored in ai_settings.json
+    if (not api_key or api_key == "\u2022" * 8) and data.get("useStored"):
+        try:
+            stored = json.loads(AI_SETTINGS_FILE.read_text()) if AI_SETTINGS_FILE.exists() else {}
+            api_key = stored.get("iris", {}).get("apiKey", "")
+        except Exception:
+            pass
+
     if not url:
         return jsonify({"ok": False, "error": "CyIRIS URL is required"}), 400
     if not api_key or api_key == "\u2022" * 8:
-        return jsonify({"ok": False, "error": "CyIRIS API Key is required"}), 400
+        return jsonify({"ok": False, "error": "CyIRIS API Key is required — enter your key in the field above"}), 400
 
     try:
         # GET /api/ping — lightweight auth-required ping endpoint built into IRIS
