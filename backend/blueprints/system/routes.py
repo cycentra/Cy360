@@ -143,6 +143,8 @@ def ai_test():
 
         if resp.status_code == 401:
             return jsonify({"ok": False, "error": "Invalid API key"}), 400
+        if not resp.ok:
+            return jsonify({"ok": False, "error": f"Provider returned {resp.status_code}"}), 400
 
         return jsonify({"ok": True, "message": f"Connected · {model}"})
 

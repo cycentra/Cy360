@@ -1,6 +1,50 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.137 — 2026-04-11
+
+### Fix — Demo license expiry bugs and sentinel file tampering protection
+
+**Root cause 1 — premature expiry on reinstall:**
+`/opt/cycentra/.demo_start` persisted across installs. On a `--full` reinstall to the
+same server, the old start date caused the validator to calculate 15+ days elapsed
+immediately. The daily watchdog then stopped `cycentra-backend` and wrote
+`.license_expired`, blocking any restart via the `ExecStartPre` guard.
+
+**Root cause 2 — signed demo `.lic` expiry calculated from generation date:**
+Signed demo `.lic` files have an `expires` calculated from the **generation date**, not
+installation date. A `.lic` file prepared weeks in advance would expire almost immediately
+on customer install. `validate()` trusted the file's `expires` exclusively for signed
+licenses, ignoring `.demo_start` entirely.
+
+**Root cause 3 — sentinel files unprotected:**
+Sentinel files `.demo_start` and `.license_expired` had no filesystem immutability
+protection — a privileged user could trivially reset the demo clock or bypass the
+restart guard.
+
+#### `backend/core/license_validator.py`
+- `validate()`: for `type="demo"` signed licenses, effective `days_remaining` is now
+  `max(lic_expiry_days, installation_clock_days)` — customer always gets `DEMO_MAX_DAYS`
+  from install date regardless of when the `.lic` was generated.
+- `_demo_days_remaining()`: applies `chattr +i` after writing `.demo_start` to make the
+  demo clock immutable.
+
+#### `backend/blueprints/system/routes.py`
+- Added `if not resp.ok` guard in `ai_test()` so Anthropic/Gemini/DeepSeek error codes
+  other than 401 no longer return a false-positive `ok: true`.
+
+#### `portal/src/pages/ai/AISettingsPage.jsx`
+- Inner try/catch on `res.json()` in `testConnection()` — nginx 502 HTML page now shows
+  `"Backend service unavailable (HTTP 502)"` instead of `"Cannot reach backend"`.
+
+#### `cycentra-setup.sh`
+- Fresh `--full` install: resets `.demo_start` to today with `chattr -i` / `chattr +i`
+  wrapper; clears any stale `.license_expired`.
+- License watchdog: wraps all `.license_expired` writes with `chattr -i` before and
+  `chattr +i` after — expired marker is immutable once set; `chattr -i` before `rm -f`
+  on the OK (renewal) path.
+
+---
 ## v1.0.136 — 2026-04-12
 
 ### Fix — Automated IRIS ticket creation broken for cloud CyIRIS mode

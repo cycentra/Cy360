@@ -104,6 +104,12 @@ def _demo_days_remaining() -> int:
         # First run — stamp it
         DEMO_STATE.parent.mkdir(parents=True, exist_ok=True)
         DEMO_STATE.write_text(date.today().isoformat())
+        # Make immutable so the clock cannot be reset without root + chattr -i
+        try:
+            import subprocess as _sp
+            _sp.run(["chattr", "+i", str(DEMO_STATE)], capture_output=True, timeout=5)
+        except Exception:
+            pass
         return DEMO_MAX_DAYS
     start = date.fromisoformat(DEMO_STATE.read_text().strip())
     elapsed = (date.today() - start).days
@@ -143,6 +149,19 @@ def validate(lic_path: Path = LICENSE_PATH) -> dict:
                 "message": "License signature is invalid — file may have been tampered"}
 
     days = _days_remaining(payload["expires"])
+
+    # For demo-type signed licenses: the expiry date is calculated from the
+    # GENERATION date, not the installation date.  A demo .lic file generated
+    # weeks before the customer installs it would expire almost immediately.
+    # Fix: for type="demo" lics, the effective days remaining is the MAX of
+    # (lic expiry days, installation-clock days from .demo_start).  This
+    # guarantees the customer always gets DEMO_MAX_DAYS from the day they
+    # installed, regardless of when the .lic file was generated.
+    if payload["type"] == "demo":
+        install_days = _demo_days_remaining()
+        if install_days > days:
+            days = install_days
+
     if days < 0:
         return {"valid": False, "type": payload["type"], "days_remaining": 0,
                 "features": payload.get("features", []),

@@ -59,7 +59,9 @@ export function AISettingsPage({ aiConfig, onSave, embedded = false }) {
         credentials: "include",
         body: JSON.stringify({ provider, ...fields }),
       });
-      const d = await res.json();
+      let d;
+      try { d = await res.json(); }
+      catch { setTestStatus("fail"); setTestMsg(`Backend service unavailable (HTTP ${res.status})`); return; }
       if (d.ok) { setTestStatus("ok");   setTestMsg(d.message || "Connected"); }
       else       { setTestStatus("fail"); setTestMsg(d.error  || "Connection failed"); }
     } catch { setTestStatus("fail"); setTestMsg("Cannot reach backend"); }
