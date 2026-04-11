@@ -123,10 +123,16 @@ export const siemApi = {
 export async function siemFetch(responseProm) {
   try {
     const r = await responseProm;
-    if (r.status === 503) return { _offline: true };
+    if (r.status === 503) {
+      // Distinguish: Flask engine-offline response vs engine app-level service error
+      const body = await r.json().catch(() => ({}));
+      if (body.error === "engine_unavailable") return { _offline: true };
+      return { _error: body.error || body.detail || body.message || "Service unavailable" };
+    }
     if (!r.ok) {
       const body = await r.json().catch(() => ({}));
-      return { _error: body.error || `HTTP ${r.status}` };
+      // body.error = Flask errors; body.detail = FastAPI HTTPException errors
+      return { _error: body.error || body.detail || `HTTP ${r.status}` };
     }
     return await r.json();
   } catch (e) {

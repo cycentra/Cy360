@@ -1,6 +1,33 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.134 — 2026-04-12
+
+### Fix — "Raise Ticket" in Active Incidents shows "Engine offline" when CyIRIS not configured
+
+**Root cause:** The correlation engine's `POST /incidents/{id}/escalate` endpoint raised
+`HTTPException(status_code=503)` when CyIRIS was not configured. `siemFetch` in the
+frontend maps **any** HTTP 503 to `{ _offline: true }`, causing the drawer to show
+*"✗ Engine offline — try again shortly."* instead of the real error ("CyIRIS not configured").
+Findings and UEBA were unaffected because their escalation is handled directly by the Flask
+layer (never touches the engine), so they receive a proper `{"error": "..."}` response.
+
+#### `backend/cysiemstack/correlation_engine/main.py`
+- `POST /incidents/{id}/escalate`: Changed "CyIRIS not configured" status from **503 → 422**.
+  503 must be reserved for "service itself is unavailable"; 422 correctly signals a
+  configuration pre-condition failure.
+- "IRIS case creation failed" changed from **502 → 422** for the same reason.
+
+#### `portal/src/siem/siemApi.js` — `siemFetch`
+- **503 handling:** Now reads the response body before deciding. If
+  `body.error === "engine_unavailable"` → `{ _offline: true }` (genuine engine offline).
+  All other 503s → `{ _error: body.error || body.detail || body.message }` (app-level error,
+  real message shown to user).
+- **Non-ok handling:** Added `body.detail` fallback alongside `body.error` so FastAPI
+  `HTTPException` messages (which use `{"detail": "..."}`) are surfaced correctly instead of
+  showing "HTTP 422".
+
+---
 ## v1.0.133 — 2026-04-12
 
 ### Fix — Cloud MISP / Cloud CyIRIS panels no longer show unnecessary input fields

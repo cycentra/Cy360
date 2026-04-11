@@ -537,13 +537,13 @@ async def escalate_incident_to_iris(
 
     if not _load_iris_config():
         raise HTTPException(
-            status_code=503,
+            status_code=422,
             detail="CyIRIS is not configured. Enable it in System Settings → Integrations → CyIRIS."
         )
 
     result = await create_iris_case(db, inc)
     if not result:
-        raise HTTPException(status_code=502, detail="IRIS case creation failed — check IRIS connectivity and API key.")
+        raise HTTPException(status_code=422, detail="IRIS case creation failed — check CyIRIS connectivity and API key.")
 
     return {**result, "already_existed": False}
 
