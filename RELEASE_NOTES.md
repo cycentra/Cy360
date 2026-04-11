@@ -1,6 +1,29 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.129 — 2026-04-11
+
+### Fix — Remove broken Python bytecode compilation step; restore working wheel
+
+**Root cause:** The `Compile Python source to bytecode (.pyc) inside wheel` CI step added in
+v1.0.126 renamed `app.pyc` → `app.py`, overwriting the source file with raw bytecode binary
+content. When `python3 app.py` ran, Python tried to parse binary `.pyc` data as Python source
+and failed with `SyntaxError: source code string cannot contain null bytes`, crash-looping the
+entire backend.
+
+`.pyc` files cannot be executed as `.py` source — Python must either run `python3 app.pyc`
+directly or find the file in `__pycache__`. Since the systemd service runs
+`python3 .../app.py`, overwriting with bytecode is always fatal.
+
+#### `deploy.yml` changes
+- Removed the entire `Compile Python source to bytecode (.pyc) inside wheel` step
+- Wheel now ships standard `.py` source files as before
+
+#### Server recovery (manual step for any instance running v1.0.128)
+The corrupted wheel is already installed. Reinstall from v1.0.129 wheel via the Update button,
+or run manually: `/opt/cycentra/cycentra-setup.sh --update`
+
+---
 ## v1.0.128 — 2026-04-11
 
 ### Fix — Update button: asset name mismatch + SHC binary execution

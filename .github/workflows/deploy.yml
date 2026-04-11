@@ -60,34 +60,6 @@ jobs:
           cd backend
           python -m build --wheel --outdir ../dist/
 
-      - name: Compile Python source to bytecode (.pyc) inside wheel
-        run: |
-          # Unpack wheel, compile .py → .pyc bytecode, strip plain source, repack
-          WHL=$(ls dist/*.whl | head -1)
-          UNPACK=$(mktemp -d)
-          python -m zipfile -e "$WHL" "$UNPACK"
-
-          # Compile all .py files to co-located .pyc (not __pycache__)
-          python -m compileall -q -b "$UNPACK"
-
-          # Overwrite each .py (except __init__ which importlib needs) with
-          # its bytecode, then remove the separate .pyc so only one file remains
-          find "$UNPACK" -name '*.py' ! -name '__init__.py' | while read src; do
-            pyc="${src%.py}.pyc"
-            if [[ -f "$pyc" ]]; then
-              mv "$pyc" "$src"
-            fi
-          done
-          # Remove any remaining .pyc files (__init__.pyc etc.)
-          find "$UNPACK" -name '*.pyc' -delete
-
-          # Repack as wheel (zip) back to original path
-          ORIG_WHL=$(realpath "$WHL")
-          rm -f "$ORIG_WHL"
-          cd "$UNPACK" && zip -r -q "$ORIG_WHL" .
-          rm -rf "$UNPACK"
-          echo "Wheel repacked with bytecode: $(du -sh "$ORIG_WHL" | cut -f1)"
-
       - uses: actions/upload-artifact@v4
         with:
           name: python-wheel
