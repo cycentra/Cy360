@@ -146,8 +146,140 @@ def siem_incident_patch(incident_id):
 @siem_bp.route("/incidents/<incident_id>/escalate", methods=["POST"])
 @require_siem_analyst
 def siem_incident_escalate(incident_id):
-    """Manually escalate a SIEM incident to CyIRIS regardless of FP score."""
-    return _proxy(f"/incidents/{incident_id}/escalate", method="POST")
+    """Manually escalate a SIEM incident to CyIRIS.
+
+    Handled entirely within Flask (not proxied to the engine) so that
+    get_iris_config() can read cloud credentials from /opt/cycentra/.env —
+    the systemd engine service uses cysiemstack.env which does not have those vars.
+
+    Steps:
+      1. Fetch incident from engine
+      2. If already ticketed, return existing ticket info
+      3. Create IRIS case via get_iris_config()
+      4. PATCH incident in engine to persist iris_case_id/url/status
+    """
+    from core.helpers import get_iris_config
+
+    # ── 1. Fetch incident from engine ─────────────────────────────────────────
+    try:
+        inc_resp = _req.get(
+            f"{SIEM_ENGINE_URL}/incidents/{incident_id}",
+            timeout=PROXY_TIMEOUT,
+        )
+    except _req.exceptions.ConnectionError:
+        return _engine_offline_response()
+    except _req.exceptions.Timeout:
+        return jsonify({"error": "Engine request timed out"}), 504
+
+    if inc_resp.status_code == 404:
+        return jsonify({"error": "Incident not found"}), 404
+    if not inc_resp.ok:
+        return jsonify({"error": f"Engine returned HTTP {inc_resp.status_code}"}), 502
+
+    inc = inc_resp.json()
+
+    # ── 2. Already ticketed ────────────────────────────────────────────────────
+    if inc.get("iris_case_id"):
+        return jsonify({
+            "iris_case_id":     inc["iris_case_id"],
+            "iris_case_url":    inc.get("iris_case_url"),
+            "iris_case_status": inc.get("iris_case_status", "open"),
+            "already_existed":  True,
+        })
+
+    # ── 3. Check IRIS config ───────────────────────────────────────────────────
+    cfg = get_iris_config()
+    if not cfg:
+        return jsonify({"error": "CyIRIS is not configured. Enable it in System Settings → Integrations → CyIRIS."}), 422
+
+    # ── 4. Build IRIS case ─────────────────────────────────────────────────────
+    analyst_email = session.get("user_email", "unknown")
+    sev = (inc.get("severity") or "low").lower()
+    _SEV_MAP = {"critical": 1, "high": 2, "medium": 3, "low": 4}
+    case_sev = _SEV_MAP.get(sev, 4)
+
+    agents = ", ".join(inc.get("affected_agents") or []) or "unknown"
+    users  = ", ".join(inc.get("affected_users")  or []) or "none"
+    ips    = ", ".join(inc.get("src_ips")          or []) or "none"
+    mitre  = ", ".join(inc.get("mitre_ids")        or []) or "None"
+
+    rules_fired = inc.get("correlated_rules") or []
+    rules_str = "\n".join(
+        f"  • {r.get('rule_id', '?')} — {r.get('description', '')}"
+        for r in rules_fired[:5]
+    ) or "  (none)"
+
+    case_name = (
+        f"[Incident] {sev.upper()} — {inc.get('id', incident_id)}"
+    )
+    case_description = (
+        f"## CySIEM Incident: {inc.get('id', incident_id)}\n\n"
+        f"**Severity:** {sev.upper()}  \n"
+        f"**Status:** {inc.get('status', 'open')}  \n"
+        f"**First Seen:** {inc.get('first_seen', 'N/A')}  \n"
+        f"**Last Seen:** {inc.get('last_seen', 'N/A')}  \n"
+        f"**Alert Count:** {inc.get('alert_count', 0)}  \n\n"
+        f"**Affected Hosts:** {agents}  \n"
+        f"**Affected Users:** {users}  \n"
+        f"**Source IPs:** {ips}  \n"
+        f"**MITRE ATT&CK:** {mitre}  \n\n"
+        f"### Correlated Rules\n{rules_str}\n"
+    )
+    if inc.get("llm_summary"):
+        case_description += f"\n### AI Narrative\n{inc['llm_summary']}\n"
+    case_description += f"\n---\n*Escalated manually by {analyst_email} via CyCentra360 Active Incidents*"
+
+    try:
+        resp = _req.post(
+            f"{cfg['url'].rstrip('/')}/api/v2/cases",
+            headers={
+                "Authorization": f"Bearer {cfg['apiKey']}",
+                "Content-Type":  "application/json",
+                "Accept":        "application/json",
+            },
+            json={
+                "case_name":        case_name,
+                "case_description": case_description,
+                "case_customer":    cfg.get("customerId", 1),
+                "case_severity_id": case_sev,
+                "case_soc_id":      incident_id,
+            },
+            timeout=10,
+            verify=False,
+        )
+    except _req.exceptions.ConnectionError:
+        return jsonify({"error": "Cannot reach CyIRIS. Check URL in System Settings → CyIRIS."}), 503
+    except _req.exceptions.Timeout:
+        return jsonify({"error": "CyIRIS request timed out"}), 504
+
+    if resp.status_code not in (200, 201):
+        return jsonify({"error": f"IRIS returned HTTP {resp.status_code}", "detail": resp.text[:300]}), 502
+
+    data  = resp.json()
+    case  = data if "case_id" in data else data.get("data", data)
+    case_id  = case.get("case_id")
+    case_url = f"{cfg['url'].rstrip('/')}/case?cid={case_id}" if case_id else cfg["url"]
+
+    # ── 5. Persist ticket info back to the engine ──────────────────────────────
+    try:
+        _req.patch(
+            f"{SIEM_ENGINE_URL}/incidents/{incident_id}",
+            json={
+                "iris_case_id":     str(case_id),
+                "iris_case_url":    case_url,
+                "iris_case_status": "open",
+            },
+            timeout=PROXY_TIMEOUT,
+        )
+    except Exception:
+        pass  # ticket was created — don't fail the response over a patch error
+
+    return jsonify({
+        "iris_case_id":     case_id,
+        "iris_case_url":    case_url,
+        "iris_case_status": "open",
+        "already_existed":  False,
+    })
 
 
 @siem_bp.route("/risk-scores")

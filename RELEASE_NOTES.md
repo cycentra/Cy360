@@ -1,6 +1,37 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.135 — 2026-04-12
+
+### Fix — "Raise Ticket" in Active Incidents fails when CyIRIS uses cloud credentials
+
+**Root cause:** The correlation engine runs as a systemd service with
+`EnvironmentFile=/opt/cycentra/cysiemstack.env`. That file does not contain
+`CLOUD_IRIS_API_KEY` / `CLOUD_IRIS_URL` — those live in `/opt/cycentra/.env` which is
+loaded by the Flask backend only. So `_load_iris_config()` inside the engine found an
+empty API key and returned `None`, even though CyIRIS was fully operational for
+UEBA and ASM Findings (which call IRIS from the Flask layer via `get_iris_config()`).
+
+**Fix: move incident manual escalation entirely into the Flask proxy layer**
+(same architecture as UEBA escalation — `siem_proxy.py` handles everything, the engine
+is only used for data fetch and persistence).
+
+#### `backend/siem_proxy.py`
+- `POST /api/siem/incidents/<id>/escalate`: No longer proxied to the engine.
+  Now self-contained in Flask:
+  1. `GET /incidents/{id}` from engine — fetch incident data
+  2. If already ticketed: return existing case info (no duplicate)
+  3. `get_iris_config()` from `core.helpers` — reads cloud creds from `.env` correctly
+  4. `POST /api/v2/cases` to IRIS — creates case with severity, affected hosts/users,
+     MITRE IDs, correlated rules, and AI narrative
+  5. `PATCH /incidents/{id}` back to engine — persists `iris_case_id/url/status`
+  (step 5 failure is non-fatal — ticket was created, drawer still updates)
+
+#### `backend/cysiemstack/correlation_engine/main.py`
+- `IncidentPatch` model: added `iris_case_id`, `iris_case_url`, `iris_case_status`
+  optional fields so the proxy can write ticket info back after creating the case.
+
+---
 ## v1.0.134 — 2026-04-12
 
 ### Fix — "Raise Ticket" in Active Incidents shows "Engine offline" when CyIRIS not configured

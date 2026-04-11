@@ -553,6 +553,9 @@ class IncidentPatch(BaseModel):
     assigned_to:           Optional[str] = None
     notes:                 Optional[str] = None
     false_positive_reason: Optional[str] = None
+    iris_case_id:          Optional[str] = None
+    iris_case_url:         Optional[str] = None
+    iris_case_status:      Optional[str] = None
 
 
 @app.patch("/incidents/{incident_id}")
@@ -575,6 +578,12 @@ async def patch_incident(
         inc.notes = body.notes
     if body.false_positive_reason is not None:
         inc.false_positive_reason = body.false_positive_reason
+    if body.iris_case_id is not None:
+        inc.iris_case_id = body.iris_case_id
+    if body.iris_case_url is not None:
+        inc.iris_case_url = body.iris_case_url
+    if body.iris_case_status is not None:
+        inc.iris_case_status = body.iris_case_status
 
     inc.updated_at = datetime.now(timezone.utc)
     await db.commit()
