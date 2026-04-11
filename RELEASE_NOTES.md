@@ -1,6 +1,28 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.133 — 2026-04-12
+
+### Fix — Cloud MISP / Cloud CyIRIS panels no longer show unnecessary input fields
+
+**Root cause:** Cloud credentials (`CLOUD_MISP_API_KEY`, `CLOUD_IRIS_API_KEY`,
+`CLOUD_IRIS_CUSTOMER_ID`) are provisioned server-side in `/opt/cycentra/.env` at install
+time. Showing API key and customer ID inputs in the cloud panel was misleading — values
+entered there were stored in `ai_settings.json` but the backend already prefers env vars.
+
+#### `portal/src/pages/settings/SystemSettingsPage.jsx`
+- **Cloud CyMISP panel:** Removed API key `<input>`. Replaced with env-var explanation text
+  referencing `CLOUD_MISP_URL` and `CLOUD_MISP_API_KEY`. Test Connection button still present.
+- **Cloud CyIRIS panel:** Removed API key + Customer ID `<input>` fields. Replaced with
+  env-var explanation text referencing `CLOUD_IRIS_URL`, `CLOUD_IRIS_API_KEY`,
+  `CLOUD_IRIS_CUSTOMER_ID`. Test Connection button still present.
+- Both panels show an ℹ️ footer: *"Cloud credentials are set at install time — contact
+  Cycentra support to rotate your key."*
+- `testConnection` (MispTab + CyIrisTab): Cloud path now explicitly passes
+  `{ apiKey: "", useStored: true }` — no masked-key detection logic needed.
+  Local path unchanged (requires URL + key, `useStored: false`).
+
+---
 ## v1.0.132 — 2026-04-11
 
 ### Fix — Cloud CyMISP / Cloud CyIRIS Test Connection fails with masked API key

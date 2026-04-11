@@ -594,22 +594,33 @@ function MispTab() {
   };
 
   const testConnection = async () => {
-    const _MASK = "\u2022".repeat(8);
-    // For cloud mode, use the known cloud URL; for local, require user-entered URL
-    const effectiveUrl = mode === "cloud" ? "https://cymisp.cycentra.com" : (misp.url || "");
-    if (!effectiveUrl) { setTestStatus("fail"); setTestMsg("MISP Server URL is required"); return; }
-    // Cloud mode: if apiKey is still the masked placeholder, send empty string —
-    // the backend test endpoint will fall back to the key stored in ai_settings.json
-    const effectiveKey = (misp.apiKey && misp.apiKey !== _MASK) ? misp.apiKey : "";
-    if (!effectiveKey && mode !== "cloud") {
-      setTestStatus("fail"); setTestMsg("Enter your API Key (currently showing masked placeholder)"); return;
+    if (mode === "cloud") {
+      // Credentials are in .env — always delegate to backend
+      setTestStatus("testing"); setTestMsg("");
+      try {
+        const r = await fetch(`${API_BASE}/api/system/misp/test`, {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: "https://cymisp.cycentra.com", apiKey: "", useStored: true }),
+        });
+        const d = await r.json();
+        if (d.ok) { setTestStatus("ok");   setTestMsg(d.message || "Connected"); }
+        else       { setTestStatus("fail"); setTestMsg(d.error  || "Connection failed"); }
+      } catch { setTestStatus("fail"); setTestMsg("Cannot reach backend"); }
+      return;
     }
+    // Local mode
+    const _MASK = "\u2022".repeat(8);
+    const url = misp.url || "";
+    const key = (misp.apiKey && misp.apiKey !== _MASK) ? misp.apiKey : "";
+    if (!url) { setTestStatus("fail"); setTestMsg("MISP Server URL is required"); return; }
+    if (!key) { setTestStatus("fail"); setTestMsg("API key required"); return; }
     setTestStatus("testing"); setTestMsg("");
     try {
       const r = await fetch(`${API_BASE}/api/system/misp/test`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: effectiveUrl, apiKey: effectiveKey, useStored: !effectiveKey }),
+        body: JSON.stringify({ url, apiKey: key, useStored: false }),
       });
       const d = await r.json();
       if (d.ok) { setTestStatus("ok");   setTestMsg(d.message || "Connected"); }
@@ -672,23 +683,17 @@ function MispTab() {
         </div>
       )}
 
-      {/* Mode: Cloud CyMISP */}
+      {/* Mode: Cloud CyMISP — credentials live in .env, no UI input needed */}
       {mode === "cloud" && (
         <div style={{ background: "rgba(77,158,255,0.04)", border: "1px solid rgba(77,158,255,0.2)", borderRadius: 6, padding: "18px 20px" }}>
           <div style={{ color: "#4d9eff", fontSize: 11, fontFamily: "monospace", fontWeight: 700, marginBottom: 4 }}>
             ☁️ Cycentra Cloud MISP — cymisp.cycentra.com
           </div>
-          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginBottom: 16 }}>
-            Enter your Cycentra-issued Cloud MISP API key. The server URL is managed automatically.
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginBottom: 16, lineHeight: 1.6 }}>
+            Credentials are provisioned server-side via <code style={{ color: "#4d9eff" }}>CLOUD_MISP_URL</code> and{" "}
+            <code style={{ color: "#4d9eff" }}>CLOUD_MISP_API_KEY</code> in{" "}
+            <code style={{ color: "rgba(255,255,255,0.4)" }}>/opt/cycentra/.env</code>. No manual entry required.
           </div>
-          <div style={{ marginBottom: 14 }}>
-            <div style={LABEL}>Cloud MISP API Key</div>
-            <input type="password" value={misp.apiKey || ""}
-              onChange={e => setMisp(prev => ({ ...prev, apiKey: e.target.value }))}
-              placeholder="Your Cycentra-issued CyMISP API key"
-              style={INPUT} />
-          </div>
-          {/* Test Connection */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
             <button onClick={testConnection} disabled={testStatus === "testing"}
               style={{ background: "rgba(77,158,255,0.12)", color: "#4d9eff",
@@ -696,15 +701,13 @@ function MispTab() {
                 padding: "8px 18px", fontFamily: "monospace", fontSize: 11,
                 fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px",
                 opacity: testStatus === "testing" ? 0.6 : 1 }}>
-              {testStatus === "testing" ? "Testing\u2026" : "Test Connection"}
+              {testStatus === "testing" ? "Testing…" : "Test Connection"}
             </button>
             {testStatus === "ok"   && <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ {testMsg}</span>}
             {testStatus === "fail" && <span style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace" }}>✗ {testMsg}</span>}
           </div>
           <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.25)" }}>
-            {misp.apiKey
-              ? <span style={{ color: "#4d9eff" }}>✓ API key configured — IOC lookups will use cymisp.cycentra.com</span>
-              : <span style={{ color: "#ff8c00" }}>⚠ API key required to activate Cloud CyMISP</span>}
+            ℹ️ Cloud credentials are set at install time — contact Cycentra support to rotate your key.
           </div>
         </div>
       )}
@@ -818,22 +821,33 @@ function CyIrisTab() {
   };
 
   const testConnection = async () => {
-    const _MASK = "\u2022".repeat(8);
-    // For cloud mode use the known cloud URL; for local require user-entered URL
-    const effectiveUrl = mode === "cloud" ? "https://cyiris.cycentra.com" : (iris.url || "");
-    if (!effectiveUrl) { setTestStatus("fail"); setTestMsg("CyIRIS URL is required"); return; }
-    // Cloud mode: if apiKey is still the masked placeholder, send empty string —
-    // the backend test endpoint will fall back to the key stored in ai_settings.json
-    const effectiveKey = (iris.apiKey && iris.apiKey !== _MASK) ? iris.apiKey : "";
-    if (!effectiveKey && mode !== "cloud") {
-      setTestStatus("fail"); setTestMsg("Enter your API Key (currently showing masked placeholder)"); return;
+    if (mode === "cloud") {
+      // Credentials are in .env — always delegate to backend
+      setTestStatus("testing"); setTestMsg("");
+      try {
+        const r = await fetch(`${API_BASE}/api/system/iris/test`, {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: "https://cyiris.cycentra.com", apiKey: "", useStored: true }),
+        });
+        const d = await r.json();
+        if (d.ok) { setTestStatus("ok");   setTestMsg(d.message || "Connected"); }
+        else       { setTestStatus("fail"); setTestMsg(d.error  || "Connection failed"); }
+      } catch { setTestStatus("fail"); setTestMsg("Cannot reach backend"); }
+      return;
     }
+    // Local mode
+    const _MASK = "\u2022".repeat(8);
+    const url = iris.url || "";
+    const key = (iris.apiKey && iris.apiKey !== _MASK) ? iris.apiKey : "";
+    if (!url) { setTestStatus("fail"); setTestMsg("CyIRIS URL is required"); return; }
+    if (!key) { setTestStatus("fail"); setTestMsg("API key required"); return; }
     setTestStatus("testing"); setTestMsg("");
     try {
       const r = await fetch(`${API_BASE}/api/system/iris/test`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: effectiveUrl, apiKey: effectiveKey, useStored: !effectiveKey }),
+        body: JSON.stringify({ url, apiKey: key, useStored: false }),
       });
       const d = await r.json();
       if (d.ok) { setTestStatus("ok");   setTestMsg(d.message || "Connected"); }
@@ -896,35 +910,18 @@ function CyIrisTab() {
         </div>
       )}
 
-      {/* Mode: Cloud CyIRIS */}
+      {/* Mode: Cloud CyIRIS — credentials live in .env, no UI input needed */}
       {mode === "cloud" && (
         <div style={{ background: "rgba(77,158,255,0.04)", border: "1px solid rgba(77,158,255,0.2)", borderRadius: 6, padding: "18px 20px" }}>
           <div style={{ color: "#4d9eff", fontSize: 11, fontFamily: "monospace", fontWeight: 700, marginBottom: 4 }}>
             ☁️ Cycentra Cloud CyIRIS — cyiris.cycentra.com
           </div>
-          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginBottom: 16 }}>
-            Enter your Cycentra-issued Cloud CyIRIS API key. The server URL is managed automatically.
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginBottom: 16, lineHeight: 1.6 }}>
+            Credentials are provisioned server-side via <code style={{ color: "#4d9eff" }}>CLOUD_IRIS_URL</code>,{" "}
+            <code style={{ color: "#4d9eff" }}>CLOUD_IRIS_API_KEY</code>, and{" "}
+            <code style={{ color: "#4d9eff" }}>CLOUD_IRIS_CUSTOMER_ID</code> in{" "}
+            <code style={{ color: "rgba(255,255,255,0.4)" }}>/opt/cycentra/.env</code>. No manual entry required.
           </div>
-          {/* API Key */}
-          <div style={{ marginBottom: 14 }}>
-            <div style={LABEL}>Cloud CyIRIS API Key</div>
-            <input type="password" value={iris.apiKey || ""}
-              onChange={e => setIris(prev => ({ ...prev, apiKey: e.target.value }))}
-              placeholder="Your Cycentra-issued CyIRIS Bearer token"
-              style={INPUT} />
-          </div>
-          {/* Customer ID */}
-          <div style={{ marginBottom: 18 }}>
-            <div style={LABEL}>Customer ID</div>
-            <input type="number" value={iris.customerId || 1} min={1}
-              onChange={e => setIris(prev => ({ ...prev, customerId: parseInt(e.target.value) || 1 }))}
-              placeholder="1"
-              style={{ ...INPUT, width: 120 }} />
-            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
-              Provided by Cycentra with your cloud subscription
-            </div>
-          </div>
-          {/* Test Connection */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
             <button onClick={testConnection} disabled={testStatus === "testing"}
               style={{ background: "rgba(77,158,255,0.12)", color: "#4d9eff",
@@ -932,15 +929,13 @@ function CyIrisTab() {
                 padding: "8px 18px", fontFamily: "monospace", fontSize: 11,
                 fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px",
                 opacity: testStatus === "testing" ? 0.6 : 1 }}>
-              {testStatus === "testing" ? "Testing\u2026" : "Test Connection"}
+              {testStatus === "testing" ? "Testing…" : "Test Connection"}
             </button>
             {testStatus === "ok"   && <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ {testMsg}</span>}
             {testStatus === "fail" && <span style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace" }}>✗ {testMsg}</span>}
           </div>
           <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.25)" }}>
-            {iris.apiKey
-              ? <span style={{ color: "#4d9eff" }}>✓ API key configured — incidents will escalate to cyiris.cycentra.com</span>
-              : <span style={{ color: "#ff8c00" }}>⚠ API key required to activate Cloud CyIRIS</span>}
+            ℹ️ Cloud credentials are set at install time — contact Cycentra support to rotate your key.
           </div>
         </div>
       )}
