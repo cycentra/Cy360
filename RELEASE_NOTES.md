@@ -1,6 +1,43 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.136 — 2026-04-12
+
+### Fix — Automated IRIS ticket creation broken for cloud CyIRIS mode
+
+**Root cause (same env-var isolation as v1.0.135 manual fix):**
+The correlation engine's ingestor runs `create_iris_case()` automatically when a new
+incident is created or new correlation rules fire. This calls `_load_iris_config()` inside
+`iris_connector.py`, which reads `CLOUD_IRIS_API_KEY` / `CLOUD_IRIS_URL` from
+`os.environ`. Because the engine's systemd service uses
+`EnvironmentFile=/opt/cycentra/cysiemstack.env` (which has no cloud IRIS vars), the lookup
+always returned `None` → no IRIS ticket was ever auto-created for cloud mode.
+
+#### `backend/cysiemstack/correlation_engine/iris_connector.py`
+- Added `_CYCENTRA_ENV_FILE = Path("/opt/cycentra/.env")` constant.
+- Added `_read_cycentra_env()` — a minimal `.env` parser (no external dependency) that
+  reads `/opt/cycentra/.env` directly and returns a `dict`.
+- `_load_iris_config()` cloud branch: when `CLOUD_IRIS_URL` or `CLOUD_IRIS_API_KEY` are
+  absent from `os.environ`, falls back to `_read_cycentra_env()`. Covers:
+  - Automated ticket creation from the ingestor pipeline
+  - `sync_closed_cases()` (5-minute IRIS sync scheduler)
+  - `auto_close_fp()` (FP threshold check)
+
+#### Scope of automated ticket raising (for reference)
+| Surface | Auto-raised? | Trigger |
+|---|---|---|
+| Active Incidents (SIEM) | ✅ Yes | New incident created OR new correlation rules fire (if FP score < threshold) |
+| ASM Findings | ❌ No — manual only | Analyst clicks "Raise CyIRIS Ticket" |
+| UEBA Anomalies | ❌ No — manual only | Analyst clicks escalate button |
+
+#### FP score vs. confidence score
+The ingestor derives an **FP probability score** (0–100) from rule confidence:
+`fp_score = (1 − avg_rule_confidence) × 100`
+- High rule confidence → low FP score → incident **is NOT auto-closed** → IRIS ticket IS raised
+- FP score ≥ threshold (default 90.0) → incident auto-closed as false positive → NO ticket raised
+- Threshold is configurable via `fpThreshold` in `ai_settings.json` (System Settings → CyIRIS)
+
+---
 ## v1.0.135 — 2026-04-12
 
 ### Fix — "Raise Ticket" in Active Incidents fails when CyIRIS uses cloud credentials

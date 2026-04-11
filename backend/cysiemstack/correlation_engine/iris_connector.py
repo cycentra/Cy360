@@ -44,7 +44,32 @@ log = structlog.get_logger()
 settings = get_settings()
 
 _AI_SETTINGS_FILE = Path("/opt/cycentra/ai_settings.json")
+_CYCENTRA_ENV_FILE = Path("/opt/cycentra/.env")   # loaded by Flask; not by engine's systemd unit
 _CLOUD_IRIS_URL_DEFAULT = "https://cyiris.cycentra.com"
+
+
+# ── .env reader ────────────────────────────────────────────────────────────────
+
+def _read_cycentra_env() -> dict:
+    """
+    Parse /opt/cycentra/.env and return a key→value dict.
+    The engine's systemd unit uses cysiemstack.env, so CLOUD_IRIS_* vars are
+    not injected into os.environ.  We read the file directly as a fallback.
+    Only called when os.environ is missing the needed key — low overhead.
+    """
+    env: dict = {}
+    if not _CYCENTRA_ENV_FILE.exists():
+        return env
+    try:
+        for line in _CYCENTRA_ENV_FILE.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            env[k.strip()] = v.strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return env
 
 # IRIS severity ID mapping (matches IRIS built-in severity table)
 _SEV_MAP = {
@@ -63,6 +88,10 @@ def _load_iris_config() -> dict | None:
 
     Returns dict with keys: url, api_key, customer_id, fp_threshold, mode
     Returns None if iris is disabled or credentials are missing.
+
+    NOTE: The engine's systemd unit loads cysiemstack.env, NOT /opt/cycentra/.env,
+    so CLOUD_IRIS_* vars are absent from os.environ inside the engine process.
+    We fall back to _read_cycentra_env() which reads .env directly.
     """
     try:
         raw = _AI_SETTINGS_FILE.read_text() if _AI_SETTINGS_FILE.exists() else "{}"
@@ -74,15 +103,25 @@ def _load_iris_config() -> dict | None:
     mode = iris.get("mode", "disabled")
 
     if mode == "cloud":
-        url = os.environ.get("CLOUD_IRIS_URL", _CLOUD_IRIS_URL_DEFAULT).rstrip("/")
-        # Prefer env var; fall back to key stored in ai_settings.json by the UI
-        key = os.environ.get("CLOUD_IRIS_API_KEY", "").strip() or iris.get("apiKey", "").strip()
+        # Fall back to .env file when env vars are missing (engine process doesn't get .env)
+        _dotenv = None
+        url_env = os.environ.get("CLOUD_IRIS_URL", "")
+        key_env = os.environ.get("CLOUD_IRIS_API_KEY", "")
+        cid_env = os.environ.get("CLOUD_IRIS_CUSTOMER_ID", "")
+        if not url_env or not key_env:
+            _dotenv = _read_cycentra_env()
+            url_env = url_env or _dotenv.get("CLOUD_IRIS_URL", "")
+            key_env = key_env or _dotenv.get("CLOUD_IRIS_API_KEY", "")
+            cid_env = cid_env or _dotenv.get("CLOUD_IRIS_CUSTOMER_ID", "")
+
+        url = (url_env or _CLOUD_IRIS_URL_DEFAULT).rstrip("/")
+        key = key_env.strip() or iris.get("apiKey", "").strip()
         if not key:
             return None
         return {
             "url":          url,
             "api_key":      key,
-            "customer_id":  int(os.environ.get("CLOUD_IRIS_CUSTOMER_ID", "") or iris.get("customerId", settings.iris_customer_id)),
+            "customer_id":  int(cid_env or iris.get("customerId", settings.iris_customer_id)),
             "fp_threshold": float(iris.get("fpThreshold", settings.iris_fp_threshold)),
             "mode":         "cloud",
         }
