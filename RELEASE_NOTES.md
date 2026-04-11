@@ -1,6 +1,28 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.131 — 2026-04-11
+
+### Fix — AI Settings: `baseUrl` silently wiped on re-save; provider switch clears live fields
+
+**Root cause 1 — backend:** `POST /api/ai/settings` guarded `apiKey` against being overwritten
+with empty values, but had no equivalent guard for `baseUrl`. If the page loaded, showed the
+masked API key (no baseUrl since it was never saved), and the user saved again, `baseUrl: ""`
+was written to disk, erasing any previously stored URL.
+
+**Root cause 2 — frontend:** Clicking a provider card always called `setFields({})` — even
+when clicking the already-selected provider. This cleared any URL/key the user had just typed
+if they accidentally clicked their own card.
+
+#### `backend/blueprints/system/routes.py`
+- Added `baseUrl` preservation guard: incoming empty `baseUrl` falls back to the value already
+  on disk, same pattern as the existing `apiKey` guard
+
+#### `portal/src/pages/ai/AISettingsPage.jsx`
+- Provider card `onClick` now only calls `setFields({})` when switching to a **different**
+  provider (`if (p.id !== provider)`); clicking the currently active card no longer wipes fields
+
+---
 ## v1.0.130 — 2026-04-11
 
 ### Fix — Update button: ship plain `.sh` as release asset, not SHC binary

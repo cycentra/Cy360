@@ -100,7 +100,7 @@ export function AISettingsPage({ aiConfig, onSave, embedded = false }) {
           <div style={{ color:"rgba(255,255,255,0.35)", fontSize:10, letterSpacing:"1.5px", textTransform:"uppercase", fontFamily:"monospace", marginBottom:14 }}>AI Provider</div>
           <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:22 }}>
             {Object.values(AI_PROVIDERS).map(p => (
-              <div key={p.id} onClick={() => { setProvider(p.id); setFields({}); setTestStatus(null); }}
+              <div key={p.id} onClick={() => { if (p.id !== provider) { setProvider(p.id); setFields({}); } setTestStatus(null); }}
                 style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 16px", background:provider===p.id?"rgba(255,255,255,0.04)":"rgba(255,255,255,0.02)", border:`1px solid ${provider===p.id?p.color+"50":"rgba(255,255,255,0.07)"}`, borderLeft:`3px solid ${provider===p.id?p.color:"transparent"}`, borderRadius:4, cursor:"pointer" }}>
                 <span style={{ fontSize:18 }}>{p.icon}</span>
                 <div style={{ flex:1 }}>

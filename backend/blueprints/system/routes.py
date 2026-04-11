@@ -310,6 +310,12 @@ def ai_settings_post():
             existing_key = existing.get("fields", {}).get("apiKey", "")
             if existing_key:
                 payload.setdefault("fields", {})["apiKey"] = existing_key
+        # Guard: never overwrite a stored baseUrl with an empty string
+        incoming_url = incoming_fields.get("baseUrl", "")
+        if not incoming_url:
+            existing_url = existing.get("fields", {}).get("baseUrl", "")
+            if existing_url:
+                payload.setdefault("fields", {})["baseUrl"] = existing_url
         # Same guard for the separate cymind_memory block
         incoming_cm_key = payload.get("cymind_memory", {}).get("apiKey", "")
         if not incoming_cm_key or incoming_cm_key == _MASK:
