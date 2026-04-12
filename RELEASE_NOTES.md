@@ -1,12 +1,35 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.147 — 2026-04-12
+
+### Bug Fix
+
+**`.github/workflows/agent-post-release.yml` and `agent-label-pr.yml` — remaining YAML syntax and trigger gaps**
+- Root cause 1: `agent-post-release.yml` "Create hotfix issue" step used the same unindented multi-line template literal pattern as the bugs fixed in v1.0.146. Lines like `**Verification run:**` and `**Checks that failed:**` at column 0 terminated the `script: |` YAML block scalar early, causing a parse error that prevented GitHub Actions from queuing any jobs (all runs: `conclusion: failure, total_count: 0 jobs`).
+- Root cause 2: `agent-label-pr.yml` only had `types: [opened]` as its trigger. Copilot agent PRs are always created as **draft** first; the `opened` event fires while the PR is still draft. When a draft PR is converted to ready-for-review, no new `opened` event fires, so the `auto-merge` label was never automatically applied to any agent PR.
+- Fix 1: Replaced bare multi-line template literal in the hotfix issue body with a `[...].join('\\n')` array (all lines fully indented within the `script: |` block), matching the pattern used to fix v1.0.146.
+- Fix 2: Added `ready_for_review` to `agent-label-pr.yml`'s `pull_request` event types so the auto-merge label is applied when a draft agent PR is converted to ready.
+  - `.github/workflows/agent-post-release.yml`: "Create hotfix issue" body converted to `join('\\n')` array.
+  - `.github/workflows/agent-label-pr.yml`: added `ready_for_review` to `types`.
+
+---
+
+
+### Bug Fix
+
+**`.github/workflows/agent-release.yml` — YAML block scalar terminated early by unindented template literal**
+- Root cause: Step 10 ("Post release summary comment") used a multi-line JavaScript template literal whose body lines had zero indentation. In YAML, a block scalar (`|`) terminates when it encounters a non-empty line with less indentation than the block content. Lines like `**Version:**` at column 0 broke out of the `script: |` block, causing a YAML parse error that prevented GitHub Actions from queuing any jobs. Every single `agent-release.yml` run since the workflow was created has failed for this reason.
+- Fix: Replaced the single multi-line template literal with a `[...].join('\\n')` array where every element is a single-line template literal fully indented within the YAML block scalar.
+  - `.github/workflows/agent-release.yml`: Step 10 body now uses `join('\\n')` instead of a bare multi-line template literal.
+
+---
 ## v1.0.145 — 2026-04-12
 
 ### Chore
 
-**End-to-end automation smoke test**
-- Dummy release note entry to validate the full agent → PR → auto-merge label → merge → tag → deploy pipeline introduced in v1.0.144.
+**End-to-end automation smoke test (superseded by v1.0.146)**
+- Dummy entry from prior session; superseded by the actual bug fix in v1.0.146.
 
 ---
 ## v1.0.144 — 2026-04-12

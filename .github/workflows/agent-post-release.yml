@@ -188,31 +188,34 @@ jobs:
             parts[2] = String(parseInt(parts[2]) + 1);
             const nextVer = 'v' + parts.join('.');
 
+            const failList = errors.split('\\n').filter(Boolean).map(e => `- ${e.trim()}`).join('\n');
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo:  context.repo.repo,
               title: `hotfix: Post-release verification FAILED for ${tag}`,
               labels: ['hotfix', 'priority:critical', 'agent:cyra-devops'],
-              body: `## 🚨 Post-Release Verification Failed — ${tag}
-
-**Verification run:** ${runUrl}
-
-**Checks that failed:**
-${errors.split('\\n').filter(Boolean).map(e => `- ${e.trim()}`).join('\n')}
-
-## Required Actions
-
-1. Review the [verification run](${runUrl}) for full details
-2. Determine if customers who ran \`--update\` are affected
-3. Fix the issues and release as \`${nextVer}\`
-
-## Notes
-
-- Tag \`${tag}\` is left intact — do not delete it
-- Customers on the broken version: running \`--update\` again after \`${nextVer}\` is released will fix them
-- The System Settings page may show incorrect release history until the hotfix is deployed
-
-cc @cyra-devops @cyra-bugfix`,
+              body: [
+                `## 🚨 Post-Release Verification Failed — ${tag}`,
+                ``,
+                `**Verification run:** ${runUrl}`,
+                ``,
+                `**Checks that failed:**`,
+                failList,
+                ``,
+                `## Required Actions`,
+                ``,
+                `1. Review the [verification run](${runUrl}) for full details`,
+                `2. Determine if customers who ran \`--update\` are affected`,
+                `3. Fix the issues and release as \`${nextVer}\``,
+                ``,
+                `## Notes`,
+                ``,
+                `- Tag \`${tag}\` is left intact — do not delete it`,
+                `- Customers on the broken version: running \`--update\` again after \`${nextVer}\` is released will fix them`,
+                `- The System Settings page may show incorrect release history until the hotfix is deployed`,
+                ``,
+                `cc @cyra-devops @cyra-bugfix`,
+              ].join('\n'),
             });
 
       # ── Append verification status to the GitHub Release description ──────────

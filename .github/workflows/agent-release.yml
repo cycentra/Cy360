@@ -306,18 +306,22 @@ jobs:
               owner: context.repo.owner,
               repo:  context.repo.repo,
               issue_number: parseInt(prNum),
-              body: `## 🚀 cyra-devops — Auto-Release Triggered
-
-**Version:** \`${version}\`
-
-What happened automatically after PR merged:
-1. ✅ Read \`${version}\` from \`RELEASE_NOTES.md\`
-2. ✅ Stamped \`_WIZARD_VERSION_\` in \`cycentra-setup.sh\` with \`${version}\`
-3. ✅ Updated \`backend/pyproject.toml\` version
-4. ✅ Created annotated git tag \`${version}\` with RELEASE_NOTES content as annotation
-5. ✅ Pushed tag + triggered \`deploy.yml\` via workflow_dispatch
-
-**Next:** [Watch build](${runUrl}) → [Releases page](${relUrl})
-
-When \`deploy.yml\` completes, \`RELEASE_NOTES.md\` will be bundled into \`cycentra-release.tar.gz\`, copied to \`/opt/cycentra/RELEASE_NOTES.md\` on servers after \`--update\`, and the System Settings page will show the last 5 entries as before.`,
+              body: [
+                `## 🚀 cyra-devops — Auto-Release Triggered`,
+                ``,
+                `**Version:** \`${version}\``,
+                ``,
+                `What happened automatically after PR merged:`,
+                `1. ✅ Read \`${version}\` from \`RELEASE_NOTES.md\``,
+                `2. ✅ Stamped \`_WIZARD_VERSION_\` in \`cycentra-setup.sh\` with \`${version}\``,
+                `3. ✅ Updated \`backend/pyproject.toml\` version`,
+                `4. ✅ Created annotated git tag \`${version}\` with RELEASE_NOTES content as annotation`,
+                `5. ✅ Pushed tag + triggered \`deploy.yml\` via workflow_dispatch`,
+                ``,
+                `**Next:** [Watch build](${runUrl}) → [Releases page](${relUrl})`,
+                ``,
+                `When \`deploy.yml\` completes, \`RELEASE_NOTES.md\` will be bundled into \`cycentra-release.tar.gz\`,`,
+                `copied to \`/opt/cycentra/RELEASE_NOTES.md\` on servers after \`--update\`,`,
+                `and the System Settings page will show the last 5 entries as before.`,
+              ].join('\n'),
             });

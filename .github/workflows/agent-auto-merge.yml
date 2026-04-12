@@ -102,13 +102,15 @@ jobs:
               owner: context.repo.owner,
               repo:  context.repo.repo,
               issue_number: prNum,
-              body: `## 🤖 agent-auto-merge — PR Merged Automatically
-
-\`auto-merge\` label set — PR merged and release pipeline triggered.
-
-**Next steps running automatically:**
-1. \`agent-release.yml\` — stamps version, creates git tag
-2. \`deploy.yml\` — builds wheel + portal, publishes GitHub Release
-
-[Watch Actions](${relUrl})`,
+              body: [
+                `## 🤖 agent-auto-merge — PR Merged Automatically`,
+                ``,
+                `\`auto-merge\` label set — PR merged and release pipeline triggered.`,
+                ``,
+                `**Next steps running automatically:**`,
+                `1. \`agent-release.yml\` — stamps version, creates git tag`,
+                `2. \`deploy.yml\` — builds wheel + portal, publishes GitHub Release`,
+                ``,
+                `[Watch Actions](${relUrl})`,
+              ].join('\n'),
             });
