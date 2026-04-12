@@ -1,0 +1,239 @@
+name: Agent Post-Release Verification
+
+# Fires automatically when deploy.yml publishes a GitHub Release.
+# Checks that all 3 artifacts are present, the wheel is inside the bundle,
+# RELEASE_NOTES.md is inside the bundle, manifest.json has the wheel key,
+# and _WIZARD_VERSION_ was replaced in cycentra-setup.sh.
+#
+# On failure: creates a GitHub Issue labelled hotfix + priority:critical
+# so cyra-bugfix and cyra-devops pick it up immediately.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  post-release-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get install -y jq 2>/dev/null || true
+
+      - name: Get release tag
+        id: rel
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Verifying release: $TAG"
+
+      # ── Check 1: All 3 assets present on the GitHub Release ──────────────────
+      - name: Verify release assets
+        id: assets
+        run: |
+          TAG="${{ steps.rel.outputs.tag }}"
+          GH_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          ERRORS=""
+
+          ASSETS=$(curl -sfL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" \
+            | jq -r '.assets[].name' 2>/dev/null || echo "")
+
+          echo "Assets found on release:"
+          echo "$ASSETS"
+
+          echo "$ASSETS" | grep -q "cycentra-release.tar.gz" \
+            && echo "✅ cycentra-release.tar.gz present" \
+            || { echo "❌ cycentra-release.tar.gz MISSING"; ERRORS="$ERRORS\ncycentra-release.tar.gz missing from release assets"; }
+
+          echo "$ASSETS" | grep -q "cycentra-setup.sh" \
+            && echo "✅ cycentra-setup.sh present" \
+            || { echo "❌ cycentra-setup.sh MISSING"; ERRORS="$ERRORS\ncycentra-setup.sh missing from release assets"; }
+
+          echo "$ASSETS" | grep -q "\.whl$" \
+            && echo "✅ Python wheel present" \
+            || { echo "❌ Python wheel MISSING"; ERRORS="$ERRORS\nPython wheel missing from release assets"; }
+
+          echo "errors<<EOF" >> $GITHUB_OUTPUT
+          echo "$ERRORS"    >> $GITHUB_OUTPUT
+          echo "EOF"        >> $GITHUB_OUTPUT
+          [ -z "$ERRORS" ] && echo "ok=true" >> $GITHUB_OUTPUT || echo "ok=false" >> $GITHUB_OUTPUT
+
+      # ── Check 2: Download bundle and verify its contents ─────────────────────
+      - name: Download and inspect bundle tarball
+        id: bundle
+        run: |
+          TAG="${{ steps.rel.outputs.tag }}"
+          GH_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          ERRORS=""
+
+          # 2-step Releases API download (direct URL fails on private repos)
+          ASSET_URL=$(curl -sfL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" \
+            | jq -r '.assets[] | select(.name == "cycentra-release.tar.gz") | .url' 2>/dev/null || echo "")
+
+          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
+            echo "ok=false" >> $GITHUB_OUTPUT
+            echo "errors=Could not resolve bundle asset URL" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/octet-stream" \
+            "$ASSET_URL" -o /tmp/bundle.tar.gz
+
+          echo "Bundle size: $(du -sh /tmp/bundle.tar.gz | cut -f1)"
+          CONTENTS=$(tar -tzf /tmp/bundle.tar.gz)
+
+          # Wheel inside bundle (v1.0.112 regression guard)
+          echo "$CONTENTS" | grep -q "\.whl$" \
+            && echo "✅ Wheel present inside bundle" \
+            || { echo "❌ Wheel MISSING from inside bundle (v1.0.112 regression)"; ERRORS="$ERRORS\nWheel missing from inside cycentra-release.tar.gz — local installs without GH_TOKEN will fail"; }
+
+          # RELEASE_NOTES.md inside bundle (required for System Settings UI)
+          echo "$CONTENTS" | grep -q "RELEASE_NOTES.md" \
+            && echo "✅ RELEASE_NOTES.md present inside bundle" \
+            || { echo "❌ RELEASE_NOTES.md MISSING from bundle"; ERRORS="$ERRORS\nRELEASE_NOTES.md missing from bundle — System Settings last-5-releases display will be blank after --update"; }
+
+          # manifest.json with wheel key
+          echo "$CONTENTS" | grep -q "manifest.json" && {
+            tar -xzf /tmp/bundle.tar.gz --wildcards "*/manifest.json" -O 2>/dev/null > /tmp/manifest.json || true
+            if [ -s /tmp/manifest.json ]; then
+              WHEEL_KEY=$(jq -r '.wheel // empty' /tmp/manifest.json 2>/dev/null || echo "")
+              [ -n "$WHEEL_KEY" ] \
+                && echo "✅ manifest.json wheel key: $WHEEL_KEY" \
+                || { echo "⚠️  manifest.json missing 'wheel' key"; ERRORS="$ERRORS\nmanifest.json missing 'wheel' key"; }
+            fi
+          } || { echo "❌ manifest.json MISSING from bundle"; ERRORS="$ERRORS\nmanifest.json missing from bundle"; }
+
+          echo "errors<<EOF" >> $GITHUB_OUTPUT
+          echo "$ERRORS"    >> $GITHUB_OUTPUT
+          echo "EOF"        >> $GITHUB_OUTPUT
+          [ -z "$ERRORS" ] && echo "ok=true" >> $GITHUB_OUTPUT || echo "ok=false" >> $GITHUB_OUTPUT
+
+      # ── Check 3: _WIZARD_VERSION_ was replaced in cycentra-setup.sh ──────────
+      - name: Verify version stamp in cycentra-setup.sh
+        id: stamp
+        run: |
+          TAG="${{ steps.rel.outputs.tag }}"
+          GH_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          ERRORS=""
+
+          ASSET_URL=$(curl -sfL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" \
+            | jq -r '.assets[] | select(.name == "cycentra-setup.sh") | .url' 2>/dev/null || echo "")
+
+          if [ -n "$ASSET_URL" ] && [ "$ASSET_URL" != "null" ]; then
+            curl -fsSL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/octet-stream" \
+              "$ASSET_URL" -o /tmp/check-setup.sh
+
+            grep -q "_WIZARD_VERSION_" /tmp/check-setup.sh \
+              && { echo "❌ _WIZARD_VERSION_ placeholder NOT replaced in released setup.sh"; ERRORS="$ERRORS\n_WIZARD_VERSION_ placeholder still present — version stamp failed"; } \
+              || echo "✅ Version stamp applied in cycentra-setup.sh"
+          fi
+
+          echo "errors<<EOF" >> $GITHUB_OUTPUT
+          echo "$ERRORS"    >> $GITHUB_OUTPUT
+          echo "EOF"        >> $GITHUB_OUTPUT
+          [ -z "$ERRORS" ] && echo "ok=true" >> $GITHUB_OUTPUT || echo "ok=false" >> $GITHUB_OUTPUT
+
+      # ── Collate all errors and decide overall result ──────────────────────────
+      - name: Collate results
+        id: final
+        if: always()
+        run: |
+          ALL=""
+          [ -n "${{ steps.assets.outputs.errors }}" ] && ALL="$ALL\n${{ steps.assets.outputs.errors }}"
+          [ -n "${{ steps.bundle.outputs.errors }}" ] && ALL="$ALL\n${{ steps.bundle.outputs.errors }}"
+          [ -n "${{ steps.stamp.outputs.errors }}"  ] && ALL="$ALL\n${{ steps.stamp.outputs.errors }}"
+
+          if [ -z "$ALL" ]; then
+            echo "overall=passed" >> $GITHUB_OUTPUT
+            echo "✅ All post-release checks passed for ${{ steps.rel.outputs.tag }}"
+          else
+            echo "overall=failed" >> $GITHUB_OUTPUT
+            echo "❌ Post-release checks FAILED:"
+            echo -e "$ALL"
+          fi
+          echo "all_errors<<EOF" >> $GITHUB_OUTPUT
+          echo "$ALL"            >> $GITHUB_OUTPUT
+          echo "EOF"             >> $GITHUB_OUTPUT
+
+      # ── If failed: create hotfix issue ───────────────────────────────────────
+      - name: Create hotfix issue on failure
+        if: steps.final.outputs.overall == 'failed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag    = '${{ steps.rel.outputs.tag }}';
+            const errors = `${{ steps.final.outputs.all_errors }}`;
+            const runUrl = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+
+            // Compute next patch version for the hotfix
+            const parts = tag.replace('v','').split('.');
+            parts[2] = String(parseInt(parts[2]) + 1);
+            const nextVer = 'v' + parts.join('.');
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              title: `hotfix: Post-release verification FAILED for ${tag}`,
+              labels: ['hotfix', 'priority:critical', 'agent:cyra-devops'],
+              body: `## 🚨 Post-Release Verification Failed — ${tag}
+
+**Verification run:** ${runUrl}
+
+**Checks that failed:**
+${errors.split('\\n').filter(Boolean).map(e => `- ${e.trim()}`).join('\n')}
+
+## Required Actions
+
+1. Review the [verification run](${runUrl}) for full details
+2. Determine if customers who ran \`--update\` are affected
+3. Fix the issues and release as \`${nextVer}\`
+
+## Notes
+
+- Tag \`${tag}\` is left intact — do not delete it
+- Customers on the broken version: running \`--update\` again after \`${nextVer}\` is released will fix them
+- The System Settings page may show incorrect release history until the hotfix is deployed
+
+cc @cyra-devops @cyra-bugfix`,
+            });
+
+      # ── Append verification status to the GitHub Release description ──────────
+      - name: Update release description with verification result
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const overall = '${{ steps.final.outputs.overall }}';
+            const tag     = '${{ steps.rel.outputs.tag }}';
+            const runUrl  = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+            const icon    = overall === 'passed' ? '✅' : '❌';
+            const label   = overall === 'passed' ? 'PASSED' : 'FAILED — hotfix issue created';
+
+            const { data: rel } = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner, repo: context.repo.repo, tag
+            });
+
+            await github.rest.repos.updateRelease({
+              owner:      context.repo.owner,
+              repo:       context.repo.repo,
+              release_id: rel.id,
+              body:       rel.body + `\n\n---\n**Post-Release Verification:** ${icon} ${label} — [View run](${runUrl})`
+            });

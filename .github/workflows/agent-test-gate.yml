@@ -1,0 +1,203 @@
+name: Agent Test Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: test-gate-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  check-trigger:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      pr_number: ${{ steps.check.outputs.pr_number }}
+    steps:
+      - name: Check trigger type
+        id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "should_run=true"  >> $GITHUB_OUTPUT
+            echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+            BODY="${{ github.event.comment.body }}"
+            if [[ "$BODY" == "/retest"* ]] && [[ "${{ github.event.issue.pull_request }}" != "" ]]; then
+              echo "should_run=true"  >> $GITHUB_OUTPUT
+              echo "pr_number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
+            else
+              echo "should_run=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          fi
+
+  run-tests:
+    needs: check-trigger
+    if: needs.check-trigger.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install test dependencies
+        run: |
+          pip install pytest pytest-cov pytest-asyncio --break-system-packages -q
+          sudo apt-get install -y shellcheck 2>/dev/null || true
+
+      - name: Compute changed files
+        id: diff
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || 'HEAD~1' }}"
+          CHANGED=$(git diff --name-only "$BASE" HEAD 2>/dev/null || git diff --name-only HEAD~1 HEAD)
+          echo "$CHANGED" > /tmp/changed_files.txt
+          echo "changed_count=$(echo "$CHANGED" | grep -c .)" >> $GITHUB_OUTPUT
+          echo "Changed files:"
+          cat /tmp/changed_files.txt
+
+      - name: Select test suites from changed files
+        id: suites
+        run: |
+          CHANGED=$(cat /tmp/changed_files.txt)
+          SUITES="01"
+
+          echo "$CHANGED" | grep -qE "^backend/.*\.py$"                                        && SUITES="$SUITES,02"
+          echo "$CHANGED" | grep -qE "^backend/blueprints/"                                    && SUITES="$SUITES,02,03"
+          echo "$CHANGED" | grep -qE "^backend/blueprints/(auth|rbac|oidc)/"                  && SUITES="$SUITES,04,10"
+          echo "$CHANGED" | grep -qE "^backend/siem_proxy\.py$"                               && SUITES="$SUITES,03,04,06,10"
+          echo "$CHANGED" | grep -qE "^backend/cysiemstack/correlation_engine/correlator\.py$" && SUITES="$SUITES,06"
+          echo "$CHANGED" | grep -qE "^backend/cysiemstack/correlation_engine/ueba\.py$"       && SUITES="$SUITES,06"
+          echo "$CHANGED" | grep -qE "^backend/cysiemstack/correlation_engine/main\.py$"       && SUITES="$SUITES,03,05"
+          echo "$CHANGED" | grep -qE "^backend/cy_asm/"                                        && SUITES="$SUITES,02,07"
+          echo "$CHANGED" | grep -qE "^backend/blueprints/asm/"                               && SUITES="$SUITES,03,07"
+          echo "$CHANGED" | grep -qE "^portal/src/"                                            && SUITES="$SUITES,08"
+          echo "$CHANGED" | grep -qE "^cycentra-setup\.sh$"                                    && SUITES="$SUITES,09"
+          echo "$CHANGED" | grep -qE "^\.github/workflows/deploy\.yml$"                        && SUITES="$SUITES,09"
+          echo "$CHANGED" | grep -qE "^backend/pyproject\.toml$"                              && SUITES="$SUITES,09"
+
+          COUNT=$(cat /tmp/changed_files.txt | grep -c . || echo 0)
+          [ "$COUNT" -ge 10 ] && SUITES="$SUITES,03,04,07,08,10"
+
+          SUITES=$(echo "$SUITES" | tr ',' '\n' | sort -n | uniq | tr '\n' ',' | sed 's/,$//')
+          echo "suites=$SUITES" >> $GITHUB_OUTPUT
+          echo "Selected suites: $SUITES"
+
+      - name: Make test scripts executable
+        run: chmod +x tests/*.sh 2>/dev/null || echo "No test scripts found yet"
+
+      - name: Run selected test suites
+        id: tests
+        run: |
+          SUITES="${{ steps.suites.outputs.suites }}"
+          echo "Running suites: $SUITES"
+          set +e
+          bash tests/run-all.sh --suite "$SUITES" 2>&1 | tee /tmp/test_output.txt
+          EXIT=$?
+          set -e
+          echo "exit_code=$EXIT" >> $GITHUB_OUTPUT
+          [ $EXIT -eq 0 ] && echo "result=passed" >> $GITHUB_OUTPUT || echo "result=failed" >> $GITHUB_OUTPUT
+
+      - name: Build report comment
+        id: report
+        if: always()
+        run: |
+          RESULT="${{ steps.tests.outputs.result }}"
+          SUITES="${{ steps.suites.outputs.suites }}"
+          SHA="${{ github.event.pull_request.head.sha || github.sha }}"
+          SHORT="${SHA:0:7}"
+          COUNT="${{ steps.diff.outputs.changed_count }}"
+          OUTPUT=$(cat /tmp/test_output.txt 2>/dev/null | tail -80 || echo "No output captured")
+
+          if [ "$RESULT" = "passed" ]; then
+            VERDICT="### ✅ Overall: PASS — all blocking suites passed, safe to merge"
+          else
+            VERDICT="### ❌ Overall: FAIL — one or more blocking suites failed, merge is BLOCKED"
+          fi
+
+          cat > /tmp/report.md << REPORT
+          ## 🧪 cyra-test — PR Test Report
+
+          **Commit:** \`$SHORT\` | **Run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          **Changed files:** $COUNT | **Suites selected:** $SUITES
+
+          <details>
+          <summary>📋 Full test output</summary>
+
+          \`\`\`
+          $OUTPUT
+          \`\`\`
+          </details>
+
+          $VERDICT
+
+          ---
+          *Comment \`/retest\` to re-run*
+          REPORT
+
+      - name: Post or update PR comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('/tmp/report.md', 'utf8');
+            const prNum = parseInt('${{ needs.check-trigger.outputs.pr_number }}');
+            const marker = '## 🧪 cyra-test — PR Test Report';
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: prNum
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: prNum, body
+              });
+            }
+
+      - name: Set labels on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const result = '${{ steps.tests.outputs.result }}';
+            const prNum = parseInt('${{ needs.check-trigger.outputs.pr_number }}');
+
+            for (const lbl of ['tests:passed','tests:failed','blocked','needs:testing']) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: prNum, name: lbl
+                });
+              } catch {}
+            }
+
+            const add = result === 'passed' ? ['tests:passed'] : ['tests:failed','blocked'];
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: prNum, labels: add
+            });
+            console.log('Labels set:', add.join(', '));

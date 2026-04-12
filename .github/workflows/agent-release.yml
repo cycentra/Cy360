@@ -1,0 +1,214 @@
+name: Agent Release — Auto-Tag and Publish
+
+# Fires when a PR with tests:passed label is merged to main.
+# Replaces the manual git-push.sh workflow:
+#   1. Reads next version from RELEASE_NOTES.md  (## v1.0.NNN)
+#   2. Validates the entry exists and has a category heading + description
+#   3. Stamps _WIZARD_VERSION_ in cycentra-setup.sh  (same as git-push.sh did)
+#   4. Updates backend/pyproject.toml version
+#   5. Commits the stamped files
+#   6. Creates annotated tag vX.X.X with RELEASE_NOTES content as annotation
+#   7. Pushes commit + tag  →  triggers the existing deploy.yml
+#
+# deploy.yml is UNCHANGED. RELEASE_NOTES.md format is UNCHANGED.
+# cycentra-setup.sh _WIZARD_VERSION_ placeholder is UNCHANGED.
+# The UI still receives the last 5 release blocks exactly as before.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  auto-release:
+    # Only when the PR was actually merged AND tests:passed label is present
+    if: |
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'tests:passed')
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "cyra-devops[bot]"
+          git config user.email "cyra-devops@users.noreply.github.com"
+
+      # ── Step 1: Read latest version from RELEASE_NOTES.md ────────────────────
+      - name: Read version from RELEASE_NOTES.md
+        id: version
+        run: |
+          python3 - << 'PYEOF'
+          import re, os, sys
+
+          with open("RELEASE_NOTES.md") as f:
+              content = f.read()
+
+          versions = re.findall(r"^## (v[\d.]+)", content, re.MULTILINE)
+          if not versions:
+              print("ERROR: No version entries found in RELEASE_NOTES.md")
+              sys.exit(1)
+
+          latest = versions[0]
+          print(f"Latest version in RELEASE_NOTES.md: {latest}")
+
+          out = os.environ.get("GITHUB_OUTPUT", "")
+          if out:
+              with open(out, "a") as f:
+                  f.write(f"version={latest}\n")
+                  f.write(f"version_num={latest.lstrip('v')}\n")
+          PYEOF
+
+      # ── Step 2: Validate RELEASE_NOTES entry ─────────────────────────────────
+      - name: Validate RELEASE_NOTES entry
+        run: |
+          python3 - << PYEOF
+          import re, sys
+
+          version = "${{ steps.version.outputs.version }}"
+          with open("RELEASE_NOTES.md") as f:
+              content = f.read()
+
+          pattern = rf"^## {re.escape(version)}.*?(?=^## v|\Z)"
+          match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
+          if not match:
+              print(f"ERROR: No RELEASE_NOTES entry found for {version}")
+              sys.exit(1)
+
+          block = match.group(0).strip()
+          headings = ["### Bug Fixes","### Enhancements","### Features","### Performance","### Security"]
+          if not any(h in block for h in headings):
+              print(f"ERROR: Entry for {version} has no category heading (### Bug Fixes, etc.)")
+              sys.exit(1)
+
+          if len([l for l in block.splitlines() if l.strip()]) < 3:
+              print(f"ERROR: Entry for {version} is too short — add description")
+              sys.exit(1)
+
+          print(f"RELEASE_NOTES entry for {version} is valid")
+          print(block[:400])
+          PYEOF
+
+      # ── Step 3: Check tag does not already exist ──────────────────────────────
+      - name: Check tag availability
+        id: tagcheck
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if git tag -l | grep -q "^${VERSION}$"; then
+            echo "Tag $VERSION already exists — skipping to prevent duplicate release"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "Tag $VERSION is available"
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ── Step 4: Stamp _WIZARD_VERSION_ in cycentra-setup.sh ──────────────────
+      # This is what git-push.sh used to do manually
+      - name: Stamp version in cycentra-setup.sh
+        if: steps.tagcheck.outputs.skip != 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TIMESTAMP=$(date -u "+%Y-%m-%d %H:%M UTC")
+          STAMP="${VERSION} — ${TIMESTAMP}"
+
+          if [ -f "cycentra-setup.sh" ]; then
+            sed -i "s|_WIZARD_VERSION_|${STAMP}|g" cycentra-setup.sh
+            echo "Stamped cycentra-setup.sh: ${STAMP}"
+          else
+            echo "cycentra-setup.sh not found at repo root — skipping stamp"
+          fi
+
+      # ── Step 5: Update pyproject.toml version ────────────────────────────────
+      - name: Update pyproject.toml
+        if: steps.tagcheck.outputs.skip != 'true'
+        run: |
+          VER="${{ steps.version.outputs.version_num }}"
+          if [ -f "backend/pyproject.toml" ]; then
+            sed -i "s/^version = .*/version = \"${VER}\"/" backend/pyproject.toml
+            echo "Stamped backend/pyproject.toml: ${VER}"
+          fi
+
+      # ── Step 6: Commit stamped files ─────────────────────────────────────────
+      - name: Commit version stamps
+        if: steps.tagcheck.outputs.skip != 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          git add cycentra-setup.sh backend/pyproject.toml 2>/dev/null || true
+          if git diff --staged --quiet; then
+            echo "No stamp changes to commit (placeholders may already be replaced)"
+          else
+            git commit -m "chore: stamp version ${VERSION} [skip ci]"
+            echo "Committed version stamps for ${VERSION}"
+          fi
+
+      # ── Step 7: Create annotated tag with RELEASE_NOTES content ──────────────
+      - name: Create annotated tag
+        if: steps.tagcheck.outputs.skip != 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          TAG_MSG=$(python3 - << PYEOF
+          import re
+          version = "$VERSION"
+          with open("RELEASE_NOTES.md") as f:
+              content = f.read()
+          pattern = rf"^## {re.escape(version)}.*?(?=^## v|\Z)"
+          match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
+          print(match.group(0).strip() if match else f"Release {version}")
+          PYEOF
+          )
+
+          echo "Creating annotated tag: $VERSION"
+          git tag -a "$VERSION" -m "$TAG_MSG"
+          echo "Tag created"
+
+      # ── Step 8: Push commit + tag → triggers deploy.yml ──────────────────────
+      - name: Push to main and push tag
+        if: steps.tagcheck.outputs.skip != 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          git push origin main
+          git push origin "$VERSION"
+          echo "✅ Pushed commit and tag $VERSION"
+          echo "deploy.yml will now fire and build the release artifacts."
+
+      # ── Step 9: Post summary on the merged PR ────────────────────────────────
+      - name: Post release summary comment
+        if: steps.tagcheck.outputs.skip != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version  = '${{ steps.version.outputs.version }}';
+            const runUrl   = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+            const relUrl   = `${{ github.server_url }}/${{ github.repository }}/releases`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: `## 🚀 cyra-devops — Auto-Release Triggered
+
+**Version:** \`${version}\`
+
+What happened automatically after tests passed and PR merged:
+1. ✅ Read \`${version}\` from \`RELEASE_NOTES.md\`
+2. ✅ Stamped \`_WIZARD_VERSION_\` in \`cycentra-setup.sh\` with \`${version}\`
+3. ✅ Updated \`backend/pyproject.toml\` version
+4. ✅ Created annotated git tag \`${version}\` with RELEASE_NOTES content as annotation
+5. ✅ Pushed tag → \`deploy.yml\` now building release artifacts
+
+**Next:** [Watch build](${runUrl}) → [Releases page](${relUrl})
+
+When \`deploy.yml\` completes, \`RELEASE_NOTES.md\` will be bundled into \`cycentra-release.tar.gz\`, copied to \`/opt/cycentra/RELEASE_NOTES.md\` on servers after \`--update\`, and the System Settings page will show the last 5 entries as before.`,
+            });
