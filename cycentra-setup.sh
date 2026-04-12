@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 — Setup & Update Wizard v1.0.137 — 2026-04-11 12:25 UTC
+# CyCentra 360 — Setup & Update Wizard v1.0.141 — 2026-04-12 15:00 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -218,7 +218,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.139"
+_SCRIPT_VERSION="v1.0.141"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -1282,7 +1282,6 @@ Description=CyCentra 360 License Watchdog — daily check
 [Timer]
 OnBootSec=2min
 OnUnitActiveSec=24h
-Persistent=true
 
 [Install]
 WantedBy=timers.target
@@ -1301,6 +1300,13 @@ systemctl daemon-reload
 systemctl enable cycentra-backend cysiemstack-engine cycentra-license-check.timer
 systemctl start  cycentra-license-check.timer
 success "License watchdog timer enabled (daily)"
+
+# Clear any stale .license_expired sentinel before restarting the backend.
+# During --update the full-install cleanup path is skipped, so a sentinel left
+# from a previous expiry event would block the restart.  The daily watchdog
+# will re-enforce expiry on its next run if the license is genuinely expired.
+chattr -i /opt/cycentra/.license_expired 2>/dev/null || true
+rm -f /opt/cycentra/.license_expired
 
 # Start Flask backend
 pkill -f "python3.*app.py" 2>/dev/null || true
