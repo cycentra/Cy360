@@ -1,0 +1,117 @@
+name: Agent Auto-Merge
+
+# Fires when the tests:passed label is added to a PR targeting main.
+# Merges the PR automatically, then dispatches agent-release.yml so the
+# release pipeline runs even though GITHUB_TOKEN merges do not trigger
+# downstream workflow events on their own.
+#
+# Full automation flow (no human needed after passing tests):
+#   1. Agent opens PR
+#   2. agent-test-gate runs tests → sets tests:passed label
+#   3. THIS workflow fires → merges PR → dispatches agent-release
+#   4. agent-release stamps version, creates tag, dispatches deploy.yml
+#   5. deploy.yml builds wheel + portal, publishes GitHub Release
+
+on:
+  pull_request:
+    types: [labeled]
+    branches: [main]
+
+jobs:
+  auto-merge:
+    # Only when the exact tests:passed label was just added
+    if: github.event.label.name == 'tests:passed'
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+
+    steps:
+      - name: Verify PR is mergeable
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNum = context.payload.pull_request.number;
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              pull_number: prNum,
+            });
+
+            if (pr.state !== 'open') {
+              console.log(`PR #${prNum} is not open (state=${pr.state}) — skipping`);
+              core.setOutput('mergeable', 'false');
+              return;
+            }
+            if (pr.draft) {
+              console.log(`PR #${prNum} is a draft — skipping`);
+              core.setOutput('mergeable', 'false');
+              return;
+            }
+            // mergeable can be null while GitHub is computing it; treat null as ok
+            // and let the actual merge call fail if needed.
+            console.log(`PR #${prNum} is open and not a draft — proceeding`);
+            core.setOutput('mergeable', 'true');
+
+      - name: Merge PR
+        if: steps.check.outputs.mergeable == 'true'
+        id: merge
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNum = context.payload.pull_request.number;
+            const title = context.payload.pull_request.title;
+            console.log(`Auto-merging PR #${prNum}: ${title}`);
+
+            await github.rest.pulls.merge({
+              owner:         context.repo.owner,
+              repo:          context.repo.repo,
+              pull_number:   prNum,
+              merge_method:  'merge',
+              commit_title:  title,
+              commit_message: 'Auto-merged by agent-auto-merge after tests:passed',
+            });
+            console.log(`✅ PR #${prNum} merged`);
+
+      # Dispatch agent-release explicitly because GITHUB_TOKEN merges do not
+      # trigger downstream workflow runs via normal push/pull_request events.
+      - name: Dispatch agent-release
+        if: steps.check.outputs.mergeable == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNum = String(context.payload.pull_request.number);
+            console.log(`Dispatching agent-release.yml for PR #${prNum}`);
+            await github.rest.actions.createWorkflowDispatch({
+              owner:       context.repo.owner,
+              repo:        context.repo.repo,
+              workflow_id: 'agent-release.yml',
+              ref:         'main',
+              inputs:      { pr_number: prNum },
+            });
+            console.log('✅ agent-release.yml dispatched');
+
+      - name: Post merge comment
+        if: steps.check.outputs.mergeable == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNum = context.payload.pull_request.number;
+            const relUrl = `${{ github.server_url }}/${{ github.repository }}/actions`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: prNum,
+              body: `## 🤖 agent-auto-merge — PR Merged Automatically
+
+Tests passed (\`tests:passed\` label set) — PR merged and release pipeline triggered.
+
+**Next steps running automatically:**
+1. \`agent-release.yml\` — stamps version, creates git tag
+2. \`deploy.yml\` — builds wheel + portal, publishes GitHub Release
+
+[Watch Actions](${relUrl})`,
+            });

@@ -1,52 +1,119 @@
 name: Agent Release — Auto-Tag and Publish
 
 # Fires when a PR with tests:passed label is merged to main.
-# Replaces the manual git-push.sh workflow:
+# Three supported triggers:
+#   1. pull_request: closed  — when a PR is closed/merged via the GitHub UI
+#   2. push: branches: [main] — when a PR merge creates a push event on main
+#   3. workflow_dispatch     — called by agent-auto-merge.yml after merging via API
+#
+# Steps:
 #   1. Reads next version from RELEASE_NOTES.md  (## v1.0.NNN)
 #   2. Validates the entry exists and has a category heading + description
-#   3. Stamps _WIZARD_VERSION_ in cycentra-setup.sh  (same as git-push.sh did)
+#   3. Stamps _WIZARD_VERSION_ in cycentra-setup.sh
 #   4. Updates backend/pyproject.toml version
 #   5. Commits the stamped files
 #   6. Creates annotated tag vX.X.X with RELEASE_NOTES content as annotation
-#   7. Pushes commit + tag  →  triggers the existing deploy.yml
-#
-# deploy.yml is UNCHANGED. RELEASE_NOTES.md format is UNCHANGED.
-# cycentra-setup.sh _WIZARD_VERSION_ placeholder is UNCHANGED.
-# The UI still receives the last 5 release blocks exactly as before.
+#   7. Pushes commit + tag
+#   8. Triggers deploy.yml via workflow_dispatch (explicit, bypasses GITHUB_TOKEN
+#      restriction where tag pushes from workflows do not fire further workflows)
 
 on:
   pull_request:
     types: [closed]
     branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to release (must have tests:passed label)'
+        required: true
 
 jobs:
   auto-release:
-    # Only when the PR was actually merged AND tests:passed label is present
-    if: |
-      github.event.pull_request.merged == true &&
-      contains(github.event.pull_request.labels.*.name, 'tests:passed')
-
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
 
     steps:
+      # ── Step 0: Determine whether this run should produce a release ───────────
+      - name: Check release conditions
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EVENT="${{ github.event_name }}"
+          SHOULD="false"
+          PR_NUM=""
+
+          if [[ "$EVENT" == "pull_request" ]]; then
+            MERGED="${{ github.event.pull_request.merged }}"
+            LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
+            PR_NUM="${{ github.event.pull_request.number }}"
+            if [[ "$MERGED" == "true" ]] && echo "$LABELS" | grep -q '"tests:passed"'; then
+              SHOULD="true"
+            else
+              echo "pull_request event: merged=$MERGED, labels=$LABELS — skipping"
+            fi
+
+          elif [[ "$EVENT" == "push" ]]; then
+            # Extract PR number from the merge commit message ("Merge pull request #N")
+            COMMIT_MSG="${{ github.event.head_commit.message }}"
+            PR_NUM=$(echo "$COMMIT_MSG" | grep -oE 'pull request #[0-9]+' | grep -oE '[0-9]+' || true)
+            if [[ -z "$PR_NUM" ]]; then
+              echo "push event: no PR merge commit detected — skipping"
+            else
+              LABELS=$(curl -sf \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${{ github.repository }}/issues/${PR_NUM}/labels" \
+                | jq -r '.[].name' 2>/dev/null || true)
+              if echo "$LABELS" | grep -q "^tests:passed$"; then
+                SHOULD="true"
+              else
+                echo "push event: PR #$PR_NUM labels: $(echo $LABELS | tr '\n' ',') — tests:passed not set, skipping"
+              fi
+            fi
+
+          elif [[ "$EVENT" == "workflow_dispatch" ]]; then
+            PR_NUM="${{ github.event.inputs.pr_number }}"
+            LABELS=$(curl -sf \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/${PR_NUM}/labels" \
+              | jq -r '.[].name' 2>/dev/null || true)
+            if echo "$LABELS" | grep -q "^tests:passed$"; then
+              SHOULD="true"
+            else
+              echo "workflow_dispatch: PR #$PR_NUM labels: $(echo $LABELS | tr '\n' ',') — tests:passed not set, skipping"
+            fi
+          fi
+
+          echo "should_release=$SHOULD" >> $GITHUB_OUTPUT
+          echo "pr_number=$PR_NUM"      >> $GITHUB_OUTPUT
+          echo "Release gate: should_release=$SHOULD  pr_number=$PR_NUM"
+
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.should_release == 'true'
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.should_release == 'true'
         with:
           python-version: '3.12'
 
       - name: Configure git identity
+        if: steps.gate.outputs.should_release == 'true'
         run: |
           git config user.name  "cyra-devops[bot]"
           git config user.email "cyra-devops@users.noreply.github.com"
 
       # ── Step 1: Read latest version from RELEASE_NOTES.md ────────────────────
       - name: Read version from RELEASE_NOTES.md
+        if: steps.gate.outputs.should_release == 'true'
         id: version
         run: |
           python3 - << 'PYEOF'
@@ -72,6 +139,7 @@ jobs:
 
       # ── Step 2: Validate RELEASE_NOTES entry ─────────────────────────────────
       - name: Validate RELEASE_NOTES entry
+        if: steps.gate.outputs.should_release == 'true'
         run: |
           python3 - << PYEOF
           import re, sys
@@ -109,6 +177,7 @@ jobs:
 
       # ── Step 3: Check tag does not already exist ──────────────────────────────
       - name: Check tag availability
+        if: steps.gate.outputs.should_release == 'true'
         id: tagcheck
         run: |
           VERSION="${{ steps.version.outputs.version }}"
@@ -184,7 +253,9 @@ jobs:
           git tag -a "$VERSION" -m "$TAG_MSG"
           echo "Tag created"
 
-      # ── Step 8: Push commit + tag → triggers deploy.yml ──────────────────────
+      # ── Step 8: Push commit + tag ─────────────────────────────────────────────
+      # Note: pushes via GITHUB_TOKEN do not trigger downstream workflow runs.
+      # deploy.yml is triggered explicitly in Step 9 via workflow_dispatch instead.
       - name: Push to main and push tag
         if: steps.tagcheck.outputs.skip != 'true'
         run: |
@@ -192,9 +263,26 @@ jobs:
           git push origin main
           git push origin "$VERSION"
           echo "✅ Pushed commit and tag $VERSION"
-          echo "deploy.yml will now fire and build the release artifacts."
 
-      # ── Step 9: Post summary on the merged PR ────────────────────────────────
+      # ── Step 9: Explicitly trigger deploy.yml ─────────────────────────────────
+      # GITHUB_TOKEN pushes do not trigger other workflows, so we fire deploy.yml
+      # via workflow_dispatch to guarantee the build-and-publish job runs.
+      - name: Trigger deploy.yml via workflow_dispatch
+        if: steps.tagcheck.outputs.skip != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ steps.version.outputs.version }}';
+            console.log(`Dispatching deploy.yml for tag ${version}`);
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              workflow_id: 'deploy.yml',
+              ref: version,
+            });
+            console.log('✅ deploy.yml dispatched');
+
+      # ── Step 10: Post summary on the merged PR ────────────────────────────────
       - name: Post release summary comment
         if: steps.tagcheck.outputs.skip != 'true'
         uses: actions/github-script@v7
@@ -203,11 +291,17 @@ jobs:
             const version  = '${{ steps.version.outputs.version }}';
             const runUrl   = `${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
             const relUrl   = `${{ github.server_url }}/${{ github.repository }}/releases`;
+            const prNum    = '${{ steps.gate.outputs.pr_number }}';
+
+            if (!prNum) {
+              console.log('No PR number available — skipping comment');
+              return;
+            }
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo:  context.repo.repo,
-              issue_number: context.payload.pull_request.number,
+              issue_number: parseInt(prNum),
               body: `## 🚀 cyra-devops — Auto-Release Triggered
 
 **Version:** \`${version}\`
@@ -217,7 +311,7 @@ What happened automatically after tests passed and PR merged:
 2. ✅ Stamped \`_WIZARD_VERSION_\` in \`cycentra-setup.sh\` with \`${version}\`
 3. ✅ Updated \`backend/pyproject.toml\` version
 4. ✅ Created annotated git tag \`${version}\` with RELEASE_NOTES content as annotation
-5. ✅ Pushed tag → \`deploy.yml\` now building release artifacts
+5. ✅ Pushed tag + triggered \`deploy.yml\` via workflow_dispatch
 
 **Next:** [Watch build](${runUrl}) → [Releases page](${relUrl})
 

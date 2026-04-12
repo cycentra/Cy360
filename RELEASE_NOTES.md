@@ -1,6 +1,40 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.142 — 2026-04-12
+
+### Feature — Full end-to-end automation: PR auto-merge and version publishing
+
+Completed the fully automated pipeline from agent task → code → tests → merge → release → publish.
+No human action is required after a task is assigned, except when tests fail.
+
+**What was broken and is now fixed:**
+
+- **Auto-merge missing:** `agent-test-gate` set `tests:passed` but nothing merged the PR.
+  Added `agent-auto-merge.yml` — fires when `tests:passed` label is set, merges the PR,
+  then explicitly dispatches `agent-release.yml`.
+
+- **`agent-release` never ran (0 jobs every time):** Job condition checked
+  `github.event.pull_request.merged` which is always null on `push` events (the actual
+  event type GitHub uses). Fixed with a gate step that handles all three trigger types:
+  `pull_request: closed`, `push: branches: [main]`, and `workflow_dispatch`.
+
+- **GITHUB_TOKEN push blocks downstream workflows:** Tag pushes from workflow runs using
+  `GITHUB_TOKEN` do not trigger further workflow runs (GitHub security restriction).
+  `agent-release` now explicitly dispatches `deploy.yml` via `workflow_dispatch` after
+  pushing the tag, guaranteeing the build-and-publish job always runs.
+
+**Resulting full automation chain:**
+```
+Agent opens PR
+  → agent-test-gate    runs tests → sets tests:passed label
+  → agent-auto-merge   merges PR → dispatches agent-release
+  → agent-release      stamps version, creates tag → dispatches deploy.yml
+  → deploy.yml         builds wheel + portal, publishes GitHub Release
+  → agent-post-release verifies artifacts, opens hotfix issue if broken
+```
+
+---
 ## v1.0.141 — 2026-04-12
 
 ### Fix — License watchdog fires immediately on setup re-enable, blocking backend restart
