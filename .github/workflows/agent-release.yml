@@ -87,7 +87,14 @@ jobs:
               sys.exit(1)
 
           block = match.group(0).strip()
-          headings = ["### Bug Fixes","### Enhancements","### Features","### Performance","### Security"]
+          headings = [
+              "### Bug Fix", "### Fix",
+              "### Feature", "### Features",
+              "### Enhancement", "### Enhancements",
+              "### Chore", "### Hotfix", "### Refactor",
+              "### Performance", "### Security",
+              "### Bug Fixes",
+          ]
           if not any(h in block for h in headings):
               print(f"ERROR: Entry for {version} has no category heading (### Bug Fixes, etc.)")
               sys.exit(1)
@@ -123,7 +130,11 @@ jobs:
           STAMP="${VERSION} — ${TIMESTAMP}"
 
           if [ -f "cycentra-setup.sh" ]; then
+            # Replace placeholder (fresh checkout) OR existing stamped version (update)
             sed -i "s|_WIZARD_VERSION_|${STAMP}|g" cycentra-setup.sh
+            sed -i "s|Setup & Update Wizard v[0-9][0-9.]* — [0-9-]* [0-9:]* UTC|Setup & Update Wizard ${STAMP}|g" cycentra-setup.sh
+            # Also update the _SCRIPT_VERSION variable if present
+            sed -i "s|^_SCRIPT_VERSION=.*|_SCRIPT_VERSION=\"${VERSION}\"|" cycentra-setup.sh
             echo "Stamped cycentra-setup.sh: ${STAMP}"
           else
             echo "cycentra-setup.sh not found at repo root — skipping stamp"
