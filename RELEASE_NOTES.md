@@ -1,6 +1,47 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.138 — 2026-04-12
+
+### Feature — Integrated Security MCP Server
+
+Introduces a native **Model Context Protocol (MCP) server** (`cysiemstack-mcp`) that
+bridges CyCentra 360's correlation engine and Wazuh with any MCP-capable AI client
+(Claude Desktop, OpenAI Agents SDK, custom LLM toolchains, etc.).
+
+The server installs automatically alongside the CySIEMStack correlation engine and
+requires no manual setup — Wazuh credentials are sourced directly from
+`/opt/cycentra/cysiemstack.env`.
+
+#### New files
+- `backend/cysiemstack/mcp_server/__init__.py` — package marker
+- `backend/cysiemstack/mcp_server/config.py` — reads `MCP_HOST`, `MCP_PORT`,
+  `WAZUH_API_*`, and `ENGINE_URL` from `cysiemstack.env`
+- `backend/cysiemstack/mcp_server/server.py` — FastMCP server (SSE/HTTP, port 8101)
+  with 10 registered tools:
+  - `get_stats` — SIEM overview statistics
+  - `list_incidents` — incidents with status/severity filters
+  - `get_incident` — full incident detail (MITRE, UEBA, LLM summary)
+  - `list_alerts` — raw ingested Wazuh alerts
+  - `list_risk_scores` — entity risk scores
+  - `list_ueba_users` — UEBA-tracked users with behavioural baselines
+  - `get_ueba_anomalies` — full anomaly history for a specific user
+  - `wazuh_list_agents` — enumerate monitored endpoints
+  - `wazuh_active_response` — trigger AR action on an agent (firewall-drop, etc.)
+  - `wazuh_get_agent_vulnerabilities` — known CVEs on an agent
+- `backend/cysiemstack/mcp_server/requirements.txt` — `mcp[cli]>=1.0.0`, `httpx`,
+  `pydantic-settings`, `structlog`
+
+#### `cycentra-setup.sh`
+- `cysiemstack.env` template: adds `MCP_HOST=127.0.0.1` and `MCP_PORT=8101`
+- New systemd unit `cysiemstack-mcp.service` (written to `/etc/systemd/system/`,
+  `After=cysiemstack-engine.service`, logs to `/opt/cycentra/mcp.log`)
+- License-expired guard applied to `cysiemstack-mcp.service` alongside existing services
+- `systemctl enable/restart` loop updated to include `cysiemstack-mcp`
+- Post-install health check verifies port 8101 is up
+- Final summary and `cycentra-setup-summary.txt` mention MCP service and log path
+
+---
 ## v1.0.137 — 2026-04-11
 
 ### Fix — Demo license expiry bugs and sentinel file tampering protection
