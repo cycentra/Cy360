@@ -1017,6 +1017,9 @@ UEBA_ML_SHADOW_MODE=true
 UEBA_ML_MIN_TRAIN_DAYS=7
 UEBA_ML_MODEL_DIR=/opt/cycentra/ml_models
 MISP_ENABLED=false
+# Security MCP bridge — exposes 11 SIEM/Wazuh tools to AI clients at /mcp/sse
+# Set to false to disable the bridge without uninstalling the mcp package.
+MCP_ENABLED=true
 # Standalone key so --update mode can read the password without parsing DATABASE_URL
 POSTGRES_PASSWORD=${CORR_DB_PASS}
 SIEMEOF

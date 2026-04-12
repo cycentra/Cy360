@@ -96,6 +96,8 @@ def rbac_users():
     rbac = _load_rbac()
     rbac[email] = {"role": role}
     _save_rbac(rbac)
+    auth_event("rbac_role_assigned", caller, "", "success",
+               f"assigned role={role} to {email}", request.remote_addr)
     return jsonify({"status": "ok", "email": email, "role": role})
 
 
@@ -114,4 +116,6 @@ def rbac_delete_user(email):
     rbac = _load_rbac()
     rbac.pop(email, None)
     _save_rbac(rbac)
+    auth_event("rbac_user_deleted", caller, "", "success",
+               f"removed user {email} from RBAC", request.remote_addr)
     return jsonify({"status": "deleted", "email": email})

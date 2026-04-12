@@ -1,6 +1,39 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.143 — 2026-04-13
+
+### Bug Fixes
+
+**`blueprints/rbac/manager.py` — RBAC mutations missing audit log entries**
+- Root cause: `POST /api/rbac/users` and `DELETE /api/rbac/users/<email>` in
+  `rbac_users()` / `rbac_delete_user()` called `auth_event` only on *denial* (HTTP 403)
+  but never on *success*. Because Wazuh tails `/var/log/cycentra/auth.log` for security
+  monitoring, every admin role assignment and user removal was invisible to the SIEM —
+  a blind-spot for insider-threat and compliance use-cases.
+- Fix: Added `auth_event("rbac_role_assigned", ...)` immediately after `_save_rbac()` in
+  the POST handler, and `auth_event("rbac_user_deleted", ...)` in the DELETE handler.
+  Both records include the acting admin's email, the target email, the new role (for
+  assignments), and the request IP. The existing denial path is unchanged.
+  - `backend/blueprints/rbac/manager.py`: two `auth_event(...)` calls added on the
+    success return paths of `rbac_users()` (POST) and `rbac_delete_user()` (DELETE).
+
+**`cycentra-setup.sh` — `MCP_ENABLED` absent from generated `cysiemstack.env`**
+- Root cause: `backend/cysiemstack/correlation_engine/main.py` reads `MCP_ENABLED` from
+  `cysiemstack.env` via `settings.__dict__.get("mcp_enabled", "true")` to decide whether
+  to mount the Security MCP bridge at `/mcp/sse`. However, the `cysiemstack.env` heredoc
+  template in `cycentra-setup.sh` (Step 10) never wrote `MCP_ENABLED`, so the generated
+  file gave operators no documented toggle — the only way to disable the bridge was to
+  manually add the variable after knowing to look for it in the engine source.
+- Fix: Added `MCP_ENABLED=true` (with an explanatory comment) to the `cysiemstack.env`
+  heredoc, immediately after `MISP_ENABLED`. The default is `true` (preserving existing
+  behaviour). Operators can now set `MCP_ENABLED=false` in
+  `/opt/cycentra/cysiemstack.env` and restart `cysiemstack-engine` to disable the bridge
+  without uninstalling the `mcp` package.
+  - `cycentra-setup.sh`: three lines added to the `cysiemstack.env` heredoc (comment +
+    `MCP_ENABLED=true` + blank separator before `POSTGRES_PASSWORD`).
+
+---
 ## v1.0.142 — 2026-04-12
 
 ### Feature — Full end-to-end automation: PR auto-merge and version publishing
