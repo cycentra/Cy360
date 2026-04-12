@@ -1,6 +1,14 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.140 — 2026-04-12
+
+### Chore — Agent definitions and workflow docs cleanup
+
+- Removed stale `cyra-360-old.md` agent file
+- Synced latest agent definitions and GitHub workflow docs from remote
+
+---
 ## v1.0.137 — 2026-04-11
 
 ### Fix — Demo license expiry bugs and sentinel file tampering protection
