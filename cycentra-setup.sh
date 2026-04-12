@@ -1019,10 +1019,6 @@ UEBA_ML_MODEL_DIR=/opt/cycentra/ml_models
 MISP_ENABLED=false
 # Standalone key so --update mode can read the password without parsing DATABASE_URL
 POSTGRES_PASSWORD=${CORR_DB_PASS}
-
-# MCP Server — Security MCP bridge (port 8101, localhost-only by default)
-MCP_HOST=127.0.0.1
-MCP_PORT=8101
 SIEMEOF
     chmod 600 /opt/cycentra/cysiemstack.env
     success "cysiemstack.env written → /opt/cycentra/cysiemstack.env"
@@ -1235,36 +1231,11 @@ StandardError=append:/opt/cycentra/engine.log
 WantedBy=multi-user.target
 UNITEOF
 
-MCP_DIR="${SITE_PKG}/cysiemstack/mcp_server"
-info "MCP server dir: ${MCP_DIR}"
-
-cat > /etc/systemd/system/cysiemstack-mcp.service << UNITEOF
-[Unit]
-Description=CyCentra 360 Security MCP Server
-After=network.target cysiemstack-engine.service
-Wants=cysiemstack-engine.service
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=${MCP_DIR}
-EnvironmentFile=/opt/cycentra/cysiemstack.env
-ExecStart=${PYTHON_BIN} server.py
-Restart=always
-RestartSec=5
-StandardOutput=append:/opt/cycentra/mcp.log
-StandardError=append:/opt/cycentra/mcp.log
-
-[Install]
-WantedBy=multi-user.target
-UNITEOF
-success "cysiemstack-mcp.service written"
-
 # ── License watchdog timer (checks + enforces expiry daily) ──────────────────
 cat > /opt/cycentra/license-watchdog.sh << 'WATCHEOF'
 #!/bin/bash
 LOG="/var/log/cycentra/license-watchdog.log"
-SERVICES=(cycentra-backend cysiemstack-engine cysiemstack-mcp cysiem-to-redis)
+SERVICES=(cycentra-backend cysiemstack-engine cysiem-to-redis)
 _log() { echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ")  $*" | tee -a "$LOG"; }
 mkdir -p "$(dirname "$LOG")"
 _LIC_JSON=$(python3 /opt/cycentra/license_validator.py --license /opt/cycentra/cycentra.lic 2>/dev/null)
@@ -1319,8 +1290,7 @@ LICTIMEREOF
 
 # Patch cycentra-backend and cysiemstack-engine to refuse start if license expired
 for _SVC_FILE in /etc/systemd/system/cycentra-backend.service \
-                 /etc/systemd/system/cysiemstack-engine.service \
-                 /etc/systemd/system/cysiemstack-mcp.service; do
+                 /etc/systemd/system/cysiemstack-engine.service; do
     if [[ -f "$_SVC_FILE" ]] && ! grep -q "license-check" "$_SVC_FILE"; then
         sed -i '/^\[Service\]/a ExecStartPre=/bin/bash -c "[ ! -f /opt/cycentra/.license_expired ] || { echo LICENSE_EXPIRED; exit 1; }"' \
             "$_SVC_FILE"
@@ -1328,7 +1298,7 @@ for _SVC_FILE in /etc/systemd/system/cycentra-backend.service \
 done
 
 systemctl daemon-reload
-systemctl enable cycentra-backend cysiemstack-engine cysiemstack-mcp cycentra-license-check.timer
+systemctl enable cycentra-backend cysiemstack-engine cycentra-license-check.timer
 systemctl start  cycentra-license-check.timer
 success "License watchdog timer enabled (daily)"
 
@@ -1342,12 +1312,12 @@ curl -s --max-time 5 http://127.0.0.1:5252/health 2>/dev/null | grep -q "ok" \
     || { warn "Flask not responding — check: journalctl -u cycentra-backend -n 30"; \
          ERRORS+=("Flask unhealthy"); }
 
-# Start correlation engine
+# Start correlation engine (MCP bridge runs inside this same process at /mcp/sse)
 systemctl restart cysiemstack-engine
 ENGINE_UP=false
 for i in $(seq 1 12); do
     curl -sf http://127.0.0.1:8100/health >/dev/null 2>&1 \
-        && { success "CySIEMStack engine healthy :8100"; ENGINE_UP=true; break; }
+        && { success "CySIEMStack engine healthy :8100 (MCP bridge at /mcp/sse)"; ENGINE_UP=true; break; }
     sleep 5
 done
 [[ "$ENGINE_UP" == false ]] && \
@@ -1357,20 +1327,6 @@ done
       echo ""
       warn "To investigate: journalctl -u cysiemstack-engine -n 30"
       ERRORS+=("Engine not responding"); }
-
-# Start MCP server (best-effort — only available if mcp package is installed)
-if [[ -d "$MCP_DIR" ]]; then
-    systemctl restart cysiemstack-mcp
-    MCP_UP=false
-    for i in $(seq 1 6); do
-        curl -sf http://127.0.0.1:8101/sse >/dev/null 2>&1 \
-            && { success "Security MCP server healthy :8101"; MCP_UP=true; break; }
-        sleep 3
-    done
-    [[ "$MCP_UP" == false ]] && warn "MCP server not responding — check: journalctl -u cysiemstack-mcp -n 20"
-else
-    warn "MCP server dir not found (${MCP_DIR}) — skipping cysiemstack-mcp start"
-fi
 
 # ── Step 15: nginx vhosts (full install only) ─────────────────────────────────
 # ── Step 15: nginx vhosts (full install only) ─────────────────────────────────
@@ -1830,7 +1786,6 @@ chk() {
 echo ""; info "── Internal ports ──"
 _port_up 5252 && success "Flask backend   :5252 UP" || warn "Flask backend   :5252 DOWN"
 _port_up 8100 && success "SIEM engine     :8100 UP" || warn "SIEM engine     :8100 DOWN"
-_port_up 8101 && success "Security MCP    :8101 UP" || warn "Security MCP    :8101 DOWN (check: journalctl -u cysiemstack-mcp -n 20)"
 _port_up 5433 && success "PostgreSQL      :5433 UP" || warn "PostgreSQL      :5433 DOWN"
 _port_up 6379 && success "Redis           :6379 UP" || warn "Redis           :6379 DOWN"
 _port_up 5601 && success "CySIEM Dashboard :5601 UP" || warn "CySIEM Dashboard :5601 DOWN (install via portal)"
@@ -1838,7 +1793,7 @@ _port_up 4433 && success "CyIRIS          :4433 UP" || warn "CyIRIS          :44
 _port_up 1880 && success "CySOAR          :1880 UP" || warn "CySOAR          :1880 DOWN (install via portal)"
 
 echo ""; info "── Systemd services ──"
-for svc in cycentra-backend cysiemstack-engine cysiemstack-mcp postgresql redis-server nginx cysiem-to-redis; do
+for svc in cycentra-backend cysiemstack-engine postgresql redis-server nginx cysiem-to-redis; do
     systemctl is-active "$svc" >/dev/null 2>&1 \
         && success "${svc} active" \
         || warn    "${svc} inactive"
@@ -1878,10 +1833,8 @@ fi
 echo ""
 echo -e "  ${BOLD}Flask service  :${NC}  systemctl status cycentra-backend"
 echo -e "  ${BOLD}Engine service :${NC}  systemctl status cysiemstack-engine"
-echo -e "  ${BOLD}MCP service    :${NC}  systemctl status cysiemstack-mcp"
 echo -e "  ${BOLD}Flask log      :${NC}  /opt/cycentra/flask.log"
 echo -e "  ${BOLD}Engine log     :${NC}  /opt/cycentra/engine.log"
-echo -e "  ${BOLD}MCP log        :${NC}  /opt/cycentra/mcp.log"
 echo -e "  ${BOLD}Main env       :${NC}  /opt/cycentra/.env"
 echo -e "  ${BOLD}SIEM env       :${NC}  /opt/cycentra/cysiemstack.env"
 echo -e "  ${BOLD}nginx config   :${NC}  /etc/nginx/sites-available/cycentra-modules"
@@ -1912,11 +1865,11 @@ fi
 
 echo -e "  ${BOLD}${YELLOW}Next steps:${NC}"
 echo -e "  ${DIM}1. Verify WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env (auto-detected if CySIEM is installed)${NC}"
-echo -e "  ${DIM}   then: systemctl restart cysiemstack-engine cysiemstack-mcp${NC}"
+echo -e "  ${DIM}   then: systemctl restart cysiemstack-engine${NC}"
 echo -e "  ${DIM}2. Verify alerts flowing: redis-cli -p 6379 llen cysiemstack:alerts:raw${NC}"
 echo -e "  ${DIM}   (cysiem-to-redis tails CySIEM alerts → Redis — check: journalctl -u cysiem-to-redis -n 20)${NC}"
 echo -e "  ${DIM}3. Check engine log: tail -f /opt/cycentra/engine.log${NC}"
-echo -e "  ${DIM}4. MCP server (AI bridge) listening on 127.0.0.1:8101 — check: journalctl -u cysiemstack-mcp -n 20${NC}"
+echo -e "  ${DIM}4. Security MCP bridge available at http://127.0.0.1:8100/mcp/sse (inside cysiemstack-engine)${NC}"
 echo -e "  ${DIM}5. Install CyIRIS / CySOAR via portal${NC}"
 echo -e "  ${DIM}6. To update: sudo bash cycentra-setup.sh --update${NC}"
 echo ""
@@ -1942,7 +1895,6 @@ URLs:
 Services:
   Flask backend  : systemctl status cycentra-backend
   SIEM engine    : systemctl status cysiemstack-engine
-  Security MCP   : systemctl status cysiemstack-mcp  (port 8101)
   PostgreSQL     : systemctl status postgresql   (port 5433)
   Redis          : systemctl status redis-server (port 6379)
   nginx          : systemctl status nginx
@@ -1951,7 +1903,6 @@ Services:
 Paths:
   Flask log    : /opt/cycentra/flask.log
   Engine log   : /opt/cycentra/engine.log
-  MCP log      : /opt/cycentra/mcp.log
   Main env     : /opt/cycentra/.env
   SIEM env     : /opt/cycentra/cysiemstack.env
   RBAC         : /opt/cycentra/rbac.json
@@ -1961,11 +1912,11 @@ Paths:
 
 Next steps:
   1. Verify WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env (auto-detected if CySIEM is installed)
-     then: systemctl restart cysiemstack-engine cysiemstack-mcp
+     then: systemctl restart cysiemstack-engine
   2. Verify alerts flowing: redis-cli -p 6379 llen cysiemstack:alerts:raw
      (cysiem-to-redis service tails CySIEM alerts → Redis)
   3. Check engine log: tail -f /opt/cycentra/engine.log
-  4. MCP server (AI bridge) on 127.0.0.1:8101 — check: journalctl -u cysiemstack-mcp -n 20
+  4. Security MCP bridge: http://127.0.0.1:8100/mcp/sse (inside cysiemstack-engine)
   5. Install CyIRIS/CySOAR via portal
   6. Update: sudo bash cycentra-setup.sh --update
 SUMEOF
