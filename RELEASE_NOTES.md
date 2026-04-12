@@ -1,6 +1,27 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.141 — 2026-04-12
+
+### Fix — License watchdog fires immediately on setup re-enable, blocking backend restart
+
+**Root cause — `Persistent=true` in `cycentra-license-check.timer`:**
+When setup calls `systemctl start cycentra-license-check.timer`, systemd detected the
+timer had not recently run (it was disabled/stopped before the update) and fired the
+watchdog immediately. The watchdog wrote `.license_expired` (with `chattr +i`) before
+`systemctl restart cycentra-backend` ran, causing the `ExecStartPre` license guard to
+block the restart and abort setup at STEP 9.
+
+**Fix 1 — Removed `Persistent=true` from timer:**
+`OnBootSec=2min` already ensures a post-boot check; `Persistent=true` is redundant and
+caused catch-up firing during setup.
+
+**Fix 2 — Explicit sentinel cleanup before backend restart in STEP 9:**
+Added `chattr -i` + `rm -f` of `.license_expired` after starting the timer and before
+restarting the backend. The full-install path already had this cleanup; the `--update`
+path did not, leaving a stale sentinel from a previous expiry event able to block restart.
+
+---
 ## v1.0.140 — 2026-04-12
 
 ### Chore — Agent definitions and workflow docs cleanup
