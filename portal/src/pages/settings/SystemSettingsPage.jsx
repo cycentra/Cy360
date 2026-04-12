@@ -11,6 +11,7 @@
 import { useState, useEffect, useRef } from "react";
 import { API_BASE } from "../../core/constants.js";
 import { AISettingsPage } from "../ai/AISettingsPage.jsx";
+import { getSavedUser } from "../../core/auth.js";
 
 // ── Shared style constants ────────────────────────────────────────────────────
 const CARD  = { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "20px 24px", marginBottom: 20 };
@@ -530,6 +531,215 @@ function EnvConfigTab() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// TAB 5 — User Management (admin only)
+// ════════════════════════════════════════════════════════════════════════════
+
+const _VALID_ROLES = ["admin", "analyst", "viewer", "cyiris", "cysoar"];
+const _ROLE_APPS = {
+  admin:   ["cy360", "cysiem", "cyiris", "cysoar", "cyasm"],
+  analyst: ["cy360", "cysiem", "cyiris", "cysoar", "cyasm"],
+  viewer:  ["cy360", "cysiem"],
+  cyiris:  ["cyiris"],
+  cysoar:  ["cysoar"],
+};
+
+function UserManagementTab() {
+  const [authRole,  setAuthRole]  = useState(null);   // null = loading
+  const [users,     setUsers]     = useState({});
+  const [loading,   setLoading]   = useState(true);
+  const [msg,       setMsg]       = useState(null);
+  const [newEmail,  setNewEmail]  = useState("");
+  const [newRole,   setNewRole]   = useState("viewer");
+  const [adding,    setAdding]    = useState(false);
+
+  const showMsg = (ok, text) => {
+    setMsg({ ok, text });
+    setTimeout(() => setMsg(null), 4000);
+  };
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/auth/verify`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => {
+        const role = d.role || "viewer";
+        setAuthRole(role);
+        if (role === "admin") {
+          return fetch(`${API_BASE}/api/rbac/users`, { credentials: "include" })
+            .then(r2 => r2.json())
+            .then(d2 => setUsers(d2 || {}));
+        }
+      })
+      .catch(() => setAuthRole("viewer"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const reloadUsers = () =>
+    fetch(`${API_BASE}/api/rbac/users`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => setUsers(d || {}));
+
+  const handleRoleChange = async (email, role) => {
+    const r = await fetch(`${API_BASE}/api/rbac/users`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, role }),
+    });
+    if (r.ok) {
+      setUsers(prev => ({ ...prev, [email]: { ...prev[email], role } }));
+      showMsg(true, `Updated ${email} → ${role}`);
+    } else {
+      const d = await r.json().catch(() => ({}));
+      showMsg(false, d.error || "Update failed");
+    }
+  };
+
+  const handleDelete = async (email) => {
+    if (!window.confirm(`Remove ${email} from RBAC? They will revert to the 'viewer' default.`)) return;
+    const r = await fetch(`${API_BASE}/api/rbac/users/${encodeURIComponent(email)}`, {
+      method: "DELETE", credentials: "include",
+    });
+    if (r.ok) {
+      setUsers(prev => { const n = { ...prev }; delete n[email]; return n; });
+      showMsg(true, `Removed ${email}`);
+    } else {
+      showMsg(false, "Delete failed");
+    }
+  };
+
+  const handleAdd = async () => {
+    const trimmed = newEmail.trim().toLowerCase();
+    if (!trimmed) return;
+    setAdding(true);
+    const r = await fetch(`${API_BASE}/api/rbac/users`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: trimmed, role: newRole }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) {
+      await reloadUsers();
+      setNewEmail("");
+      setNewRole("viewer");
+      showMsg(true, `Added ${trimmed} as ${newRole}`);
+    } else {
+      showMsg(false, d.error || "Add failed");
+    }
+    setAdding(false);
+  };
+
+  if (loading) {
+    return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
+  }
+
+  if (authRole !== "admin") {
+    return (
+      <div style={{ ...CARD, textAlign: "center", padding: "48px 24px" }}>
+        <div style={{ fontSize: 32, marginBottom: 12 }}>🔒</div>
+        <div style={{ color: "rgba(255,255,255,0.7)", fontFamily: "monospace", fontSize: 14, marginBottom: 6 }}>
+          Admin access required
+        </div>
+        <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>
+          Only administrators can manage user roles.
+        </div>
+      </div>
+    );
+  }
+
+  const entries = Object.entries(users).sort(([a], [b]) => a.localeCompare(b));
+
+  return (
+    <div style={{ maxWidth: 820 }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+        <span style={{ fontSize: 18 }}>👤</span>
+        <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
+          User Management
+        </div>
+      </div>
+      <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, marginBottom: 20, lineHeight: 1.6 }}>
+        Manage user roles and portal access. Changes take effect on the user's next request.
+      </div>
+
+      {msg && (
+        <div style={{ color: msg.ok ? "#00e5a0" : "#ff3b3b", fontSize: 12, fontFamily: "monospace", marginBottom: 14 }}>
+          {msg.ok ? "✓" : "✗"} {msg.text}
+        </div>
+      )}
+
+      {/* User table */}
+      <div style={{ ...CARD, padding: 0, overflow: "hidden", marginBottom: 20 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 150px 1fr 90px", gap: 0, padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)" }}>
+          <span style={{ ...LABEL, marginBottom: 0 }}>Email</span>
+          <span style={{ ...LABEL, marginBottom: 0 }}>Role</span>
+          <span style={{ ...LABEL, marginBottom: 0 }}>Apps</span>
+          <span />
+        </div>
+        {entries.length === 0 ? (
+          <div style={{ padding: "20px 16px", color: "rgba(255,255,255,0.2)", fontFamily: "monospace", fontSize: 12 }}>
+            No users configured. Add one below.
+          </div>
+        ) : (
+          entries.map(([email, entry]) => {
+            const role = entry.role || "viewer";
+            const apps = entry.apps || _ROLE_APPS[role] || [];
+            return (
+              <div key={email} style={{ display: "grid", gridTemplateColumns: "1fr 150px 1fr 90px", gap: 0, padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", alignItems: "center" }}>
+                <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 12, fontFamily: "monospace", wordBreak: "break-all", paddingRight: 8 }}>{email}</span>
+                <select
+                  value={role}
+                  onChange={e => handleRoleChange(email, e.target.value)}
+                  style={{ ...INPUT, padding: "4px 8px", fontSize: 11, width: "100%" }}
+                >
+                  {_VALID_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace", paddingLeft: 12 }}>
+                  {apps.join(", ") || "—"}
+                </span>
+                <button
+                  onClick={() => handleDelete(email)}
+                  style={{ background: "rgba(255,59,59,0.08)", border: "1px solid rgba(255,59,59,0.3)", color: "#ff6b6b", borderRadius: 3, padding: "4px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700, letterSpacing: "0.5px", marginLeft: 8 }}
+                >
+                  DELETE
+                </button>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Add user form */}
+      <div style={{ ...CARD }}>
+        <div style={{ ...LABEL }}>Add User</div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            type="email"
+            placeholder="user@example.com"
+            value={newEmail}
+            onChange={e => setNewEmail(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleAdd()}
+            style={{ ...INPUT, flex: 1, minWidth: 220 }}
+          />
+          <select
+            value={newRole}
+            onChange={e => setNewRole(e.target.value)}
+            style={{ ...INPUT, width: "auto", padding: "8px 12px", flex: "0 0 auto" }}
+          >
+            {_VALID_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+          <button
+            onClick={handleAdd}
+            disabled={adding || !newEmail.trim()}
+            style={{ ...BTN(), opacity: adding || !newEmail.trim() ? 0.5 : 1, flexShrink: 0 }}
+          >
+            {adding ? "Adding…" : "Add User"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // Main page
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -538,6 +748,7 @@ const TABS = [
   { id: "ai-config",    label: "AI Config" },
   { id: "integrations", label: "Integrations" },
   { id: "env",          label: "Environment Config" },
+  { id: "users",        label: "User Management" },
 ];
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1088,6 +1299,7 @@ export function SystemSettingsPage({ aiConfig, onSaveAIConfig }) {
       {tab === "ai-config"    && <AISettingsPage aiConfig={aiConfig || {}} onSave={onSaveAIConfig || (() => {})} embedded={true} />}
       {tab === "integrations" && <IntegrationsTab />}
       {tab === "env"          && <EnvConfigTab />}
+      {tab === "users"        && <UserManagementTab />}
     </div>
   );
 }

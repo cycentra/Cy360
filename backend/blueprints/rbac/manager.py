@@ -15,9 +15,10 @@ API routes:
 """
 
 import json
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, session
 
 from core.config import RBAC_FILE, ROLE_APPS, VALID_ROLES, OIDC_CLIENTS
+from core.helpers import auth_event
 
 rbac_bp = Blueprint("rbac", __name__)
 
@@ -72,6 +73,16 @@ def user_can_access_client(email: str, client_id: str) -> bool:
 
 @rbac_bp.route("/api/rbac/users", methods=["GET", "POST"])
 def rbac_users():
+    caller = session.get("user_email")
+    if not caller:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    caller_role = get_user_role(caller)
+    if caller_role != "admin":
+        auth_event("rbac_denied", caller, "", "failure",
+                   f"{request.method} /api/rbac/users", request.remote_addr)
+        return jsonify({"error": "Admin access required"}), 403
+
     if request.method == "GET":
         return jsonify(_load_rbac())
 
@@ -90,6 +101,16 @@ def rbac_users():
 
 @rbac_bp.route("/api/rbac/users/<email>", methods=["DELETE"])
 def rbac_delete_user(email):
+    caller = session.get("user_email")
+    if not caller:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    caller_role = get_user_role(caller)
+    if caller_role != "admin":
+        auth_event("rbac_denied", caller, "", "failure",
+                   f"DELETE /api/rbac/users/{email}", request.remote_addr)
+        return jsonify({"error": "Admin access required"}), 403
+
     rbac = _load_rbac()
     rbac.pop(email, None)
     _save_rbac(rbac)
