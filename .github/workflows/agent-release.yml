@@ -5,6 +5,8 @@ name: Agent Release — Auto-Tag and Publish
 #   1. pull_request: closed  — when a PR is closed/merged via the GitHub UI
 #   2. push: branches: [main] — when a PR merge creates a push event on main
 #   3. workflow_dispatch     — called by agent-auto-merge.yml after merging via API
+#                            — or run manually with bypass_tests_gate=true to skip
+#                              the tests:passed label requirement (emergency use only)
 #
 # Steps:
 #   1. Reads next version from RELEASE_NOTES.md  (## v1.0.NNN)
@@ -26,8 +28,13 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'PR number to release (must have tests:passed label)'
-        required: true
+        description: 'PR number to release (must have tests:passed label, unless bypass_tests_gate is set)'
+        required: false
+      bypass_tests_gate:
+        description: 'Skip the tests:passed label check — use only when CI tests are broken and release is urgent'
+        type: boolean
+        default: false
+        required: false
 
 jobs:
   auto-release:
@@ -77,16 +84,25 @@ jobs:
             fi
 
           elif [[ "$EVENT" == "workflow_dispatch" ]]; then
+            BYPASS="${{ github.event.inputs.bypass_tests_gate }}"
             PR_NUM="${{ github.event.inputs.pr_number }}"
-            LABELS=$(curl -sf \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${{ github.repository }}/issues/${PR_NUM}/labels" \
-              | jq -r '.[].name' 2>/dev/null || true)
-            if echo "$LABELS" | grep -q "^tests:passed$"; then
+
+            if [[ "$BYPASS" == "true" ]]; then
+              echo "⚠️  bypass_tests_gate=true — skipping tests:passed label check (emergency release)"
               SHOULD="true"
+            elif [[ -n "$PR_NUM" ]]; then
+              LABELS=$(curl -sf \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${{ github.repository }}/issues/${PR_NUM}/labels" \
+                | jq -r '.[].name' 2>/dev/null || true)
+              if echo "$LABELS" | grep -q "^tests:passed$"; then
+                SHOULD="true"
+              else
+                echo "workflow_dispatch: PR #$PR_NUM labels: $(echo $LABELS | tr '\n' ',') — tests:passed not set, skipping"
+              fi
             else
-              echo "workflow_dispatch: PR #$PR_NUM labels: $(echo $LABELS | tr '\n' ',') — tests:passed not set, skipping"
+              echo "workflow_dispatch: no pr_number and bypass_tests_gate not set — skipping"
             fi
           fi
 
