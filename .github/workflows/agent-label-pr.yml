@@ -10,7 +10,7 @@ name: Agent — Auto-label PR with auto-merge
 
 on:
   pull_request:
-    types: [opened]
+    types: [opened, ready_for_review]
     branches: [main]
 
 jobs:
