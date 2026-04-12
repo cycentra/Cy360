@@ -1,6 +1,14 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.145 — 2026-04-12
+
+### Chore
+
+**End-to-end automation smoke test**
+- Dummy release note entry to validate the full agent → PR → auto-merge label → merge → tag → deploy pipeline introduced in v1.0.144.
+
+---
 ## v1.0.144 — 2026-04-12
 
 ### Chore
