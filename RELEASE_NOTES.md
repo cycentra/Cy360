@@ -1,6 +1,40 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.138 — 2026-04-12
+
+### Feature — Integrated Security MCP Server
+
+Introduces a native **Model Context Protocol (MCP) bridge** mounted directly inside
+the existing `cysiemstack-engine` FastAPI process at `/mcp/sse` (port 8100). No
+separate service or port is required — the MCP bridge starts automatically when the
+`mcp[cli]` package is installed alongside the engine.
+
+External AI clients (Claude Desktop, OpenAI Agents SDK, custom LLM toolchains, etc.)
+connect to `http://127.0.0.1:8100/mcp/sse`.
+
+Wazuh credentials are sourced automatically from `/opt/cycentra/cysiemstack.env`.
+
+#### `backend/cysiemstack/correlation_engine/main.py`
+- Added `import base64`, `import json as _stdlib_json`, `import httpx` to existing imports.
+- Added module docstring entry for the `/mcp/sse` endpoint.
+- At the end of the file: conditional `try/except ImportError` block that, when the
+  `mcp` package is present, creates a `FastMCP` instance and registers 10 tools:
+  - `get_stats`, `list_incidents`, `get_incident`, `list_alerts`, `list_risk_scores`
+    — query the correlation engine's own REST endpoints (loopback)
+  - `list_ueba_users`, `get_ueba_anomalies` — UEBA behavioural data
+  - `wazuh_list_agents`, `wazuh_get_agent_vulnerabilities` — Wazuh Manager API (direct)
+  - `wazuh_active_response` — trigger AR action on an agent (firewall-drop, etc.)
+- Mounts the MCP ASGI sub-application: `app.mount("/mcp", _mcp.get_application())`
+- Gracefully skips mount with an info log if `mcp` is not installed.
+
+#### `backend/cysiemstack/correlation_engine/requirements.txt`
+- Added `mcp[cli]>=1.0.0`
+
+#### `cycentra-setup.sh`
+- No new systemd unit (MCP runs inside `cysiemstack-engine`).
+- Post-install success message updated: `CySIEMStack engine healthy :8100 (MCP bridge at /mcp/sse)`.
+- Summary and `cycentra-setup-summary.txt` reference `http://127.0.0.1:8100/mcp/sse`.
 ## v1.0.141 — 2026-04-12
 
 ### Fix — License watchdog fires immediately on setup re-enable, blocking backend restart

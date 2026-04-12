@@ -14,8 +14,12 @@ Endpoints:
   GET   /alerts
   POST  /alerts/ingest
   WS    /ws/live
+
+  MCP   /mcp/sse   — Security MCP bridge (SSE transport, MCP_ENABLED=true to activate)
 """
 import asyncio
+import base64
+import json as _stdlib_json
 from contextlib import asynccontextmanager
 try:
     import orjson as _json
@@ -26,6 +30,7 @@ except ImportError:
 from datetime import datetime, timezone
 from typing import Optional
 
+import httpx
 import structlog
 import redis.asyncio as aioredis
 from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
@@ -804,3 +809,273 @@ async def websocket_endpoint(ws: WebSocket):
             await ws.receive_text()  # Keep connection alive
     except WebSocketDisconnect:
         manager.disconnect(ws)
+
+
+# ── Security MCP bridge (mounted at /mcp) ─────────────────────────────────────
+# Enabled when the mcp package is installed (installed alongside the engine).
+# AI clients connect to: http://127.0.0.1:8100/mcp/sse
+# To disable, set MCP_ENABLED=false in cysiemstack.env.
+try:
+    from mcp.server.fastmcp import FastMCP as _FastMCP
+
+    _mcp_enabled = str(settings.__dict__.get("mcp_enabled", "true")).lower() != "false"
+
+    if _mcp_enabled:
+        _mcp = _FastMCP(
+            "CySIEM Security MCP",
+            instructions=(
+                "You are a security operations assistant with live access to CyCentra 360. "
+                "Use the provided tools to investigate incidents, inspect UEBA behavioural "
+                "anomalies, query entity risk scores, enumerate Wazuh endpoints, and trigger "
+                "active-response containment actions. Always confirm agent IDs before running "
+                "active-response commands."
+            ),
+        )
+
+        # ── Wazuh auth helpers ─────────────────────────────────────────────────
+
+        async def _wazuh_token() -> str:
+            creds = base64.b64encode(
+                f"{settings.wazuh_api_user}:{settings.wazuh_api_password}".encode()
+            ).decode()
+            async with httpx.AsyncClient(verify=False, timeout=10) as c:
+                r = await c.get(
+                    f"{settings.wazuh_api_url}/security/user/authenticate",
+                    headers={"Authorization": f"Basic {creds}"},
+                )
+                r.raise_for_status()
+                return r.json()["data"]["token"]
+
+        async def _wazuh_get(path: str, params: dict | None = None) -> dict:
+            token = await _wazuh_token()
+            async with httpx.AsyncClient(verify=False, timeout=15) as c:
+                r = await c.get(
+                    f"{settings.wazuh_api_url}{path}",
+                    headers={"Authorization": "Bearer " + token},
+                    params=params or {},
+                )
+                r.raise_for_status()
+                return r.json()
+
+        async def _wazuh_put(path: str, body: dict | None = None, params: dict | None = None) -> dict:
+            token = await _wazuh_token()
+            async with httpx.AsyncClient(verify=False, timeout=15) as c:
+                r = await c.put(
+                    f"{settings.wazuh_api_url}{path}",
+                    headers={"Authorization": "Bearer " + token},
+                    json=body or {},
+                    params=params or {},
+                )
+                r.raise_for_status()
+                return r.json()
+
+        # ── MCP tools — correlation engine ─────────────────────────────────────
+
+        @_mcp.tool()
+        async def get_stats() -> str:
+            """Return high-level SIEM statistics: total incidents, alerts processed,
+            active anomalies, and engine uptime."""
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get("http://127.0.0.1:8100/stats")
+                r.raise_for_status()
+                return _stdlib_json.dumps(r.json(), indent=2)
+
+        @_mcp.tool()
+        async def list_incidents(
+            status: Optional[str] = None,
+            severity: Optional[str] = None,
+            limit: int = 20,
+        ) -> str:
+            """List security incidents from the correlation engine.
+
+            Args:
+                status:   Filter by lifecycle status.
+                          Values: open | investigating | resolved | false_positive
+                severity: Filter by severity level.
+                          Values: low | medium | high | critical
+                limit:    Maximum number of incidents to return (1–100, default 20).
+            """
+            params: dict = {"limit": max(1, min(limit, 100))}
+            if status:
+                params["status"] = status
+            if severity:
+                params["severity"] = severity
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get("http://127.0.0.1:8100/incidents", params=params)
+                r.raise_for_status()
+                return _stdlib_json.dumps(r.json(), indent=2)
+
+        @_mcp.tool()
+        async def get_incident(incident_id: str) -> str:
+            """Get full details for a specific security incident.
+
+            Returns correlated rules, UEBA flags, MITRE ATT&CK tactic/kill-chain
+            mapping, LLM-generated summary, and recommended remediation steps.
+
+            Args:
+                incident_id: Incident identifier (e.g. INC-0042).
+            """
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(f"http://127.0.0.1:8100/incidents/{incident_id}")
+                r.raise_for_status()
+                return _stdlib_json.dumps(r.json(), indent=2)
+
+        @_mcp.tool()
+        async def list_alerts(
+            incident_id: Optional[str] = None,
+            limit: int = 50,
+        ) -> str:
+            """List raw Wazuh alerts ingested by the correlation engine.
+
+            Args:
+                incident_id: Restrict to alerts belonging to a specific incident.
+                limit:       Maximum number of alerts to return (1–200, default 50).
+            """
+            params: dict = {"limit": max(1, min(limit, 200))}
+            if incident_id:
+                params["incident_id"] = incident_id
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get("http://127.0.0.1:8100/alerts", params=params)
+                r.raise_for_status()
+                return _stdlib_json.dumps(r.json(), indent=2)
+
+        @_mcp.tool()
+        async def list_risk_scores(
+            entity_type: Optional[str] = None,
+            level: Optional[str] = None,
+            limit: int = 20,
+        ) -> str:
+            """Return entity risk scores ranked by current threat level.
+
+            Args:
+                entity_type: Filter by entity type. Values: user | host | ip
+                level:       Filter by risk band. Values: low | medium | high | critical
+                limit:       Maximum number of results (1–100, default 20).
+            """
+            params: dict = {"limit": max(1, min(limit, 100))}
+            if entity_type:
+                params["entity_type"] = entity_type
+            if level:
+                params["level"] = level
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get("http://127.0.0.1:8100/risk-scores", params=params)
+                r.raise_for_status()
+                return _stdlib_json.dumps(r.json(), indent=2)
+
+        @_mcp.tool()
+        async def list_ueba_users(
+            category: Optional[str] = None,
+            has_anomaly: Optional[bool] = None,
+            top_activity: Optional[int] = None,
+        ) -> str:
+            """List users tracked by UEBA with their behavioural baseline profiles.
+
+            Args:
+                category:     Filter by account type. Values: system | service | human
+                has_anomaly:  If true, return only users with at least one active anomaly.
+                top_activity: If set, return the top N users by average daily event count.
+            """
+            params: dict = {}
+            if category:
+                params["category"] = category
+            if has_anomaly is not None:
+                params["has_anomaly"] = str(has_anomaly).lower()
+            if top_activity is not None:
+                params["top_activity"] = top_activity
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get("http://127.0.0.1:8100/ueba/users", params=params)
+                r.raise_for_status()
+                return _stdlib_json.dumps(r.json(), indent=2)
+
+        @_mcp.tool()
+        async def get_ueba_anomalies(username: str) -> str:
+            """Get the UEBA baseline and full anomaly history for a specific user.
+
+            Returns the behavioural baseline (typical hours, agents, fail rates) and
+            a list of detected anomalies with severity, type, and triggering alert context.
+
+            Args:
+                username: Exact username to investigate (case-sensitive).
+            """
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(f"http://127.0.0.1:8100/ueba/{username}")
+                r.raise_for_status()
+                return _stdlib_json.dumps(r.json(), indent=2)
+
+        # ── MCP tools — Wazuh Manager API ──────────────────────────────────────
+
+        @_mcp.tool()
+        async def wazuh_list_agents(
+            status: Optional[str] = None,
+            limit: int = 25,
+        ) -> str:
+            """List Wazuh agents (monitored endpoints) registered with the manager.
+
+            Args:
+                status: Filter by connection status.
+                        Values: active | disconnected | never_connected | pending
+                limit:  Maximum number of agents to return (1–500, default 25).
+            """
+            params: dict = {
+                "limit": max(1, min(limit, 500)),
+                "select": "id,name,ip,status,os,version,lastKeepAlive",
+            }
+            if status:
+                params["status"] = status
+            data = await _wazuh_get("/agents", params=params)
+            agents = data.get("data", {}).get("affected_items", [])
+            return _stdlib_json.dumps({"agents": agents, "total": len(agents)}, indent=2)
+
+        @_mcp.tool()
+        async def wazuh_active_response(
+            agent_id: str,
+            command: str,
+            arguments: Optional[list[str]] = None,
+        ) -> str:
+            """Trigger a Wazuh active-response action on a specific endpoint.
+
+            Use this to contain threats — for example block a source IP, disable a
+            compromised account, or restart the Wazuh agent process.
+
+            Common commands: firewall-drop, disable-account, restart-wazuh
+
+            Args:
+                agent_id:  Wazuh agent ID (e.g. "001"). Use wazuh_list_agents to look up IDs.
+                command:   Active-response command name (must match ossec.conf definition).
+                arguments: Optional list of command arguments (e.g. ["192.168.1.100"]).
+            """
+            body = {"command": command, "arguments": arguments or []}
+            data = await _wazuh_put(
+                "/active-response",
+                body=body,
+                params={"agents_list": agent_id},
+            )
+            log.info("wazuh_active_response_triggered",
+                     agent_id=agent_id, command=command, arguments=arguments)
+            return _stdlib_json.dumps(data, indent=2)
+
+        @_mcp.tool()
+        async def wazuh_get_agent_vulnerabilities(
+            agent_id: str,
+            severity: Optional[str] = None,
+            limit: int = 25,
+        ) -> str:
+            """Get known vulnerabilities detected on a specific Wazuh-monitored endpoint.
+
+            Args:
+                agent_id: Wazuh agent ID (e.g. "001").
+                severity: Filter by severity. Values: Critical | High | Medium | Low
+                limit:    Maximum number of results (1–100, default 25).
+            """
+            params: dict = {"limit": max(1, min(limit, 100))}
+            if severity:
+                params["severity"] = severity
+            data = await _wazuh_get(f"/vulnerability/{agent_id}", params=params)
+            return _stdlib_json.dumps(data.get("data", {}), indent=2)
+
+        # Mount the MCP sub-application — SSE endpoint: /mcp/sse
+        app.mount("/mcp", _mcp.get_application())
+        log.info("security_mcp_mounted", path="/mcp/sse")
+
+except ImportError:
+    log.info("mcp_package_not_installed", hint="pip install 'mcp[cli]' to enable the Security MCP bridge")

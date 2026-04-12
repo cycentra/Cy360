@@ -1318,12 +1318,12 @@ curl -s --max-time 5 http://127.0.0.1:5252/health 2>/dev/null | grep -q "ok" \
     || { warn "Flask not responding — check: journalctl -u cycentra-backend -n 30"; \
          ERRORS+=("Flask unhealthy"); }
 
-# Start correlation engine
+# Start correlation engine (MCP bridge runs inside this same process at /mcp/sse)
 systemctl restart cysiemstack-engine
 ENGINE_UP=false
 for i in $(seq 1 12); do
     curl -sf http://127.0.0.1:8100/health >/dev/null 2>&1 \
-        && { success "CySIEMStack engine healthy :8100"; ENGINE_UP=true; break; }
+        && { success "CySIEMStack engine healthy :8100 (MCP bridge at /mcp/sse)"; ENGINE_UP=true; break; }
     sleep 5
 done
 [[ "$ENGINE_UP" == false ]] && \
@@ -1875,8 +1875,9 @@ echo -e "  ${DIM}   then: systemctl restart cysiemstack-engine${NC}"
 echo -e "  ${DIM}2. Verify alerts flowing: redis-cli -p 6379 llen cysiemstack:alerts:raw${NC}"
 echo -e "  ${DIM}   (cysiem-to-redis tails CySIEM alerts → Redis — check: journalctl -u cysiem-to-redis -n 20)${NC}"
 echo -e "  ${DIM}3. Check engine log: tail -f /opt/cycentra/engine.log${NC}"
-echo -e "  ${DIM}4. Install CyIRIS / CySOAR via portal${NC}"
-echo -e "  ${DIM}5. To update: sudo bash cycentra-setup.sh --update${NC}"
+echo -e "  ${DIM}4. Security MCP bridge available at http://127.0.0.1:8100/mcp/sse (inside cysiemstack-engine)${NC}"
+echo -e "  ${DIM}5. Install CyIRIS / CySOAR via portal${NC}"
+echo -e "  ${DIM}6. To update: sudo bash cycentra-setup.sh --update${NC}"
 echo ""
 
 # Save summary file
@@ -1921,8 +1922,9 @@ Next steps:
   2. Verify alerts flowing: redis-cli -p 6379 llen cysiemstack:alerts:raw
      (cysiem-to-redis service tails CySIEM alerts → Redis)
   3. Check engine log: tail -f /opt/cycentra/engine.log
-  4. Install CyIRIS/CySOAR via portal
-  5. Update: sudo bash cycentra-setup.sh --update
+  4. Security MCP bridge: http://127.0.0.1:8100/mcp/sse (inside cysiemstack-engine)
+  5. Install CyIRIS/CySOAR via portal
+  6. Update: sudo bash cycentra-setup.sh --update
 SUMEOF
 
 success "Summary saved → /root/cycentra-setup-summary.txt"
