@@ -1,13 +1,18 @@
 name: Agent Test Gate
 
+# Testing is run manually when needed.
+# This workflow is disabled for automatic triggers.
+# Trigger manually via workflow_dispatch from the Actions tab when tests are needed.
+
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-  issue_comment:
-    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to test'
+        required: true
 
 concurrency:
-  group: test-gate-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: test-gate-${{ github.event.inputs.pr_number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -20,17 +25,10 @@ jobs:
       - name: Check trigger type
         id: check
         run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          PR_NUM="${{ github.event.inputs.pr_number }}"
+          if [[ -n "$PR_NUM" ]]; then
             echo "should_run=true"  >> $GITHUB_OUTPUT
-            echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.event_name }}" == "issue_comment" ]]; then
-            BODY="${{ github.event.comment.body }}"
-            if [[ "$BODY" == "/retest"* ]] && [[ "${{ github.event.issue.pull_request }}" != "" ]]; then
-              echo "should_run=true"  >> $GITHUB_OUTPUT
-              echo "pr_number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
-            else
-              echo "should_run=false" >> $GITHUB_OUTPUT
-            fi
+            echo "pr_number=${PR_NUM}" >> $GITHUB_OUTPUT
           else
             echo "should_run=false" >> $GITHUB_OUTPUT
           fi
