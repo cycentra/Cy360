@@ -16,7 +16,7 @@ on:
 jobs:
   label-agent-pr:
     # Only run for PRs opened by the Copilot coding agent bot
-    if: github.event.pull_request.user.login == 'copilot[bot]'
+    if: github.event.pull_request.user.login == 'Copilot'
 
     runs-on: ubuntu-latest
     permissions:
