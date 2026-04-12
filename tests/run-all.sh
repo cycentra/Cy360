@@ -77,7 +77,9 @@ suite_01() {
 
     # Each version block must have a recognised category heading
     python3 - << 'PYEOF'
-import re, sys, os
+import re
+import sys
+import os
 rn = open(os.path.join(os.environ.get("REPO_ROOT","."),"RELEASE_NOTES.md")).read()
 blocks = re.split(r"^## v[\d.]+", rn, flags=re.MULTILINE)[1:]
 accepted = ("### Bug Fix","### Fix","### Feature","### Enhancement","### Chore",
@@ -224,9 +226,13 @@ suite_08() {
     grep -q "BASE_API_URL\|API_BASE" "$constants" 2>/dev/null \
         && ok "API_BASE declared in constants.js" || fail "API_BASE missing from constants.js"
 
-    # No circular imports — check that App.jsx doesn't import from pages that import App
-    ! grep -q "from.*App" "$REPO_ROOT/portal/src/pages"/**/*.jsx 2>/dev/null \
-        && ok "No circular App.jsx imports detected" || true  # warn only
+    # No circular imports — check that page files don't import from App
+    if find "$REPO_ROOT/portal/src/pages" -name "*.jsx" \
+       | xargs grep -l "from.*App" 2>/dev/null | grep -q .; then
+        warn "Possible circular App.jsx import detected"
+    else
+        ok "No circular App.jsx imports detected"
+    fi
 }
 
 # ── Suite 09: Setup script + deploy workflow checks ──────────────────────────
