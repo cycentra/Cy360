@@ -1,16 +1,13 @@
 name: Agent Auto-Merge
 
-# Fires when the tests:passed label is added to a PR targeting main.
-# Merges the PR automatically, then dispatches agent-release.yml so the
-# release pipeline runs even though GITHUB_TOKEN merges do not trigger
-# downstream workflow events on their own.
+# Fires when the auto-merge label is added to a PR targeting main.
+# Testing is run manually when needed — no tests:passed gate.
 #
-# Full automation flow (no human needed after passing tests):
-#   1. Agent opens PR
-#   2. agent-test-gate runs tests → sets tests:passed label
-#   3. THIS workflow fires → merges PR → dispatches agent-release
-#   4. agent-release stamps version, creates tag, dispatches deploy.yml
-#   5. deploy.yml builds wheel + portal, publishes GitHub Release
+# Full automation flow (no human needed after label is added):
+#   1. Agent/human adds auto-merge label to PR
+#   2. THIS workflow fires → merges PR → dispatches agent-release
+#   3. agent-release stamps version, creates tag, dispatches deploy.yml
+#   4. deploy.yml builds wheel + portal, publishes GitHub Release
 
 on:
   pull_request:
@@ -19,8 +16,8 @@ on:
 
 jobs:
   auto-merge:
-    # Only when the exact tests:passed label was just added
-    if: github.event.label.name == 'tests:passed'
+    # Only when the auto-merge label was just added
+    if: github.event.label.name == 'auto-merge'
 
     runs-on: ubuntu-latest
     permissions:
@@ -72,7 +69,7 @@ jobs:
               pull_number:   prNum,
               merge_method:  'merge',
               commit_title:  title,
-              commit_message: 'Auto-merged by agent-auto-merge after tests:passed',
+              commit_message: 'Auto-merged by agent-auto-merge (auto-merge label set)',
             });
             console.log(`✅ PR #${prNum} merged`);
 
@@ -107,7 +104,7 @@ jobs:
               issue_number: prNum,
               body: `## 🤖 agent-auto-merge — PR Merged Automatically
 
-Tests passed (\`tests:passed\` label set) — PR merged and release pipeline triggered.
+\`auto-merge\` label set — PR merged and release pipeline triggered.
 
 **Next steps running automatically:**
 1. \`agent-release.yml\` — stamps version, creates git tag
