@@ -1,14 +1,13 @@
 name: Agent Release — Auto-Tag and Publish
 
-# Fires on every push/merge to main — no test gate required.
-# Testing is run manually when needed; this workflow releases unconditionally.
+# Fires on every push/merge to main — fully automated, no test gate.
+# Assign issue → agent implements → PR with auto-merge label → this fires.
 #
 # Three supported triggers:
 #   1. pull_request: closed  — when a PR is closed/merged via the GitHub UI
 #   2. push: branches: [main] — when a PR merge creates a push event on main
 #   3. workflow_dispatch     — called by agent-auto-merge.yml after merging via API
-#                            — or run manually with bypass_tests_gate=true to skip
-#                              the tests:passed label requirement (emergency use only)
+#                            — or run manually (bypass_tests_gate is a no-op legacy input)
 #
 # Steps:
 #   1. Reads next version from RELEASE_NOTES.md  (## v1.0.NNN)
@@ -33,7 +32,7 @@ on:
         description: 'PR number to release (must have tests:passed label, unless bypass_tests_gate is set)'
         required: false
       bypass_tests_gate:
-        description: 'Skip the tests:passed label check — use only when CI tests are broken and release is urgent'
+        description: 'Legacy input — no longer used (testing is fully skipped). Kept for backward compatibility.'
         type: boolean
         default: false
         required: false
@@ -311,7 +310,7 @@ jobs:
 
 **Version:** \`${version}\`
 
-What happened automatically after tests passed and PR merged:
+What happened automatically after PR merged:
 1. ✅ Read \`${version}\` from \`RELEASE_NOTES.md\`
 2. ✅ Stamped \`_WIZARD_VERSION_\` in \`cycentra-setup.sh\` with \`${version}\`
 3. ✅ Updated \`backend/pyproject.toml\` version
