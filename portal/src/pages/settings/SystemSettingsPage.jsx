@@ -11,7 +11,6 @@
 import { useState, useEffect, useRef } from "react";
 import { API_BASE } from "../../core/constants.js";
 import { AISettingsPage } from "../ai/AISettingsPage.jsx";
-import { getSavedUser } from "../../core/auth.js";
 
 // ── Shared style constants ────────────────────────────────────────────────────
 const CARD  = { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "20px 24px", marginBottom: 20 };
@@ -545,6 +544,7 @@ const _ROLE_APPS = {
 
 function UserManagementTab() {
   const [authRole,  setAuthRole]  = useState(null);   // null = loading
+  const [authErr,   setAuthErr]   = useState(null);
   const [users,     setUsers]     = useState({});
   const [loading,   setLoading]   = useState(true);
   const [msg,       setMsg]       = useState(null);
@@ -569,7 +569,7 @@ function UserManagementTab() {
             .then(d2 => setUsers(d2 || {}));
         }
       })
-      .catch(() => setAuthRole("viewer"))
+      .catch(e => { setAuthErr(String(e)); setAuthRole("viewer"); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -609,6 +609,10 @@ function UserManagementTab() {
   const handleAdd = async () => {
     const trimmed = newEmail.trim().toLowerCase();
     if (!trimmed) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      showMsg(false, "Invalid email address format");
+      return;
+    }
     setAdding(true);
     const r = await fetch(`${API_BASE}/api/rbac/users`, {
       method: "POST", credentials: "include",
@@ -638,9 +642,15 @@ function UserManagementTab() {
         <div style={{ color: "rgba(255,255,255,0.7)", fontFamily: "monospace", fontSize: 14, marginBottom: 6 }}>
           Admin access required
         </div>
-        <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>
-          Only administrators can manage user roles.
-        </div>
+        {authErr ? (
+          <div style={{ color: "#ff6b6b", fontFamily: "monospace", fontSize: 12 }}>
+            Could not verify session: {authErr}
+          </div>
+        ) : (
+          <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>
+            Only administrators can manage user roles.
+          </div>
+        )}
       </div>
     );
   }
