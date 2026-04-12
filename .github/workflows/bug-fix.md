@@ -1,6 +1,6 @@
 ---
 name: bug-fix
-description: Workflow for diagnosing and patching bugs in CyCentra 360. Enforces root cause analysis before any code is written and a regression test before any PR opens. Testing depth is calibrated to the type and layer of the bug. Hotfix path for production-down incidents.
+description: Workflow for diagnosing and patching bugs in CyCentra 360. Enforces root cause analysis before any code is written. Agent implements fix, opens PR with auto-merge label, pipeline releases automatically. No testing gate, no human merge/approve/reject.
 triggers:
   - event: issues.labeled
     conditions:
@@ -13,7 +13,7 @@ triggers:
 
 ## Core Principle
 
-No code before RCA. No PR before regression test. The RELEASE_NOTES history of this project shows 30+ bugs that were variations of previously fixed issues — reading history first prevents repeating them.
+No code before RCA. The RELEASE_NOTES history of this project shows 30+ bugs that were variations of previously fixed issues — reading history first prevents repeating them.
 
 ---
 
@@ -73,54 +73,43 @@ Historical match: v1.0.X — [similar fix] / None — novel
 Minimal fix:
 - Files to change: path/to/file.py ([N] lines changed)
 - Strategy: [one sentence]
-
-Regression test:
-tests/unit/test_[module].py::test_[regression_name]
-This test FAILS on current code, PASSES after fix.
 ```
 
 Add label `status:rca-complete`.
 
 ---
 
-## Step 5 — Regression Test First
+## Step 5 — Minimal Patch on Branch
 
-Branch: `bugfix/<issue-number>-<slug>`.
-
-Write the regression test. Commit it. Verify it fails against current code. This is not optional — it proves the test catches the bug.
-
----
-
-## Step 6 — Minimal Patch
+Branch: `bugfix/<issue-number>-<slug>`. Commit format: `fix(scope): description — closes #N`.
 
 Apply the fix. Change the fewest lines possible. No refactors. No unrelated improvements. One bug per PR.
 
-Verify:
-- Regression test now passes
-- Suite 01 still passes
-- RELEASE_NOTES entry written using release-notes-writer skill
+Pre-PR self-validation:
+```
+[ ] Python AST check passes for all modified .py files
+[ ] Frontend: npm run build passes with 0 errors (if portal files changed)
+[ ] RELEASE_NOTES entry written (new ## vX.X.X block at top of RELEASE_NOTES.md)
+```
 
 ---
 
-## Step 7 — Testing Depth for Bug Fixes
+## Step 6 — PR Opens with auto-merge Label
 
-Bug fix testing uses the feature-development Testing Depth Matrix PLUS these additions:
+Agent opens the PR and **immediately adds the `auto-merge` label**.
 
-| Bug category | Additional suite |
-|-------------|-----------------|
-| Any auth or session bug | + Suite 04 (OWASP) forced |
-| Any env var bug in setup.sh | + Suite 09 (Infra) to verify template |
-| Any SIEM or correlation bug | + Suite 06 (Correlation accuracy) |
-| Any CORS or route protection bug | + Suite 03 (API contract) forced |
-| `hotfix` label | Suite 01 + Suite 03 + layer-specific suite only |
+- `agent-auto-merge.yml` fires on the label event
+- PR is merged automatically — no human approval required
+- `agent-release.yml` stamps version, creates git tag, triggers `deploy.yml`
+- `deploy.yml` builds and publishes the GitHub Release
+- Issue is closed automatically via `closes #N` in PR description
 
 ---
 
-## Step 8 — Hotfix Fast-Track
+## Step 7 — Hotfix Fast-Track
 
 If labelled `hotfix` (production-down):
 - Historical search: 2 minutes max
 - RCA: required, abbreviated format acceptable
-- PR targets `main` directly
-- cyra-test: Suite 01 + Suite 03 + affected-layer suite only (expedited)
-- cyra-devops: patch release tag created immediately after merge
+- Branch targets `main` directly
+- PR opens immediately with `auto-merge` label — release pipeline fires automatically

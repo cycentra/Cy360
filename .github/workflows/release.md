@@ -1,9 +1,11 @@
 ---
 name: release
-description: Release workflow for CyCentra 360. Governs every tagged release from pre-release gate through CI pipeline validation, 3-artifact bundle integrity check, GitHub Release creation, and post-release verification. cyra-devops executes this workflow.
+description: Release workflow for CyCentra 360. Fully automated — fires on every merge to main. No human steps. cyra-devops owns this workflow.
 triggers:
   - event: push.tags
     pattern: "v*.*.*"
+  - event: push.branches
+    pattern: "main"
   - event: issues.labeled
     conditions:
       - label.name: "release"
@@ -11,29 +13,40 @@ triggers:
 
 # Workflow: Release
 
-## Pre-Release Gate (cyra-devops checks before creating the git tag)
+## Fully Automated — No Human Steps
 
-All of these must be true before tagging:
+Every merge to `main` triggers the complete release pipeline automatically.
+
+**Pipeline chain:**
+1. PR is merged (by `agent-auto-merge.yml` on the `auto-merge` label)
+2. `agent-release.yml` fires on the `push` to `main` event
+3. `deploy.yml` is dispatched by `agent-release.yml` after tagging
+4. `agent-post-release.yml` verifies the release assets
+
+---
+
+## agent-release.yml — Auto-Tag and Publish
+
+Fires on every push to main (no test gate). Steps:
 
 ```
-[ ] RELEASE_NOTES.md has entry ## v1.0.NNN for this exact version
-[ ] Entry has root cause + fix description (not vague language)
-[ ] All PRs for this release are merged to main
-[ ] main branch has a green CI run (no failing checks)
-[ ] No PR with label blocked or tests:failed merged in the last 24h
-[ ] backend/pyproject.toml version field matches the tag about to be created
-```
-
-Verify entry exists:
-```bash
-grep "^## v1.0.NNN" RELEASE_NOTES.md || echo "MISSING — do not tag"
+1. Read latest version from RELEASE_NOTES.md (top ## vX.X.X entry)
+2. Validate entry has a category heading (### Feature, ### Bug Fix, etc.) and description
+3. Check tag vX.X.X does not already exist (skip if duplicate)
+4. Stamp _WIZARD_VERSION_ in cycentra-setup.sh with version + timestamp
+5. Update backend/pyproject.toml version field
+6. Commit stamped files: "chore: stamp version vX.X.X [skip ci]"
+7. Create annotated git tag with RELEASE_NOTES content as annotation
+8. Push commit + tag to main
+9. Dispatch deploy.yml via workflow_dispatch (GITHUB_TOKEN pushes do not trigger workflows)
+10. Post release summary comment on the merged PR
 ```
 
 ---
 
-## CI Pipeline (deploy.yml fires automatically on tag push)
+## deploy.yml — CI Pipeline (fires on tag dispatch from agent-release)
 
-Three jobs run in sequence:
+Three jobs run in parallel then sequence:
 
 **Job 1: build-portal** (Node 20)
 - `npm ci && npm run build`
@@ -44,53 +57,47 @@ Three jobs run in sequence:
 - `python -m build --wheel --outdir ../dist/`
 - Uploads `python-wheel` artifact
 
-**Job 3: publish**
+**Job 3: publish** (needs both artifacts)
 - Downloads both artifacts
 - Installs SHC, compiles `cycentra-setup.sh` → `cycentra-setup-bin`
-- Assembles bundle (CRITICAL — v1.0.112 fix must be present):
-
-```bash
-mkdir -p cycentra-release/dist
-# Copy all 3 artifact types:
-cp -r portal/dist   cycentra-release/portal/dist
-cp -r db            cycentra-release/db
-cp dist/*.whl       cycentra-release/dist/      # ← wheel MUST be in bundle
-cp cycentra-setup.sh cycentra-release/
-cp cycentra-setup-bin cycentra-release/
-cp RELEASE_NOTES.md  cycentra-release/
-# Write manifest with wheel filename:
-echo '{"version":"'$VER'","wheel":"'$(basename dist/*.whl)'"}' > cycentra-release/manifest.json
-tar -czf cycentra-release.tar.gz cycentra-release/
-```
-
+- Assembles 3-artifact bundle: portal dist + wheel + RELEASE_NOTES.md + manifest.json
 - Publishes versioned + `latest` aliases to GitHub Packages
-- Creates GitHub Release with 3 assets: `cycentra-release.tar.gz`, `cycentra-setup.sh`, `dist/*.whl`
+- Creates GitHub Release with assets: `cycentra-release.tar.gz`, `cycentra-setup.sh`, `*.whl`
 
 ---
 
-## Post-Release Verification (cyra-test runs within 30 minutes)
+## agent-post-release.yml — Post-Release Verification
 
-Run `tests/09-infra-tests.sh --release-check`:
+Fires automatically on GitHub Release published event. Checks:
 
 ```
-[ ] GitHub Release exists with correct tag
-[ ] 3 assets attached: cycentra-release.tar.gz, cycentra-setup.sh, *.whl
-[ ] tar -tzf cycentra-release.tar.gz | grep ".whl" → returns result
-[ ] tar -tzf cycentra-release.tar.gz | grep "RELEASE_NOTES.md" → returns result
-[ ] cat manifest.json | jq '.wheel' → not null
-[ ] cycentra-setup.sh download via 2-step Releases API works with GH_TOKEN
-[ ] GitHub Packages latest alias updated
+[ ] 3 assets on GitHub Release: cycentra-release.tar.gz, cycentra-setup.sh, *.whl
+[ ] Wheel present inside cycentra-release.tar.gz
+[ ] RELEASE_NOTES.md present inside cycentra-release.tar.gz
+[ ] manifest.json present with 'wheel' key
+[ ] _WIZARD_VERSION_ placeholder replaced in released cycentra-setup.sh
 ```
+
+On failure: creates a GitHub Issue labelled `hotfix` + `priority:critical` so cyra-bugfix and cyra-devops pick it up immediately.
 
 ---
 
-## If Post-Release Check Fails
+## RELEASE_NOTES.md Format (required for agent-release.yml to proceed)
 
-1. cyra-devops creates `hotfix` issue with `priority:critical` immediately
-2. Failed release tag is left intact — old bundle still downloadable
-3. Customers who updated to broken version: next `--update` with patch version will fix
-4. cyra-bugfix fast-tracks patch through bug-fix workflow
-5. cyra-devops creates `v1.0.NNN+1` tag within 2 hours of identifying the regression
+Every PR must include a new version block at the TOP of RELEASE_NOTES.md:
+
+```markdown
+## v1.0.NNN
+
+### Feature  (or: Bug Fix / Enhancement / Chore / Hotfix / Security)
+
+- Short description of what changed and why
+```
+
+agent-release.yml will fail (and skip the release) if:
+- No `## vX.X.X` block found
+- Block has no `### Category` heading
+- Block has fewer than 3 non-empty lines
 
 ---
 
@@ -98,9 +105,9 @@ Run `tests/09-infra-tests.sh --release-check`:
 
 ```
 v1.0.NNN
-  ^      — major: reserved for architecture rewrites (like the v4.3 Blueprint refactor)
+  ^      — major: reserved for architecture rewrites
     ^    — minor: reserved for significant feature milestones
       ^^^ — patch: every regular release increments this
 ```
 
-Never skip a number. Never reuse a number. Never delete a tag. If a release fails validation, the fix becomes the next increment.
+Never skip a number. Never reuse a number. Never delete a tag. If a release fails verification, the fix becomes the next increment.

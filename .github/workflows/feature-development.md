@@ -1,6 +1,6 @@
 ---
 name: feature-development
-description: End-to-end workflow for implementing a new CyCentra 360 feature or enhancement. Handles automatic agent routing, implementation governance, cross-agent review, and depth-calibrated automated testing. Testing depth is computed from the actual files changed — not chosen manually.
+description: End-to-end fully-automated workflow for implementing a new CyCentra 360 feature or enhancement. Assign issue to agent — agent implements, opens PR with auto-merge label, pipeline releases automatically. No human merge/approve/reject. No testing gate.
 triggers:
   - event: issues.labeled
     conditions:
@@ -11,9 +11,18 @@ triggers:
 
 # Workflow: Feature Development
 
-## Trigger
+## Fully Automated — No Human Steps Required
 
-Fires when an issue is labelled `feature` or `enhancement`, or when an issue is assigned to a specific agent.
+Assign an issue → agent does everything → code is released automatically.
+
+**End-to-end flow:**
+1. Issue is labelled `feature` or `enhancement` (or assigned directly)
+2. Agent is routed automatically, implements changes, and opens a PR
+3. Agent adds `auto-merge` label to the PR
+4. `agent-auto-merge.yml` merges the PR without human approval
+5. `agent-release.yml` stamps the version, creates the git tag, and triggers `deploy.yml`
+6. `deploy.yml` builds the wheel + portal bundle and publishes the GitHub Release
+7. `agent-post-release.yml` verifies all artifacts are correct
 
 ---
 
@@ -43,7 +52,6 @@ The assigned agent posts an implementation plan comment before writing any code.
 - RBAC level for any new routes
 - New env vars needed (if any)
 - Cross-agent notifications needed
-- Predicted test suites that cyra-test will run (based on expected file changes)
 
 Agent adds label `status:planning`.
 
@@ -65,7 +73,6 @@ Agent implements on a branch named `feature/<issue-number>-<slug>`. Commit forma
 - New env var added → comment "@cyra-devops: new env var `VAR_NAME` needs cycentra-setup.sh .env template"
 - Schema change in `adaptCyCentraJSON` or scan result → comment "@cyra-asm: schema change — please verify module output still parses correctly"
 - New SIEM engine endpoint → comment "@cyra-siem: new engine endpoint added — please verify proxy route and RBAC"
-- New `/api/` route → cyra-rbac is automatically requested as reviewer when PR opens
 
 Agent adds label `status:in-progress`.
 
@@ -79,69 +86,29 @@ Agent adds label `status:in-progress`.
 [ ] All new routes have auth check (→ 401) and role check where needed (→ 403)
 [ ] All non-GET paths have OPTIONS handler returning 204
 [ ] env-var-auditor skill run if any os.environ usage added or changed
-[ ] RELEASE_NOTES entry drafted using release-notes-writer skill
+[ ] RELEASE_NOTES entry written (new ## vX.X.X block at top of RELEASE_NOTES.md)
 [ ] app.py still under 70 lines, App.jsx still under 120 lines
 ```
 
 ---
 
-## Step 5 — PR Opens → Testing Depth Computed Automatically
+## Step 5 — PR Opens with auto-merge Label
 
-When PR is opened or updated, GitHub Actions:
-1. Computes changed file list from `git diff --name-only`
-2. Applies the Testing Depth Matrix below to determine which suites to run
-3. Runs `tests/run-all.sh --suite <computed list>`
-4. cyra-test posts the test report comment on the PR
+Agent opens the PR and **immediately adds the `auto-merge` label**.
 
-### Testing Depth Matrix
+- `agent-auto-merge.yml` fires on the label event
+- PR is merged automatically — no human approval or review required
+- `agent-release.yml` is dispatched after merge, stamps the version, creates the git tag
+- `deploy.yml` builds wheel + portal and publishes the GitHub Release
+- Issue is closed automatically via `closes #N` in PR description
 
-| Changed file pattern | Suites that run automatically |
-|---------------------|-------------------------------|
-| Any `.py` in `backend/` | 01, 02 |
-| `backend/blueprints/` any file | 01, 02, 03 |
-| `backend/blueprints/auth/**` or `/rbac/**` or `/oidc/**` | 01, 02, 03, 04, 10 |
-| `backend/siem_proxy.py` | 01, 02, 03, 04, 06, 10 |
-| `backend/cysiemstack/correlation_engine/correlator.py` | 01, 02, 06 |
-| `backend/cysiemstack/correlation_engine/ueba.py` | 01, 02, 06 |
-| `backend/cysiemstack/correlation_engine/main.py` | 01, 02, 03, 05 |
-| `backend/cysiemstack/correlation_engine/iris_connector.py` | 01, 02, 03 |
-| `backend/blueprints/asm/scanner.py` | 01, 02, 03, 07 |
-| `backend/cy_asm/**` | 01, 02, 07 |
-| `portal/src/**` any | 01, 08 |
-| `cycentra-setup.sh` | 01, 09 |
-| `.github/workflows/deploy.yml` | 01, 09 |
-| `backend/pyproject.toml` | 01, 09 |
-| `RELEASE_NOTES.md` only | 01 |
-| 10+ files changed | 01, 02, 03, 04, 07, 08, 10 |
-| SIEM + portal changed together | 01, 02, 03, 04, 05, 06, 10 |
-| Label `security-test` added to PR | + 04 forced |
-| Label `load-test` added to PR | + 05 forced |
-
-**Suite 01 always runs regardless of scope.**
+Agent adds label `status:merged` after PR merges.
 
 ---
 
-## Step 6 — Cross-Agent Review (parallel with testing)
+## Step 6 — Post-Merge (automated)
 
-While cyra-test runs, cyra-rbac is automatically requested as reviewer if the PR adds any `/api/` route. cyra-rbac posts the route review table and approves or requests changes.
-
----
-
-## Step 7 — Merge Gate
-
-PR can only merge when ALL of these are true:
-- Label `tests:passed` present (set by cyra-test)
-- No label `blocked` present
-- cyra-rbac has approved (if new routes were added)
-- No unresolved `needs:review` conversations
-- RELEASE_NOTES entry present in the diff
-- Suite 01 confirms `app.py` ≤ 70 lines and `App.jsx` ≤ 120 lines
-
----
-
-## Step 8 — Post-Merge
-
-GitHub Actions:
-- Close linked issue (requires `closes #N` in PR description)
-- Change `status:in-progress` → `status:merged`
-- If commit has tag `v*.*.*`: notify @cyra-devops to run release workflow
+GitHub Actions runs automatically:
+- `agent-release.yml` — reads version from `RELEASE_NOTES.md`, stamps `cycentra-setup.sh`, updates `pyproject.toml`, creates annotated git tag, pushes to main
+- `deploy.yml` — builds React SPA + Python wheel, assembles 3-artifact bundle, publishes GitHub Release
+- `agent-post-release.yml` — verifies all 3 release assets are present and correct; creates a `hotfix` issue if any check fails
