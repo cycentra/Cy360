@@ -533,14 +533,16 @@ function EnvConfigTab() {
 // TAB 5 — User Management (admin only)
 // ════════════════════════════════════════════════════════════════════════════
 
-const _VALID_ROLES = ["admin", "analyst", "viewer", "cyiris", "cysoar"];
-const _ROLE_APPS = {
+const VALID_ROLES = ["admin", "analyst", "viewer", "cyiris", "cysoar"];
+const ROLE_APPS_MAP = {
   admin:   ["cy360", "cysiem", "cyiris", "cysoar", "cyasm"],
   analyst: ["cy360", "cysiem", "cyiris", "cysoar", "cyasm"],
   viewer:  ["cy360", "cysiem"],
   cyiris:  ["cyiris"],
   cysoar:  ["cysoar"],
 };
+// RFC 5322 simplified: requires local@domain.tld structure
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function UserManagementTab() {
   const [authRole,  setAuthRole]  = useState(null);   // null = loading
@@ -609,7 +611,7 @@ function UserManagementTab() {
   const handleAdd = async () => {
     const trimmed = newEmail.trim().toLowerCase();
     if (!trimmed) return;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    if (!EMAIL_RE.test(trimmed)) {
       showMsg(false, "Invalid email address format");
       return;
     }
@@ -691,7 +693,7 @@ function UserManagementTab() {
         ) : (
           entries.map(([email, entry]) => {
             const role = entry.role || "viewer";
-            const apps = entry.apps || _ROLE_APPS[role] || [];
+            const apps = entry.apps || ROLE_APPS_MAP[role] || [];
             return (
               <div key={email} style={{ display: "grid", gridTemplateColumns: "1fr 150px 1fr 90px", gap: 0, padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", alignItems: "center" }}>
                 <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 12, fontFamily: "monospace", wordBreak: "break-all", paddingRight: 8 }}>{email}</span>
@@ -700,7 +702,7 @@ function UserManagementTab() {
                   onChange={e => handleRoleChange(email, e.target.value)}
                   style={{ ...INPUT, padding: "4px 8px", fontSize: 11, width: "100%" }}
                 >
-                  {_VALID_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                  {VALID_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
                 </select>
                 <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace", paddingLeft: 12 }}>
                   {apps.join(", ") || "—"}
@@ -734,7 +736,7 @@ function UserManagementTab() {
             onChange={e => setNewRole(e.target.value)}
             style={{ ...INPUT, width: "auto", padding: "8px 12px", flex: "0 0 auto" }}
           >
-            {_VALID_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+            {VALID_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
           </select>
           <button
             onClick={handleAdd}
