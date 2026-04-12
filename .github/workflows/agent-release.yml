@@ -1,10 +1,12 @@
 name: Agent Release — Auto-Tag and Publish
 
-# Fires when a PR with tests:passed label is merged to main.
+# Fires on every push/merge to main — no test gate required.
+# Testing is run manually when needed; this workflow releases unconditionally.
+#
 # Three supported triggers:
 #   1. pull_request: closed  — when a PR is closed/merged via the GitHub UI
-#   2. push: branches: [main] — when a PR merge creates a push event on main
-#   3. workflow_dispatch     — called by agent-auto-merge.yml after merging via API
+#   2. push: branches: [main] — when a push event lands on main
+#   3. workflow_dispatch     — called by agent-auto-merge.yml or manually
 #
 # Steps:
 #   1. Reads next version from RELEASE_NOTES.md  (## v1.0.NNN)
@@ -26,8 +28,8 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'PR number to release (must have tests:passed label)'
-        required: true
+        description: 'PR number to release (optional — for comment posting only)'
+        required: false
 
 jobs:
   auto-release:
@@ -38,10 +40,9 @@ jobs:
 
     steps:
       # ── Step 0: Determine whether this run should produce a release ───────────
+      # No tests:passed gate — testing is run manually when needed.
       - name: Check release conditions
         id: gate
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           EVENT="${{ github.event_name }}"
           SHOULD="false"
@@ -49,45 +50,24 @@ jobs:
 
           if [[ "$EVENT" == "pull_request" ]]; then
             MERGED="${{ github.event.pull_request.merged }}"
-            LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
             PR_NUM="${{ github.event.pull_request.number }}"
-            if [[ "$MERGED" == "true" ]] && echo "$LABELS" | grep -q '"tests:passed"'; then
+            if [[ "$MERGED" == "true" ]]; then
               SHOULD="true"
             else
-              echo "pull_request event: merged=$MERGED, labels=$LABELS — skipping"
+              echo "pull_request event: merged=$MERGED — not merged yet, skipping"
             fi
 
           elif [[ "$EVENT" == "push" ]]; then
-            # Extract PR number from the merge commit message ("Merge pull request #N")
+            # Fire on every push to main
+            SHOULD="true"
+            # Extract PR number from merge commit message for comment posting (optional)
             COMMIT_MSG="${{ github.event.head_commit.message }}"
             PR_NUM=$(echo "$COMMIT_MSG" | grep -oE 'pull request #[0-9]+' | grep -oE '[0-9]+' || true)
-            if [[ -z "$PR_NUM" ]]; then
-              echo "push event: no PR merge commit detected — skipping"
-            else
-              LABELS=$(curl -sf \
-                -H "Authorization: Bearer $GH_TOKEN" \
-                -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/repos/${{ github.repository }}/issues/${PR_NUM}/labels" \
-                | jq -r '.[].name' 2>/dev/null || true)
-              if echo "$LABELS" | grep -q "^tests:passed$"; then
-                SHOULD="true"
-              else
-                echo "push event: PR #$PR_NUM labels: $(echo $LABELS | tr '\n' ',') — tests:passed not set, skipping"
-              fi
-            fi
+            echo "push event: PR_NUM=${PR_NUM:-none} — proceeding"
 
           elif [[ "$EVENT" == "workflow_dispatch" ]]; then
+            SHOULD="true"
             PR_NUM="${{ github.event.inputs.pr_number }}"
-            LABELS=$(curl -sf \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${{ github.repository }}/issues/${PR_NUM}/labels" \
-              | jq -r '.[].name' 2>/dev/null || true)
-            if echo "$LABELS" | grep -q "^tests:passed$"; then
-              SHOULD="true"
-            else
-              echo "workflow_dispatch: PR #$PR_NUM labels: $(echo $LABELS | tr '\n' ',') — tests:passed not set, skipping"
-            fi
           fi
 
           echo "should_release=$SHOULD" >> $GITHUB_OUTPUT
