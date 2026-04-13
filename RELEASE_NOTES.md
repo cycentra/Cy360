@@ -1,6 +1,66 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.152 — 2026-04-13
+
+### Enhancement — SIEM Engine: 20 new correlation rules (CR-016 → CR-035) + UEBA detectors 8–12 + GeoIP enrichment
+
+**Correlation Engine — `correlator.py`**
+- Added 20 new `CorrelationRule` classes covering Windows, cloud and endpoint attack techniques:
+  - CR-016 Password Spraying (20+ accounts from 1 source IP)
+  - CR-017 Windows Brute Force → Login (EventID 4625 → 4624)
+  - CR-018 Dormant Account Rebirth (no activity 90+ days)
+  - CR-019 Privileged Group Membership Change (Domain Admins / Enterprise Admins)
+  - CR-020 Kerberos Ticket Anomaly (Golden Ticket / RC4-HMAC)
+  - CR-021 Registry Persistence (autorun Run/RunOnce keys)
+  - CR-022 Scheduled Task Abuse (task pointing to Temp/AppData paths)
+  - CR-023 Process Injection Indicator (Office/Browser → shell child process)
+  - CR-024 Encoded/Obfuscated Command Execution (PowerShell -EncodedCommand, IEX)
+  - CR-025 Web Shell Execution (web server spawning shell process)
+  - CR-026 Security Tool Disabled (AV/EDR/firewall service stopped)
+  - CR-027 Unusual Outbound Port (4444, 6667, 9001, 31337, etc.)
+  - CR-028 RDP to External Host (outbound :3389)
+  - CR-029 Internal Subnet Scan (20+ scan events from single host)
+  - CR-030 Large Upload to Cloud Storage (Mega, Dropbox, OneDrive, etc.)
+  - CR-031 Cloud Console Login without MFA (AWS/Azure MFA bypass)
+  - CR-032 Privileged Cloud IAM Change (AdministratorAccess / Global Admin)
+  - CR-033 Mass Cloud Resource Deletion (S3/Blob wipe)
+  - CR-034 Suspicious Mail Forwarding Rule (BEC indicator)
+  - CR-035 OAuth App Consent Grant (mail.read / files.readwrite phishing)
+- `ALL_RULES` registry expanded from 15 to 35 rules
+
+**UEBA Engine — `ueba.py`**
+- Added `DORMANT_THRESHOLD_DAYS = 90` constant
+- Added 5 new risk contribution types:
+  `dormant_account_login (55)`, `concurrent_session (50)`, `activity_volume_spike (45)`,
+  `suspicious_process (65)`, `repeated_privesc_attempt (50)`
+- Added detectors 8–12 in `analyse_alert()`:
+  - 8: Dormant account rebirth (login after 90+ inactive days)
+  - 9: Concurrent sessions from different agents within 30 s
+  - 10: Activity volume spike (10× hourly baseline, 20+ events)
+  - 11: First-seen known attack-tool process (mimikatz, meterpreter, Cobalt Strike, etc.)
+  - 12: Rapid privilege escalation (3+ privesc attempts in 2h window)
+
+**Normaliser — `normaliser.py`**
+- Added graceful `geoip2` import block (`_GEOIP_ENABLED` / `_GEOIP_READER`; no-op if DB absent)
+- Added `_lookup_geoip(ip)` helper returning `{country_iso, country_name, city, lat, lon}`
+- Added `'cloud'` category in `_classify_category()` for AWS/Azure/O365/GCP/GitHub rule groups
+- `normalise()` return dict now includes `'geo'` key populated at parse time
+
+**setup.sh — Step 19: Infrastructure Prerequisites (new)**
+- Installs `geoip2` Python library
+- Downloads `GeoLite2-City.mmdb` when `MAXMIND_KEY` is present in `/opt/cycentra/.env`
+- Deploys Sysmon XML decoder to `/var/ossec/etc/decoders/cycentra_sysmon_decoder.xml`
+- Deploys custom detection rules 100300–100309 to `/var/ossec/etc/rules/cycentra_custom_rules.xml`
+  (process injection, encoded commands, web shell, registry persistence, LSASS, AV tamper,
+  C2 ports, outbound RDP, privileged group changes, Kerberos Golden Ticket)
+- Deploys SaaS auth decoders (Okta, Azure MFA, Duo) to `/var/ossec/etc/decoders/`
+- Injects disabled cloud wodle stubs into `ossec.conf` (AWS CloudTrail, Azure AD, Microsoft 365,
+  Okta/Duo localfile inputs) — requires customer to fill PLACEHOLDER_ values and enable
+- Writes Sysmon deployment package to `/opt/cycentra/sysmon/` (config XML, deploy PS1, audit policy PS1)
+- Reloads `wazuh-manager` after each config change; prints manual-action checklist post-install
+
+---
 ## v1.0.151 — 2026-04-13
 
 ### Bug Fix

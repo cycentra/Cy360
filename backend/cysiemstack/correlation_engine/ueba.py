@@ -29,7 +29,14 @@ RISK_CONTRIBUTIONS = {
     'svc_account_interactive': 55,
     'privilege_escalation':   40,
     'impossible_travel':      60,
+    'dormant_account_login':   55,
+    'concurrent_session':       50,
+    'activity_volume_spike':    45,
+    'suspicious_process':       65,
+    'repeated_privesc_attempt': 50,
 }
+
+DORMANT_THRESHOLD_DAYS = 90  # dormant account rebirth threshold
 
 AUTH_SUCCESS_IDS = {5715, 5718}
 AUTH_FAIL_IDS    = {5710, 5711, 5716, 5719, 5720, 2502}
@@ -203,6 +210,76 @@ async def analyse_alert(
                 db, username, 'impossible_travel',
                 f"{username} on {alert.get('agent_name')} and {other.get('agent_id')} within {(ts - other['timestamp']).seconds}s",
                 incident_id, [alert.get('wazuh_id'), other.get('rule_id')],
+            ))
+
+    # ── 8. Dormant account rebirth ──────────────────────────────────────────────
+    if rule_id in AUTH_SUCCESS_IDS:
+        last_seen_ts = baseline.updated_at
+        if last_seen_ts:
+            days_inactive = (ts - last_seen_ts.replace(tzinfo=timezone.utc)).days
+            if days_inactive >= DORMANT_THRESHOLD_DAYS and (baseline.avg_daily_events or 0) > 0:
+                anomalies.append(await _record_anomaly(
+                    db, username, 'dormant_account_login',
+                    f"Account {username} inactive for {days_inactive} days — sudden login on {alert.get('agent_name')}",
+                    incident_id, [alert.get('wazuh_id')],
+                ))
+
+    # ── 9. Concurrent sessions from different agents ───────────────────────────
+    if rule_id in AUTH_SUCCESS_IDS and recent_alerts:
+        concurrent_window = timedelta(seconds=30)
+        concurrent_sessions = [
+            a for a in recent_alerts
+            if a['rule_id'] in AUTH_SUCCESS_IDS
+            and a['agent_id'] != agent_id
+            and abs((ts - a['timestamp']).total_seconds()) <= concurrent_window.total_seconds()
+        ]
+        if concurrent_sessions:
+            other = concurrent_sessions[0]
+            anomalies.append(await _record_anomaly(
+                db, username, 'concurrent_session',
+                f"{username} simultaneously logged into {alert.get('agent_name')} and {other.get('agent_id')} — possible shared credential or session hijack",
+                incident_id, [alert.get('wazuh_id')],
+            ))
+
+    # ── 10. Activity volume spike (data hoarding precursor) ───────────────────
+    if rule_id in AUTH_SUCCESS_IDS or alert.get('category') == 'fim':
+        baseline_daily = float(baseline.avg_daily_events or 0)
+        if baseline_daily > 0:
+            recent_count = len(recent_alerts) + 1
+            spike_ratio  = recent_count / max(baseline_daily / 24, 1)  # compare to hourly avg
+            if spike_ratio >= 10 and recent_count >= 20:
+                anomalies.append(await _record_anomaly(
+                    db, username, 'activity_volume_spike',
+                    f"{username} generated {recent_count} events in 2h window — {spike_ratio:.1f}× their baseline",
+                    incident_id, [alert.get('wazuh_id')],
+                ))
+
+    # ── 11. First-seen suspicious process ─────────────────────────────────────
+    process = alert.get('process_name')
+    if process and alert.get('category') in ('malware', 'system'):
+        COMMON_PROCS = {'svchost.exe', 'explorer.exe', 'lsass.exe', 'winlogon.exe',
+                        'csrss.exe', 'wininit.exe', 'services.exe', 'bash', 'sh',
+                        'python3', 'python', 'node', 'systemd'}
+        if process.lower() not in COMMON_PROCS:
+            suspicious_proc_keywords = ('mimikatz', 'meterpreter', 'cobaltstrike',
+                                        'cobalt', 'empire', 'havoc', 'sliver',
+                                        'psexec', 'wce.exe', 'pwdump', 'procdump',
+                                        'sharpdump', 'rubeus', 'bloodhound')
+            if any(k in process.lower() for k in suspicious_proc_keywords):
+                anomalies.append(await _record_anomaly(
+                    db, username, 'suspicious_process',
+                    f"Known attack tool process '{process}' observed under {username} on {alert.get('agent_name')}",
+                    incident_id, [alert.get('wazuh_id')],
+                ))
+
+    # ── 12. Rapid privilege escalation attempts ────────────────────────────────
+    if rule_id in AUTH_FAIL_IDS:
+        recent_privesc_attempts = sum(1 for a in recent_alerts if a['rule_id'] in PRIVESC_IDS)
+        if recent_privesc_attempts >= 3:
+            anomalies.append(await _record_anomaly(
+                db, username, 'repeated_privesc_attempt',
+                f"{username} made {recent_privesc_attempts} privilege escalation attempts in 2h window",
+                incident_id, [alert.get('wazuh_id')],
             ))
 
     # ── Update baseline ────────────────────────────────────────────────────────

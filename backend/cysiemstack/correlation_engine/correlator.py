@@ -439,8 +439,623 @@ class C2Beacon(CorrelationRule):
                     'confidence': min(len(times) / 10.0, 1.0),
                 }
         return None
+
+
+# =============================================================================
+# CR-016 → CR-035  — Advanced detection rules
+# =============================================================================
+
+# ── CR-016: Password Spraying ─────────────────────────────────────────────────
+class PasswordSpraying(CorrelationRule):
+    def __init__(self):
+        super().__init__(
+            'CR-016', 'Password Spraying',
+            '1 failed login attempt across 20+ different usernames from a single source IP',
+            'high', ['Credential Access', 'Initial Access'], 5
+        )
+
+    def match(self, alerts):
+        fails = [a for a in alerts if a['rule_id'] in (5710, 5711, 5716, 18102) and a.get('src_ip')]
+        if not fails:
+            return None
+        by_src: dict = {}
+        for a in fails:
+            by_src.setdefault(a['src_ip'], set()).add(a.get('username') or a.get('agent_id', ''))
+        for src, victims in by_src.items():
+            if len(victims) >= 20:
+                related = [a for a in fails if a['src_ip'] == src]
+                return {
+                    'key_alert_ids': [related[0].get('wazuh_id')],
+                    'detail': f"Password spray from {src} targeting {len(victims)} accounts",
+                    'confidence': min(len(victims) / 50.0, 1.0),
+                }
+        return None
+
+
+# ── CR-017: Windows Brute Force → Successful Login ───────────────────────────
+class WindowsBruteForce(CorrelationRule):
+    """Windows Event 4625 failures → 4624 success — distinct from CR-001 (SSH only)."""
+    WIN_FAIL    = {60122, 60123, 60204}   # EventID 4625 variants
+    WIN_SUCCESS = {60106, 60137, 60138}   # EventID 4624 variants
+
+    def __init__(self):
+        super().__init__(
+            'CR-017', 'Windows Brute Force → Login',
+            'Multiple Windows auth failures (4625) followed by successful logon (4624)',
+            'high', ['Credential Access', 'Initial Access'], 15
+        )
+
+    def match(self, alerts):
+        fails   = [a for a in alerts if a['rule_id'] in self.WIN_FAIL]
+        success = [a for a in alerts if a['rule_id'] in self.WIN_SUCCESS]
+        if len(fails) >= 5 and success:
+            return {
+                'key_alert_ids': [fails[0].get('wazuh_id'), success[0].get('wazuh_id')],
+                'detail': f"{len(fails)} Windows auth failures then success on {success[0].get('agent_name')}",
+                'confidence': min(len(fails) / 20.0, 1.0),
+            }
+        return None
+
+
+# ── CR-018: Dormant Account Rebirth ──────────────────────────────────────────
+class DormantAccountRebirth(CorrelationRule):
+    """Account inactive in the alert DB for 90+ days suddenly logs in."""
+    DORMANT_DAYS = 90
+
+    def __init__(self):
+        super().__init__(
+            'CR-018', 'Dormant Account Rebirth',
+            f'Account with no activity for {DormantAccountRebirth.DORMANT_DAYS}+ days suddenly authenticates',
+            'high', ['Initial Access', 'Persistence'], 60
+        )
+
+    def match(self, alerts):
+        logins = [a for a in alerts if a['rule_id'] in (5715, 5718, 60106, 60137) and a.get('username')]
+        if not logins:
+            return None
+        usernames_with_prior = {a.get('username') for a in alerts
+                                if a['rule_id'] not in (5715, 5718, 60106, 60137)}
+        for login in logins:
+            uname = login.get('username')
+            if uname and uname not in usernames_with_prior:
+                prior_alerts = [a for a in alerts if a.get('username') == uname
+                                and a.get('wazuh_id') != login.get('wazuh_id')]
+                if not prior_alerts:
+                    return {
+                        'key_alert_ids': [login.get('wazuh_id')],
+                        'detail': f"Account {uname} logged in with no prior activity in observation window",
+                        'confidence': 0.65,
+                    }
+        return None
+
+
+# ── CR-019: Domain Admin Group Modification ───────────────────────────────────
+class DomainAdminGroupChange(CorrelationRule):
+    """Windows Event 4732 — member added to privileged group."""
+    WIN_GROUP_CHANGE = {60148, 60149, 60150, 60271, 60272}
+    PRIV_GROUPS = ('domain admins', 'administrators', 'enterprise admins',
+                   'schema admins', 'group policy creator', 'backup operators')
+
+    def __init__(self):
+        super().__init__(
+            'CR-019', 'Privileged Group Membership Change',
+            'Account added to Domain Admins, Administrators, or equivalent privileged group',
+            'critical', ['Privilege Escalation', 'Persistence'], 60
+        )
+
+    def match(self, alerts):
+        changes = [
+            a for a in alerts
+            if a['rule_id'] in self.WIN_GROUP_CHANGE or
+            any(g in (a.get('rule_desc') or '').lower() for g in self.PRIV_GROUPS)
+        ]
+        if changes:
+            return {
+                'key_alert_ids': [changes[0].get('wazuh_id')],
+                'detail': f"Privileged group change on {changes[0].get('agent_name')}: {changes[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.92,
+            }
+        return None
+
+
+# ── CR-020: Kerberos / Golden Ticket Anomaly ──────────────────────────────────
+class GoldenTicketAnomaly(CorrelationRule):
+    """Kerberos TGS requests with anomalous lifetimes or encryption types."""
+    KERB_IDS = {60210, 60211, 60212, 60213}  # Wazuh Kerberos rules (EventID 4769/4770)
+    GOLDEN_KEYWORDS = ('rc4-hmac', '0x17', 'ticket lifetime', 'forwardable', 'renewable',
+                       'golden ticket', 'kerberoast', 'pass-the-ticket')
+
+    def __init__(self):
+        super().__init__(
+            'CR-020', 'Kerberos Ticket Anomaly',
+            'Kerberos TGS request with suspicious encryption or lifetime — possible Golden Ticket',
+            'critical', ['Credential Access', 'Lateral Movement'], 30
+        )
+
+    def match(self, alerts):
+        kerb = [
+            a for a in alerts
+            if a['rule_id'] in self.KERB_IDS or
+            any(k in (a.get('rule_desc') or '').lower() for k in self.GOLDEN_KEYWORDS)
+        ]
+        if kerb:
+            return {
+                'key_alert_ids': [kerb[0].get('wazuh_id')],
+                'detail': f"Kerberos anomaly on {kerb[0].get('agent_name')}: {kerb[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.80,
+            }
+        return None
+
+
+# ── CR-021: Registry Persistence ─────────────────────────────────────────────
+class RegistryPersistence(CorrelationRule):
+    """FIM alert on autorun registry keys followed by new process execution."""
+    RUN_KEY_PATHS = (
+        'currentversion\\run', 'currentversion\\runonce',
+        'currentversion\\runservices', 'winlogon\\userinit',
+        'policies\\explorer\\run',
+    )
+
+    def __init__(self):
+        super().__init__(
+            'CR-021', 'Registry Persistence',
+            'Modification of autorun registry key (Run/RunOnce) indicating boot persistence',
+            'high', ['Persistence'], 30
+        )
+
+    def match(self, alerts):
+        reg = [
+            a for a in alerts
+            if (a.get('category') == 'fim' or 'registry' in (a.get('rule_desc') or '').lower()) and
+            a.get('file_path') and
+            any(k in (a['file_path'] or '').lower() for k in self.RUN_KEY_PATHS)
+        ]
+        if not reg:
+            reg = [a for a in alerts if
+                   any(k in (a.get('rule_desc') or '').lower()
+                       for k in ('run key', 'runonce', 'autorun', 'registry persistence'))]
+        if reg:
+            return {
+                'key_alert_ids': [reg[0].get('wazuh_id')],
+                'detail': f"Registry autorun key modified on {reg[0].get('agent_name')}: {(reg[0].get('file_path') or '')[-60:]}",
+                'confidence': 0.85,
+            }
+        return None
+
+
+# ── CR-022: Scheduled Task Abuse ─────────────────────────────────────────────
+class ScheduledTaskAbuse(CorrelationRule):
+    """New scheduled task pointing to suspicious paths (Temp, AppData, Public)."""
+    SUSPICIOUS_PATHS = ('\\temp\\', '\\appdata\\', '\\public\\', '\\programdata\\',
+                        '/tmp/', '/var/tmp/', 'c:\\windows\\temp')
+    TASK_RULE_IDS = {60280, 60281, 60282}  # Wazuh rules for EventID 4698/4702
+
+    def __init__(self):
+        super().__init__(
+            'CR-022', 'Scheduled Task Abuse',
+            'Scheduled task created or modified pointing to a suspicious temp/user-writable path',
+            'high', ['Persistence', 'Execution'], 30
+        )
+
+    def match(self, alerts):
+        tasks = [
+            a for a in alerts
+            if (a['rule_id'] in self.TASK_RULE_IDS or
+                any(k in (a.get('rule_desc') or '').lower()
+                    for k in ('scheduled task', 'task scheduler', 'schtask'))) and
+            any(p in ((a.get('rule_desc') or '') + (a.get('file_path') or '')).lower()
+                for p in self.SUSPICIOUS_PATHS)
+        ]
+        if tasks:
+            return {
+                'key_alert_ids': [tasks[0].get('wazuh_id')],
+                'detail': f"Suspicious scheduled task on {tasks[0].get('agent_name')}: {tasks[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.80,
+            }
+        return None
+
+
+# ── CR-023: Process Injection (Browser → System Process) ──────────────────────
+class ProcessInjection(CorrelationRule):
+    """Browser or Office app spawning a shell/system process — classic injection."""
+    PARENT_PROCS = ('chrome.exe', 'msedge.exe', 'firefox.exe', 'iexplore.exe',
+                    'winword.exe', 'excel.exe', 'powerpnt.exe', 'outlook.exe')
+    CHILD_PROCS  = ('cmd.exe', 'powershell.exe', 'wscript.exe', 'cscript.exe',
+                    'mshta.exe', 'rundll32.exe', 'regsvr32.exe', 'certutil.exe')
+
+    def __init__(self):
+        super().__init__(
+            'CR-023', 'Process Injection Indicator',
+            'Browser or Office process spawning a system/shell process as child',
+            'high', ['Defense Evasion', 'Execution'], 15
+        )
+
+    def match(self, alerts):
+        injection = [
+            a for a in alerts
+            if any(p in (a.get('rule_desc') or '').lower() for p in self.PARENT_PROCS) and
+               any(c in (a.get('rule_desc') or '').lower() for c in self.CHILD_PROCS)
+        ]
+        if not injection:
+            injection = [
+                a for a in alerts
+                if a.get('process_name') and
+                   any(p in a['process_name'].lower() for p in self.CHILD_PROCS) and
+                   any(k in (a.get('rule_desc') or '').lower()
+                       for k in ('parent', 'spawned by', 'child process'))
+            ]
+        if injection:
+            return {
+                'key_alert_ids': [injection[0].get('wazuh_id')],
+                'detail': f"Suspicious parent→child process on {injection[0].get('agent_name')}: {injection[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.85,
+            }
+        return None
+
+
+# ── CR-024: Suspicious Encoded Command (Living off the Land) ──────────────────
+class EncodedCommandExecution(CorrelationRule):
+    """PowerShell -EncodedCommand / -enc — LOLBin execution technique."""
+    LOL_KEYWORDS = ('-encodedcommand', '-enc ', 'encodedcommand', 'frombase64string',
+                    'iex(', 'invoke-expression', 'downloadstring', 'hidden -w', 'bypass')
+
+    def __init__(self):
+        super().__init__(
+            'CR-024', 'Encoded / Obfuscated Command Execution',
+            'PowerShell or script interpreter executing a Base64-encoded or obfuscated command',
+            'high', ['Execution', 'Defense Evasion'], 20
+        )
+
+    def match(self, alerts):
+        lol = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() for k in self.LOL_KEYWORDS) or
+               any(k in (a.get('raw_log') or '').lower() for k in self.LOL_KEYWORDS)
+        ]
+        if lol:
+            return {
+                'key_alert_ids': [lol[0].get('wazuh_id')],
+                'detail': f"Obfuscated command on {lol[0].get('agent_name')}: {lol[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.88,
+            }
+        return None
+
+
+# ── CR-025: Web Shell Execution ───────────────────────────────────────────────
+class WebShellExecution(CorrelationRule):
+    """Web server process (IIS/Apache) spawning a shell — classic web shell."""
+    WEB_PROCS   = ('w3wp.exe', 'httpd', 'apache2', 'nginx', 'php-fpm', 'tomcat')
+    SHELL_PROCS = ('cmd.exe', 'powershell.exe', 'bash', 'sh', 'python', 'perl', 'ruby')
+
+    def __init__(self):
+        super().__init__(
+            'CR-025', 'Web Shell Execution',
+            'Web server process spawning a system shell — likely web shell activity',
+            'critical', ['Initial Access', 'Execution', 'Persistence'], 20
+        )
+
+    def match(self, alerts):
+        webshell = [
+            a for a in alerts
+            if any(w in (a.get('rule_desc') or '').lower() for w in self.WEB_PROCS) and
+               any(s in (a.get('rule_desc') or '').lower() for s in self.SHELL_PROCS)
+        ]
+        if not webshell:
+            webshell = [a for a in alerts if
+                        any(k in (a.get('rule_desc') or '').lower()
+                            for k in ('web shell', 'webshell', 'shell upload'))]
+        if webshell:
+            return {
+                'key_alert_ids': [webshell[0].get('wazuh_id')],
+                'detail': f"Web shell on {webshell[0].get('agent_name')}: {webshell[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.95,
+            }
+        return None
+
+
+# ── CR-026: Security Tool Disabled ───────────────────────────────────────────
+class SecurityToolDisabled(CorrelationRule):
+    """AV/EDR/firewall service stopped or disabled."""
+    SECURITY_SERVICES = ('wdefend', 'windefend', 'mssecflt', 'sense', 'mssense',
+                         'carbonblack', 'crowdstrike', 'cylance', 'sophos', 'eset',
+                         'symantec', 'mcafee', 'trend', 'avast', 'kaspersky',
+                         'ufw', 'firewalld', 'iptables')
+    STOP_IDS = {7036, 7045, 60100, 60101}  # Service control manager rules
+
+    def __init__(self):
+        super().__init__(
+            'CR-026', 'Security Tool Disabled',
+            'AV, EDR or firewall service stopped or disabled — anti-forensic step',
+            'critical', ['Defense Evasion'], 15
+        )
+
+    def match(self, alerts):
+        disabled = [
+            a for a in alerts
+            if (a['rule_id'] in self.STOP_IDS or
+                any(k in (a.get('rule_desc') or '').lower()
+                    for k in ('service stopped', 'service disabled', 'antivirus disabled'))) and
+            any(s in (a.get('rule_desc') or '').lower() for s in self.SECURITY_SERVICES)
+        ]
+        if not disabled:
+            disabled = [a for a in alerts if
+                        any(k in (a.get('rule_desc') or '').lower()
+                            for k in ('tamper protection', 'real-time protection disabled',
+                                      'windows defender disabled', 'av disabled'))]
+        if disabled:
+            return {
+                'key_alert_ids': [disabled[0].get('wazuh_id')],
+                'detail': f"Security service disabled on {disabled[0].get('agent_name')}: {disabled[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.95,
+            }
+        return None
+
+
+# ── CR-027: Unusual Outbound Port ─────────────────────────────────────────────
+class UnusualOutboundPort(CorrelationRule):
+    """Internal host connecting outbound on classic malware/C2 ports."""
+    SUSPICIOUS_PORTS = ('4444', '1234', '6667', '6666', '9001', '9002',
+                        '31337', '1337', '8888', '2222')
+
+    def __init__(self):
+        super().__init__(
+            'CR-027', 'Unusual Outbound Port',
+            'Outbound connection on a port commonly associated with malware, RATs or C2 frameworks',
+            'high', ['Command and Control'], 30
+        )
+
+    def match(self, alerts):
+        suspicious = [
+            a for a in alerts
+            if a.get('src_ip') and
+               any(f':{p}' in (a.get('rule_desc') or '') or
+                   f'port {p}' in (a.get('rule_desc') or '').lower() or
+                   f'dstport={p}' in (a.get('raw_log') or '').lower()
+                   for p in self.SUSPICIOUS_PORTS)
+        ]
+        if suspicious:
+            return {
+                'key_alert_ids': [suspicious[0].get('wazuh_id')],
+                'detail': f"Unusual outbound port from {suspicious[0].get('agent_name')}: {suspicious[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.78,
+            }
+        return None
+
+
+# ── CR-028: RDP to Internet ───────────────────────────────────────────────────
+class RDPToInternet(CorrelationRule):
+    """Internal host initiating RDP (3389) connection to an external IP."""
+    def __init__(self):
+        super().__init__(
+            'CR-028', 'RDP to External Host',
+            'Internal workstation connecting outbound on port 3389 (RDP) to internet IP',
+            'high', ['Lateral Movement', 'Exfiltration'], 30
+        )
+
+    def match(self, alerts):
+        rdp_out = [
+            a for a in alerts
+            if a.get('src_ip') and (
+                ':3389' in (a.get('rule_desc') or '') or
+                'port 3389' in (a.get('rule_desc') or '').lower() or
+                'rdp' in (a.get('rule_desc') or '').lower()
+            ) and
+            any(k in (a.get('rule_desc') or '').lower()
+                for k in ('outbound', 'egress', 'connection established', 'attempted'))
+        ]
+        if rdp_out:
+            return {
+                'key_alert_ids': [rdp_out[0].get('wazuh_id')],
+                'detail': f"Outbound RDP from {rdp_out[0].get('agent_name')} to {rdp_out[0].get('src_ip')}",
+                'confidence': 0.82,
+            }
+        return None
+
+
+# ── CR-029: Internal Subnet Scanning ─────────────────────────────────────────
+class InternalSubnetScan(CorrelationRule):
+    """Single host contacting 20+ internal IPs in a short window."""
+    def __init__(self):
+        super().__init__(
+            'CR-029', 'Internal Subnet Scan',
+            'Single host scanning its own subnet — reconnaissance or worm propagation',
+            'medium', ['Discovery', 'Reconnaissance'], 10
+        )
+
+    def match(self, alerts):
+        scan_alerts = [
+            a for a in alerts
+            if a.get('category') == 'scan' or
+               any(k in (a.get('rule_desc') or '').lower()
+                   for k in ('port scan', 'host scan', 'sweep', 'arp scan', 'ping sweep'))
+        ]
+        by_host: dict = {}
+        for a in scan_alerts:
+            by_host.setdefault(a['agent_id'], []).append(a)
+        for host, host_alerts in by_host.items():
+            if len(host_alerts) >= 20:
+                return {
+                    'key_alert_ids': [host_alerts[0].get('wazuh_id')],
+                    'detail': f"{len(host_alerts)} scan events from {host_alerts[0].get('agent_name')} on internal subnet",
+                    'confidence': min(len(host_alerts) / 50.0, 1.0),
+                }
+        return None
+
+
+# ── CR-030: Large Upload to Cloud Storage ────────────────────────────────────
+class LargeCloudUpload(CorrelationRule):
+    """Sustained outbound to known cloud storage domains."""
+    CLOUD_HOSTS = ('mega.nz', 'mega.co.nz', 'dropbox.com', 'drive.google.com',
+                   'onedrive.live.com', 'box.com', 'wetransfer.com', 'anonfiles.com',
+                   'gofile.io', 'transfer.sh', 'filebin.net', 'mediafire.com')
+
+    def __init__(self):
+        super().__init__(
+            'CR-030', 'Large Upload to Cloud Storage',
+            'Multiple outbound connections to cloud storage / file-sharing services — possible exfiltration',
+            'high', ['Exfiltration'], 30
+        )
+
+    def match(self, alerts):
+        uploads = [
+            a for a in alerts
+            if any(host in (a.get('rule_desc') or '').lower() or
+                   host in (a.get('raw_log') or '').lower()
+                   for host in self.CLOUD_HOSTS)
+        ]
+        by_host: dict = {}
+        for a in uploads:
+            by_host.setdefault(a['agent_id'], []).append(a)
+        for host, host_alerts in by_host.items():
+            if len(host_alerts) >= 3:
+                return {
+                    'key_alert_ids': [host_alerts[0].get('wazuh_id')],
+                    'detail': f"{len(host_alerts)} cloud storage connections from {host_alerts[0].get('agent_name')}",
+                    'confidence': min(len(host_alerts) / 10.0, 0.9),
+                }
+        return None
+
+
+# ── CR-031: Cloud Console Login without MFA ──────────────────────────────────
+class CloudLoginNoMFA(CorrelationRule):
+    """AWS ConsoleLogin with mfaUsed=No, or Azure AD login MFA bypass."""
+    def __init__(self):
+        super().__init__(
+            'CR-031', 'Cloud Console Login without MFA',
+            'AWS or Azure console login where MFA was not used — policy violation',
+            'high', ['Initial Access'], 30
+        )
+
+    def match(self, alerts):
+        no_mfa = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower()
+                   for k in ('mfaused: no', 'mfa not used', 'without mfa',
+                              'console login', 'mfa bypass', 'no mfa'))
+        ]
+        if no_mfa:
+            return {
+                'key_alert_ids': [no_mfa[0].get('wazuh_id')],
+                'detail': f"Cloud login without MFA: {no_mfa[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.90,
+            }
+        return None
+
+
+# ── CR-032: Privileged Cloud IAM Change ──────────────────────────────────────
+class CloudIAMPrivilegeChange(CorrelationRule):
+    """AWS CreateUser+AttachPolicy(Admin) or Azure AD global admin role assignment."""
+    IAM_KEYWORDS = ('administratoraccess', 'global administrator', 'privileged role',
+                    'createuser', 'attachuserpolicy', 'add member to role',
+                    'iam admin', 'owner role assigned')
+
+    def __init__(self):
+        super().__init__(
+            'CR-032', 'Privileged Cloud IAM Change',
+            'New admin user or admin policy attached in AWS/Azure without change record',
+            'critical', ['Privilege Escalation', 'Persistence'], 60
+        )
+
+    def match(self, alerts):
+        iam = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() for k in self.IAM_KEYWORDS)
+        ]
+        if iam:
+            return {
+                'key_alert_ids': [iam[0].get('wazuh_id')],
+                'detail': f"Cloud IAM privilege change: {iam[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.88,
+            }
+        return None
+
+
+# ── CR-033: Mass Cloud Resource Deletion ─────────────────────────────────────
+class MassCloudDeletion(CorrelationRule):
+    """5+ cloud resource deletion events within 10 minutes."""
+    DELETE_KEYWORDS = ('deletebucket', 'deleteobject', 'dropbucket',
+                       'storageaccounts/delete', 'delete blob', 'deleteinstance',
+                       's3 bucket deleted', 'resource deleted')
+
+    def __init__(self):
+        super().__init__(
+            'CR-033', 'Mass Cloud Resource Deletion',
+            '5+ cloud storage or resource deletion events — potential destructive attack or data wipe',
+            'critical', ['Impact'], 10
+        )
+
+    def match(self, alerts):
+        deletes = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() for k in self.DELETE_KEYWORDS)
+        ]
+        if len(deletes) >= 5:
+            return {
+                'key_alert_ids': [deletes[0].get('wazuh_id')],
+                'detail': f"{len(deletes)} cloud resource deletions in window",
+                'confidence': min(len(deletes) / 10.0, 1.0),
+            }
+        return None
+
+
+# ── CR-034: Mail Forwarding Rule Created ─────────────────────────────────────
+class MailForwardingRule(CorrelationRule):
+    """O365 / Exchange inbox rule forwarding mail to external address."""
+    FWD_KEYWORDS = ('new-inboxrule', 'forwardto', 'forwardsmbcc', 'redirectto',
+                    'mail forward', 'forwarding rule', 'inbox rule', 'auto-forward')
+
+    def __init__(self):
+        super().__init__(
+            'CR-034', 'Suspicious Mail Forwarding Rule',
+            'Inbox forwarding rule created directing mail to external address — BEC indicator',
+            'high', ['Collection', 'Exfiltration'], 60
+        )
+
+    def match(self, alerts):
+        fwd = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() for k in self.FWD_KEYWORDS)
+        ]
+        if fwd:
+            return {
+                'key_alert_ids': [fwd[0].get('wazuh_id')],
+                'detail': f"Mail forwarding rule created: {fwd[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.88,
+            }
+        return None
+
+
+# ── CR-035: OAuth App Consent Grant ──────────────────────────────────────────
+class OAuthConsentGrant(CorrelationRule):
+    """Azure AD / O365 user grants 3rd-party app broad permissions."""
+    CONSENT_KEYWORDS = ('consent to application', 'app consent', 'oauth consent',
+                        'mail.read', 'files.readwrite', 'contacts.read',
+                        'application permission granted', 'delegated permission')
+
+    def __init__(self):
+        super().__init__(
+            'CR-035', 'Suspicious OAuth App Consent',
+            'User granted 3rd-party app permissions to read mail, files or contacts — OAuth phishing',
+            'high', ['Collection', 'Initial Access'], 60
+        )
+
+    def match(self, alerts):
+        consent = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() for k in self.CONSENT_KEYWORDS)
+        ]
+        if consent:
+            return {
+                'key_alert_ids': [consent[0].get('wazuh_id')],
+                'detail': f"OAuth consent grant: {consent[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.85,
+            }
+        return None
+
+
 # ── Rule registry ─────────────────────────────────────────────────────────────
 ALL_RULES: list[CorrelationRule] = [
+    # ── Original 15 rules ─────────────────────────────────────────────────────
     SSHBruteForceLogin(),
     LoginPrivEsc(),
     FullCompromiseChain(),
@@ -451,12 +1066,33 @@ ALL_RULES: list[CorrelationRule] = [
     ScanThenExploit(),
     DataExfiltration(),
     ServiceAccountAnomaly(),
-    # ENH-5: new rules
+    # ENH-5: rules batch 2
     EventLogCleared(),
     DNSTunnelling(),
     CredentialDumping(),
     RansomwareIndicators(),
     C2Beacon(),
+    # ── CR-016 → CR-035: Windows, Cloud & Endpoint rules ─────────────────────
+    PasswordSpraying(),
+    WindowsBruteForce(),
+    DormantAccountRebirth(),
+    DomainAdminGroupChange(),
+    GoldenTicketAnomaly(),
+    RegistryPersistence(),
+    ScheduledTaskAbuse(),
+    ProcessInjection(),
+    EncodedCommandExecution(),
+    WebShellExecution(),
+    SecurityToolDisabled(),
+    UnusualOutboundPort(),
+    RDPToInternet(),
+    InternalSubnetScan(),
+    LargeCloudUpload(),
+    CloudLoginNoMFA(),
+    CloudIAMPrivilegeChange(),
+    MassCloudDeletion(),
+    MailForwardingRule(),
+    OAuthConsentGrant(),
 ]
 
 

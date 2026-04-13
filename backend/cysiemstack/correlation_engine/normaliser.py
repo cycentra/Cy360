@@ -16,6 +16,15 @@ import math
 from datetime import datetime, timezone
 from typing import Optional
 
+# ── GeoIP enrichment (graceful no-op if DB absent) ────────────────────────────
+try:
+    import geoip2.database as _geoip2_db
+    _GEOIP_READER  = _geoip2_db.Reader("/opt/cycentra/geoip/GeoLite2-City.mmdb")
+    _GEOIP_ENABLED = True
+except Exception:
+    _GEOIP_READER  = None
+    _GEOIP_ENABLED = False
+
 # Rule IDs that indicate SSH / auth events (used for category mapping)
 SSH_RULE_IDS     = {5715, 5716, 5718, 5719, 5720, 5710, 5711, 2502}
 AUTH_RULE_IDS    = {18100, 18101, 18102, 18103, 18104, 5400, 5500, 5502}
@@ -79,6 +88,23 @@ def _extract_ip(text: str) -> Optional[str]:
     return None
 
 
+def _lookup_geoip(ip: str) -> dict:
+    """Return geo dict {country_iso, country_name, city, lat, lon} or {}."""
+    if not _GEOIP_ENABLED or not ip:
+        return {}
+    try:
+        r = _GEOIP_READER.city(ip)
+        return {
+            'country_iso':  r.country.iso_code,
+            'country_name': r.country.name,
+            'city':         r.city.name,
+            'lat':          float(r.location.latitude  or 0),
+            'lon':          float(r.location.longitude or 0),
+        }
+    except Exception:
+        return {}
+
+
 def _classify_category(rule_id: int, groups: list) -> str:
     """Map rule ID and groups to a high-level category string."""
     if rule_id in FIM_RULE_IDS or 'syscheck' in groups:
@@ -97,6 +123,8 @@ def _classify_category(rule_id: int, groups: list) -> str:
         return 'vulnerability'
     if 'network_scan' in groups or 'nmap' in groups:
         return 'scan'
+    if any(g in groups for g in ('aws', 'azure', 'office365', 'gcp', 'cloudtrail', 'o365', 'msaz', 'github')):
+        return 'cloud'
     return 'system'
 
 
@@ -209,6 +237,9 @@ def normalise(raw: dict) -> Optional[dict]:
     # Raw log
     raw_log = raw.get('full_log') or raw.get('message') or ''
 
+    # GeoIP lookup (no-op if DB not present)
+    geo = _lookup_geoip(src_ip) if src_ip else {}
+
     return {
         'wazuh_id':     raw.get('id'),
         'timestamp':    ts,
@@ -229,4 +260,5 @@ def normalise(raw: dict) -> Optional[dict]:
         'file_path':    file_path,
         'raw_log':      raw_log[:2000] if raw_log else '',  # cap at 2KB
         'full_alert':   raw,
+        'geo':          geo,
     }
