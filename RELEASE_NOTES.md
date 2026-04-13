@@ -1,6 +1,61 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.153 — 2026-04-13
+
+### Bug Fix — Demo license expires every 24 hours (`license_validator.py` missing from installer package)
+
+**Root cause**: `build-package.sh` defined `VALIDATOR_PY` pointing to
+`backend/core/license_validator.py` but **never copied it into the installer tarball**.
+The comment on line 81 incorrectly claimed the validator was "embedded in the binary" — it
+is not; the embedded heredoc in `cycentra-setup.sh` writes a temporary validator to `/tmp`
+only for the pre-install license check and deletes it immediately after.
+
+As a result, `/opt/cycentra/license_validator.py` — called daily by the
+`cycentra-license-check.timer` watchdog — was **never deployed** on any installation.
+
+The daily watchdog runs:
+```
+python3 /opt/cycentra/license_validator.py --license /opt/cycentra/cycentra.lic
+```
+When the file does not exist, Python exits with code **2** ("can't open file"). The watchdog
+checks `[[ $_CODE -eq 2 ]]` and treats code 2 as "license expired", writing
+`/opt/cycentra/.license_expired` and stopping all CyCentra services — every 24 hours —
+even during a valid 15-day demo (`.demo_start` still shows the original install date).
+
+Running `--update` cleared `.license_expired` (lines 1311-1312 in `cycentra-setup.sh`) and
+restarted services, but did **not** deploy the missing validator. 24 hours later the watchdog
+fired again, repeating the cycle.
+
+**Fix**:
+
+#### `build-package.sh`
+- Replaced the incorrect comment *"Validator is embedded in the binary — no external file needed"*.
+- Added preflight guard: `[[ -f "$VALIDATOR_PY" ]] || error "..."` — build now fails fast if the validator is missing.
+- Added `cp "$VALIDATOR_PY" "$PKG_DIR/license_validator.py"` so the runtime validator is
+  included in every installer tarball and deployed to `/opt/cycentra/license_validator.py`
+  by `cycentra-setup.sh` on every install/update.
+
+#### `cycentra-setup.sh` — watchdog heredoc (defense-in-depth)
+- Added an existence guard at the top of the deployed `/opt/cycentra/license-watchdog.sh`:
+  ```bash
+  if [[ ! -f /opt/cycentra/license_validator.py ]]; then
+      _log "WARNING: /opt/cycentra/license_validator.py not found — skipping license check"
+      _log "Re-run: sudo bash /opt/cycentra/cycentra-setup.sh --update to redeploy"
+      exit 0
+  fi
+  ```
+  This ensures a missing validator causes the watchdog to log a warning and exit cleanly
+  (`exit 0`) rather than letting Python's "can't open file" exit code 2 be misread as
+  "license expired".
+
+#### `tests/run-all.sh` — Suite 09
+- Added regression check: `build-package.sh` must contain a `cp "$VALIDATOR_PY"` line.
+- Added regression check: the watchdog heredoc must contain a `-f license_validator.py`
+  existence guard.
+  Both tests **fail** on the unfixed code and **pass** after this fix.
+
+---
 ## v1.0.152 — 2026-04-13
 
 ### Enhancement — SIEM Engine: 20 new correlation rules (CR-016 → CR-035) + UEBA detectors 8–12 + GeoIP enrichment

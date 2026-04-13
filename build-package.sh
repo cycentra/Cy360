@@ -7,7 +7,7 @@
 # Output:
 #   dist/cycentra-360-installer-<version>.tar.gz
 #     ├── cycentra-setup          (binary — not human-readable)
-#     ├── license_validator.py    (embedded validator, public key only)
+#     ├── license_validator.py    (runtime validator — called daily by watchdog)
 #     ├── cycentra.lic            (customer license — placed by vendor)
 #     └── README-INSTALLER.txt
 #
@@ -48,7 +48,7 @@ echo -e "\n${BOLD}  CyCentra 360 — Package Builder${NC}\n"
 command -v shc  >/dev/null 2>&1 || error "shc not installed. Install with: brew install shc  /  apt install shc"
 command -v gcc  >/dev/null 2>&1 || error "gcc not installed"
 [[ -f "$SETUP_SH" ]]       || error "cycentra-setup.sh not found at $SETUP_SH"
-# Note: license_validator.py is embedded inside setup.sh as a heredoc — no external file needed
+[[ -f "$VALIDATOR_PY" ]]   || error "license_validator.py not found at $VALIDATOR_PY"
 
 # Read version from line 3
 VERSION=$(sed -n '3p' "$SETUP_SH" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
@@ -78,7 +78,12 @@ PKG_DIR="$BUILD_DIR/package"
 mkdir -p "$PKG_DIR"
 
 cp "$BUILD_DIR/cycentra-setup"    "$PKG_DIR/cycentra-setup"
-# Validator is embedded in the binary — no separate file needed
+# The runtime validator must be in the tarball so setup.sh can deploy it to
+# /opt/cycentra/license_validator.py (called daily by the license watchdog).
+# Without this file the watchdog gets Python exit code 2 ("can't open file"),
+# which it treats as "license expired", stopping all services every 24 h.
+cp "$VALIDATOR_PY"               "$PKG_DIR/license_validator.py"
+success "Runtime validator included: license_validator.py"
 
 if [[ -n "$LICENSE_FILE" && -f "$LICENSE_FILE" ]]; then
     cp "$LICENSE_FILE" "$PKG_DIR/cycentra.lic"
