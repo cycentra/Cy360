@@ -317,7 +317,7 @@ async def _analyse_host_alert(
             cv = (variance ** 0.5) / avg_iv   # coefficient of variation
             if cv < 0.25 and avg_iv < 600:   # tight interval < 10 min
                 anomalies.append(await _record_anomaly(
-                    db, host_entity, 'multi_host_burst',
+                    db, host_entity, 'c2_beaconing',
                     f"C2 beaconing pattern on {alert.get('agent_name', agent_id)}: "
                     f"{len(outbound_ts)} outbound events, avg interval {avg_iv:.0f}s (CV={cv:.2f})",
                     incident_id, [alert.get('wazuh_id')],

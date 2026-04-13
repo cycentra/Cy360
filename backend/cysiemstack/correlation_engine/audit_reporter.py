@@ -85,7 +85,7 @@ async def generate_auto_close_audit(
     result = await db.execute(
         select(Incident).where(
             Incident.status                  == "closed",
-            Incident.false_positive_reason   != None,    # noqa: E711
+            Incident.false_positive_reason.isnot(None),
             Incident.closed_at               >= cutoff,
         ).order_by(Incident.closed_at.desc())
     )

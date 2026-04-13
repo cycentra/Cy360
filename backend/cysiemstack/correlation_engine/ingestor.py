@@ -297,19 +297,9 @@ async def _reenrich_held_incident(incident_id: str) -> None:
     """Re-enrich a held incident after 30 minutes and promote/close it."""
     await asyncio.sleep(30 * 60)   # 30-minute hold window
     try:
+        from sqlalchemy import select as sa_select
         async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(Alert).where(Alert.incident_id == incident_id)
-            )
             from models import Incident as _Incident
-            inc_q = await db.execute(
-                _Incident.__table__.select().where(
-                    _Incident.id == incident_id,
-                    _Incident.status == "held",
-                )
-            )
-            # Use ORM select
-            from sqlalchemy import select as sa_select
             inc_q = await db.execute(
                 sa_select(_Incident).where(
                     _Incident.id     == incident_id,

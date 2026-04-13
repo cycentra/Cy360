@@ -140,7 +140,7 @@ async def lookup_ioc(db: AsyncSession, ioc_value: str, ioc_type: str) -> dict:
         'tags':         misp_result.get('tags', []),
     }
     _mem_cache[mem_key] = (now_ts, out)
-    return out if misp_result else out
+    return out
 
 
 async def enrich_incident(db: AsyncSession, incident: Incident) -> dict:

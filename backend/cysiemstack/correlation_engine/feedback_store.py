@@ -159,7 +159,6 @@ async def apply_feedback_adjustments(db: AsyncSession) -> None:
             stats[rule_id][fb.verdict] = stats[rule_id].get(fb.verdict, 0) + 1
 
     from correlator import ALL_RULES
-    import importlib, sys
 
     rules_by_id = {r.rule_id: r for r in ALL_RULES}
 
