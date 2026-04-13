@@ -51,8 +51,20 @@ class Settings(BaseSettings):
     iris_enabled: bool = False
     iris_customer_id: int = 1
     # False-positive auto-close threshold (0–100).  Incidents with a
-    # confidence_score >= this value are closed automatically without a ticket.
+    # fp_probability >= this value are closed automatically without a ticket.
     iris_fp_threshold: float = 90.0
+
+    # Watch-zone upper bound (0–100).  Incidents between iris_fp_threshold and
+    # this value are placed in "held" status for re-enrichment after 30 min.
+    fp_watch_zone_upper: float = 65.0
+
+    # CySOAR (Node-RED) webhook URL — empty string means SOAR is not configured.
+    soar_webhook_url: str = ""
+
+    # TLS CA bundle path for outbound httpx calls (MISP, IRIS).
+    # Set to the path of a CA certificate bundle to verify self-signed certs.
+    # Leave empty to use the system default CA store.
+    tls_ca_bundle: str = ""
 
     model_config = SettingsConfigDict(
         env_file="/opt/cycentra/cysiemstack.env",

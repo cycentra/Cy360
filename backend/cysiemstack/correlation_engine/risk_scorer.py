@@ -84,6 +84,66 @@ def _level_for_score(score: float) -> str:
     return 'low'
 
 
+def _asset_score(asset_tier: Optional[int], max_points: float = 20.0) -> float:
+    """Bonus risk points for high-value asset tiers.
+
+    tier 1 (crown jewel)      → +20 pts (max)
+    tier 2 (business critical)→ +10 pts
+    tier 3 (dev/low)          →   0 pts
+    None / unknown            →   0 pts
+    """
+    if asset_tier == 1:
+        return max_points
+    if asset_tier == 2:
+        return max_points / 2
+    return 0.0
+
+
+def compute_fp_score(
+    avg_conf: float,
+    ueba_anomaly_count: int,
+    misp_ioc_hits: int,
+    kill_chain_stage_name: Optional[str],
+    asset_tier: Optional[int],
+) -> float:
+    """Multi-factor false-positive probability (0–100, high = likely FP).
+
+    Factors (applied in order):
+      1. Base: (1 − avg_rule_confidence) × 100
+      2. UEBA penalty: each anomaly reduces FP probability by 8 pts (cap 30)
+      3. MISP IOC hit multiplier: ×0.6 per batch of hits; floor 5 if any hit
+      4. Kill-chain stage cap/floor
+      5. Asset criticality cap/floor
+    """
+    base: float = (1.0 - max(0.0, min(1.0, avg_conf))) * 100.0
+
+    # UEBA anomalies are evidence of a real threat → lower FP probability
+    ueba_penalty = min(ueba_anomaly_count * 8, 30)
+    base -= ueba_penalty
+
+    # MISP IOC hit multiplier
+    if misp_ioc_hits > 0:
+        base *= 0.6
+        base = max(base, 5.0)
+
+    # Kill-chain stage cap/floor
+    kc = (kill_chain_stage_name or "").lower().replace(" ", "-")
+    if kc in ("exfiltration", "c2", "command-and-control", "actions-on-objectives",
+              "command and control"):
+        base = min(base, 30.0)
+    elif kc in ("reconnaissance", "weaponization"):
+        base = max(base, 65.0)
+
+    # Asset criticality
+    tier = asset_tier if asset_tier is not None else 3
+    if tier == 1:
+        base = min(base, 20.0)
+    elif tier == 3:
+        base = max(base, 40.0)
+
+    return round(max(0.0, min(100.0, base)), 1)
+
+
 def _trend(current: float, previous: Optional[float]) -> str:
     if previous is None:
         return 'stable'
@@ -160,7 +220,14 @@ async def calculate_entity_risk(
     ueba       = _ueba_score(anomalies)
     misp       = _misp_score(alerts)
 
-    raw_score  = alert_sev + inc_sev + ueba + misp
+    # Asset criticality component (uses the most critical tier found in incidents)
+    min_tier = min(
+        (inc.asset_tier for inc in incidents if inc.asset_tier is not None),
+        default=None
+    )
+    asset = _asset_score(min_tier)
+
+    raw_score  = alert_sev + inc_sev + ueba + misp + asset
 
     # Apply time decay
     last_seen = max((a.timestamp for a in alerts), default=None) if alerts else None
@@ -189,6 +256,7 @@ async def calculate_entity_risk(
             'incident_severity': inc_sev,
             'ueba_anomalies':    ueba,
             'misp_ioc_hits':     misp,
+            'asset_criticality': asset,
         }
     else:
         record = RiskScore(
@@ -204,6 +272,7 @@ async def calculate_entity_risk(
                 'incident_severity': inc_sev,
                 'ueba_anomalies':    ueba,
                 'misp_ioc_hits':     misp,
+                'asset_criticality': asset,
             },
         )
         db.add(record)

@@ -95,13 +95,26 @@ async def analyse_alert(
     alert: dict,
     recent_alerts: list[dict],
     incident_id: str,
+    entity_type: str = "user",
 ) -> list[UEBAAnomaly]:
     """
     Run all UEBA detectors against the current alert + recent context.
+
+    When entity_type='user' (default), user-based detectors run on alert.username.
+    When entity_type='host', host-based detectors run on alert.agent_id /
+    alert.agent_name — covers multi-host burst, C2 beaconing, impossible travel.
+
     Returns list of UEBAAnomaly objects created this call.
     """
     username = alert.get('username')
-    if not username:
+
+    # Host-based path: derive a synthetic username from the agent to reuse
+    # existing anomaly infrastructure (baseline keyed on 'username' column).
+    if not username or entity_type == "host":
+        if entity_type == "host":
+            # Use host sentinel so we don't mix user/host baselines
+            host_entity = f"host:{alert.get('agent_id', 'unknown')}"
+            return await _analyse_host_alert(db, alert, recent_alerts, incident_id, host_entity)
         return []
 
     baseline  = await _get_or_create_baseline(db, username)
@@ -233,3 +246,85 @@ async def _update_baseline(
     baseline.avg_daily_events = round(old_avg * 0.95 + daily_event_count * 0.05, 2)
 
     baseline.updated_at = datetime.now(timezone.utc)
+
+
+# ── Host-based UEBA detectors ─────────────────────────────────────────────────
+
+async def _analyse_host_alert(
+    db: AsyncSession,
+    alert: dict,
+    recent_alerts: list[dict],
+    incident_id: str,
+    host_entity: str,
+) -> list[UEBAAnomaly]:
+    """Host-centric UEBA detectors when no username is available.
+
+    Detectors:
+      • multi_host_burst     — same agent seen talking to 4+ peers in 10 min
+      • impossible_travel    — same agent_id appearing on two IPs within 2 min
+      • C2 beaconing pattern — repeated outbound events at narrow time variance
+    """
+    anomalies: list = []
+    ts       = alert['timestamp']
+    agent_id = alert['agent_id']
+
+    # ── Multi-host burst (host touches 4+ agents in 10 min) ───────────────────
+    burst_cutoff = ts - timedelta(minutes=10)
+    burst_agents = {a['agent_id'] for a in recent_alerts if a['timestamp'] >= burst_cutoff}
+    burst_agents.add(agent_id)
+    if len(burst_agents) >= 4:
+        anomalies.append(await _record_anomaly(
+            db, host_entity, 'multi_host_burst',
+            f"Host-based burst: activity across {len(burst_agents)} agents in 10 min: "
+            f"{', '.join(list(burst_agents)[:4])}",
+            incident_id, [alert.get('wazuh_id')],
+        ))
+
+    # ── Impossible travel (same host appears on two src_ips within 2 min) ─────
+    travel_window = timedelta(minutes=2)
+    current_ip = alert.get('src_ip')
+    if current_ip:
+        recent_ips = {
+            a.get('src_ip') for a in recent_alerts
+            if a.get('src_ip')
+            and a['agent_id'] == agent_id
+            and ts - a['timestamp'] <= travel_window
+            and a.get('src_ip') != current_ip
+        }
+        if recent_ips:
+            anomalies.append(await _record_anomaly(
+                db, host_entity, 'impossible_travel',
+                f"Agent {alert.get('agent_name', agent_id)} seen from {current_ip} "
+                f"and {next(iter(recent_ips))} within 2 minutes",
+                incident_id, [alert.get('wazuh_id')],
+            ))
+
+    # ── C2 beaconing pattern (≥5 outbound events with tight inter-arrival) ────
+    # Look for repeated network/outbound events with low time variance
+    outbound_ts = sorted(
+        a['timestamp'] for a in recent_alerts
+        if a['agent_id'] == agent_id
+        and a.get('rule_id', 0) >= 18100   # generic outbound / network rule range
+    )
+    if len(outbound_ts) >= 5:
+        intervals = [
+            (outbound_ts[i + 1] - outbound_ts[i]).total_seconds()
+            for i in range(len(outbound_ts) - 1)
+        ]
+        avg_iv = sum(intervals) / len(intervals)
+        if avg_iv > 0:
+            variance = sum((x - avg_iv) ** 2 for x in intervals) / len(intervals)
+            cv = (variance ** 0.5) / avg_iv   # coefficient of variation
+            if cv < 0.25 and avg_iv < 600:   # tight interval < 10 min
+                anomalies.append(await _record_anomaly(
+                    db, host_entity, 'multi_host_burst',
+                    f"C2 beaconing pattern on {alert.get('agent_name', agent_id)}: "
+                    f"{len(outbound_ts)} outbound events, avg interval {avg_iv:.0f}s (CV={cv:.2f})",
+                    incident_id, [alert.get('wazuh_id')],
+                ))
+
+    if anomalies:
+        log.info('ueba_host_anomalies', host=host_entity, count=len(anomalies),
+                 types=[a.anomaly_type for a in anomalies])
+
+    return anomalies
