@@ -1474,7 +1474,7 @@ async with sse_client("${status?.public_url || status?.endpoint || "<MCP_ENDPOIN
               background: "rgba(0,229,160,0.03)", border: "1px solid rgba(0,229,160,0.08)",
               borderRadius: 4, padding: "8px 12px" }}>
               <code style={{ color: accentColor, fontFamily: "monospace", fontSize: 11,
-                fontWeight: 700, minWidth: 240, flexShrink: 0 }}>
+                fontWeight: 700, minWidth: 0, flex: "0 0 auto", maxWidth: "55%", wordBreak: "break-all" }}>
                 {t.name}
               </code>
               <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, lineHeight: 1.5 }}>

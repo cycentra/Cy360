@@ -1091,7 +1091,7 @@ _MCP_TOOLS = [
 
 
 def _read_mcp_enabled() -> bool:
-    """Read MCP_ENABLED from cysiemstack.env.  Defaults to True when absent."""
+    """Read MCP_ENABLED from cysiemstack.env. Defaults to True when absent."""
     env_path = Path(_ENV_FILE_MAP["cysiemstack"])
     if not env_path.exists():
         return True
