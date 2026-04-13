@@ -91,7 +91,13 @@ class Incident(Base):
     iris_case_id     = Column(Integer, nullable=True)   # DFIR IRIS case ID
     iris_case_status = Column(Text, nullable=True)       # "open" | "closed"
     iris_case_url    = Column(Text, nullable=True)       # deep link to case in IRIS UI
-    confidence_score = Column(Numeric(5, 1), nullable=True)  # FP confidence 0-100
+    # fp_probability: multi-factor false-positive probability 0–100.
+    # High score = likely FP/noise.  Replaces the old single-factor confidence_score.
+    fp_probability   = Column(Numeric(5, 1), nullable=True)
+    # asset_tier: CMDB criticality — 1=crown jewel, 2=business critical, 3=dev/low
+    asset_tier       = Column(Integer, nullable=True)
+    # soar_actions: list of action objects returned by CySOAR/Node-RED
+    soar_actions     = Column(JSONB, default=list)
 
     __table_args__ = (
         # Speed up the common WHERE/ORDER BY patterns used by GET /incidents

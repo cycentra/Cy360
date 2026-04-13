@@ -21,11 +21,12 @@ from normaliser import normalise
 from grouper import group_alert
 from correlator import run_correlation
 from ueba import analyse_alert
-from risk_scorer import calculate_entity_risk
+from risk_scorer import calculate_entity_risk, compute_fp_score
 from misp_enricher import enrich_incident
 from llm_enricher import enrich_incident as llm_enrich_incident
 from iris_connector import create_iris_case, auto_close_fp
 from ueba_ml import ml_analyse_alert
+from cysoar_connector import cysoar_trigger
 from config import get_settings
 
 log = structlog.get_logger()
@@ -104,14 +105,46 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
             # 2. Correlation rules
             new_rules = await run_correlation(db, incident, alert)
 
-            # 3. UEBA
+            # 3. UEBA — user-based and host-based paths
             ueba_anomalies = []
             if alert.get("username"):
                 cutoff = alert["timestamp"] - UEBA_CONTEXT_WINDOW
                 recent = await _get_recent_user_alerts(db, alert["username"], cutoff)
-                ueba_anomalies  = await analyse_alert(db, alert, recent, incident.id)
+                ueba_anomalies  = await analyse_alert(db, alert, recent, incident.id,
+                                                      entity_type="user")
                 ml_anomalies    = await ml_analyse_alert(db, alert, recent, incident.id)
                 ueba_anomalies.extend(ml_anomalies)
+            else:
+                # Host-based UEBA when no username is present
+                host_entity = alert.get("agent_name") or alert.get("agent_id", "unknown")
+                if host_entity:
+                    cutoff = alert["timestamp"] - UEBA_CONTEXT_WINDOW
+                    # Reuse per-user cache infrastructure for host entities
+                    cache_key = f"host:{alert['agent_id']}"
+                    now_ts_cache = time.monotonic()
+                    cached_host = _ueba_ctx_cache.get(cache_key)
+                    if cached_host and (now_ts_cache - cached_host[0]) < _UEBA_CTX_TTL:
+                        recent_host = cached_host[1]
+                    else:
+                        result_host = await db.execute(
+                            select(Alert).where(
+                                Alert.agent_id  == alert['agent_id'],
+                                Alert.timestamp >= cutoff,
+                            ).order_by(Alert.timestamp.desc()).limit(100)
+                        )
+                        recent_host = [
+                            {
+                                'rule_id':   a.rule_id,
+                                'agent_id':  a.agent_id,
+                                'timestamp': a.timestamp,
+                                'src_ip':    str(a.src_ip) if a.src_ip else None,
+                            }
+                            for a in result_host.scalars().all()
+                        ]
+                        _ueba_ctx_cache[cache_key] = (now_ts_cache, recent_host)
+
+                    ueba_anomalies = await analyse_alert(db, alert, recent_host, incident.id,
+                                                         entity_type="host")
 
             # 4. Risk scoring — throttled per entity to avoid 8 DB queries per alert
             now_ts = time.monotonic()
@@ -140,28 +173,62 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                     not incident.llm_summary):
                 llm_result = await llm_enrich_incident(db, incident)
 
-            # 7. CyIRIS integration — false-positive auto-close OR ticket creation
-            iris_result = {}
-            iris_auto_closed = False
-            # Use correlated rule confidence values to derive an FP score.
-            # A simple heuristic: average rule confidence inverted (high rule
-            # confidence = low FP probability).  Incidents with no rules or
-            # very low severity get a higher FP score.
-            if incident.status not in ("closed", "false_positive"):
-                rules = incident.correlated_rules or []
+            # ── Compute multi-factor FP probability ──────────────────────────
+            def _fp_score_for(inc, ueba_anoms, misp_res) -> float:
+                rules = inc.correlated_rules or []
                 if rules:
                     avg_conf = sum(
                         float(r.get("confidence", 0.5)) for r in rules
                     ) / len(rules)
-                    fp_score = round((1.0 - avg_conf) * 100, 1)
                 else:
-                    # No correlation rules fired → likely noise → higher FP score
-                    fp_score = 70.0 if incident.severity in ("low", "medium") else 30.0
+                    # No correlation rules → likely noise
+                    avg_conf = 0.3 if inc.severity in ("low", "medium") else 0.7
+                return compute_fp_score(
+                    avg_conf          = avg_conf,
+                    ueba_anomaly_count= len(ueba_anoms),
+                    misp_ioc_hits     = len(misp_res.get("ioc_hits", [])),
+                    kill_chain_stage_name = inc.kill_chain_stage_name,
+                    asset_tier        = inc.asset_tier,
+                )
 
-                iris_auto_closed = await auto_close_fp(db, incident, fp_score)
+            fp_score = _fp_score_for(incident, ueba_anomalies, misp_result)
 
-                if not iris_auto_closed and (created or new_rules):
-                    iris_result = await create_iris_case(db, incident)
+            # Re-score AFTER enrichment completes with updated incident state
+            # (MISP may have set ioc_hits; LLM may have updated stage info)
+            fp_score = _fp_score_for(incident, ueba_anomalies,
+                                     incident.misp_enrichment or {})
+
+            # 6b. CySOAR trigger (after LLM, before IRIS)
+            await cysoar_trigger(db, incident)
+
+            # 7. CyIRIS integration — false-positive auto-close OR ticket creation
+            #    Watch-zone: mid-range FP scores get "held" for re-enrichment.
+            iris_result = {}
+            iris_auto_closed = False
+
+            if incident.status not in ("closed", "false_positive", "held"):
+                # Read watch-zone upper threshold from ai_settings.json or config
+                watch_zone_upper = _get_watch_zone_upper()
+                iris_threshold   = _get_fp_threshold()
+
+                incident.fp_probability = fp_score
+
+                if fp_score > watch_zone_upper:
+                    # High FP score → auto-close
+                    iris_auto_closed = await auto_close_fp(db, incident, fp_score)
+                elif fp_score > iris_threshold and fp_score <= watch_zone_upper:
+                    # Mid-range → hold for re-enrichment
+                    incident.status     = "held"
+                    incident.updated_at = datetime.now(timezone.utc)
+                    await db.flush()
+                    asyncio.create_task(_reenrich_held_incident(incident.id))
+                    log.info("incident_held_for_reenrichment",
+                             incident_id=incident.id, fp_score=fp_score)
+                else:
+                    # Low FP score → create IRIS ticket
+                    iris_auto_closed = await auto_close_fp(db, incident, fp_score)
+                    if not iris_auto_closed and (created or new_rules):
+                        iris_result = await create_iris_case(db, incident)
 
             await db.commit()
 
@@ -180,6 +247,7 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                 "llm_ready":         bool(llm_result),
                 "iris_case_id":      iris_result.get("iris_case_id"),
                 "iris_auto_closed":  iris_auto_closed,
+                "fp_probability":    fp_score,
                 "agent_name":        alert.get("agent_name"),
                 "rule_desc":         alert.get("rule_desc"),
             }
@@ -187,11 +255,98 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
 
             log.info("alert_processed",
                      incident=incident.id, severity=incident.severity,
-                     new_rules=len(new_rules), ueba=len(ueba_anomalies))
+                     new_rules=len(new_rules), ueba=len(ueba_anomalies),
+                     fp_probability=fp_score)
 
         except Exception as e:
             await db.rollback()
             log.error("alert_processing_error", error=str(e), exc_info=True)
+
+
+def _get_watch_zone_upper() -> float:
+    """Read fpWatchZoneUpper from ai_settings.json or fall back to config."""
+    try:
+        from pathlib import Path
+        import json as _j
+        raw = Path("/opt/cycentra/ai_settings.json").read_text()
+        stored = _j.loads(raw)
+        val = stored.get("iris", {}).get("fpWatchZoneUpper")
+        if val is not None:
+            return float(val)
+    except Exception:
+        pass
+    return settings.fp_watch_zone_upper
+
+
+def _get_fp_threshold() -> float:
+    """Read fpThreshold from ai_settings.json or fall back to config."""
+    try:
+        from pathlib import Path
+        import json as _j
+        raw = Path("/opt/cycentra/ai_settings.json").read_text()
+        stored = _j.loads(raw)
+        val = stored.get("iris", {}).get("fpThreshold")
+        if val is not None:
+            return float(val)
+    except Exception:
+        pass
+    return settings.iris_fp_threshold
+
+
+async def _reenrich_held_incident(incident_id: str) -> None:
+    """Re-enrich a held incident after 30 minutes and promote/close it."""
+    await asyncio.sleep(settings.hold_window_minutes * 60)   # configurable hold window
+    try:
+        from sqlalchemy import select as sa_select
+        async with AsyncSessionLocal() as db:
+            from models import Incident as _Incident
+            inc_q = await db.execute(
+                sa_select(_Incident).where(
+                    _Incident.id     == incident_id,
+                    _Incident.status == "held",
+                )
+            )
+            incident = inc_q.scalar_one_or_none()
+            if not incident:
+                return   # already handled by analyst
+
+            # Re-run MISP enrichment with fresh data
+            misp_result = await enrich_incident(db, incident)
+
+            # Re-score with updated enrichment
+            rules = incident.correlated_rules or []
+            avg_conf = (
+                sum(float(r.get("confidence", 0.5)) for r in rules) / len(rules)
+                if rules else 0.3
+            )
+            ueba_count = len(incident.ueba_flags or [])
+            fp_score = compute_fp_score(
+                avg_conf            = avg_conf,
+                ueba_anomaly_count  = ueba_count,
+                misp_ioc_hits       = len(misp_result.get("ioc_hits", [])),
+                kill_chain_stage_name = incident.kill_chain_stage_name,
+                asset_tier          = incident.asset_tier,
+            )
+            incident.fp_probability = fp_score
+
+            iris_threshold   = _get_fp_threshold()
+            watch_zone_upper = _get_watch_zone_upper()
+
+            if fp_score > watch_zone_upper:
+                await auto_close_fp(db, incident, fp_score)
+            else:
+                # Promote to open so IRIS ticket gets created
+                incident.status     = "open"
+                incident.updated_at = datetime.now(timezone.utc)
+                await db.flush()
+                await create_iris_case(db, incident)
+
+            await db.commit()
+            log.info("held_incident_reprocessed",
+                     incident_id=incident_id, fp_score=fp_score)
+    except Exception as e:
+        log.error("reenrich_held_incident_error",
+                  incident_id=incident_id, error=str(e))
 
 
 async def run_ingestor():

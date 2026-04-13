@@ -150,6 +150,38 @@ async def _iris_sync_scheduler():
         await asyncio.sleep(300)  # every 5 minutes
 
 
+# ── Nightly feedback-adjustment scheduler ─────────────────────────────────────
+# Runs once per day.  Consumes analyst verdicts to tune rule confidence scores.
+async def _feedback_adjustment_scheduler():
+    from feedback_store import apply_feedback_adjustments
+    from models import AsyncSessionLocal
+    await asyncio.sleep(3600)   # first run: 1 h after startup
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                await apply_feedback_adjustments(db)
+        except Exception as e:
+            log.error('feedback_adjustment_error', error=str(e))
+        await asyncio.sleep(24 * 3600)   # every 24 hours
+
+
+# ── Weekly auto-close audit scheduler ────────────────────────────────────────
+async def _weekly_audit_scheduler():
+    from audit_reporter import generate_auto_close_audit
+    from models import AsyncSessionLocal
+    await asyncio.sleep(7200)   # first run: 2 h after startup
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                report = await generate_auto_close_audit(db, period_days=7)
+                await db.commit()
+                log.info('weekly_audit_complete',
+                         total_auto_closed=report.get('total_auto_closed', 0))
+        except Exception as e:
+            log.error('weekly_audit_error', error=str(e))
+        await asyncio.sleep(7 * 24 * 3600)   # every 7 days
+
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -169,6 +201,10 @@ async def lifespan(app: FastAPI):
     log.info("iris_sync_scheduler_started")
     asyncio.create_task(_auto_archive_scheduler())
     log.info("auto_archive_scheduler_started")
+    asyncio.create_task(_feedback_adjustment_scheduler())
+    log.info("feedback_adjustment_scheduler_started")
+    asyncio.create_task(_weekly_audit_scheduler())
+    log.info("weekly_audit_scheduler_started")
     yield
     if ingestor_task:
         ingestor_task.cancel()
@@ -260,7 +296,9 @@ def _incident_to_dict(i: Incident) -> dict:
         "iris_case_id":      i.iris_case_id,
         "iris_case_status":  i.iris_case_status,
         "iris_case_url":     i.iris_case_url,
-        "confidence_score":  float(i.confidence_score) if i.confidence_score is not None else None,
+        "fp_probability":    float(i.fp_probability) if i.fp_probability is not None else None,
+        "asset_tier":        i.asset_tier,
+        "soar_actions":      i.soar_actions or [],
     }
 
 

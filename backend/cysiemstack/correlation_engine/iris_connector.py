@@ -10,7 +10,7 @@ Responsibilities
 3. sync_closed_cases()  — Batch-poll all open IRIS-linked incidents and close
                           any whose IRIS case has been closed by an analyst.
 4. auto_close_fp()      — Mark an incident as false positive / auto-closed when
-                          its confidence_score >= iris_fp_threshold.
+                          its fp_probability >= iris_fp_threshold.
 
 Configuration is read from Settings (cysiemstack.env):
   IRIS_MODE         disabled | cloud | local
@@ -46,6 +46,11 @@ settings = get_settings()
 _AI_SETTINGS_FILE = Path("/opt/cycentra/ai_settings.json")
 _CYCENTRA_ENV_FILE = Path("/opt/cycentra/.env")   # loaded by Flask; not by engine's systemd unit
 _CLOUD_IRIS_URL_DEFAULT = "https://cyiris.cycentra.com"
+
+
+def _tls_verify():
+    """Return verify parameter for httpx: CA bundle path or system default."""
+    return settings.tls_ca_bundle if settings.tls_ca_bundle else True
 
 
 # ── .env reader ────────────────────────────────────────────────────────────────
@@ -213,7 +218,7 @@ async def create_iris_case(db: AsyncSession, incident: Incident) -> dict:
             base_url=cfg["url"],
             headers=_iris_headers(cfg["api_key"]),
             timeout=10.0,
-            verify=False,   # IRIS commonly runs with a self-signed cert on-premise
+            verify=_tls_verify(),
         ) as client:
             resp = await client.post("/api/v2/cases", json=payload)
 
@@ -259,7 +264,7 @@ async def get_iris_case_status(cfg: dict, case_id: int) -> str | None:
             base_url=cfg["url"],
             headers=_iris_headers(cfg["api_key"]),
             timeout=8.0,
-            verify=False,
+            verify=_tls_verify(),
         ) as client:
             resp = await client.get(f"/api/v2/cases/{case_id}")
 
@@ -318,28 +323,28 @@ async def sync_closed_cases(db: AsyncSession) -> int:
 # ── False-positive auto-close ─────────────────────────────────────────────────
 
 async def auto_close_fp(db: AsyncSession, incident: Incident,
-                        confidence_score: float) -> bool:
+                        fp_probability: float) -> bool:
     """
-    Close an incident as a false positive if confidence_score >= threshold.
+    Close an incident as a false positive if fp_probability >= threshold.
 
     Returns True if auto-closed, False otherwise.
     """
     cfg = _load_iris_config()
     threshold = cfg["fp_threshold"] if cfg else settings.iris_fp_threshold
 
-    incident.confidence_score = confidence_score
+    incident.fp_probability = fp_probability
 
-    if confidence_score >= threshold:
+    if fp_probability >= threshold:
         incident.status               = "closed"
         incident.closed_at            = datetime.now(timezone.utc)
         incident.updated_at           = datetime.now(timezone.utc)
         incident.false_positive_reason = (
-            f"Auto-closed: AI confidence score {confidence_score:.1f} >= "
+            f"Auto-closed: FP probability {fp_probability:.1f} >= "
             f"threshold {threshold:.1f}"
         )
         await db.flush()
         log.info("incident_auto_closed_fp",
-                 incident_id=incident.id, score=confidence_score,
+                 incident_id=incident.id, score=fp_probability,
                  threshold=threshold)
         return True
 

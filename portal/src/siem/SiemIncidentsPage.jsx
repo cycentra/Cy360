@@ -191,10 +191,11 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
                   fontWeight: 700 }}>{inc.risk_score?.toFixed(1)}</span>
               </span>
             )}
-            {inc.confidence_score != null && (
-              <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11 }}>
-                FP Score: <span style={{ color: inc.confidence_score >= 90 ? "#ff8c00" : "#4d9eff",
-                  fontWeight: 700 }}>{inc.confidence_score?.toFixed(1)}%</span>
+            {inc.fp_probability != null && (
+              <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11 }}
+                title="False-Positive Probability: high value = likely noise. Multi-factor score based on rule confidence, UEBA anomalies, MISP IOC hits, kill-chain stage and asset criticality.">
+                FP Prob: <span style={{ color: inc.fp_probability >= 90 ? "#ff8c00" : "#4d9eff",
+                  fontWeight: 700 }}>{inc.fp_probability?.toFixed(1)}%</span>
               </span>
             )}
           </div>

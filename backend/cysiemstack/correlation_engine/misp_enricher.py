@@ -2,7 +2,10 @@
 misp_enricher.py
 Enriches incidents with MISP threat intelligence via cached IOC lookups.
 Cache TTL: 4h for hits, 1h for misses — avoids hammering MISP API.
+Extended lookups: IP, domain, SHA256, URL (in addition to src_ip).
 """
+import re
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 import httpx
@@ -18,6 +21,26 @@ settings = get_settings()
 CACHE_TTL_HIT  = timedelta(hours=4)
 CACHE_TTL_MISS = timedelta(hours=1)
 
+# ── Validation constants ──────────────────────────────────────────────────────
+SHA256_HEX_LENGTH = 64
+MIN_DOMAIN_LENGTH = 4   # skip obviously invalid FQDN tokens
+
+# ── In-memory IOC cache (fast path before DB) ─────────────────────────────────
+# Key: "misp:{ioc_type}:{value}" → (epoch_float, result_dict)
+_mem_cache: dict[str, tuple[float, dict]] = {}
+_MEM_CACHE_HIT_TTL  = 4 * 3600   # 4 hours for hits
+_MEM_CACHE_MISS_TTL = 1 * 3600   # 1 hour for misses
+
+# ── FQDN regex for domain extraction from rule_desc ───────────────────────────
+_FQDN_RE = re.compile(
+    r'\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)'
+    r'+[a-zA-Z]{2,}\b'
+)
+
+def _tls_verify():
+    """Return verify parameter for httpx: CA bundle path or system default."""
+    return settings.tls_ca_bundle if settings.tls_ca_bundle else True
+
 
 async def _lookup_misp(ioc_value: str, ioc_type: str) -> dict:
     """Direct MISP REST API call. Returns hit metadata or empty dict."""
@@ -25,7 +48,7 @@ async def _lookup_misp(ioc_value: str, ioc_type: str) -> dict:
         async with httpx.AsyncClient(
             base_url=settings.misp_url,
             headers={'Authorization': settings.misp_api_key, 'Accept': 'application/json'},
-            timeout=8.0, verify=False,
+            timeout=8.0, verify=_tls_verify(),
         ) as client:
             resp = await client.post('/attributes/restSearch', json={
                 'returnFormat': 'json',
@@ -56,10 +79,20 @@ async def _lookup_misp(ioc_value: str, ioc_type: str) -> dict:
 
 
 async def lookup_ioc(db: AsyncSession, ioc_value: str, ioc_type: str) -> dict:
-    """Cached IOC lookup: check DB cache first, fall back to MISP API."""
+    """Cached IOC lookup: check in-memory cache, then DB cache, then MISP API."""
     now = datetime.now(timezone.utc)
+    now_ts = time.monotonic()
 
-    # Cache lookup
+    # ── In-memory fast path ────────────────────────────────────────────────────
+    mem_key = f"misp:{ioc_type}:{ioc_value}"
+    cached_mem = _mem_cache.get(mem_key)
+    if cached_mem:
+        mem_ts, mem_result = cached_mem
+        ttl = _MEM_CACHE_HIT_TTL if mem_result.get('hit') else _MEM_CACHE_MISS_TTL
+        if now_ts - mem_ts < ttl:
+            return mem_result
+
+    # ── DB cache ───────────────────────────────────────────────────────────────
     result = await db.execute(
         select(MISPIOCCache).where(
             MISPIOCCache.ioc_value == ioc_value,
@@ -102,12 +135,21 @@ async def lookup_ioc(db: AsyncSession, ioc_value: str, ioc_type: str) -> dict:
         db.add(cached)
 
     await db.flush()
-    return misp_result
+
+    # Store result in in-memory cache
+    out = {
+        'hit':          is_hit,
+        'events':       misp_result.get('events', []),
+        'threat_level': misp_result.get('threat_level'),
+        'tags':         misp_result.get('tags', []),
+    }
+    _mem_cache[mem_key] = (now_ts, out)
+    return out
 
 
 async def enrich_incident(db: AsyncSession, incident: Incident) -> dict:
     """
-    Look up all src_ips from incident alerts in MISP.
+    Look up all IOCs (IP, domain, SHA256, URL) from incident alerts in MISP.
     Updates incident.misp_enrichment and alert.misp_ioc_match.
     """
     if not settings.misp_enabled:
@@ -119,26 +161,56 @@ async def enrich_incident(db: AsyncSession, incident: Incident) -> dict:
     alerts = alerts_q.scalars().all()
 
     enrichment = {'ioc_hits': [], 'total_lookups': 0, 'tags': []}
-    seen_ips   = set()
+    seen: set[str] = set()   # "type:value" dedup key
 
-    for alert in alerts:
-        if not alert.src_ip or str(alert.src_ip) in seen_ips:
-            continue
-        seen_ips.add(str(alert.src_ip))
+    async def _check(ioc_value: str, ioc_type: str, alert: Alert):
+        key = f"{ioc_type}:{ioc_value}"
+        if not ioc_value or key in seen:
+            return
+        seen.add(key)
         enrichment['total_lookups'] += 1
-
-        result = await lookup_ioc(db, str(alert.src_ip), 'ip-src')
+        result = await lookup_ioc(db, ioc_value, ioc_type)
         if result.get('hit'):
             enrichment['ioc_hits'].append({
-                'ioc':          str(alert.src_ip),
-                'type':         'ip-src',
+                'ioc':          ioc_value,
+                'type':         ioc_type,
                 'events':       result.get('events', []),
                 'threat_level': result.get('threat_level'),
                 'tags':         result.get('tags', []),
             })
             enrichment['tags'].extend(result.get('tags', []))
             alert.misp_ioc_match = True
-            alert.misp_event_ids = result.get('events', [])
+            if not alert.misp_event_ids:
+                alert.misp_event_ids = result.get('events', [])
+
+    for alert in alerts:
+        # ── IP addresses ──────────────────────────────────────────────────────
+        if alert.src_ip:
+            await _check(str(alert.src_ip), 'ip-src', alert)
+
+        # ── Domains extracted from rule_desc ──────────────────────────────────
+        if alert.rule_desc:
+            for domain in _FQDN_RE.findall(alert.rule_desc):
+                # Skip very short or clearly non-FQDN tokens
+                if '.' not in domain or len(domain) < MIN_DOMAIN_LENGTH:
+                    continue
+                await _check(domain.lower(), 'domain', alert)
+
+        # ── SHA256 hashes from FIM / syscheck events ──────────────────────────
+        full = alert.full_alert or {}
+        sha256 = (
+            full.get('sha256')
+            or full.get('syscheck', {}).get('sha256_after')
+            or full.get('syscheck', {}).get('sha256_before')
+            or getattr(alert, 'sha256', None)
+        )
+        if sha256 and len(str(sha256)) == SHA256_HEX_LENGTH:
+            await _check(str(sha256).lower(), 'sha256', alert)
+
+        # ── URLs from web proxy alert categories ──────────────────────────────
+        url = full.get('url') or full.get('data', {}).get('url')
+        if url:
+            await _check(str(url), 'url', alert)
 
     enrichment['tags'] = list(set(enrichment['tags']))
     incident.misp_enrichment = enrichment
@@ -148,3 +220,35 @@ async def enrich_incident(db: AsyncSession, incident: Incident) -> dict:
         log.info('misp_hits', incident_id=incident.id, hits=len(enrichment['ioc_hits']))
 
     return enrichment
+
+
+async def push_iocs_to_misp(indicators: list[dict]) -> None:
+    """Push confirmed TP IOCs back to MISP as sightings / new attributes.
+
+    Each indicator dict: {'value': str, 'type': str, 'comment': str}
+    Silently exits if MISP is not configured.  Designed for fire-and-forget.
+    """
+    if not settings.misp_enabled or not indicators:
+        return
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.misp_url,
+            headers={'Authorization': settings.misp_api_key, 'Accept': 'application/json'},
+            timeout=10.0, verify=_tls_verify(),
+        ) as client:
+            for ind in indicators:
+                val  = ind.get('value', '')
+                typ  = ind.get('type', 'other')
+                note = ind.get('comment', 'CySIEM confirmed TP sighting')
+                if not val:
+                    continue
+                # Try to record a sighting first (lightweight)
+                await client.post('/sightings/add', json={
+                    'value': val,
+                    'type':  '0',  # 0 = sighting
+                    'source': 'CySIEM',
+                    'comment': note,
+                })
+        log.info('misp_iocs_pushed', count=len(indicators))
+    except Exception as e:
+        log.warning('misp_push_error', error=str(e))
