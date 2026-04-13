@@ -759,6 +759,7 @@ const TABS = [
   { id: "updates",      label: "Updates & Version" },
   { id: "ai-config",    label: "AI Config" },
   { id: "integrations", label: "Integrations" },
+  { id: "mcp",          label: "MCP" },
   { id: "env",          label: "Environment Config" },
   { id: "users",        label: "User Management" },
 ];
@@ -1262,6 +1263,232 @@ function CyIrisTab() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// TAB 5 — MCP Configuration
+// ════════════════════════════════════════════════════════════════════════════
+
+function McpTab() {
+  const [status,  setStatus]  = useState(null);   // null | {enabled, endpoint, public_url, tools, ...}
+  const [loading, setLoading] = useState(true);
+  const [saving,  setSaving]  = useState(false);
+  const [msg,     setMsg]     = useState(null);    // {ok, text}
+  const [copied,  setCopied]  = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/system/mcp`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { setStatus(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  const toggle = async () => {
+    if (!status) return;
+    setSaving(true); setMsg(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/system/mcp`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !status.enabled }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        setStatus(prev => ({ ...prev, enabled: d.enabled }));
+        setMsg({ ok: true, text: d.message });
+      } else {
+        setMsg({ ok: false, text: d.error || "Failed to update MCP setting" });
+      }
+    } catch (ex) {
+      setMsg({ ok: false, text: String(ex) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const copyEndpoint = () => {
+    const url = status?.public_url || status?.endpoint || "";
+    if (!url) return;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  if (loading) return (
+    <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>
+  );
+
+  const enabled    = status?.enabled ?? true;
+  const accentColor = enabled ? "#00e5a0" : "rgba(255,255,255,0.3)";
+  const tools      = status?.tools || [];
+
+  return (
+    <div style={{ maxWidth: 720 }}>
+
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+        <span style={{ fontSize: 18 }}>⚡</span>
+        <div style={{ color: "#00e5a0", fontSize: 10, letterSpacing: "1.5px",
+          textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
+          Model Context Protocol (MCP)
+        </div>
+        <span style={{ marginLeft: 4, background: enabled ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.06)",
+          color: enabled ? "#00e5a0" : "rgba(255,255,255,0.35)", border: `1px solid ${enabled ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.1)"}`,
+          borderRadius: 4, padding: "2px 8px", fontSize: 10, fontFamily: "monospace", letterSpacing: "1px" }}>
+          {enabled ? "ENABLED" : "DISABLED"}
+        </span>
+      </div>
+      <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, marginBottom: 24, lineHeight: 1.6 }}>
+        The Security MCP bridge exposes{" "}
+        <strong style={{ color: "rgba(255,255,255,0.5)" }}>{tools.length} SIEM, UEBA, and Wazuh tools</strong>{" "}
+        to external AI clients (Claude Desktop, OpenAI Agents SDK, custom LLM toolchains).
+        It runs inside the <code style={{ color: "#4d9eff", fontFamily: "monospace" }}>cysiemstack-engine</code>{" "}
+        process — no separate service or extra port required.
+      </div>
+
+      {/* Enable/Disable toggle */}
+      <div style={{ ...CARD, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
+        <div>
+          <div style={LABEL}>MCP Bridge</div>
+          <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, fontFamily: "monospace" }}>
+            {enabled
+              ? "Active — AI clients can connect via SSE transport"
+              : "Inactive — restart engine after enabling to activate"}
+          </div>
+        </div>
+        <button onClick={toggle} disabled={saving}
+          style={{ background: enabled ? "rgba(255,59,59,0.1)" : "rgba(0,229,160,0.1)",
+            color: enabled ? "#ff6b6b" : "#00e5a0",
+            border: `1px solid ${enabled ? "rgba(255,59,59,0.35)" : "rgba(0,229,160,0.35)"}`,
+            borderRadius: 4, padding: "8px 20px", fontFamily: "monospace", fontSize: 11,
+            fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", letterSpacing: "0.5px",
+            opacity: saving ? 0.6 : 1 }}>
+          {saving ? "Saving…" : enabled ? "Disable MCP" : "Enable MCP"}
+        </button>
+      </div>
+
+      {msg && (
+        <div style={{ marginBottom: 16, fontFamily: "monospace", fontSize: 11,
+          color: msg.ok ? "#00e5a0" : "#ff4444" }}>
+          {msg.ok ? "✓ " : "✗ "}{msg.text}
+        </div>
+      )}
+
+      {/* SSE Endpoint */}
+      <div style={CARD}>
+        <div style={LABEL}>SSE Endpoint</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+          <code style={{ flex: 1, background: "rgba(0,229,160,0.05)", border: "1px solid rgba(0,229,160,0.15)",
+            borderRadius: 4, padding: "8px 12px", color: "#00e5a0", fontFamily: "monospace",
+            fontSize: 12, wordBreak: "break-all" }}>
+            {status?.public_url || status?.endpoint || "—"}
+          </code>
+          <button onClick={copyEndpoint}
+            style={{ background: "rgba(0,229,160,0.08)", color: "#00e5a0",
+              border: "1px solid rgba(0,229,160,0.25)", borderRadius: 4,
+              padding: "8px 14px", fontFamily: "monospace", fontSize: 10,
+              fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+            {copied ? "✓ Copied" : "Copy"}
+          </button>
+        </div>
+        <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ ...LABEL, marginBottom: 2 }}>Transport</div>
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace" }}>
+              {status?.transport || "SSE (Server-Sent Events)"}
+            </div>
+          </div>
+          <div>
+            <div style={{ ...LABEL, marginBottom: 2 }}>Protocol</div>
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace" }}>
+              {status?.protocol || "MCP 2024-11-05"}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Connection guide */}
+      <div style={CARD}>
+        <div style={LABEL}>Connect a 3rd-party AI Client</div>
+
+        {/* Claude Desktop */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace",
+            fontWeight: 700, marginBottom: 8 }}>Claude Desktop</div>
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, marginBottom: 6, lineHeight: 1.5 }}>
+            Add the following block to your{" "}
+            <code style={{ color: "#4d9eff", fontFamily: "monospace" }}>claude_desktop_config.json</code>:
+          </div>
+          <pre style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.07)",
+            borderRadius: 4, padding: "12px 14px", fontFamily: "monospace", fontSize: 11,
+            color: "rgba(255,255,255,0.7)", overflowX: "auto", margin: 0, lineHeight: 1.6 }}>{
+`{
+  "mcpServers": {
+    "cycentra-siem": {
+      "url": "${status?.public_url || status?.endpoint || "<MCP_ENDPOINT>"}",
+      "transport": "sse"
+    }
+  }
+}`
+          }</pre>
+        </div>
+
+        {/* OpenAI Agents SDK */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace",
+            fontWeight: 700, marginBottom: 8 }}>OpenAI Agents SDK / custom Python client</div>
+          <pre style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.07)",
+            borderRadius: 4, padding: "12px 14px", fontFamily: "monospace", fontSize: 11,
+            color: "rgba(255,255,255,0.7)", overflowX: "auto", margin: 0, lineHeight: 1.6 }}>{
+`from mcp.client.sse import sse_client
+
+async with sse_client("${status?.public_url || status?.endpoint || "<MCP_ENDPOINT>"}") as (r, w):
+    # r = read stream, w = write stream
+    ...`
+          }</pre>
+        </div>
+
+        {/* mcp CLI */}
+        <div>
+          <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace",
+            fontWeight: 700, marginBottom: 8 }}>MCP Inspector / CLI</div>
+          <pre style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.07)",
+            borderRadius: 4, padding: "12px 14px", fontFamily: "monospace", fontSize: 11,
+            color: "rgba(255,255,255,0.7)", overflowX: "auto", margin: 0 }}>{
+`npx @modelcontextprotocol/inspector ${status?.public_url || status?.endpoint || "<MCP_ENDPOINT>"}`
+          }</pre>
+        </div>
+      </div>
+
+      {/* Available tools */}
+      <div style={CARD}>
+        <div style={{ ...LABEL, marginBottom: 14 }}>Available Tools ({tools.length})</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {tools.map(t => (
+            <div key={t.name} style={{ display: "flex", gap: 12, alignItems: "flex-start",
+              background: "rgba(0,229,160,0.03)", border: "1px solid rgba(0,229,160,0.08)",
+              borderRadius: 4, padding: "8px 12px" }}>
+              <code style={{ color: accentColor, fontFamily: "monospace", fontSize: 11,
+                fontWeight: 700, minWidth: 240, flexShrink: 0 }}>
+                {t.name}
+              </code>
+              <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, lineHeight: 1.5 }}>
+                {t.description}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Notes */}
+      <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.2)", lineHeight: 1.8 }}>
+        ℹ️ The MCP bridge starts automatically when the <code>mcp[cli]</code> package is installed with the engine.
+        Changes to MCP_ENABLED take effect after restarting the <code>cysiemstack-engine</code> service.
+        Set <code>MCP_ENABLED=false</code> in <code>/opt/cycentra/cysiemstack.env</code> to disable without uninstalling.
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // TAB 3 wrapper — Integrations (MISP + CyIRIS)
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -1310,6 +1537,7 @@ export function SystemSettingsPage({ aiConfig, onSaveAIConfig }) {
       {tab === "updates"      && <UpdatesTab />}
       {tab === "ai-config"    && <AISettingsPage aiConfig={aiConfig || {}} onSave={onSaveAIConfig || (() => {})} embedded={true} />}
       {tab === "integrations" && <IntegrationsTab />}
+      {tab === "mcp"          && <McpTab />}
       {tab === "env"          && <EnvConfigTab />}
       {tab === "users"        && <UserManagementTab />}
     </div>

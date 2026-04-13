@@ -18,6 +18,8 @@ Routes:
   PUT  /api/system/env/<target>  write env file
   GET  /api/system/license         current license status (type, days, customer, valid)
   POST /api/system/license/upload  upload a .lic file — validates and activates immediately
+  GET  /api/system/mcp             MCP bridge status (enabled flag, endpoint URL, tool list)
+  POST /api/system/mcp             toggle MCP_ENABLED in cysiemstack.env (admin only)
 """
 
 import os
@@ -29,7 +31,7 @@ import threading
 from pathlib import Path
 
 import requests as http_requests
-from flask import Blueprint, request, jsonify, make_response
+from flask import Blueprint, request, jsonify, make_response, session
 
 from core.helpers import add_cors_headers, get_misp_config
 from core.config import AI_SETTINGS_FILE
@@ -1070,3 +1072,114 @@ def system_geoip():
 
     return jsonify({"results": results})
 
+
+# ── MCP configuration ─────────────────────────────────────────────────────────
+
+# The 11 tools registered by the Security MCP bridge (mirrors main.py)
+_MCP_TOOLS = [
+    {"name": "get_stats",                  "description": "High-level SIEM statistics: incidents, alerts, anomalies, uptime"},
+    {"name": "list_incidents",             "description": "List incidents filtered by status / severity"},
+    {"name": "get_incident",               "description": "Full details for a single incident by ID"},
+    {"name": "list_alerts",                "description": "Enumerate raw alerts, optionally scoped to an incident"},
+    {"name": "list_risk_scores",           "description": "Entity risk scores filtered by type and level"},
+    {"name": "list_ueba_users",            "description": "UEBA user profiles with anomaly and activity data"},
+    {"name": "get_ueba_anomalies",         "description": "Detailed behavioural anomalies for a specific user"},
+    {"name": "wazuh_list_agents",          "description": "Enumerate Wazuh agents with optional status filter"},
+    {"name": "wazuh_active_response",      "description": "Trigger a Wazuh active-response command on an agent"},
+    {"name": "wazuh_get_agent_vulnerabilities", "description": "Wazuh vulnerability scan results for an agent"},
+]
+
+
+def _read_mcp_enabled() -> bool:
+    """Read MCP_ENABLED from cysiemstack.env.  Defaults to True when absent."""
+    env_path = Path(_ENV_FILE_MAP["cysiemstack"])
+    if not env_path.exists():
+        return True
+    try:
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("MCP_ENABLED=") and not line.startswith("#"):
+                return line.split("=", 1)[1].strip().lower() not in ("false", "0", "no")
+    except Exception:
+        pass
+    return True
+
+
+def _write_mcp_enabled(enabled: bool) -> None:
+    """Write MCP_ENABLED into cysiemstack.env, updating in-place."""
+    env_path = Path(_ENV_FILE_MAP["cysiemstack"])
+    if not env_path.parent.exists():
+        return
+    value = "true" if enabled else "false"
+    try:
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
+    except Exception:
+        lines = []
+    result, found = [], False
+    for line in lines:
+        if re.match(r'^MCP_ENABLED\s*=', line) and not line.strip().startswith("#"):
+            result.append(f"MCP_ENABLED={value}")
+            found = True
+        else:
+            result.append(line)
+    if not found:
+        result.append(f"MCP_ENABLED={value}")
+    try:
+        env_path.write_text("\n".join(result) + "\n")
+    except Exception:
+        pass
+
+
+@system_bp.route("/api/system/mcp", methods=["OPTIONS"])
+def mcp_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/mcp", methods=["GET"])
+def mcp_get():
+    """Return MCP bridge status, SSE endpoint URL, and registered tool list."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+
+    enabled  = _read_mcp_enabled()
+    base_url = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").rstrip("/")
+    # Derive the public-facing host for the MCP endpoint hint
+    base_domain = os.environ.get("BASE_DOMAIN", "")
+    public_url  = f"https://siem.{base_domain}/mcp/sse" if base_domain else f"{base_url}/mcp/sse"
+
+    return jsonify({
+        "enabled":     enabled,
+        "endpoint":    f"{base_url}/mcp/sse",
+        "public_url":  public_url,
+        "tools":       _MCP_TOOLS,
+        "transport":   "SSE (Server-Sent Events)",
+        "protocol":    "MCP 2024-11-05",
+        "description": "CySIEM Security MCP — exposes SIEM, UEBA, and Wazuh tools to AI clients",
+    })
+
+
+@system_bp.route("/api/system/mcp", methods=["POST"])
+def mcp_post():
+    """Enable or disable the MCP bridge by writing MCP_ENABLED to cysiemstack.env.
+    Requires admin role.  The engine must be restarted for the change to take effect.
+    """
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+
+    data    = request.get_json() or {}
+    enabled = bool(data.get("enabled", True))
+    try:
+        _write_mcp_enabled(enabled)
+    except PermissionError:
+        return jsonify({"error": "Permission denied — backend cannot write cysiemstack.env"}), 403
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify({
+        "ok":      True,
+        "enabled": enabled,
+        "message": f"MCP bridge {'enabled' if enabled else 'disabled'} — restart cysiemstack-engine to apply",
+    })
