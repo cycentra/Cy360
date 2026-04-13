@@ -1,6 +1,35 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.150 — 2026-04-13
+
+### Fix
+
+**MCP SSE endpoint URL updated from `siem.cycentra.com` to `cysoc.cycentra.com`**
+- Root cause: `blueprints/system/routes.py` `/api/system/mcp` GET handler hard-coded
+  `https://siem.{BASE_DOMAIN}/mcp/sse` as the `public_url` returned to clients and shown
+  in the AI connection guide. The production server is reachable at `cysoc.cycentra.com`,
+  not `siem.cycentra.com`, causing every externally-configured AI client to target an
+  unreachable host.
+- Fix: Changed the `public_url` construction from `f"https://siem.{base_domain}/mcp/sse"`
+  to `f"https://cysoc.{base_domain}/mcp/sse"` in `blueprints/system/routes.py` (line 1151).
+  The internal loopback `endpoint` (`http://127.0.0.1:8100/mcp/sse`) is unchanged.
+  - `backend/blueprints/system/routes.py`: `public_url` subdomain changed `siem` → `cysoc`.
+
+---
+## v1.0.149 — 2026-04-13
+
+### Chore
+
+**`publish.yml` removed; `_SCRIPT_VERSION` synced to v1.0.149**
+- Removed `.github/workflows/publish.yml` (stub workflow with no steps — superseded by
+  `agent-release.yml` and `build-package.sh`).
+- Bumped `_SCRIPT_VERSION` in `cycentra-setup.sh` from `v1.0.144` to `v1.0.149` to align
+  the self-update version check with the actual release history.
+  - `.github/workflows/publish.yml`: deleted.
+  - `cycentra-setup.sh`: `_SCRIPT_VERSION` bumped to `v1.0.149`.
+
+---
 ## v1.0.148 — 2026-04-13
 
 ### Chore

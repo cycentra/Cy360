@@ -1148,7 +1148,7 @@ def mcp_get():
     # the engine under https://siem.<domain>/ so that is what 3rd-party clients use.
     # Without BASE_DOMAIN (dev / isolated installs) we fall back to the loopback URL.
     base_domain = os.environ.get("BASE_DOMAIN", "")
-    public_url  = f"https://siem.{base_domain}/mcp/sse" if base_domain else f"{base_url}/mcp/sse"
+    public_url  = f"https://cysoc.{base_domain}/mcp/sse" if base_domain else f"{base_url}/mcp/sse"
 
     return jsonify({
         "enabled":     enabled,
