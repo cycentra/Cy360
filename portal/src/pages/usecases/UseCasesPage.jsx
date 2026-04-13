@@ -1,10 +1,12 @@
 /**
  * src/pages/usecases/UseCasesPage.jsx
  * ======================================
- * Use Case Marketplace — pre-built CySOAR automation playbook templates.
+ * Use Case Marketplace — pre-built CySOAR automation playbook templates
+ * and cloud integration configuration widgets.
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { API_BASE } from "../../core/constants";
 
 const USE_CASES = [
   {
@@ -42,6 +44,12 @@ const USE_CASES = [
     description:"Detect and respond to brute force login attempts. Temporarily block offending IPs, alert the user, and create an investigation case.",
     steps:["CySIEM: 10+ failed logins in 60s","Extract source IP and target account","Block IP for 1 hour via active response","Notify target user via email","Create CyIRIS case for investigation","Auto-close if no further activity in 24h"],
     modules:["CySOAR","CySIEM","CyIRIS"], time:"~30 min to deploy", cysoarFlow:"brute_force.py",
+  },
+  {
+    id:"office365", title:"Office 365", icon:"☁️", color:"#0078d4", category:"Cloud Management",
+    description:"Configure the Wazuh Office 365 audit log integration. Ingest Exchange, SharePoint, Azure AD and General audit events directly into CySIEM for unified cloud visibility.",
+    modules:["CySIEM"], time:"~5 min to configure",
+    isConfigWidget: true,
   },
 ];
 
@@ -122,6 +130,182 @@ function UseCaseModal({ uc, onClose }) {
   );
 }
 
+const O365_SUBSCRIPTIONS = [
+  { id: "Audit.AzureActiveDirectory", label: "Azure Active Directory" },
+  { id: "Audit.Exchange",             label: "Exchange" },
+  { id: "Audit.SharePoint",           label: "SharePoint" },
+  { id: "Audit.General",              label: "General" },
+];
+
+const O365_INTERVALS = ["1m","5m","10m","15m","30m","1h","2h","6h","12h","24h"];
+
+function O365ConfigModal({ uc, onClose }) {
+  const [tenantId,          setTenantId]          = useState("");
+  const [clientId,          setClientId]          = useState("");
+  const [clientSecret,      setClientSecret]      = useState("");
+  const [interval,          setInterval]          = useState("30m");
+  const [subs,              setSubs]              = useState(O365_SUBSCRIPTIONS.map(s => s.id));
+  const [enabled,           setEnabled]           = useState(true);
+  const [saving,            setSaving]            = useState(false);
+  const [result,            setResult]            = useState(null);
+  const [loadError,         setLoadError]         = useState(null);
+  const [hasExistingSecret, setHasExistingSecret] = useState(false);
+
+  // Load existing config on mount
+  useEffect(() => {
+    fetch(`${API_BASE}/api/system/o365config`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => {
+        if (d.ok) {
+          if (d.tenant_id)  setTenantId(d.tenant_id);
+          if (d.client_id)  setClientId(d.client_id);
+          if (d.interval)   setInterval(d.interval);
+          if (d.subscriptions && d.subscriptions.length) setSubs(d.subscriptions);
+          setEnabled(d.enabled !== false);
+          // Secret is never returned — track whether one is already configured
+          setHasExistingSecret(!!d.tenant_id && !d.tenant_id.startsWith("PLACEHOLDER"));
+        }
+      })
+      .catch(err => {
+        // 404 means ossec.conf not found (CySIEM not installed yet) — not an error
+        if (err !== 404) setLoadError("Could not load current config.");
+      });
+  }, []);
+
+  function toggleSub(id) {
+    setSubs(prev => prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]);
+  }
+
+  function handleSave(e) {
+    e.preventDefault();
+    setResult(null);
+    setSaving(true);
+    fetch(`${API_BASE}/api/system/o365config`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tenant_id: tenantId, client_id: clientId, client_secret: clientSecret, interval, subscriptions: subs, enabled }),
+    })
+      .then(r => r.json().then(d => ({ ok: r.ok, data: d })))
+      .then(({ ok, data }) => setResult({ ok: ok && data.ok, msg: data.message || data.error || (ok ? "Saved" : "Error") }))
+      .catch(() => setResult({ ok: false, msg: "Network error" }))
+      .finally(() => setSaving(false));
+  }
+
+  if (!uc) return null;
+
+  const inputStyle = {
+    width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)",
+    borderRadius: 4, padding: "9px 12px", color: "white", fontSize: 13, fontFamily: "monospace",
+    outline: "none", boxSizing: "border-box",
+  };
+  const labelStyle = { color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace", letterSpacing: "0.8px", textTransform: "uppercase", marginBottom: 6, display: "block" };
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.88)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:150, backdropFilter:"blur(6px)" }} onClick={onClose}>
+      <div style={{ background:"#0d0f14", border:"1px solid #0078d440", borderTop:"2px solid #0078d4", borderRadius:8, padding:36, width:"min(580px,95vw)", maxHeight:"90vh", overflowY:"auto" }} onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:24 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+            <span style={{ fontSize:34 }}>☁️</span>
+            <div>
+              <div style={{ color:"white", fontSize:19, fontWeight:700 }}>Office 365 Integration</div>
+              <div style={{ color:"rgba(255,255,255,0.35)", fontSize:11, fontFamily:"monospace", marginTop:3 }}>Cloud Management · Wazuh wodle configuration</div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.4)", cursor:"pointer", fontSize:22 }}>×</button>
+        </div>
+
+        <div style={{ color:"rgba(255,255,255,0.5)", fontSize:12, lineHeight:1.7, marginBottom:24 }}>
+          Configure the Wazuh <code style={{ color:"#0078d4" }}>office365</code> wodle to ingest Microsoft 365 audit logs into CySIEM.
+          Credentials are written directly into <code style={{ color:"rgba(255,255,255,0.6)" }}>/var/ossec/etc/ossec.conf</code> and
+          <strong style={{ color:"rgba(255,255,255,0.75)" }}> wazuh-manager is restarted automatically</strong>.
+        </div>
+
+        {loadError && (
+          <div style={{ background:"rgba(255,59,59,0.08)", border:"1px solid rgba(255,59,59,0.25)", borderRadius:4, padding:"10px 14px", fontSize:12, color:"#ff8080", marginBottom:18 }}>
+            {loadError}
+          </div>
+        )}
+
+        <form onSubmit={handleSave}>
+          {/* Azure App Credentials */}
+          <div style={{ background:"rgba(0,120,212,0.05)", border:"1px solid rgba(0,120,212,0.15)", borderRadius:6, padding:"18px 20px", marginBottom:20 }}>
+            <div style={{ color:"rgba(255,255,255,0.3)", fontSize:10, letterSpacing:"1.5px", fontFamily:"monospace", textTransform:"uppercase", marginBottom:16 }}>Azure App Credentials</div>
+
+            <div style={{ marginBottom:14 }}>
+              <label style={labelStyle}>Tenant ID</label>
+              <input value={tenantId} onChange={e => setTenantId(e.target.value)} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required style={inputStyle} />
+            </div>
+            <div style={{ marginBottom:14 }}>
+              <label style={labelStyle}>Client ID (Application ID)</label>
+              <input value={clientId} onChange={e => setClientId(e.target.value)} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>Client Secret</label>
+              <input type="password" value={clientSecret} onChange={e => setClientSecret(e.target.value)} placeholder={hasExistingSecret ? "Leave blank to keep existing secret" : "Enter client secret"} required={!hasExistingSecret} style={inputStyle} autoComplete="new-password" />
+              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
+                {hasExistingSecret ? "Secret already configured — leave blank to keep it unchanged" : "Secret is write-only — never returned by the API"}
+              </div>
+            </div>
+          </div>
+
+          {/* Poll Interval */}
+          <div style={{ marginBottom:20 }}>
+            <label style={labelStyle}>Poll Interval</label>
+            <select value={interval} onChange={e => setInterval(e.target.value)} style={{ ...inputStyle, cursor:"pointer" }}>
+              {O365_INTERVALS.map(i => <option key={i} value={i}>{i}</option>)}
+            </select>
+          </div>
+
+          {/* Subscriptions */}
+          <div style={{ marginBottom:20 }}>
+            <div style={{ ...labelStyle, marginBottom:12 }}>Audit Log Subscriptions</div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+              {O365_SUBSCRIPTIONS.map(s => (
+                <label key={s.id} style={{ display:"flex", alignItems:"center", gap:9, cursor:"pointer", background:"rgba(255,255,255,0.03)", border:`1px solid ${subs.includes(s.id)?"rgba(0,120,212,0.4)":"rgba(255,255,255,0.07)"}`, borderRadius:4, padding:"8px 12px" }}>
+                  <input type="checkbox" checked={subs.includes(s.id)} onChange={() => toggleSub(s.id)}
+                    style={{ accentColor:"#0078d4", width:14, height:14, cursor:"pointer" }} />
+                  <span style={{ color: subs.includes(s.id) ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.4)", fontSize:12 }}>{s.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Enable toggle */}
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24 }}>
+            <input type="checkbox" id="o365enabled" checked={enabled} onChange={e => setEnabled(e.target.checked)}
+              style={{ accentColor:"#0078d4", width:15, height:15, cursor:"pointer" }} />
+            <label htmlFor="o365enabled" style={{ color:"rgba(255,255,255,0.6)", fontSize:13, cursor:"pointer" }}>
+              Enable integration (<code style={{ color:"#0078d4" }}>disabled=no</code> in ossec.conf)
+            </label>
+          </div>
+
+          {/* Result banner */}
+          {result && (
+            <div style={{ background: result.ok ? "rgba(0,229,160,0.08)" : "rgba(255,59,59,0.08)", border: `1px solid ${result.ok ? "rgba(0,229,160,0.25)" : "rgba(255,59,59,0.25)"}`, borderRadius:4, padding:"10px 14px", fontSize:12, color: result.ok ? "#00e5a0" : "#ff8080", marginBottom:18 }}>
+              {result.ok ? "✓ " : "✗ "}{result.msg}
+            </div>
+          )}
+
+          {/* Actions */}
+          <div style={{ display:"flex", gap:10 }}>
+            <button type="submit" disabled={saving}
+              style={{ flex:1, background: saving ? "rgba(0,120,212,0.4)" : "#0078d4", color:"white", border:"none", borderRadius:4, padding:"12px", fontFamily:"monospace", fontSize:12, fontWeight:700, cursor: saving ? "not-allowed" : "pointer", letterSpacing:"1px", textTransform:"uppercase" }}>
+              {saving ? "Applying…" : "Apply Configuration"}
+            </button>
+            <button type="button" onClick={onClose}
+              style={{ padding:"12px 20px", background:"transparent", color:"rgba(255,255,255,0.4)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:4, fontFamily:"monospace", fontSize:12, cursor:"pointer" }}>
+              Close
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export function UseCasesPage() {
   const [expanded,  setExpanded]  = useState(null);
   const [catFilter, setCatFilter] = useState("all");
@@ -139,7 +323,7 @@ export function UseCasesPage() {
           </span>
         </div>
         <p style={{ color:"rgba(255,255,255,0.4)", fontSize:13 }}>
-          Pre-built CySOAR automation playbooks. One-click deploy integrates CySOAR, CyIRIS and CySIEM into battle-tested response workflows.
+          Pre-built CySOAR automation playbooks and cloud integration configurators.
         </p>
       </div>
 
@@ -170,7 +354,11 @@ export function UseCasesPage() {
         </div>
       </div>
 
-      {expanded && <UseCaseModal uc={expanded} onClose={() => setExpanded(null)}/>}
+      {expanded && (
+        expanded.isConfigWidget
+          ? <O365ConfigModal uc={expanded} onClose={() => setExpanded(null)}/>
+          : <UseCaseModal    uc={expanded} onClose={() => setExpanded(null)}/>
+      )}
     </div>
   );
 }
