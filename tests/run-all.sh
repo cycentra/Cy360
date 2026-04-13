@@ -276,7 +276,7 @@ suite_09() {
     # Regression: watchdog heredoc must guard against missing license_validator.py.
     local _watchdog_block
     _watchdog_block=$(awk '/cat > \/opt\/cycentra\/license-watchdog\.sh/,/^WATCHEOF/' "$REPO_ROOT/cycentra-setup.sh")
-    echo "$_watchdog_block" | grep -qE '\[\[.*-f.*license_validator\.py|\-f.*license_validator\.py' \
+    echo "$_watchdog_block" | grep -qE '\[\[.*-f.*license_validator\.py' \
         && ok "watchdog heredoc guards against missing license_validator.py" \
         || fail "watchdog heredoc missing -f guard — python3 exit 2 on missing file creates .license_expired daily"
 }
