@@ -264,6 +264,21 @@ suite_09() {
         && ok "deploy.yml has tags trigger" || fail "deploy.yml missing tags trigger"
     grep -q "branches:" "$deploy" \
         && ok "deploy.yml has branches trigger" || fail "deploy.yml missing branches trigger"
+
+    # Regression: build-package.sh must copy license_validator.py into the tarball.
+    # Without this, /opt/cycentra/license_validator.py is never deployed; the daily
+    # watchdog calls python3 on the missing file (exit 2 = "can't open file"), which
+    # is misread as "license expired" → services stop every 24 h in demo mode.
+    grep -qE 'cp[[:space:]].*VALIDATOR_PY' "$REPO_ROOT/build-package.sh" \
+        && ok "build-package.sh copies license_validator.py into installer tarball" \
+        || fail "build-package.sh does not cp VALIDATOR_PY — watchdog will false-expire daily"
+
+    # Regression: watchdog heredoc must guard against missing license_validator.py.
+    local _watchdog_block
+    _watchdog_block=$(awk '/cat > \/opt\/cycentra\/license-watchdog\.sh/,/^WATCHEOF/' "$REPO_ROOT/cycentra-setup.sh")
+    echo "$_watchdog_block" | grep -qE '\[\[.*-f.*license_validator\.py' \
+        && ok "watchdog heredoc guards against missing license_validator.py" \
+        || fail "watchdog heredoc missing -f guard — python3 exit 2 on missing file creates .license_expired daily"
 }
 
 # ── Suite 10: Full auth integration checks ───────────────────────────────────

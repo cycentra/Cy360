@@ -218,7 +218,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.152"
+_SCRIPT_VERSION="v1.0.153"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -1241,6 +1241,13 @@ LOG="/var/log/cycentra/license-watchdog.log"
 SERVICES=(cycentra-backend cysiemstack-engine cysiem-to-redis)
 _log() { echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ")  $*" | tee -a "$LOG"; }
 mkdir -p "$(dirname "$LOG")"
+# Guard: a missing validator makes python3 exit 2 ("can't open file"), which
+# the watchdog below would misread as "license expired" and stop all services.
+if [[ ! -f /opt/cycentra/license_validator.py ]]; then
+    _log "WARNING: /opt/cycentra/license_validator.py not found — skipping license check"
+    _log "Re-run: sudo bash /opt/cycentra/cycentra-setup.sh --update to redeploy"
+    exit 0
+fi
 _LIC_JSON=$(python3 /opt/cycentra/license_validator.py --license /opt/cycentra/cycentra.lic 2>/dev/null)
 _CODE=$?
 _TYPE=$(echo "$_LIC_JSON" | python3 -c "import sys,json;print(json.load(sys.stdin).get('type','none'))" 2>/dev/null)
