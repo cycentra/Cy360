@@ -20,6 +20,8 @@ Routes:
   POST /api/system/license/upload  upload a .lic file — validates and activates immediately
   GET  /api/system/mcp             MCP bridge status (enabled flag, endpoint URL, tool list)
   POST /api/system/mcp             toggle MCP_ENABLED in cysiemstack.env (admin only)
+  GET  /api/system/o365config      read current Office 365 wodle config from ossec.conf
+  POST /api/system/o365config      write O365 credentials into ossec.conf and restart wazuh-manager
 """
 
 import os
@@ -1200,3 +1202,180 @@ def mcp_post():
         "enabled": enabled,
         "message": f"MCP bridge {'enabled' if enabled else 'disabled'} — restart cysiemstack-engine to apply",
     })
+
+
+# ── Office 365 Wazuh Integration ──────────────────────────────────────────────
+
+_OSSEC_CONF = Path("/var/ossec/etc/ossec.conf")
+
+_O365_VALID_SUBSCRIPTIONS = {
+    "Audit.AzureActiveDirectory",
+    "Audit.Exchange",
+    "Audit.SharePoint",
+    "Audit.General",
+}
+
+_O365_VALID_INTERVALS = {"1m", "5m", "10m", "15m", "30m", "1h", "2h", "6h", "12h", "24h"}
+
+
+@system_bp.route("/api/system/o365config", methods=["OPTIONS"])
+def o365config_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/o365config", methods=["GET"])
+def o365config_get():
+    """Return the current Office 365 wodle configuration (credentials redacted)."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+
+    if not _OSSEC_CONF.exists():
+        return jsonify({"ok": False, "error": "ossec.conf not found — is CySIEM installed?"}), 404
+
+    try:
+        content = _OSSEC_CONF.read_text()
+    except PermissionError:
+        return jsonify({"ok": False, "error": "Permission denied reading ossec.conf"}), 403
+
+    # Extract current values (redact secrets)
+    def _extract(tag):
+        m = re.search(rf"<{tag}>(.*?)</{tag}>", content)
+        return m.group(1).strip() if m else ""
+
+    disabled_val = _extract("disabled")
+    interval_val = _extract("interval")
+    tenant_id    = _extract("tenant_id")
+    client_id    = _extract("client_id")
+
+    subs = re.findall(r"<subscription>(.*?)</subscription>", content)
+
+    return add_cors_headers(jsonify({
+        "ok":            True,
+        "enabled":       disabled_val == "no",
+        "interval":      interval_val or "30m",
+        "tenant_id":     tenant_id if not tenant_id.startswith("PLACEHOLDER") else "",
+        "client_id":     client_id  if not client_id.startswith("PLACEHOLDER")  else "",
+        "client_secret": "",   # never returned
+        "subscriptions": subs,
+    }))
+
+
+@system_bp.route("/api/system/o365config", methods=["POST"])
+def o365config_post():
+    """Inject O365 credentials into the Wazuh ossec.conf office365 wodle and restart
+    the wazuh-manager service.
+
+    Body (JSON):
+      tenant_id    – Azure tenant UUID
+      client_id    – Azure app client ID
+      client_secret – Azure app client secret
+      interval     – poll interval (default "30m")
+      subscriptions – list of audit log subscriptions (default: all four)
+      enabled      – bool, whether to set <disabled>no</disabled> (default true)
+    """
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
+        return jsonify({"error": "Analyst or admin role required"}), 403
+
+    data          = request.get_json() or {}
+    tenant_id     = (data.get("tenant_id")     or "").strip()
+    client_id     = (data.get("client_id")     or "").strip()
+    client_secret = (data.get("client_secret") or "").strip()
+    interval      = (data.get("interval")      or "30m").strip()
+    subscriptions = data.get("subscriptions") or list(_O365_VALID_SUBSCRIPTIONS)
+    enabled       = bool(data.get("enabled", True))
+
+    # Validate required fields
+    if not tenant_id:
+        return jsonify({"ok": False, "error": "tenant_id is required"}), 400
+    if not client_id:
+        return jsonify({"ok": False, "error": "client_id is required"}), 400
+    if not client_secret:
+        return jsonify({"ok": False, "error": "client_secret is required"}), 400
+
+    # Validate interval
+    if interval not in _O365_VALID_INTERVALS:
+        return jsonify({"ok": False, "error": f"interval must be one of: {', '.join(sorted(_O365_VALID_INTERVALS))}"}), 400
+
+    # Validate subscriptions
+    invalid_subs = set(subscriptions) - _O365_VALID_SUBSCRIPTIONS
+    if invalid_subs:
+        return jsonify({"ok": False, "error": f"Invalid subscriptions: {', '.join(invalid_subs)}"}), 400
+    if not subscriptions:
+        return jsonify({"ok": False, "error": "At least one subscription is required"}), 400
+
+    if not _OSSEC_CONF.exists():
+        return jsonify({"ok": False, "error": "ossec.conf not found — is CySIEM installed?"}), 404
+
+    try:
+        content = _OSSEC_CONF.read_text()
+    except PermissionError:
+        return jsonify({"ok": False, "error": "Permission denied reading ossec.conf"}), 403
+
+    disabled_str = "no" if enabled else "yes"
+
+    # Build the subscription block
+    subs_xml = "\n".join(
+        f"      <subscription>{s}</subscription>" for s in subscriptions
+    )
+
+    new_wodle = (
+        f'<wodle name="office365">\n'
+        f'    <disabled>{disabled_str}</disabled>\n'
+        f'    <interval>{interval}</interval>\n'
+        f'    <curl_max_size>1M</curl_max_size>\n'
+        f'    <run_on_start>yes</run_on_start>\n'
+        f'    <api_auth>\n'
+        f'      <tenant_id>{tenant_id}</tenant_id>\n'
+        f'      <client_id>{client_id}</client_id>\n'
+        f'      <client_secret>{client_secret}</client_secret>\n'
+        f'    </api_auth>\n'
+        f'    <subscriptions>\n'
+        f'{subs_xml}\n'
+        f'    </subscriptions>\n'
+        f'  </wodle>'
+    )
+
+    # Replace existing office365 wodle block or append before </ossec_config>
+    updated, n_subs = re.subn(
+        r'<wodle name="office365">.*?</wodle>',
+        new_wodle,
+        content,
+        flags=re.DOTALL,
+    )
+    if n_subs == 0:
+        # Wodle block not present — inject before closing tag
+        updated = content.replace(
+            "</ossec_config>",
+            f"\n  {new_wodle}\n</ossec_config>",
+        )
+
+    # Write back with backup
+    backup = Path(f"{_OSSEC_CONF}.o365bak")
+    try:
+        import shutil as _shutil
+        _shutil.copy2(str(_OSSEC_CONF), str(backup))
+        _OSSEC_CONF.write_text(updated)
+    except PermissionError:
+        return jsonify({"ok": False, "error": "Permission denied writing ossec.conf"}), 403
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"Failed to write ossec.conf: {exc}"}), 500
+
+    # Restart wazuh-manager to apply changes
+    from core.helpers import run as _run
+    rc, stdout, stderr = _run("systemctl restart wazuh-manager")
+    if rc != 0:
+        # Config was written but service restart failed — still partial success
+        return add_cors_headers(jsonify({
+            "ok":      False,
+            "written": True,
+            "error":   f"Config saved but wazuh-manager restart failed: {stderr or stdout}",
+        })), 207
+
+    return add_cors_headers(jsonify({
+        "ok":      True,
+        "enabled": enabled,
+        "message": "Office 365 integration configured and wazuh-manager restarted successfully",
+    }))
