@@ -10,8 +10,8 @@ from bs4 import BeautifulSoup
 
 import dns.asyncresolver
 
-from config import HTTP_TIMEOUT, BRUTE_FORCE_WORDLIST, SECURITYTRAILS_API_KEY, VIRUSTOTAL_API_KEY
-from utils import setup_logging, create_async_session
+from config import HTTP_TIMEOUT, BRUTE_FORCE_WORDLIST
+from utils import setup_logging, create_async_session, get_misp_config
 
 
 logger = setup_logging()
@@ -48,20 +48,56 @@ async def get_subdomains_crtsh(domain: str, session: aiohttp.ClientSession) -> L
         logger.debug(f"crt.sh failed for {domain}: {e}")
     return sorted(subdomains)
 
-async def get_subdomains_securitytrails(domain: str, session: aiohttp.ClientSession) -> List[str]:
-    if not SECURITYTRAILS_API_KEY:
+async def get_subdomains_misp(domain: str, session: aiohttp.ClientSession) -> List[str]:
+    """
+    Query the configured MISP instance for hostname/domain attributes that
+    belong to *domain*, returning them as a list of subdomain strings.
+
+    Uses ``/attributes/restSearch`` with a wildcard prefix (``%.domain``) so
+    all historically-recorded subdomains in MISP events are surfaced without
+    any direct call to SecurityTrails, VirusTotal, or AlienVault OTX.
+    Returns an empty list when MISP is not configured or the query fails.
+    """
+    misp_cfg = get_misp_config()
+    if not misp_cfg:
         return []
-    url = f"https://api.securitytrails.com/v1/domain/{domain}/subdomains"
-    headers = {"APIKEY": SECURITYTRAILS_API_KEY}
+
+    url = f"{misp_cfg['url']}/attributes/restSearch"
+    headers = {
+        "Authorization": misp_cfg["apiKey"],
+        "Accept":        "application/json",
+        "Content-Type":  "application/json",
+    }
+    payload = {
+        "returnFormat": "json",
+        "value":        f"%.{domain}",
+        "type":         ["hostname", "domain"],
+        "limit":        500,
+    }
+    subdomains: Set[str] = set()
     try:
-        async with session.get(url, headers=headers, timeout=15) as resp:
+        async with session.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=10),
+            ssl=False,
+        ) as resp:
             if resp.status == 200:
-                data = await resp.json()
-                subs = data.get("subdomains", [])
-                return [f"{sub}.{domain}".lower() for sub in subs]
+                data  = await resp.json()
+                attrs = data.get("response", {}).get("Attribute", [])
+                for attr in attrs:
+                    value = attr.get("value", "").lower().strip()
+                    if value.endswith(f".{domain}") and value != domain:
+                        subdomains.add(value)
+                logger.info(f"[Subdomains/MISP] Found {len(subdomains)} subdomain(s) for {domain}.")
+            else:
+                logger.warning(f"[Subdomains/MISP] HTTP {resp.status} for {domain}.")
+    except asyncio.TimeoutError:
+        logger.warning(f"[Subdomains/MISP] Query timed out for {domain}.")
     except Exception as e:
-        logger.debug(f"SecurityTrails failed: {e}")
-    return []
+        logger.debug(f"[Subdomains/MISP] Search failed for {domain}: {e}")
+    return sorted(subdomains)
 
 async def brute_force_subdomains_async(domain: str) -> List[str]:
     import os
@@ -138,32 +174,6 @@ async def crawl_for_subdomains(domain: str, session: aiohttp.ClientSession) -> L
         logger.debug(f"Crawl failed for {domain}: {e}")
     return sorted(subdomains)
 
-async def get_subdomains_virustotal(domain: str, session: aiohttp.ClientSession) -> List[str]:
-    if not VIRUSTOTAL_API_KEY:
-        return []
-    url = f"https://www.virustotal.com/api/v3/domains/{domain}/subdomains"
-    headers = {"x-apikey": VIRUSTOTAL_API_KEY}
-    try:
-        async with session.get(url, headers=headers, timeout=10) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                subs = [item["id"] for item in data.get("data", []) if item["id"].endswith(domain)]
-                return subs
-    except Exception as e:
-        logger.error(f"VirusTotal error for {domain}: {e}")
-    return []
-
-# Added depth: More sources (e.g., AlienVault OTX API - stub, add key if available)
-async def get_subdomains_alienvault(domain: str, session: aiohttp.ClientSession) -> List[str]:
-    url = f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns"
-    try:
-        async with session.get(url, timeout=10) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                subs = [entry['hostname'] for entry in data.get('passive_dns', []) if entry['hostname'].endswith(domain) and entry['hostname'] != domain]
-                return list(set(subs))
-    except:
-        return []
 
 
 # ── Live DNS validation ───────────────────────────────────────────────────────
@@ -215,11 +225,19 @@ async def _check_live(subdomain: str, sem: asyncio.Semaphore) -> Dict[str, Any]:
 
 async def gather_subdomains(
     domain: str,
-    sources: List[str] = ['crtsh', 'securitytrails', 'bruteforce', 'crawl', 'virustotal', 'alienvault'],
+    sources: List[str] = ['crtsh', 'misp', 'bruteforce', 'crawl'],
 ) -> Dict[str, Any]:
     """
     Collect subdomains from all passive + active sources, then validate each
     one with a live DNS check.
+
+    Sources
+    -------
+    - ``crtsh``     — certificate transparency logs (no API key needed)
+    - ``misp``      — passive DNS / hostname attributes from MISP (replaces
+                      SecurityTrails, VirusTotal, and AlienVault OTX)
+    - ``bruteforce`` — DNS brute-force using the local wordlist
+    - ``crawl``     — crawl the apex domain for linked subdomains
 
     Returns a list of enriched dicts:
         {subdomain, live, resolved_ips, cname, sources}
@@ -228,12 +246,10 @@ async def gather_subdomains(
     async with await create_async_session() as session:
         # ── 1. Collect from all passive / active sources ─────────────────────
         task_specs: List[tuple[str, any]] = []
-        if 'crtsh'          in sources: task_specs.append(('crtsh',          get_subdomains_crtsh(domain, session)))
-        if 'securitytrails' in sources: task_specs.append(('securitytrails', get_subdomains_securitytrails(domain, session)))
-        if 'bruteforce'     in sources: task_specs.append(('bruteforce',     brute_force_subdomains_async(domain)))
-        if 'crawl'          in sources: task_specs.append(('crawl',          crawl_for_subdomains(domain, session)))
-        if 'virustotal'     in sources: task_specs.append(('virustotal',     get_subdomains_virustotal(domain, session)))
-        if 'alienvault'     in sources: task_specs.append(('alienvault',     get_subdomains_alienvault(domain, session)))
+        if 'crtsh'     in sources: task_specs.append(('crtsh',     get_subdomains_crtsh(domain, session)))
+        if 'misp'      in sources: task_specs.append(('misp',      get_subdomains_misp(domain, session)))
+        if 'bruteforce' in sources: task_specs.append(('bruteforce', brute_force_subdomains_async(domain)))
+        if 'crawl'     in sources: task_specs.append(('crawl',     crawl_for_subdomains(domain, session)))
 
         source_names  = [s for s, _ in task_specs]
         source_tasks  = [t for _, t in task_specs]
