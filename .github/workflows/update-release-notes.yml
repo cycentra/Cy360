@@ -35,7 +35,7 @@ jobs:
           DIFF=$(cat pr.diff | jq -Rs .)
           TITLE=$(echo "${{ github.event.pull_request.title }}" | jq -Rs .)
           BODY="{\"diff\": $DIFF, \"pr_title\": $TITLE}"
-          SUMMARY_RESPONSE=$(curl -s -X POST "https://cyq.cycentra.com/summarize" \
+          SUMMARY_RESPONSE=$(curl -s -X POST "https://cyq.cycentra.com/api/v1/chat" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $CYQ_TOKEN" \
             -d "$BODY")
