@@ -1,6 +1,33 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.148 — 2026-04-13
+
+### Chore
+
+**Version sync — `pyproject.toml` and `cycentra-setup.sh` aligned to release history**
+- Root cause: `backend/pyproject.toml` was pinned at `1.0.144` and `cycentra-setup.sh`
+  `_SCRIPT_VERSION` was pinned at `v1.0.142` after the initial repository publish. Subsequent
+  releases (v1.0.143–v1.0.147) were documented in `RELEASE_NOTES.md` but the two version fields
+  were never updated, causing the installed package version and the setup-script self-update check
+  to report stale values to operators.
+- Fix: Bumped `version` in `backend/pyproject.toml` from `1.0.144` → `1.0.148` and
+  `_SCRIPT_VERSION` in `cycentra-setup.sh` from `v1.0.142` → `v1.0.148`. Both files now reflect
+  the full history of changes shipped in v1.0.143–v1.0.147:
+  - v1.0.143: RBAC audit-log entries for role assignments/deletions; `MCP_ENABLED` added to
+    `cysiemstack.env` heredoc in `cycentra-setup.sh`.
+  - v1.0.144: `bypass_tests_gate` workflow-dispatch input added to `agent-release.yml` to
+    unblock releases when the CI test gate cannot pass in the Actions environment.
+  - v1.0.145: Automation smoke-test entry (superseded by v1.0.146).
+  - v1.0.146: `agent-release.yml` YAML block-scalar fix — bare multi-line template literal
+    replaced with `[...].join('\\n')` array, unblocking every release since workflow creation.
+  - v1.0.147: `agent-post-release.yml` hotfix-issue body converted to `join('\\n')` array;
+    `agent-label-pr.yml` extended with `ready_for_review` trigger type so auto-merge label
+    is applied to agent PRs converted from draft.
+  - `backend/pyproject.toml`: `version` bumped to `1.0.148`.
+  - `cycentra-setup.sh`: `_SCRIPT_VERSION` bumped to `v1.0.148`.
+
+---
 ## v1.0.147 — 2026-04-12
 
 ### Bug Fix
