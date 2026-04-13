@@ -10,6 +10,8 @@ on:
 jobs:
 
   summarize_pr:
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
