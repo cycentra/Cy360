@@ -140,15 +140,16 @@ const O365_SUBSCRIPTIONS = [
 const O365_INTERVALS = ["1m","5m","10m","15m","30m","1h","2h","6h","12h","24h"];
 
 function O365ConfigModal({ uc, onClose }) {
-  const [tenantId,     setTenantId]     = useState("");
-  const [clientId,     setClientId]     = useState("");
-  const [clientSecret, setClientSecret] = useState("");
-  const [interval,     setInterval]     = useState("30m");
-  const [subs,         setSubs]         = useState(O365_SUBSCRIPTIONS.map(s => s.id));
-  const [enabled,      setEnabled]      = useState(true);
-  const [saving,       setSaving]       = useState(false);
-  const [result,       setResult]       = useState(null);
-  const [loadError,    setLoadError]    = useState(null);
+  const [tenantId,          setTenantId]          = useState("");
+  const [clientId,          setClientId]          = useState("");
+  const [clientSecret,      setClientSecret]      = useState("");
+  const [interval,          setInterval]          = useState("30m");
+  const [subs,              setSubs]              = useState(O365_SUBSCRIPTIONS.map(s => s.id));
+  const [enabled,           setEnabled]           = useState(true);
+  const [saving,            setSaving]            = useState(false);
+  const [result,            setResult]            = useState(null);
+  const [loadError,         setLoadError]         = useState(null);
+  const [hasExistingSecret, setHasExistingSecret] = useState(false);
 
   // Load existing config on mount
   useEffect(() => {
@@ -161,9 +162,12 @@ function O365ConfigModal({ uc, onClose }) {
           if (d.interval)   setInterval(d.interval);
           if (d.subscriptions && d.subscriptions.length) setSubs(d.subscriptions);
           setEnabled(d.enabled !== false);
+          // Secret is never returned — track whether one is already configured
+          setHasExistingSecret(!!d.tenant_id && !d.tenant_id.startsWith("PLACEHOLDER"));
         }
       })
       .catch(err => {
+        // 404 means ossec.conf not found (CySIEM not installed yet) — not an error
         if (err !== 404) setLoadError("Could not load current config.");
       });
   }, []);
@@ -240,8 +244,10 @@ function O365ConfigModal({ uc, onClose }) {
             </div>
             <div>
               <label style={labelStyle}>Client Secret</label>
-              <input type="password" value={clientSecret} onChange={e => setClientSecret(e.target.value)} placeholder="Enter client secret" required style={inputStyle} autoComplete="new-password" />
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>Secret is write-only — never returned by the API</div>
+              <input type="password" value={clientSecret} onChange={e => setClientSecret(e.target.value)} placeholder={hasExistingSecret ? "Leave blank to keep existing secret" : "Enter client secret"} required={!hasExistingSecret} style={inputStyle} autoComplete="new-password" />
+              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
+                {hasExistingSecret ? "Secret already configured — leave blank to keep it unchanged" : "Secret is write-only — never returned by the API"}
+              </div>
             </div>
           </div>
 

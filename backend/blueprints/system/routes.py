@@ -35,7 +35,7 @@ from pathlib import Path
 import requests as http_requests
 from flask import Blueprint, request, jsonify, make_response, session
 
-from core.helpers import add_cors_headers, get_misp_config
+from core.helpers import add_cors_headers, get_misp_config, run as _run_cmd
 from core.config import AI_SETTINGS_FILE
 
 system_bp = Blueprint("system", __name__)
@@ -1249,13 +1249,15 @@ def o365config_get():
 
     subs = re.findall(r"<subscription>(.*?)</subscription>", content)
 
+    # cycentra-setup.sh injects PLACEHOLDER_M365_* values during initial install.
+    # Return empty string for those so the UI treats the field as unconfigured.
     return add_cors_headers(jsonify({
         "ok":            True,
         "enabled":       disabled_val == "no",
         "interval":      interval_val or "30m",
         "tenant_id":     tenant_id if not tenant_id.startswith("PLACEHOLDER") else "",
         "client_id":     client_id  if not client_id.startswith("PLACEHOLDER")  else "",
-        "client_secret": "",   # never returned
+        "client_secret": "",   # never returned — write-only field
         "subscriptions": subs,
     }))
 
@@ -1268,7 +1270,8 @@ def o365config_post():
     Body (JSON):
       tenant_id    – Azure tenant UUID
       client_id    – Azure app client ID
-      client_secret – Azure app client secret
+      client_secret – Azure app client secret (omit or send empty string to keep the
+                      value already present in ossec.conf)
       interval     – poll interval (default "30m")
       subscriptions – list of audit log subscriptions (default: all four)
       enabled      – bool, whether to set <disabled>no</disabled> (default true)
@@ -1292,8 +1295,6 @@ def o365config_post():
         return jsonify({"ok": False, "error": "tenant_id is required"}), 400
     if not client_id:
         return jsonify({"ok": False, "error": "client_id is required"}), 400
-    if not client_secret:
-        return jsonify({"ok": False, "error": "client_secret is required"}), 400
 
     # Validate interval
     if interval not in _O365_VALID_INTERVALS:
@@ -1302,7 +1303,7 @@ def o365config_post():
     # Validate subscriptions
     invalid_subs = set(subscriptions) - _O365_VALID_SUBSCRIPTIONS
     if invalid_subs:
-        return jsonify({"ok": False, "error": f"Invalid subscriptions: {', '.join(invalid_subs)}"}), 400
+        return jsonify({"ok": False, "error": f"Invalid subscriptions: {', '.join(sorted(invalid_subs))}"}), 400
     if not subscriptions:
         return jsonify({"ok": False, "error": "At least one subscription is required"}), 400
 
@@ -1313,6 +1314,14 @@ def o365config_post():
         content = _OSSEC_CONF.read_text()
     except PermissionError:
         return jsonify({"ok": False, "error": "Permission denied reading ossec.conf"}), 403
+
+    # If client_secret is omitted, preserve the value already stored in ossec.conf
+    if not client_secret:
+        m = re.search(r"<client_secret>(.*?)</client_secret>", content)
+        existing_secret = m.group(1).strip() if m else ""
+        if existing_secret.startswith("PLACEHOLDER") or not existing_secret:
+            return jsonify({"ok": False, "error": "client_secret is required for the initial configuration"}), 400
+        client_secret = existing_secret
 
     disabled_str = "no" if enabled else "yes"
 
@@ -1355,23 +1364,21 @@ def o365config_post():
     # Write back with backup
     backup = Path(f"{_OSSEC_CONF}.o365bak")
     try:
-        import shutil as _shutil
-        _shutil.copy2(str(_OSSEC_CONF), str(backup))
+        shutil.copy2(str(_OSSEC_CONF), str(backup))
         _OSSEC_CONF.write_text(updated)
     except PermissionError:
         return jsonify({"ok": False, "error": "Permission denied writing ossec.conf"}), 403
-    except Exception as exc:
-        return jsonify({"ok": False, "error": f"Failed to write ossec.conf: {exc}"}), 500
+    except OSError:
+        return jsonify({"ok": False, "error": "Failed to write ossec.conf — check server logs"}), 500
 
     # Restart wazuh-manager to apply changes
-    from core.helpers import run as _run
-    rc, stdout, stderr = _run("systemctl restart wazuh-manager")
+    rc, _stdout, stderr = _run_cmd("systemctl restart wazuh-manager")
     if rc != 0:
         # Config was written but service restart failed — still partial success
         return add_cors_headers(jsonify({
             "ok":      False,
             "written": True,
-            "error":   f"Config saved but wazuh-manager restart failed: {stderr or stdout}",
+            "error":   "Config saved but wazuh-manager restart failed — check server logs",
         })), 207
 
     return add_cors_headers(jsonify({
