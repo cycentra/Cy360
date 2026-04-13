@@ -1,4 +1,4 @@
-name: "AI Release Notes Automation"
+name: "AI Release Notes Automation (Custom AI)"
 
 on:
   pull_request:
@@ -12,67 +12,81 @@ jobs:
   summarize_pr:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
     steps:
+      - name: Install gh CLI
+        run: sudo apt-get install gh jq -y
+
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Summarize PR Diff and Comment
-        uses: christianvuerings/action-diff-summarizer@v4
-        with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      - name: Get PR diff
+        id: prdiff
+        run: |
+          gh pr diff ${{ github.event.pull_request.number }} > pr.diff
+
+      - name: Send diff to cyq.cycentra.com AI Summarizer
+        id: summarize
         env:
-          # Optional: Add your environment for the summarizer.
+          CYQ_TOKEN: ${{ secrets.CYQ_API_TOKEN }}
+        run: |
+          DIFF=$(cat pr.diff | jq -Rs .)
+          TITLE=$(echo "${{ github.event.pull_request.title }}" | jq -Rs .)
+          BODY="{\"diff\": $DIFF, \"pr_title\": $TITLE}"
+          SUMMARY_RESPONSE=$(curl -s -X POST "https://cyq.cycentra.com/summarize" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $CYQ_TOKEN" \
+            -d "$BODY")
+          SUMMARY=$(echo "$SUMMARY_RESPONSE" | jq -r .summary)
+          echo "$SUMMARY" > summary.txt
+          echo "summary<<EOF" >> $GITHUB_ENV
+          echo "$SUMMARY" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Post summary as a PR comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} --body "### Diff Summary (AI)\n\n$(cat summary.txt)"
 
   update_release_notes:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-
     steps:
+      - name: Install jq and gh CLI
+        run: sudo apt-get install gh jq -y
+
       - name: Checkout code
         uses: actions/checkout@v4
 
       # Identify latest merged PR for this push
       - name: Get latest merged PR number
         id: pr
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const commitSha = process.env.GITHUB_SHA;
-            const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              commit_sha: commitSha,
-            });
-            if (!prs.data.length) {
-              core.setFailed('No PR found for this commit');
-              return;
-            }
-            // Assume highest-numbered PR is the most recent/primary
-            const pr = prs.data.sort((a, b) => b.number - a.number)[0];
-            core.setOutput('number', pr.number);
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_JSON=$(gh pr list --state merged --base main --limit 10 --json number,mergeCommit)
+          # Find the PR whose mergeCommit matches this push, else fallback to most recent merged PR
+          PR_NUM=$(echo "$PR_JSON" | jq ".[] | select(.mergeCommit==\"$GITHUB_SHA\") | .number" | head -1)
+          if [ -z "$PR_NUM" ]; then PR_NUM=$(echo "$PR_JSON" | jq ".[0].number"); fi
+          echo "number=$PR_NUM" >> $GITHUB_OUTPUT
 
-      # Fetch the AI summary comment from the PR, searching for a marker string
+      # Fetch the AI summary comment from the PR, searching for the marker "### Diff Summary"
       - name: Get PR summary comment
         id: prcomment
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const prNumber = ${{ steps.pr.outputs.number }};
-            const comments = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-            });
-            const marker = "### Diff Summary";  // Change this if your summarizer uses a different marker/header
-            const found = comments.data.find(comment => comment.body && comment.body.includes(marker));
-            if (found) {
-              core.setOutput('summary', found.body);
-            } else {
-              core.setOutput('summary', '*No AI summary found for this PR.*');
-            }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUM=${{ steps.pr.outputs.number }}
+          SUMMARY=$(gh pr view "$PR_NUM" --json comments --jq '.comments[] | select(.body | startswith("### Diff Summary (AI)")) | .body' | head -1)
+          if [ -z "$SUMMARY" ]; then SUMMARY="*No AI summary found for this PR.*"; fi
+          echo "summary<<EOF" >> $GITHUB_ENV
+          echo "$SUMMARY" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
-      # Get latest version tag
+      # Get latest version tag (default to v0.0.0)
       - name: Get latest version tag
         id: tagfetch
         run: |
@@ -95,7 +109,7 @@ jobs:
         run: |
           { echo "## ${{ steps.bumpver.outputs.new_version }} – $(date +'%Y-%m-%d')"
             echo ""
-            echo "${{ steps.prcomment.outputs.summary }}"
+            echo "${{ env.summary }}"
             echo ""
             cat RELEASE_NOTES.md 2>/dev/null || true;
           } > RELEASE_NOTES.tmp
