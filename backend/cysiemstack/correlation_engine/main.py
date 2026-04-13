@@ -1112,7 +1112,12 @@ try:
             return _stdlib_json.dumps(data.get("data", {}), indent=2)
 
         # Mount the MCP sub-application — SSE endpoint: /mcp/sse
-        app.mount("/mcp", _mcp.get_application())
+        # FastMCP >=1.6 removed get_application(); fall back to the ASGI app directly.
+        _mcp_asgi = (
+            _mcp.get_application() if hasattr(_mcp, "get_application")
+            else getattr(_mcp, "get_asgi_app", lambda: _mcp)()
+        )
+        app.mount("/mcp", _mcp_asgi)
         log.info("security_mcp_mounted", path="/mcp/sse")
 
 except ImportError:

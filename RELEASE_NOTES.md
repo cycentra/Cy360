@@ -1,6 +1,30 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.154 — 2026-04-13
+
+### Bug Fix — CySIEM Correlation Engine fails to start after `mcp` package upgrade (`FastMCP.get_application()` removed in v1.6)
+
+**Root cause**: `mcp[cli]>=1.0.0` in `correlation_engine/requirements.txt` had no upper bound.
+FastMCP v1.6+ removed the `get_application()` method. A routine package upgrade on the server
+installed `mcp>=1.6`, causing the engine to crash at import time with:
+`AttributeError: 'FastMCP' object has no attribute 'get_application'`
+
+**Effect**: `cysiemstack-engine.service` entered a crash-restart loop (exit code 1) — 800+
+restart cycles. All SIEM/UEBA/incident functionality unavailable.
+
+**Fix**:
+- `backend/cysiemstack/correlation_engine/main.py` — replaced bare `_mcp.get_application()`
+  with a version-safe shim that checks for the method and falls back to `get_asgi_app()` or
+  the FastMCP object itself (which is a valid ASGI app in v1.6+).
+- `backend/cysiemstack/correlation_engine/requirements.txt` — pinned `mcp[cli]>=1.0.0,<1.6.0`
+  to prevent future unguarded upgrades from breaking the engine.
+
+**Files changed**:
+- `backend/cysiemstack/correlation_engine/main.py` (line 1115)
+- `backend/cysiemstack/correlation_engine/requirements.txt`
+
+---
 ## v1.0.153 — 2026-04-13
 
 ### Bug Fix — Demo license expires every 24 hours (`license_validator.py` missing from installer package)
