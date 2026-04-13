@@ -28,6 +28,7 @@ import os
 import re
 import json
 import shutil
+import stat
 import subprocess
 import threading
 from pathlib import Path
@@ -1485,9 +1486,9 @@ def gcloudconfig_get():
         "ok":               True,
         "enabled":          disabled_val == "no",
         "interval":         interval_val or "5m",
-        "project_id":       project_id if not project_id.startswith("PLACEHOLDER") else "",
-        "subscription_name": subscription_name if not subscription_name.startswith("PLACEHOLDER") else "",
-        "max_messages":     int(max_messages_val) if max_messages_val.isdigit() else 100,
+        "project_id":       project_id if project_id and not project_id.startswith("PLACEHOLDER") else "",
+        "subscription_name": subscription_name if subscription_name and not subscription_name.startswith("PLACEHOLDER") else "",
+        "max_messages":     int(max_messages_val) if max_messages_val and max_messages_val.strip().isdigit() else 100,
         "logging":          logging_val or "info",
         "has_credentials":  has_credentials,
         "custom_rules_deployed": _GCP_CUSTOM_RULES_FILE.exists(),
@@ -1557,12 +1558,11 @@ def gcloudconfig_post():
             _GCP_CREDENTIALS_FILE.parent.mkdir(parents=True, exist_ok=True)
             _GCP_CREDENTIALS_FILE.write_text(json.dumps(creds_obj, indent=2))
             # Restrict permissions — wazuh-manager user only
-            import stat
             _GCP_CREDENTIALS_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
         except PermissionError:
             return jsonify({"ok": False, "error": "Permission denied writing GCP credentials file"}), 403
-        except OSError as exc:
-            return jsonify({"ok": False, "error": f"Failed to write GCP credentials file: {exc}"}), 500
+        except OSError:
+            return jsonify({"ok": False, "error": "Failed to write GCP credentials file — check server logs"}), 500
     else:
         # No credentials supplied — require that an existing file is present
         if not _GCP_CREDENTIALS_FILE.exists():

@@ -330,7 +330,6 @@ function GCloudConfigModal({ uc, onClose }) {
   const [result,            setResult]            = useState(null);
   const [loadError,         setLoadError]         = useState(null);
   const [hasExistingCreds,  setHasExistingCreds]  = useState(false);
-  const fileInputRef = { current: null };
 
   useEffect(() => {
     fetch(`${API_BASE}/api/system/gcloudconfig`, { credentials: "include" })
