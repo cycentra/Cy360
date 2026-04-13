@@ -15,6 +15,11 @@ from models import CorrelationFeedback, Incident, Alert
 
 log = structlog.get_logger()
 
+# Minimum feedback rows per rule required before applying adjustments
+_MIN_FEEDBACK_THRESHOLD = 5
+# FP rate above this level triggers confidence reduction
+_HIGH_FP_RATE_THRESHOLD = 0.80
+
 
 async def submit_feedback(
     db: AsyncSession,
@@ -83,7 +88,7 @@ async def _push_tp_iocs(db: AsyncSession, incident_id: str) -> None:
                 full.get('sha256')
                 or full.get('syscheck', {}).get('sha256_after')
             )
-            if sha256 and len(str(sha256)) == 64:
+            if sha256 and len(str(sha256)) == 64:  # SHA256_HEX_LENGTH
                 val = str(sha256).lower()
                 if val not in seen:
                     seen.add(val)
@@ -167,10 +172,10 @@ async def apply_feedback_adjustments(db: AsyncSession) -> None:
 
     for rule_id, counts in stats.items():
         total = counts['true_positive'] + counts['false_positive'] + counts['benign']
-        if total < 5:
+        if total < _MIN_FEEDBACK_THRESHOLD:
             continue  # not enough data to make a judgment
         fp_rate = (counts['false_positive'] + counts['benign']) / total
-        if fp_rate <= 0.80:
+        if fp_rate <= _HIGH_FP_RATE_THRESHOLD:
             continue
 
         rule = rules_by_id.get(rule_id)

@@ -21,6 +21,10 @@ settings = get_settings()
 CACHE_TTL_HIT  = timedelta(hours=4)
 CACHE_TTL_MISS = timedelta(hours=1)
 
+# ── Validation constants ──────────────────────────────────────────────────────
+SHA256_HEX_LENGTH = 64
+MIN_DOMAIN_LENGTH = 4   # skip obviously invalid FQDN tokens
+
 # ── In-memory IOC cache (fast path before DB) ─────────────────────────────────
 # Key: "misp:{ioc_type}:{value}" → (epoch_float, result_dict)
 _mem_cache: dict[str, tuple[float, dict]] = {}
@@ -188,7 +192,7 @@ async def enrich_incident(db: AsyncSession, incident: Incident) -> dict:
         if alert.rule_desc:
             for domain in _FQDN_RE.findall(alert.rule_desc):
                 # Skip very short or clearly non-FQDN tokens
-                if '.' not in domain or len(domain) < 4:
+                if '.' not in domain or len(domain) < MIN_DOMAIN_LENGTH:
                     continue
                 await _check(domain.lower(), 'domain', alert)
 
@@ -200,7 +204,7 @@ async def enrich_incident(db: AsyncSession, incident: Incident) -> dict:
             or full.get('syscheck', {}).get('sha256_before')
             or getattr(alert, 'sha256', None)
         )
-        if sha256 and len(str(sha256)) == 64:
+        if sha256 and len(str(sha256)) == SHA256_HEX_LENGTH:
             await _check(str(sha256).lower(), 'sha256', alert)
 
         # ── URLs from web proxy alert categories ──────────────────────────────

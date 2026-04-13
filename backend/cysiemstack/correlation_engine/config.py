@@ -55,8 +55,11 @@ class Settings(BaseSettings):
     iris_fp_threshold: float = 90.0
 
     # Watch-zone upper bound (0–100).  Incidents between iris_fp_threshold and
-    # this value are placed in "held" status for re-enrichment after 30 min.
+    # this value are placed in "held" status for re-enrichment after hold_window_minutes.
     fp_watch_zone_upper: float = 65.0
+
+    # Hold window duration (minutes) — how long a "held" incident waits before re-enrichment.
+    hold_window_minutes: int = 30
 
     # CySOAR (Node-RED) webhook URL — empty string means SOAR is not configured.
     soar_webhook_url: str = ""

@@ -25,6 +25,9 @@ settings = get_settings()
 
 SEV_WEIGHTS = {'critical': 4, 'high': 3, 'medium': 2, 'low': 1}
 
+# Named constants for compute_fp_score() and _asset_score()
+DEFAULT_ASSET_TIER = 3          # treat unknown/None tier as dev/low
+
 
 def _alert_severity_score(alerts: list, max_points: float = 35.0) -> float:
     """Log-scale aggregation: many medium alerts ≠ one critical."""
@@ -135,7 +138,7 @@ def compute_fp_score(
         base = max(base, 65.0)
 
     # Asset criticality
-    tier = asset_tier if asset_tier is not None else 3
+    tier = asset_tier if asset_tier is not None else DEFAULT_ASSET_TIER
     if tier == 1:
         base = min(base, 20.0)
     elif tier == 3:

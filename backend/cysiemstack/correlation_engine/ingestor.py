@@ -295,7 +295,7 @@ def _get_fp_threshold() -> float:
 
 async def _reenrich_held_incident(incident_id: str) -> None:
     """Re-enrich a held incident after 30 minutes and promote/close it."""
-    await asyncio.sleep(30 * 60)   # 30-minute hold window
+    await asyncio.sleep(settings.hold_window_minutes * 60)   # configurable hold window
     try:
         from sqlalchemy import select as sa_select
         async with AsyncSessionLocal() as db:

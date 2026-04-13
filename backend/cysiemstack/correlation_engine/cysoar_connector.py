@@ -35,6 +35,11 @@ log = structlog.get_logger()
 settings = get_settings()
 
 
+def _tls_verify():
+    """Return verify parameter for httpx: CA bundle path or system default."""
+    return settings.tls_ca_bundle if settings.tls_ca_bundle else True
+
+
 def _soar_webhook_url() -> str:
     """Resolve the CySOAR webhook URL from settings or ai_settings.json."""
     # Primary: env / config
@@ -86,7 +91,7 @@ async def cysoar_trigger(db: Any, incident: Any) -> list[dict]:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=8.0, verify=_tls_verify()) as client:
             resp = await client.post(url, json=payload)
 
         if resp.status_code in (200, 201, 202, 204):
