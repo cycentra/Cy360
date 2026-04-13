@@ -1,0 +1,115 @@
+name: "AI Release Notes Automation"
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  push:
+    branches:
+      - main
+
+jobs:
+
+  summarize_pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Summarize PR Diff and Comment
+        uses: christianvuerings/action-diff-summarizer@v4
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        env:
+          # Optional: Add your environment for the summarizer.
+
+  update_release_notes:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Identify latest merged PR for this push
+      - name: Get latest merged PR number
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const commitSha = process.env.GITHUB_SHA;
+            const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: commitSha,
+            });
+            if (!prs.data.length) {
+              core.setFailed('No PR found for this commit');
+              return;
+            }
+            // Assume highest-numbered PR is the most recent/primary
+            const pr = prs.data.sort((a, b) => b.number - a.number)[0];
+            core.setOutput('number', pr.number);
+
+      # Fetch the AI summary comment from the PR, searching for a marker string
+      - name: Get PR summary comment
+        id: prcomment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = ${{ steps.pr.outputs.number }};
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+            const marker = "### Diff Summary";  // Change this if your summarizer uses a different marker/header
+            const found = comments.data.find(comment => comment.body && comment.body.includes(marker));
+            if (found) {
+              core.setOutput('summary', found.body);
+            } else {
+              core.setOutput('summary', '*No AI summary found for this PR.*');
+            }
+
+      # Get latest version tag
+      - name: Get latest version tag
+        id: tagfetch
+        run: |
+          tag=$(git tag --list 'v*' --sort=-v:refname | head -n 1)
+          if [ -z "$tag" ]; then tag="v0.0.0"; fi
+          echo "tag=$tag" >> $GITHUB_OUTPUT
+
+      # Bump patch version
+      - name: Bump patch version
+        id: bumpver
+        run: |
+          oldtag="${{ steps.tagfetch.outputs.tag }}"
+          IFS='.' read -r major minor patch <<<"${oldtag#v}"
+          patch=$((patch+1))
+          newtag="v$major.$minor.$patch"
+          echo "new_version=$newtag" >> $GITHUB_OUTPUT
+
+      # Update RELEASE_NOTES.md
+      - name: Update RELEASE_NOTES.md
+        run: |
+          { echo "## ${{ steps.bumpver.outputs.new_version }} – $(date +'%Y-%m-%d')"
+            echo ""
+            echo "${{ steps.prcomment.outputs.summary }}"
+            echo ""
+            cat RELEASE_NOTES.md 2>/dev/null || true;
+          } > RELEASE_NOTES.tmp
+          mv RELEASE_NOTES.tmp RELEASE_NOTES.md
+
+      # Commit, tag, and push changes
+      - name: Configure git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit and push release notes and tag
+        run: |
+          git add RELEASE_NOTES.md
+          git commit -m "docs: update release notes for ${{ steps.bumpver.outputs.new_version }}" || echo "No changes to commit"
+          git tag ${{ steps.bumpver.outputs.new_version }}
+          git push origin main --tags
