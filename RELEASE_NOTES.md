@@ -1,6 +1,31 @@
 # CyCentra 360 — Release Notes
 
 ---
+## v1.0.151 — 2026-04-13
+
+### Bug Fix
+
+**Update button returns HTML instead of JSON — `⚠ Version check failed` / `SyntaxError: Unexpected token '<', "<!DOCTYPE"`**
+- Root cause: Four routes in `blueprints/system/routes.py` were missing the mandatory
+  `session.get("user_email")` auth guard required on every `/api/` endpoint:
+  `POST /api/system/update`, `POST /api/system/upgrade`,
+  `GET /api/system/latest-version`, and `GET /api/system/update/log`.
+  When the browser session expired (or on the first request after a long idle), the nginx
+  `auth_request` gate at `/api/auth/verify` returned a `302` redirect to the login page.
+  The browser followed the redirect and the Flask endpoint received the request with no valid
+  session — but because Flask itself had no auth guard, it executed the route and eventually
+  returned either another redirect or a Werkzeug HTML error page. The frontend received HTML
+  where it expected JSON, causing `SyntaxError: Unexpected token '<', "<!DOCTYPE "...`.
+- Fix: Added `session.get("user_email") → 401` guard and role check to all four endpoints:
+  - `POST /api/system/update` — analyst+ required (incremental patch)
+  - `POST /api/system/upgrade` — admin only (full re-install, destructive)
+  - `GET /api/system/latest-version` — any authenticated user
+  - `GET /api/system/update/log` — any authenticated user
+  All four now return `{"error": "Authentication required"}, 401` (JSON) on expired sessions
+  instead of redirecting, so the frontend's catch block gets a valid JSON error.
+  - `backend/blueprints/system/routes.py`: session guards + RBAC checks added to all four routes.
+
+---
 ## v1.0.150 — 2026-04-13
 
 ### Fix

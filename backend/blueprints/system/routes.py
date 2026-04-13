@@ -734,6 +734,11 @@ def system_update():
     """Trigger sudo cycentra-setup.sh --update in a background thread.
     GH_TOKEN is read from the server .env — not the HTTP request.
     """
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
+        return jsonify({"error": "Analyst or admin role required"}), 403
     global _update_running
     if _update_running:
         return jsonify({"ok": False, "error": "Update already in progress"}), 409
@@ -754,6 +759,11 @@ def system_upgrade():
     This is a major re-install/upgrade — all services are re-configured.
     GH_TOKEN is read from the server .env — not the HTTP request.
     """
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) != "admin":
+        return jsonify({"error": "Admin role required"}), 403
     global _update_running
     if _update_running:
         return jsonify({"ok": False, "error": "An update/upgrade is already in progress"}), 409
@@ -766,6 +776,8 @@ def system_upgrade():
 @system_bp.route("/api/system/update/log")
 def system_update_log():
     """Poll the live update log."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
     return jsonify({"running": _update_running, "log": _update_log[-200:]})
 
 
@@ -784,6 +796,8 @@ def system_latest_version():
     Returns {current, latest, up_to_date} for the UI to act on.
     GH_TOKEN is read from the server environment (/opt/cycentra/.env).
     """
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
     gh_token = _get_server_gh_token()
     if not gh_token:
         return jsonify({"error": "GH_TOKEN not configured on server (check /opt/cycentra/.env)"}), 400
