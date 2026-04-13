@@ -1372,7 +1372,7 @@ def o365config_post():
         return jsonify({"ok": False, "error": "Failed to write ossec.conf — check server logs"}), 500
 
     # Restart wazuh-manager to apply changes
-    rc, _stdout, stderr = _run_cmd("systemctl restart wazuh-manager")
+    rc, _stdout, _stderr = _run_cmd("systemctl restart wazuh-manager")
     if rc != 0:
         # Config was written but service restart failed — still partial success
         return add_cors_headers(jsonify({
