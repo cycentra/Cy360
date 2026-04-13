@@ -1143,7 +1143,10 @@ def mcp_get():
 
     enabled  = _read_mcp_enabled()
     base_url = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").rstrip("/")
-    # Derive the public-facing host for the MCP endpoint hint
+    # public_url is the operator-facing URL shown in the UI connection guide.
+    # When BASE_DOMAIN is configured (production), the nginx reverse-proxy exposes
+    # the engine under https://siem.<domain>/ so that is what 3rd-party clients use.
+    # Without BASE_DOMAIN (dev / isolated installs) we fall back to the loopback URL.
     base_domain = os.environ.get("BASE_DOMAIN", "")
     public_url  = f"https://siem.{base_domain}/mcp/sse" if base_domain else f"{base_url}/mcp/sse"
 
@@ -1175,8 +1178,8 @@ def mcp_post():
         _write_mcp_enabled(enabled)
     except PermissionError:
         return jsonify({"error": "Permission denied — backend cannot write cysiemstack.env"}), 403
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+    except Exception:
+        return jsonify({"error": "Failed to update MCP setting — check server logs"}), 500
 
     return jsonify({
         "ok":      True,

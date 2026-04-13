@@ -1269,6 +1269,7 @@ function CyIrisTab() {
 function McpTab() {
   const [status,  setStatus]  = useState(null);   // null | {enabled, endpoint, public_url, tools, ...}
   const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState(false);
   const [saving,  setSaving]  = useState(false);
   const [msg,     setMsg]     = useState(null);    // {ok, text}
   const [copied,  setCopied]  = useState(false);
@@ -1277,7 +1278,7 @@ function McpTab() {
     fetch(`${API_BASE}/api/system/mcp`, { credentials: "include" })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(d => { setStatus(d); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch(() => { setLoadErr(true); setLoading(false); });
   }, []);
 
   const toggle = async () => {
@@ -1316,9 +1317,15 @@ function McpTab() {
     <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>
   );
 
-  const enabled    = status?.enabled ?? true;
+  if (loadErr || !status) return (
+    <div style={{ color: "#ff4444", fontFamily: "monospace", fontSize: 12 }}>
+      ✗ Unable to load MCP status — check that the backend is reachable and you have viewer access.
+    </div>
+  );
+
+  const enabled     = status.enabled;
   const accentColor = enabled ? "#00e5a0" : "rgba(255,255,255,0.3)";
-  const tools      = status?.tools || [];
+  const tools       = status.tools || [];
 
   return (
     <div style={{ maxWidth: 720 }}>
