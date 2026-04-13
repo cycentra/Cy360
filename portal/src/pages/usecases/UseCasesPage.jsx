@@ -51,6 +51,13 @@ const USE_CASES = [
     modules:["CySIEM"], time:"~5 min to configure",
     isConfigWidget: true,
   },
+  {
+    id:"google-cloud", title:"Google Cloud", icon:"🔵", color:"#4285f4", category:"Cloud Management",
+    description:"Configure the Wazuh GCP Pub/Sub integration. Upload your Service Account JSON key to ingest Google Cloud audit logs — Admin Activity, Data Access, System Events — directly into CySIEM. Custom security rules are deployed automatically.",
+    modules:["CySIEM"], time:"~5 min to configure",
+    isConfigWidget: true,
+    isGCloudWidget: true,
+  },
 ];
 
 function UseCaseCard({ uc, onExpand }) {
@@ -306,6 +313,272 @@ function O365ConfigModal({ uc, onClose }) {
   );
 }
 
+const GCP_INTERVALS = ["1m","5m","10m","15m","30m","1h","2h","6h","12h","24h"];
+const GCP_LOG_LEVELS = ["debug","info","warning","error","critical"];
+
+function GCloudConfigModal({ uc, onClose }) {
+  const [credentialsJson,   setCredentialsJson]   = useState(null);   // parsed JSON object
+  const [credentialsName,   setCredentialsName]   = useState("");      // display filename
+  const [projectId,         setProjectId]         = useState("");
+  const [subscriptionName,  setSubscriptionName]  = useState("");
+  const [interval,          setInterval]          = useState("5m");
+  const [maxMessages,       setMaxMessages]       = useState(100);
+  const [logLevel,          setLogLevel]          = useState("info");
+  const [enabled,           setEnabled]           = useState(true);
+  const [dragging,          setDragging]          = useState(false);
+  const [saving,            setSaving]            = useState(false);
+  const [result,            setResult]            = useState(null);
+  const [loadError,         setLoadError]         = useState(null);
+  const [hasExistingCreds,  setHasExistingCreds]  = useState(false);
+  const fileInputRef = { current: null };
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/system/gcloudconfig`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => {
+        if (d.ok) {
+          if (d.project_id)        setProjectId(d.project_id);
+          if (d.subscription_name) setSubscriptionName(d.subscription_name);
+          if (d.interval)          setInterval(d.interval);
+          if (d.max_messages)      setMaxMessages(d.max_messages);
+          if (d.logging)           setLogLevel(d.logging);
+          setEnabled(d.enabled !== false);
+          setHasExistingCreds(!!d.has_credentials);
+        }
+      })
+      .catch(err => {
+        if (err !== 404) setLoadError("Could not load current config.");
+      });
+  }, []);
+
+  function handleFileRead(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const parsed = JSON.parse(e.target.result);
+        setCredentialsJson(parsed);
+        setCredentialsName(file.name);
+        // Auto-populate project ID from the key file if not already set
+        if (parsed.project_id && !projectId) setProjectId(parsed.project_id);
+        setResult(null);
+      } catch {
+        setResult({ ok: false, msg: "Invalid JSON file — please upload a GCP service account key" });
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function handleDropZoneClick() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,application/json";
+    input.onchange = e => handleFileRead(e.target.files[0]);
+    input.click();
+  }
+
+  function handleDrop(e) {
+    e.preventDefault();
+    setDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleFileRead(file);
+  }
+
+  function handleSave(ev) {
+    ev.preventDefault();
+    setResult(null);
+    setSaving(true);
+    fetch(`${API_BASE}/api/system/gcloudconfig`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        credentials_json: credentialsJson || null,
+        project_id: projectId,
+        subscription_name: subscriptionName,
+        interval,
+        max_messages: maxMessages,
+        logging: logLevel,
+        enabled,
+      }),
+    })
+      .then(r => r.json().then(d => ({ ok: r.ok, data: d })))
+      .then(({ ok, data }) => {
+        const success = ok && data.ok;
+        let msg = data.message || data.error || (ok ? "Saved" : "Error");
+        if (success && data.rules_deployed) msg += " · Custom GCP security rules deployed.";
+        setResult({ ok: success, msg });
+        if (success) setHasExistingCreds(true);
+      })
+      .catch(() => setResult({ ok: false, msg: "Network error" }))
+      .finally(() => setSaving(false));
+  }
+
+  if (!uc) return null;
+
+  const inputStyle = {
+    width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)",
+    borderRadius: 4, padding: "9px 12px", color: "white", fontSize: 13, fontFamily: "monospace",
+    outline: "none", boxSizing: "border-box",
+  };
+  const labelStyle = { color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace", letterSpacing: "0.8px", textTransform: "uppercase", marginBottom: 6, display: "block" };
+  const GCP_BLUE = "#4285f4";
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.88)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:150, backdropFilter:"blur(6px)" }} onClick={onClose}>
+      <div style={{ background:"#0d0f14", border:`1px solid ${GCP_BLUE}40`, borderTop:`2px solid ${GCP_BLUE}`, borderRadius:8, padding:36, width:"min(580px,95vw)", maxHeight:"90vh", overflowY:"auto" }} onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:24 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+            <span style={{ fontSize:34 }}>🔵</span>
+            <div>
+              <div style={{ color:"white", fontSize:19, fontWeight:700 }}>Google Cloud Integration</div>
+              <div style={{ color:"rgba(255,255,255,0.35)", fontSize:11, fontFamily:"monospace", marginTop:3 }}>Cloud Management · Wazuh gcp-pubsub wodle</div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.4)", cursor:"pointer", fontSize:22 }}>×</button>
+        </div>
+
+        <div style={{ color:"rgba(255,255,255,0.5)", fontSize:12, lineHeight:1.7, marginBottom:24 }}>
+          Upload your GCP Service Account key to configure the Wazuh <code style={{ color:GCP_BLUE }}>gcp-pubsub</code> wodle.
+          Credentials are saved to <code style={{ color:"rgba(255,255,255,0.6)" }}>/var/ossec/etc/gcp_credentials.json</code> and
+          <strong style={{ color:"rgba(255,255,255,0.75)" }}> wazuh-manager is restarted automatically</strong>.
+          Custom GCP security rules are deployed on first save.
+        </div>
+
+        {loadError && (
+          <div style={{ background:"rgba(255,59,59,0.08)", border:"1px solid rgba(255,59,59,0.25)", borderRadius:4, padding:"10px 14px", fontSize:12, color:"#ff8080", marginBottom:18 }}>
+            {loadError}
+          </div>
+        )}
+
+        <form onSubmit={handleSave}>
+          {/* Credentials Upload */}
+          <div style={{ background:`rgba(66,133,244,0.05)`, border:`1px solid rgba(66,133,244,0.15)`, borderRadius:6, padding:"18px 20px", marginBottom:20 }}>
+            <div style={{ color:"rgba(255,255,255,0.3)", fontSize:10, letterSpacing:"1.5px", fontFamily:"monospace", textTransform:"uppercase", marginBottom:14 }}>Service Account Key</div>
+
+            {/* Drop zone */}
+            <div
+              onClick={handleDropZoneClick}
+              onDragOver={e => { e.preventDefault(); setDragging(true); }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={handleDrop}
+              style={{
+                border: `2px dashed ${dragging ? GCP_BLUE : (credentialsJson || hasExistingCreds) ? "rgba(0,229,160,0.5)" : "rgba(255,255,255,0.15)"}`,
+                borderRadius: 6, padding: "22px 16px", textAlign: "center", cursor: "pointer",
+                background: dragging ? `rgba(66,133,244,0.08)` : "rgba(255,255,255,0.02)",
+                transition: "border-color 0.15s, background 0.15s",
+              }}
+            >
+              {credentialsJson ? (
+                <div>
+                  <div style={{ fontSize:22, marginBottom:6 }}>✅</div>
+                  <div style={{ color:"#00e5a0", fontSize:13, fontFamily:"monospace" }}>{credentialsName}</div>
+                  <div style={{ color:"rgba(255,255,255,0.3)", fontSize:10, marginTop:4 }}>Click to replace</div>
+                </div>
+              ) : hasExistingCreds ? (
+                <div>
+                  <div style={{ fontSize:22, marginBottom:6 }}>🔑</div>
+                  <div style={{ color:"rgba(255,255,255,0.6)", fontSize:12 }}>Credentials already configured</div>
+                  <div style={{ color:"rgba(255,255,255,0.3)", fontSize:10, marginTop:4 }}>Click or drag a new JSON key to replace</div>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ fontSize:28, marginBottom:8 }}>📂</div>
+                  <div style={{ color:"rgba(255,255,255,0.6)", fontSize:13 }}>Drag &amp; Drop or <span style={{ color:GCP_BLUE }}>Browse</span></div>
+                  <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, marginTop:6 }}>GCP Service Account JSON key file</div>
+                </div>
+              )}
+            </div>
+
+            {!credentialsJson && !hasExistingCreds && (
+              <div style={{ color:"rgba(255,59,59,0.7)", fontSize:10, fontFamily:"monospace", marginTop:8 }}>
+                ⚠ A service account JSON key is required for initial setup
+              </div>
+            )}
+          </div>
+
+          {/* Project ID */}
+          <div style={{ marginBottom:14 }}>
+            <label style={labelStyle}>Project ID</label>
+            <input value={projectId} onChange={e => setProjectId(e.target.value)}
+              placeholder="my-gcp-project-123" required style={inputStyle} />
+          </div>
+
+          {/* Subscription Name */}
+          <div style={{ marginBottom:14 }}>
+            <label style={labelStyle}>Pub/Sub Subscription Name</label>
+            <input value={subscriptionName} onChange={e => setSubscriptionName(e.target.value)}
+              placeholder="projects/my-project/subscriptions/wazuh-sub" required style={inputStyle} />
+            <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
+              Full subscription path: <code>projects/&lt;PROJECT&gt;/subscriptions/&lt;NAME&gt;</code>
+            </div>
+          </div>
+
+          {/* Poll Interval + Max Messages */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:20 }}>
+            <div>
+              <label style={labelStyle}>Poll Interval</label>
+              <select value={interval} onChange={e => setInterval(e.target.value)} style={{ ...inputStyle, cursor:"pointer" }}>
+                {GCP_INTERVALS.map(i => <option key={i} value={i}>{i}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle}>Max Messages / Pull</label>
+              <input type="number" min={1} max={1000} value={maxMessages}
+                onChange={e => setMaxMessages(Number(e.target.value))} style={inputStyle} />
+            </div>
+          </div>
+
+          {/* Log Level */}
+          <div style={{ marginBottom:20 }}>
+            <label style={labelStyle}>Logging Level</label>
+            <select value={logLevel} onChange={e => setLogLevel(e.target.value)} style={{ ...inputStyle, cursor:"pointer" }}>
+              {GCP_LOG_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </div>
+
+          {/* Enable toggle */}
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24 }}>
+            <input type="checkbox" id="gcpenabled" checked={enabled} onChange={e => setEnabled(e.target.checked)}
+              style={{ accentColor:GCP_BLUE, width:15, height:15, cursor:"pointer" }} />
+            <label htmlFor="gcpenabled" style={{ color:"rgba(255,255,255,0.6)", fontSize:13, cursor:"pointer" }}>
+              Enable integration (<code style={{ color:GCP_BLUE }}>disabled=no</code> in ossec.conf)
+            </label>
+          </div>
+
+          {/* Custom rules note */}
+          <div style={{ background:"rgba(0,229,160,0.04)", border:"1px solid rgba(0,229,160,0.12)", borderRadius:4, padding:"10px 14px", fontSize:11, color:"rgba(255,255,255,0.4)", fontFamily:"monospace", marginBottom:20 }}>
+            ✦ 5 custom GCP security rules will be deployed to <code>/var/ossec/etc/rules/cycentra_gcp_rules.xml</code> on save —
+            covering IAM privilege escalation, firewall changes, storage exposure, and project deletion.
+          </div>
+
+          {/* Result banner */}
+          {result && (
+            <div style={{ background: result.ok ? "rgba(0,229,160,0.08)" : "rgba(255,59,59,0.08)", border: `1px solid ${result.ok ? "rgba(0,229,160,0.25)" : "rgba(255,59,59,0.25)"}`, borderRadius:4, padding:"10px 14px", fontSize:12, color: result.ok ? "#00e5a0" : "#ff8080", marginBottom:18 }}>
+              {result.ok ? "✓ " : "✗ "}{result.msg}
+            </div>
+          )}
+
+          {/* Actions */}
+          <div style={{ display:"flex", gap:10 }}>
+            <button type="submit" disabled={saving}
+              style={{ flex:1, background: saving ? `rgba(66,133,244,0.4)` : GCP_BLUE, color:"white", border:"none", borderRadius:4, padding:"12px", fontFamily:"monospace", fontSize:12, fontWeight:700, cursor: saving ? "not-allowed" : "pointer", letterSpacing:"1px", textTransform:"uppercase" }}>
+              {saving ? "Applying…" : "Apply Configuration"}
+            </button>
+            <button type="button" onClick={onClose}
+              style={{ padding:"12px 20px", background:"transparent", color:"rgba(255,255,255,0.4)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:4, fontFamily:"monospace", fontSize:12, cursor:"pointer" }}>
+              Close
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+
 export function UseCasesPage() {
   const [expanded,  setExpanded]  = useState(null);
   const [catFilter, setCatFilter] = useState("all");
@@ -355,9 +628,11 @@ export function UseCasesPage() {
       </div>
 
       {expanded && (
-        expanded.isConfigWidget
-          ? <O365ConfigModal uc={expanded} onClose={() => setExpanded(null)}/>
-          : <UseCaseModal    uc={expanded} onClose={() => setExpanded(null)}/>
+        expanded.isGCloudWidget
+          ? <GCloudConfigModal uc={expanded} onClose={() => setExpanded(null)}/>
+          : expanded.isConfigWidget
+            ? <O365ConfigModal uc={expanded} onClose={() => setExpanded(null)}/>
+            : <UseCaseModal    uc={expanded} onClose={() => setExpanded(null)}/>
       )}
     </div>
   );

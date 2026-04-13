@@ -1386,3 +1386,258 @@ def o365config_post():
         "enabled": enabled,
         "message": "Office 365 integration configured and wazuh-manager restarted successfully",
     }))
+
+
+# ── Google Cloud (GCP Pub/Sub) Wazuh Integration ──────────────────────────────
+
+_GCP_CREDENTIALS_FILE = Path("/var/ossec/etc/gcp_credentials.json")
+_GCP_CUSTOM_RULES_DIR = Path("/var/ossec/etc/rules")
+_GCP_CUSTOM_RULES_FILE = _GCP_CUSTOM_RULES_DIR / "cycentra_gcp_rules.xml"
+
+_GCP_VALID_INTERVALS = {"1m", "5m", "10m", "15m", "30m", "1h", "2h", "6h", "12h", "24h"}
+
+# Custom GCP security rules deployed alongside the integration
+_GCP_SECURITY_RULES = """\
+<!-- CyCentra360: Google Cloud custom security rules -->
+<group name="gcp,">
+
+  <!-- GCP IAM privilege escalation -->
+  <rule id="191001" level="12">
+    <if_group>gcp</if_group>
+    <field name="gcp.protoPayload.methodName">setIamPolicy</field>
+    <description>GCP: IAM policy change detected — possible privilege escalation</description>
+    <group>gcp_iam,privilege_escalation,</group>
+  </rule>
+
+  <!-- GCP service account key creation -->
+  <rule id="191002" level="10">
+    <if_group>gcp</if_group>
+    <field name="gcp.protoPayload.methodName">google.iam.admin.v1.CreateServiceAccountKey</field>
+    <description>GCP: New service account key created</description>
+    <group>gcp_iam,credential_access,</group>
+  </rule>
+
+  <!-- GCP firewall rule opened to the internet -->
+  <rule id="191003" level="11">
+    <if_group>gcp</if_group>
+    <field name="gcp.protoPayload.methodName">v1.compute.firewalls.insert|v1.compute.firewalls.patch</field>
+    <description>GCP: Firewall rule created or modified — review for public exposure</description>
+    <group>gcp_network,initial_access,</group>
+  </rule>
+
+  <!-- GCP bucket made publicly accessible -->
+  <rule id="191004" level="13">
+    <if_group>gcp</if_group>
+    <field name="gcp.protoPayload.methodName">storage.setIamPermissions</field>
+    <description>GCP: Storage bucket IAM permissions changed — check for public access</description>
+    <group>gcp_storage,exfiltration,</group>
+  </rule>
+
+  <!-- GCP project deletion -->
+  <rule id="191005" level="14">
+    <if_group>gcp</if_group>
+    <field name="gcp.protoPayload.methodName">cloudresourcemanager.projects.delete</field>
+    <description>GCP: Project deletion requested — potential destructive action</description>
+    <group>gcp_resource,impact,</group>
+  </rule>
+
+</group>
+"""
+
+
+@system_bp.route("/api/system/gcloudconfig", methods=["OPTIONS"])
+def gcloudconfig_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/gcloudconfig", methods=["GET"])
+def gcloudconfig_get():
+    """Return the current GCP Pub/Sub wodle configuration (credentials redacted)."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+
+    if not _OSSEC_CONF.exists():
+        return jsonify({"ok": False, "error": "ossec.conf not found — is CySIEM installed?"}), 404
+
+    try:
+        content = _OSSEC_CONF.read_text()
+    except PermissionError:
+        return jsonify({"ok": False, "error": "Permission denied reading ossec.conf"}), 403
+
+    # Extract values from the gcp-pubsub wodle block only to avoid cross-wodle matches
+    m_block = re.search(r'<wodle name="gcp-pubsub">(.*?)</wodle>', content, re.DOTALL)
+    block = m_block.group(1) if m_block else ""
+
+    def _extract_block(tag, src):
+        m = re.search(rf"<{tag}>(.*?)</{tag}>", src)
+        return m.group(1).strip() if m else ""
+
+    disabled_val      = _extract_block("disabled", block)
+    interval_val      = _extract_block("interval", block)
+    project_id        = _extract_block("project_id", block)
+    subscription_name = _extract_block("subscription_name", block)
+    max_messages_val  = _extract_block("max_messages", block)
+    logging_val       = _extract_block("logging", block)
+
+    has_credentials = _GCP_CREDENTIALS_FILE.exists()
+
+    return add_cors_headers(jsonify({
+        "ok":               True,
+        "enabled":          disabled_val == "no",
+        "interval":         interval_val or "5m",
+        "project_id":       project_id if not project_id.startswith("PLACEHOLDER") else "",
+        "subscription_name": subscription_name if not subscription_name.startswith("PLACEHOLDER") else "",
+        "max_messages":     int(max_messages_val) if max_messages_val.isdigit() else 100,
+        "logging":          logging_val or "info",
+        "has_credentials":  has_credentials,
+        "custom_rules_deployed": _GCP_CUSTOM_RULES_FILE.exists(),
+    }))
+
+
+@system_bp.route("/api/system/gcloudconfig", methods=["POST"])
+def gcloudconfig_post():
+    """Configure the Wazuh gcp-pubsub wodle with a GCP service account credentials file.
+
+    Body (JSON):
+      credentials_json  – contents of the GCP service account key JSON file (string or object)
+                          omit / null to keep the existing credentials file
+      project_id        – GCP project ID
+      subscription_name – Pub/Sub subscription name
+      interval          – poll interval (default "5m")
+      max_messages      – max messages per pull (default 100)
+      logging           – log level: debug|info|warning|error|critical (default "info")
+      enabled           – bool, whether to set <disabled>no</disabled> (default true)
+    """
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
+        return jsonify({"error": "Analyst or admin role required"}), 403
+
+    data              = request.get_json() or {}
+    credentials_raw   = data.get("credentials_json")
+    project_id        = (data.get("project_id")        or "").strip()
+    subscription_name = (data.get("subscription_name") or "").strip()
+    interval          = (data.get("interval")          or "5m").strip()
+    max_messages      = int(data.get("max_messages", 100))
+    logging_level     = (data.get("logging")           or "info").strip()
+    enabled           = bool(data.get("enabled", True))
+
+    # Validate required fields
+    if not project_id:
+        return jsonify({"ok": False, "error": "project_id is required"}), 400
+    if not subscription_name:
+        return jsonify({"ok": False, "error": "subscription_name is required"}), 400
+    if interval not in _GCP_VALID_INTERVALS:
+        return jsonify({"ok": False, "error": f"interval must be one of: {', '.join(sorted(_GCP_VALID_INTERVALS))}"}), 400
+    if logging_level not in ("debug", "info", "warning", "error", "critical"):
+        return jsonify({"ok": False, "error": "logging must be one of: debug, info, warning, error, critical"}), 400
+    if not (1 <= max_messages <= 1000):
+        return jsonify({"ok": False, "error": "max_messages must be between 1 and 1000"}), 400
+
+    # Handle credentials JSON
+    if credentials_raw is not None:
+        # Accept either a JSON string or a pre-parsed object
+        if isinstance(credentials_raw, dict):
+            creds_obj = credentials_raw
+        else:
+            try:
+                creds_obj = json.loads(credentials_raw)
+            except (ValueError, TypeError):
+                return jsonify({"ok": False, "error": "credentials_json is not valid JSON"}), 400
+
+        # Validate it looks like a GCP service account key
+        required_keys = {"type", "project_id", "private_key_id", "private_key", "client_email"}
+        missing = required_keys - set(creds_obj.keys())
+        if missing or creds_obj.get("type") != "service_account":
+            return jsonify({"ok": False, "error": "credentials_json does not appear to be a GCP service account key"}), 400
+
+        # Write credentials file
+        try:
+            _GCP_CREDENTIALS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _GCP_CREDENTIALS_FILE.write_text(json.dumps(creds_obj, indent=2))
+            # Restrict permissions — wazuh-manager user only
+            import stat
+            _GCP_CREDENTIALS_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
+        except PermissionError:
+            return jsonify({"ok": False, "error": "Permission denied writing GCP credentials file"}), 403
+        except OSError as exc:
+            return jsonify({"ok": False, "error": f"Failed to write GCP credentials file: {exc}"}), 500
+    else:
+        # No credentials supplied — require that an existing file is present
+        if not _GCP_CREDENTIALS_FILE.exists():
+            return jsonify({"ok": False, "error": "credentials_json is required for the initial configuration"}), 400
+
+    if not _OSSEC_CONF.exists():
+        return jsonify({"ok": False, "error": "ossec.conf not found — is CySIEM installed?"}), 404
+
+    try:
+        content = _OSSEC_CONF.read_text()
+    except PermissionError:
+        return jsonify({"ok": False, "error": "Permission denied reading ossec.conf"}), 403
+
+    disabled_str = "no" if enabled else "yes"
+    creds_path   = str(_GCP_CREDENTIALS_FILE)
+
+    new_wodle = (
+        f'<wodle name="gcp-pubsub">\n'
+        f'    <disabled>{disabled_str}</disabled>\n'
+        f'    <project_id>{project_id}</project_id>\n'
+        f'    <subscription_name>{subscription_name}</subscription_name>\n'
+        f'    <credentials_file>{creds_path}</credentials_file>\n'
+        f'    <max_messages>{max_messages}</max_messages>\n'
+        f'    <interval>{interval}</interval>\n'
+        f'    <pull_on_start>yes</pull_on_start>\n'
+        f'    <logging>{logging_level}</logging>\n'
+        f'  </wodle>'
+    )
+
+    # Replace existing gcp-pubsub wodle block or append before </ossec_config>
+    updated, n_subs = re.subn(
+        r'<wodle name="gcp-pubsub">.*?</wodle>',
+        new_wodle,
+        content,
+        flags=re.DOTALL,
+    )
+    if n_subs == 0:
+        updated = content.replace(
+            "</ossec_config>",
+            f"\n  {new_wodle}\n</ossec_config>",
+        )
+
+    # Write back ossec.conf with backup
+    backup = Path(f"{_OSSEC_CONF}.gcpbak")
+    try:
+        shutil.copy2(str(_OSSEC_CONF), str(backup))
+        _OSSEC_CONF.write_text(updated)
+    except PermissionError:
+        return jsonify({"ok": False, "error": "Permission denied writing ossec.conf"}), 403
+    except OSError:
+        return jsonify({"ok": False, "error": "Failed to write ossec.conf — check server logs"}), 500
+
+    # Deploy custom GCP security rules
+    rules_deployed = False
+    try:
+        _GCP_CUSTOM_RULES_DIR.mkdir(parents=True, exist_ok=True)
+        _GCP_CUSTOM_RULES_FILE.write_text(_GCP_SECURITY_RULES)
+        rules_deployed = True
+    except (PermissionError, OSError):
+        # Non-fatal — integration still works without custom rules
+        pass
+
+    # Restart wazuh-manager to apply changes
+    rc, _stdout, _stderr = _run_cmd("systemctl restart wazuh-manager")
+    if rc != 0:
+        return add_cors_headers(jsonify({
+            "ok":             False,
+            "written":        True,
+            "rules_deployed": rules_deployed,
+            "error":          "Config saved but wazuh-manager restart failed — check server logs",
+        })), 207
+
+    return add_cors_headers(jsonify({
+        "ok":             True,
+        "enabled":        enabled,
+        "rules_deployed": rules_deployed,
+        "message":        "Google Cloud integration configured and wazuh-manager restarted successfully",
+    }))
