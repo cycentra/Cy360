@@ -218,7 +218,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.168"
+_SCRIPT_VERSION="v1.0.169"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -801,8 +801,17 @@ if [[ -f "$_SCRIPT_BASE/cycentra.lic" && ! -f /opt/cycentra/cycentra.lic ]]; the
     success "License file installed → /opt/cycentra/cycentra.lic"
 fi
 # ── Step 6-9: Interactive config (full install only) ─────────────────────────
-if [[ "$MODE" == "full" ]]; then
 
+if [[ "$MODE" == "full" ]]; then
+    # Prompt for domain if .env does not exist
+    if [[ ! -f "/opt/cycentra/.env" ]]; then
+        read -p "Enter your base domain name [cycentra.com]: " USER_DOMAIN
+        BASE_DOMAIN="${USER_DOMAIN:-cycentra.com}"
+    else
+        source /opt/cycentra/.env
+        BASE_DOMAIN="${BASE_DOMAIN:-cycentra.com}"
+    fi
+    
     # ── No interactive prompts — all config is set via environment variables or
     # ── edited in /opt/cycentra/.env post-install.
     CLIENT_NAME="${CLIENT_NAME:-cycentra}"
