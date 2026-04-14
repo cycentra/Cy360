@@ -2,13 +2,13 @@
 
 ### Diff Summary (AI)
 
-## v1.0.159 – 2026-04-14
+## v1.0.163 – 2026-04-14
 
-### Diff Summary (AI)
+### Enhancement — Broader Subdomain & OSINT Coverage
 
+- Subdomain discovery now leverages multiple global intelligence sources for improved coverage and accuracy.
 
-## v1.0.158 — 2026-04-14
-
+These enhancements help customers identify more external assets and exposures, strengthening overall attack surface visibility.
 ### Chore — Tag/Release Notes Sync
 
 - Confirmed all tag conflicts resolved and release notes are in sync with GitHub tags.

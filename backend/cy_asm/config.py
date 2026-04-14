@@ -8,8 +8,15 @@
 # IPINFO_API_KEY  — still used by dns_recon.py for IP geolocation enrichment.
 # NVD_API_KEY     — still used by web_analysis.py for CVE lookups against NVD.
 # Both are optional: the respective modules skip the lookup when left empty.
-IPINFO_API_KEY = ''
-NVD_API_KEY    = ''
+
+# --- API Keys (Add yours here) ---
+IPINFO_API_KEY = 'cb88ee41947f5e' 
+SECURITYTRAILS_API_KEY = 'MTtPYhNEtxRN9pDseCoH10_SG2W6dgCZ' 
+VIRUSTOTAL_API_KEY = 'd18a0f32b4c9ed0d4595d6863e3e72c22c0303bd11b4f9d8fa2bd37a4aeeef77' 
+NVD_API_KEY = 'ca3e858c-3e96-4c08-9230-3f460900ffad' 
+SHODAN_API_KEY = 'CX89uOeKYcWB5z2njXSmqcbncm6nbi37'
+
+GOOGLE_GEMINI_KEY = "AIzaSyCW5toVZORcf8VJmDp3qNFQQlqnqBI_c3w"
 
 # --- Network Settings ---
 HTTP_TIMEOUT = 10

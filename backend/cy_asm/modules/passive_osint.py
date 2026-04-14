@@ -15,10 +15,39 @@ import asyncio
 from typing import Any, Dict, List
 
 from utils import setup_logging, create_async_session, get_misp_config
+import os
 
 logger = setup_logging()
 
 _MISP_ATTRIBUTE_TYPES = ["hostname", "domain", "ip-dst", "ip-src", "url", "domain|ip"]
+
+# Shodan API Key from config or env
+SHODAN_API_KEY = os.environ.get("SHODAN_API_KEY")
+
+
+async def search_shodan(domain: str, session: aiohttp.ClientSession) -> list[dict]:
+    """
+    Query Shodan for exposed services for the given domain.
+    Returns a list of service dicts (may be empty).
+    """
+    if not SHODAN_API_KEY:
+        logger.info("[OSINT] Shodan API key not set — skipping Shodan lookup.")
+        return []
+    url = f"https://api.shodan.io/shodan/host/search?key={SHODAN_API_KEY}&query=hostname:{domain}"
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10), ssl=False) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                matches = data.get("matches", [])
+                logger.info(f"[OSINT] Shodan returned {len(matches)} result(s) for {domain}.")
+                return matches
+            else:
+                logger.warning(f"[OSINT] Shodan returned HTTP {resp.status} for {domain}.")
+    except asyncio.TimeoutError:
+        logger.warning(f"[OSINT] Shodan query timed out for {domain}.")
+    except Exception as e:
+        logger.error(f"[OSINT] Shodan search failed for {domain}: {e}")
+    return []
 
 
 async def search_misp_domain(
@@ -97,21 +126,41 @@ async def gather_passive_osint(domain: str) -> Dict[str, Any]:
         }
     """
     misp_cfg = get_misp_config()
-    if not misp_cfg:
-        logger.info("[OSINT] MISP not configured — passive OSINT skipped.")
-        return {
-            "results": [],
-            "issues":  [],
-            "summary": "MISP not configured — passive OSINT skipped",
-        }
-
     async with await create_async_session() as session:
-        attrs = await search_misp_domain(domain, session, misp_cfg)
+        # MISP
+        attrs = []
+        misp_issues = []
+        misp_summary = ""
+        if misp_cfg:
+            attrs = await search_misp_domain(domain, session, misp_cfg)
+            misp_issues = [i for attr in attrs for i in [_attr_to_issue(attr, domain)] if i]
+            misp_summary = f"Found {len(attrs)} OSINT attribute(s) from MISP"
+        else:
+            logger.info("[OSINT] MISP not configured — passive OSINT skipped.")
+            misp_summary = "MISP not configured — passive OSINT skipped"
 
-    issues = [i for attr in attrs for i in [_attr_to_issue(attr, domain)] if i]
-    summary = f"Found {len(attrs)} OSINT attribute(s) from MISP"
+        # Shodan
+        shodan_results = await search_shodan(domain, session)
+        shodan_issues = []
+        for m in shodan_results:
+            port = m.get("port")
+            ip = m.get("ip_str")
+            vulns = m.get("vulns", {})
+            if port and ip:
+                shodan_issues.append(f"Exposed service: {ip}:{port} (Shodan)")
+            if vulns:
+                for v in vulns:
+                    shodan_issues.append(f"Vulnerability {v} on {ip}:{port} (Shodan)")
 
-    return {"results": attrs, "issues": issues, "summary": summary}
+        # Merge results
+        results = {
+            "misp": attrs,
+            "shodan": shodan_results,
+        }
+        issues = misp_issues + shodan_issues
+        summary = f"MISP: {misp_summary} | Shodan: {len(shodan_results)} result(s)"
+
+        return {"results": results, "issues": issues, "summary": summary}
 
 
 if __name__ == "__main__":

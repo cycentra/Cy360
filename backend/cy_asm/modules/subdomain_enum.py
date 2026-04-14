@@ -10,7 +10,48 @@ from bs4 import BeautifulSoup
 
 import dns.asyncresolver
 
-from config import HTTP_TIMEOUT, BRUTE_FORCE_WORDLIST
+from config import HTTP_TIMEOUT, BRUTE_FORCE_WORDLIST, SECURITYTRAILS_API_KEY, VIRUSTOTAL_API_KEY
+async def get_subdomains_securitytrails(domain: str, session: aiohttp.ClientSession) -> List[str]:
+    if not SECURITYTRAILS_API_KEY:
+        return []
+    url = f"https://api.securitytrails.com/v1/domain/{domain}/subdomains"
+    headers = {"APIKEY": SECURITYTRAILS_API_KEY}
+    try:
+        async with session.get(url, headers=headers, timeout=15) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                subs = data.get("subdomains", [])
+                return [f"{sub}.{domain}".lower() for sub in subs]
+    except Exception as e:
+        logger.debug(f"SecurityTrails failed: {e}")
+    return []
+
+async def get_subdomains_virustotal(domain: str, session: aiohttp.ClientSession) -> List[str]:
+    if not VIRUSTOTAL_API_KEY:
+        return []
+    url = f"https://www.virustotal.com/api/v3/domains/{domain}/subdomains"
+    headers = {"x-apikey": VIRUSTOTAL_API_KEY}
+    try:
+        async with session.get(url, headers=headers, timeout=10) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                subs = [item["id"] for item in data.get("data", []) if item["id"].endswith(domain)]
+                return subs
+    except Exception as e:
+        logger.error(f"VirusTotal error for {domain}: {e}")
+    return []
+
+async def get_subdomains_alienvault(domain: str, session: aiohttp.ClientSession) -> List[str]:
+    url = f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns"
+    try:
+        async with session.get(url, timeout=10) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                subs = [item["hostname"] for item in data.get("passive_dns", []) if item["hostname"].endswith(domain)]
+                return subs
+    except Exception as e:
+        logger.debug(f"AlienVault OTX failed: {e}")
+    return []
 from utils import setup_logging, create_async_session, get_misp_config
 
 
@@ -225,7 +266,7 @@ async def _check_live(subdomain: str, sem: asyncio.Semaphore) -> Dict[str, Any]:
 
 async def gather_subdomains(
     domain: str,
-    sources: List[str] = ['crtsh', 'misp', 'bruteforce', 'crawl'],
+    sources: List[str] = ['crtsh', 'misp', 'bruteforce', 'crawl', 'securitytrails', 'virustotal', 'alienvault'],
 ) -> Dict[str, Any]:
     """
     Collect subdomains from all passive + active sources, then validate each
@@ -244,12 +285,14 @@ async def gather_subdomains(
     sorted live-first, then alphabetically.
     """
     async with await create_async_session() as session:
-        # ── 1. Collect from all passive / active sources ─────────────────────
         task_specs: List[tuple[str, any]] = []
-        if 'crtsh'     in sources: task_specs.append(('crtsh',     get_subdomains_crtsh(domain, session)))
-        if 'misp'      in sources: task_specs.append(('misp',      get_subdomains_misp(domain, session)))
-        if 'bruteforce' in sources: task_specs.append(('bruteforce', brute_force_subdomains_async(domain)))
-        if 'crawl'     in sources: task_specs.append(('crawl',     crawl_for_subdomains(domain, session)))
+        if 'crtsh'         in sources: task_specs.append(('crtsh',         get_subdomains_crtsh(domain, session)))
+        if 'misp'          in sources: task_specs.append(('misp',          get_subdomains_misp(domain, session)))
+        if 'bruteforce'    in sources: task_specs.append(('bruteforce',    brute_force_subdomains_async(domain)))
+        if 'crawl'         in sources: task_specs.append(('crawl',         crawl_for_subdomains(domain, session)))
+        if 'securitytrails' in sources: task_specs.append(('securitytrails', get_subdomains_securitytrails(domain, session)))
+        if 'virustotal'    in sources: task_specs.append(('virustotal',    get_subdomains_virustotal(domain, session)))
+        if 'alienvault'    in sources: task_specs.append(('alienvault',    get_subdomains_alienvault(domain, session)))
 
         source_names  = [s for s, _ in task_specs]
         source_tasks  = [t for _, t in task_specs]
