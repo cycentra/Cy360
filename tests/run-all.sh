@@ -61,11 +61,21 @@ suite_01() {
     [ -f "$REPO_ROOT/.github/workflows/deploy.yml" ] && ok "deploy.yml exists"        || fail ".github/workflows/deploy.yml missing"
     [ -f "$REPO_ROOT/portal/src/App.jsx" ]          && ok "portal/src/App.jsx exists" || fail "portal/src/App.jsx missing"
 
+
     # RELEASE_NOTES must have at least one version entry
     local versions
     versions=$(grep -c "^## v[0-9]" "$REPO_ROOT/RELEASE_NOTES.md" 2>/dev/null || echo 0)
     [ "$versions" -ge 1 ] && ok "RELEASE_NOTES.md has $versions version entries" \
                            || fail "RELEASE_NOTES.md has no version entries"
+
+    # RELEASE_NOTES.md must not exceed 1000 lines
+    local line_count
+    line_count=$(wc -l < "$REPO_ROOT/RELEASE_NOTES.md")
+    if [ "$line_count" -le 1000 ]; then
+        ok "RELEASE_NOTES.md is $line_count lines (≤1000)"
+    else
+        fail "RELEASE_NOTES.md is $line_count lines — exceeds 1000-line limit"
+    fi
 
     # First entry must be highest (newest at top)
     local first_ver all_vers max_ver
