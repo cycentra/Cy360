@@ -218,7 +218,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.165"
+_SCRIPT_VERSION="v1.0.166"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -659,7 +659,7 @@ systemctl is-active cysiem-to-redis >/dev/null 2>&1 \
 # ── Download release bundle ───────────────────────────────────────────────────
 step_header "DOWNLOAD RELEASE BUNDLE"
 
-GH_TOKEN="${GH_TOKEN:-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}"
+GH_TOKEN="${GH_TOKEN:-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}"
 GH_ORG="cycentra"
 GH_REPO="cycentra360"
 
@@ -878,7 +878,8 @@ else
 
 # ── Cloud CyMISP (Cycentra-managed MISP at cymisp.cycentra.com) ────────────────
 CLOUD_MISP_URL=https://cymisp.cycentra.com
-CLOUD_MISP_API_KEY=${CLOUD_MISP_API_KEY:-}
+CLOUD_MISP_API_KEY="${CLOUD_MISP_API_KEY:-xM3sPTmaq2b6Z1PqgCzlPlB91W3plQn1rzotkySY}"
+
 PATCHEOF
         info "Added CLOUD_MISP_* to .env"
     fi
@@ -981,6 +982,8 @@ CLOUD_IRIS_URL=https://cyiris.cycentra.com
 CLOUD_IRIS_API_KEY=${CLOUD_IRIS_API_KEY:-}
 CLOUD_IRIS_CUSTOMER_ID=${CLOUD_IRIS_CUSTOMER_ID:-1}
 ENVEOF
+    # Hardcode MAXMIND_KEY in .env
+    echo "MAXMIND_KEY=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" >> /opt/cycentra/.env
     chmod 600 /opt/cycentra/.env
    # mkdir -p /root/cy-asm && cp /opt/cycentra/.env /root/cy-asm/.env
    # success "Main .env written → /opt/cycentra/.env"
