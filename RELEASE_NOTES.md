@@ -1,4 +1,11 @@
-## v1.0.158 – 2026-04-14
+
+## v1.0.158 — 2026-04-14
+
+### Chore — Tag/Release Notes Sync
+
+- Confirmed all tag conflicts resolved and release notes are in sync with GitHub tags.
+- git-push.sh now always uses GitHub tags as the source of truth for versioning.
+- No functional changes; this is a sync and housekeeping release.
 
 ### Diff Summary (AI)
 
