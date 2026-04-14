@@ -531,15 +531,15 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
             env_path.write_text("\n".join(f"{k}={v}" for k, v in env_vars.items()))
             log(f"Written .env with {len(env_vars)} variables")
 
-        # ── GHCR pre-auth: login with token OR clear stale creds ─────────────
-        # If GHCR_TOKEN is set: login properly so private/rate-limited pulls work.
+        # ── GH pre-auth: login with token OR clear stale creds ─────────────
+        # If GH_TOKEN is set: login properly so private/rate-limited pulls work.
         # If not set: logout to clear any stale/expired credentials stored in the
         # Docker credential store — this lets Docker fall back to anonymous pull,
         # which works fine for public ghcr.io images.
         if "ghcr.io" in compose_yaml:
-            ghcr_token = os.environ.get("GHCR_TOKEN", "").strip()
+            ghcr_token = os.environ.get("GH_TOKEN", "").strip()
             if ghcr_token:
-                ghcr_user = os.environ.get("GHCR_USER", "ghcr")
+                ghcr_user = os.environ.get("GH_USER", "ghcr")
                 try:
                     import subprocess as _sp
                     _lr = _sp.run(
@@ -548,7 +548,7 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
                         capture_output=True, text=True, timeout=30,
                     )
                     if _lr.returncode == 0:
-                        log("Logged in to ghcr.io with GHCR_TOKEN")
+                        log("Logged in to ghcr.io with GH_TOKEN")
                     else:
                         log(f"WARNING: ghcr.io login failed: {_lr.stderr.strip()}")
                 except Exception as _e:
