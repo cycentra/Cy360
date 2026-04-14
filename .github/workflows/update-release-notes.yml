@@ -59,7 +59,7 @@ jobs:
   update_release_notes:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor == 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Install jq and gh CLI
@@ -115,10 +115,12 @@ jobs:
 
       # Update RELEASE_NOTES.md
       - name: Update RELEASE_NOTES.md
+        env:
+          SUMMARY: ${{ env.summary }}
         run: |
           { echo "## ${{ steps.bumpver.outputs.new_version }} – $(date +'%Y-%m-%d')"
             echo ""
-            echo "${{ env.summary }}"
+            echo "$SUMMARY"
             echo ""
             cat RELEASE_NOTES.md 2>/dev/null || true;
           } > RELEASE_NOTES.tmp
