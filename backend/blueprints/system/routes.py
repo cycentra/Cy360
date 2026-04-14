@@ -375,8 +375,12 @@ def misp_test():
         try:
             stored = json.loads(AI_SETTINGS_FILE.read_text()) if AI_SETTINGS_FILE.exists() else {}
             api_key = stored.get("misp", {}).get("apiKey", "")
+        
         except Exception:
-            pass
+            api_key = ""
+        # Fallback to env var if still missing
+        if not api_key:
+            api_key = os.environ.get("CLOUD_MISP_API_KEY", "").strip()
 
     if not url:
         return jsonify({"ok": False, "error": "MISP Server URL is required"}), 400
