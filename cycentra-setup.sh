@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 — Setup & Update Wizard v1.0.154 — 2026-04-13 13:53 UTC
+# CyCentra 360 — Setup & Update Wizard v1.0.171 — 2026-04-15 00:10 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -218,7 +218,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.170"
+_SCRIPT_VERSION="v1.0.171"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -1899,7 +1899,6 @@ XML
 </decoder>
 <decoder name="okta-event">
   <parent>okta</parent>
-  <type>json</type>
   <use_own_name>true</use_own_name>
 </decoder>
 <decoder name="azure-mfa">
@@ -1916,14 +1915,19 @@ XML
 </decoder>
 <decoder name="duo-event">
   <parent>duo</parent>
-  <type>json</type>
   <use_own_name>true</use_own_name>
 </decoder>
 XML
         chown root:wazuh "$SAAS_DECODER"; chmod 660 "$SAAS_DECODER"
         success "SaaS auth decoders deployed (Okta / Azure MFA / Duo)"
     else
-        success "SaaS auth decoders already present"
+        # Remediate existing files that may contain the invalid <type>json</type> decoder lines
+        if grep -q '<type>json</type>' "$SAAS_DECODER" 2>/dev/null; then
+            sed -i '/<type>json<\/type>/d' "$SAAS_DECODER"
+            success "SaaS auth decoders patched — removed invalid <type>json</type> lines"
+        else
+            success "SaaS auth decoders already present"
+        fi
     fi
 
     # ── 19.6 Cloud wodle stubs in ossec.conf (disabled until customer sets secrets) ──
