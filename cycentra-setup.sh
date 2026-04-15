@@ -228,7 +228,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.174"
+_SCRIPT_VERSION="v1.0.175"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -1715,437 +1715,50 @@ if [[ -d "/var/ossec" ]]; then
     if [[ -f "$CONFIG_SRC/conf/ossec.conf" ]]; then
         cp "$CONFIG_SRC/conf/ossec.conf" /var/ossec/etc/ossec.conf
         chmod 660 /var/ossec/etc/ossec.conf
-        chown root:wazuh /var/ossec/etc/ossec.conf
-        success "ossec.conf deployed"
-    fi
-
-    /var/ossec/bin/wazuh-analysisd -t 2>/dev/null \
-        && success "CySIEM rules valid" \
-        || { warn "wazuh-analysisd -t reported errors"; ERRORS+=("CySIEM rules invalid"); }
-
-    systemctl restart wazuh-manager && success "wazuh-manager restarted"
-
-fi  # end Wazuh config block
-
-# ── Step 19: Infrastructure Prerequisites (GeoIP, Sysmon, SaaS decoders, cloud wodles) ──
-if [[ -d "/var/ossec" ]]; then
-
-    step_header "INFRASTRUCTURE PREREQUISITES"
-
-    # ── 19.1 geoip2 Python library ────────────────────────────────────────────
-    if ! python3 -c "import geoip2" 2>/dev/null; then
-        info "Installing geoip2 Python library..."
-        PIP_ROOT_USER_ACTION=ignore pip3 install geoip2 --break-system-packages -q \
-            && success "geoip2 installed" \
-            || warn "geoip2 install failed — GeoIP enrichment will be disabled"
-    else
-        success "geoip2 already installed"
-    fi
-
-    # ── 19.2 GeoLite2-City.mmdb download (requires MAXMIND_KEY in .env) ──────
-    GEOIP_DIR="/opt/cycentra/geoip"
-    mkdir -p "$GEOIP_DIR"
-    GEOLITE_DB="$GEOIP_DIR/GeoLite2-City.mmdb"
-    if [[ ! -f "$GEOLITE_DB" ]]; then
-        MAXMIND_KEY="$(grep "^MAXMIND_KEY=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2)"
-        if [[ -n "$MAXMIND_KEY" ]]; then
-            info "Downloading GeoLite2-City.mmdb..."
-            GEOURL="https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${MAXMIND_KEY}&suffix=tar.gz"
-            TMP_GEO=$(mktemp /tmp/geolite2_XXXXXX.tar.gz)
-            curl -sL "$GEOURL" -o "$TMP_GEO" \
-              && tar -xzf "$TMP_GEO" -C "$GEOIP_DIR" --strip-components=1 --wildcards "*.mmdb" 2>/dev/null || true
-            find "$GEOIP_DIR" -name "*.mmdb" ! -name "GeoLite2-City.mmdb" -exec mv {} "$GEOLITE_DB" \; 2>/dev/null || true
-            rm -f "$TMP_GEO"
-            [[ -f "$GEOLITE_DB" ]] \
-                && success "GeoLite2-City.mmdb downloaded" \
-                || warn "GeoLite2 download failed — check MAXMIND_KEY in /opt/cycentra/.env"
-        else
-            warn "MAXMIND_KEY not in /opt/cycentra/.env — GeoLite2 DB skipped"
-            warn "Add MAXMIND_KEY=<your_key> to .env and re-run to enable GeoIP enrichment"
-            warn "Free signup: https://www.maxmind.com/en/geolite2/signup"
-        fi
-    else
-        success "GeoLite2-City.mmdb already present"
-    fi
-
-    # ── 19.3 Sysmon decoder ───────────────────────────────────────────────────
-    SYSMON_DECODER="/var/ossec/etc/decoders/cycentra_sysmon_decoder.xml"
-    if [[ ! -f "$SYSMON_DECODER" ]]; then
-        cat > "$SYSMON_DECODER" << 'XML'
-<!-- CyCentra360 Sysmon Decoder for Windows Sysmon v14+ -->
-<decoder name="sysmon">
-  <prematch>Microsoft-Windows-Sysmon</prematch>
-</decoder>
-<decoder name="sysmon-process">
-  <parent>sysmon</parent>
-  <prematch>EventID: 1</prematch>
-  <regex>Image: (\S+)\.+ParentImage: (\S+)</regex>
-  <order>process_name, parent_process</order>
-</decoder>
-<decoder name="sysmon-network">
-  <parent>sysmon</parent>
-  <prematch>EventID: 3</prematch>
-  <regex>DestinationIp: (\d+\.\d+\.\d+\.\d+)\.+DestinationPort: (\d+)</regex>
-  <order>dst_ip, dst_port</order>
-</decoder>
-<decoder name="sysmon-registry">
-  <parent>sysmon</parent>
-  <prematch>EventID: 13</prematch>
-  <regex>TargetObject: (\S+)</regex>
-  <order>file_path</order>
-</decoder>
-<decoder name="sysmon-dns">
-  <parent>sysmon</parent>
-  <prematch>EventID: 22</prematch>
-  <regex>QueryName: (\S+)</regex>
-  <order>url</order>
-</decoder>
-XML
-        chown root:wazuh "$SYSMON_DECODER"; chmod 660 "$SYSMON_DECODER"
-        success "Sysmon decoder deployed"
-    else
-        # Remediate existing files that may contain the invalid <parent>windows</parent> line
-        # in the sysmon root decoder — Wazuh rejects child decoders used as parents (error 2101)
-        if grep -q '<parent>windows</parent>' "$SYSMON_DECODER" 2>/dev/null; then
-            sed -i '/<parent>windows<\/parent>/d' "$SYSMON_DECODER"
-            success "Sysmon decoder patched — removed invalid <parent>windows</parent> from root decoder"
-        else
-            success "Sysmon decoder already present"
-        fi
-    fi
-
-    # ── 19.4 Custom detection rules (100300–100309) ───────────────────────────
-    CUSTOM_RULES="/var/ossec/etc/rules/cycentra_custom_rules.xml"
-    if [[ ! -f "$CUSTOM_RULES" ]]; then
-        cat > "$CUSTOM_RULES" << 'XML'
-<!-- CyCentra360 Custom Detection Rules — feeds CR-019 through CR-035 -->
-<group name="cycentra,sysmon,windows,">
-  <rule id="100300" level="12">
-    <if_group>sysmon</if_group>
-    <field name="process_name">cmd.exe|powershell.exe|wscript.exe|cscript.exe|mshta.exe</field>
-    <field name="parent_process">chrome.exe|msedge.exe|firefox.exe|winword.exe|excel.exe|outlook.exe</field>
-    <description>Suspicious: Office/Browser spawned shell - $(parent_process) -&gt; $(process_name)</description>
-    <mitre><id>T1055</id></mitre>
-    <group>process_injection,</group>
-  </rule>
-  <rule id="100301" level="12">
-    <if_group>sysmon</if_group>
-    <field name="process_name">powershell.exe|pwsh.exe</field>
-    <match>-enc |-EncodedCommand |FromBase64String|Invoke-Expression|DownloadString|-w hidden</match>
-    <description>PowerShell obfuscated/encoded command execution</description>
-    <mitre><id>T1059.001</id></mitre>
-    <group>lolbin,encoded_command,</group>
-  </rule>
-  <rule id="100302" level="14">
-    <if_group>sysmon</if_group>
-    <field name="process_name">cmd.exe|powershell.exe|bash|sh</field>
-    <field name="parent_process">w3wp.exe|httpd|apache2|nginx|php-fpm</field>
-    <description>CRITICAL: Web server spawned shell - possible web shell: $(parent_process) -&gt; $(process_name)</description>
-    <mitre><id>T1505.003</id></mitre>
-    <group>webshell,</group>
-  </rule>
-  <rule id="100303" level="12">
-    <if_group>sysmon</if_group>
-    <field name="file_path">\\CurrentVersion\\Run|\\CurrentVersion\\RunOnce|\\Winlogon\\Userinit|\\Policies\\Explorer\\Run</field>
-    <description>Registry autorun key modified - persistence: $(file_path)</description>
-    <mitre><id>T1547.001</id></mitre>
-    <group>registry_persistence,</group>
-  </rule>
-  <rule id="100304" level="13">
-    <if_group>sysmon</if_group>
-    <field name="process_name">lsass.exe</field>
-    <match>GrantedAccess: 0x1010|GrantedAccess: 0x1410|GrantedAccess: 0x143a</match>
-    <description>LSASS memory access - possible credential dumping</description>
-    <mitre><id>T1003.001</id></mitre>
-    <group>credential_dumping,</group>
-  </rule>
-  <rule id="100305" level="13">
-    <if_group>windows</if_group>
-    <id>7036</id>
-    <match>WinDefend|MSSense|CylanceSvc|CarbonBlack|csfalconservice|SentinelAgent</match>
-    <description>Security service stopped: possible tamper/AV disable</description>
-    <mitre><id>T1562.001</id></mitre>
-    <group>security_tool_disabled,</group>
-  </rule>
-  <rule id="100306" level="11">
-    <if_group>sysmon</if_group>
-    <field name="dst_port">4444|1234|6667|6666|9001|31337|1337</field>
-    <description>Outbound on suspicious port - possible C2: port $(dst_port)</description>
-    <mitre><id>T1571</id></mitre>
-    <group>unusual_port,</group>
-  </rule>
-  <rule id="100307" level="11">
-    <if_group>sysmon</if_group>
-    <field name="dst_port">3389</field>
-    <description>Outbound RDP connection to $(dst_ip):3389</description>
-    <mitre><id>T1021.001</id></mitre>
-    <group>rdp_outbound,</group>
-  </rule>
-  <rule id="100308" level="13">
-    <if_group>windows</if_group>
-    <id>60148,60149,60271</id>
-    <match>Domain Admins|Administrators|Enterprise Admins|Schema Admins</match>
-    <description>Privileged group membership changed</description>
-    <mitre><id>T1098</id></mitre>
-    <group>domain_admin_change,</group>
-  </rule>
-  <rule id="100309" level="12">
-    <if_group>windows</if_group>
-    <id>60210,60211,60212</id>
-    <match>0x17|RC4-HMAC|forwardable|renewable</match>
-    <description>Kerberos ticket with suspicious flags - possible Golden Ticket</description>
-    <mitre><id>T1558.001</id></mitre>
-    <group>golden_ticket,</group>
-  </rule>
-</group>
-XML
-        chown root:wazuh "$CUSTOM_RULES"; chmod 660 "$CUSTOM_RULES"
-        success "Custom detection rules deployed (100300–100309)"
-    else
-        success "Custom detection rules already present — not overwriting"
-    fi
-
-    # ── 19.5 SaaS auth decoders (Okta / Azure MFA / Duo) ─────────────────────
-    SAAS_DECODER="/var/ossec/etc/decoders/cycentra_saas_decoders.xml"
-    if [[ ! -f "$SAAS_DECODER" ]]; then
-        cat > "$SAAS_DECODER" << 'XML'
-<!-- CyCentra360 SaaS Auth Log Decoders -->
-<decoder name="okta">
-  <prematch>{"actor":|"eventType":</prematch>
-</decoder>
-<decoder name="okta-event">
-  <parent>okta</parent>
-  <use_own_name>true</use_own_name>
-</decoder>
-<decoder name="azure-mfa">
-  <prematch>MicrosoftAuthenticator|ConditionalAccess</prematch>
-</decoder>
-<decoder name="azure-mfa-event">
-  <parent>azure-mfa</parent>
-  <prematch>ResultType|AuthenticationRequirement</prematch>
-  <regex>ResultType: (\d+)\.+UserPrincipalName: (\S+)</regex>
-  <order>id, user</order>
-</decoder>
-<decoder name="duo">
-  <prematch>{"action":|duo_</prematch>
-</decoder>
-<decoder name="duo-event">
-  <parent>duo</parent>
-  <use_own_name>true</use_own_name>
-</decoder>
-XML
-        chown root:wazuh "$SAAS_DECODER"; chmod 660 "$SAAS_DECODER"
-        success "SaaS auth decoders deployed (Okta / Azure MFA / Duo)"
-    else
-        # Remediate existing files that may contain the invalid <type>json</type> decoder lines
-        if grep -q '<type>json</type>' "$SAAS_DECODER" 2>/dev/null; then
-            sed -i '/<type>json<\/type>/d' "$SAAS_DECODER"
             success "SaaS auth decoders patched — removed invalid <type>json</type> lines"
         else
             success "SaaS auth decoders already present"
         fi
     fi
+        step_header "INFRASTRUCTURE PREREQUISITES"
 
-    # ── 19.6 Cloud wodle stubs in ossec.conf (disabled until customer sets secrets) ──
-    OSSEC_CONF="/var/ossec/etc/ossec.conf"
-    _inject_wodle() {
-        local marker="$1" label="$2" block="$3"
-        if grep -q "$marker" "$OSSEC_CONF" 2>/dev/null; then
-            success "$label wodle already in ossec.conf"
-            return
+        # ── 19.1 geoip2 Python library ────────────────────────────────────────────
+        if ! python3 -c "import geoip2" 2>/dev/null; then
+                info "Installing geoip2 Python library..."
+                PIP_ROOT_USER_ACTION=ignore pip3 install geoip2 --break-system-packages -q \
+                        && success "geoip2 installed" \
+                        || warn "geoip2 install failed — GeoIP enrichment will be disabled"
+        else
+                success "geoip2 already installed"
         fi
-        python3 -c "
-src = open('$OSSEC_CONF').read()
-blk = '''$block'''
-src = src.replace('</ossec_config>', blk + '\n</ossec_config>') if '</ossec_config>' in src else src + '\n' + blk
-open('$OSSEC_CONF', 'w').write(src)
-" && success "$label wodle stub added to ossec.conf" || warn "$label wodle inject failed"
-    }
 
-    _inject_wodle 'wodle name="aws-s3"' "AWS CloudTrail" \
-'
-  <!-- CyCentra360: AWS CloudTrail — replace PLACEHOLDER values, then set disabled to no -->
-  <wodle name="aws-s3">
-    <disabled>yes</disabled>
-    <interval>5m</interval>
-    <run_on_start>yes</run_on_start>
-    <skip_on_error>yes</skip_on_error>
-    <bucket type="cloudtrail">
-      <n>PLACEHOLDER_CLOUDTRAIL_BUCKET</n>
-      <access_key>PLACEHOLDER_AWS_ACCESS_KEY_ID</access_key>
-      <secret_key>PLACEHOLDER_AWS_SECRET_ACCESS_KEY</secret_key>
-      <only_logs_after>2024-01-01</only_logs_after>
-      <regions>eu-west-1,us-east-1,eu-central-1</regions>
-    </bucket>
-  </wodle>'
+        # ── 19.2 GeoLite2-City.mmdb download (requires MAXMIND_KEY in .env) ──────
+        GEOIP_DIR="/opt/cycentra/geoip"
+        mkdir -p "$GEOIP_DIR"
+        GEOLITE_DB="$GEOIP_DIR/GeoLite2-City.mmdb"
+        if [[ ! -f "$GEOLITE_DB" ]]; then
+                MAXMIND_KEY="$(grep "^MAXMIND_KEY=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2)"
+                if [[ -n "$MAXMIND_KEY" ]]; then
+                        info "Downloading GeoLite2-City.mmdb..."
+                        GEOURL="https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${MAXMIND_KEY}&suffix=tar.gz"
+                        TMP_GEO=$(mktemp /tmp/geolite2_XXXXXX.tar.gz)
+                        curl -sL "$GEOURL" -o "$TMP_GEO" \
+                            && tar -xzf "$TMP_GEO" -C "$GEOIP_DIR" --strip-components=1 --wildcards "*.mmdb" 2>/dev/null || true
+                        find "$GEOIP_DIR" -name "*.mmdb" ! -name "GeoLite2-City.mmdb" -exec mv {} "$GEOLITE_DB" \; 2>/dev/null || true
+                        rm -f "$TMP_GEO"
+                        [[ -f "$GEOLITE_DB" ]] \
+                                && success "GeoLite2-City.mmdb downloaded" \
+                                || warn "GeoLite2 download failed — check MAXMIND_KEY in /opt/cycentra/.env"
+                else
+                        warn "MAXMIND_KEY not in /opt/cycentra/.env — GeoLite2 DB skipped"
+                        warn "Add MAXMIND_KEY=<your_key> to .env and re-run to enable GeoIP enrichment"
+                        warn "Free signup: https://www.maxmind.com/en/geolite2/signup"
+                fi
+        else
+                success "GeoLite2-City.mmdb already present"
+        fi
 
-    _inject_wodle 'wodle name="azure-logs"' "Azure AD" \
-'
-  <!-- CyCentra360: Azure AD + SignIn Logs — replace PLACEHOLDER values, then set disabled to no -->
-  <wodle name="azure-logs">
-    <disabled>yes</disabled>
-    <interval>10m</interval>
-    <run_on_start>yes</run_on_start>
-    <log_analytics>
-      <application_id>PLACEHOLDER_AZURE_CLIENT_ID</application_id>
-      <application_key>PLACEHOLDER_AZURE_CLIENT_SECRET</application_key>
-      <tenantdomain>PLACEHOLDER_TENANT.onmicrosoft.com</tenantdomain>
-      <request>
-        <tag>azure-ad-audit</tag>
-        <query>AuditLogs | limit 500</query>
-        <time_offset>10m</time_offset>
-        <workspace>PLACEHOLDER_LOG_ANALYTICS_WORKSPACE_ID</workspace>
-      </request>
-      <request>
-        <tag>azure-ad-signin</tag>
-        <query>SigninLogs | limit 500</query>
-        <time_offset>10m</time_offset>
-        <workspace>PLACEHOLDER_LOG_ANALYTICS_WORKSPACE_ID</workspace>
-      </request>
-    </log_analytics>
-  </wodle>'
-
-    _inject_wodle 'wodle name="office365"' "Microsoft 365" \
-'
-  <!-- CyCentra360: Microsoft 365 Audit Logs — replace PLACEHOLDER values, then set disabled to no -->
-  <wodle name="office365">
-    <disabled>yes</disabled>
-    <interval>30m</interval>
-    <curl_max_size>1M</curl_max_size>
-    <run_on_start>yes</run_on_start>
-    <api_auth>
-      <tenant_id>PLACEHOLDER_M365_TENANT_ID</tenant_id>
-      <client_id>PLACEHOLDER_M365_CLIENT_ID</client_id>
-      <client_secret>PLACEHOLDER_M365_CLIENT_SECRET</client_secret>
-    </api_auth>
-    <subscriptions>
-      <subscription>Audit.AzureActiveDirectory</subscription>
-      <subscription>Audit.Exchange</subscription>
-      <subscription>Audit.SharePoint</subscription>
-      <subscription>Audit.General</subscription>
-    </subscriptions>
-  </wodle>'
-
-    _inject_wodle 'okta-system-log' "SaaS localfiles (Okta/Azure MFA/Duo)" \
-'
-  <!-- CyCentra360: SaaS Log Files — configure forwarding to these paths -->
-  <localfile>
-    <log_format>json</log_format>
-    <location>/var/log/okta-system-log.json</location>
-    <label key="source">okta-system-log</label>
-  </localfile>
-  <localfile>
-    <log_format>json</log_format>
-    <location>/var/log/azure-signin-logs.json</location>
-    <label key="source">azure-mfa</label>
-  </localfile>
-  <localfile>
-    <log_format>json</log_format>
-    <location>/var/log/duo-auth-log.json</location>
-    <label key="source">duo</label>
-  </localfile>'
-
-    # ── 19.7 Place Sysmon deployment package in /opt/cycentra/sysmon/ ────────
-    SYSMON_PKG_DIR="/opt/cycentra/sysmon"
-    mkdir -p "$SYSMON_PKG_DIR"
-    if [[ ! -f "$SYSMON_PKG_DIR/cycentra_sysmon_config.xml" ]]; then
-        cat > "$SYSMON_PKG_DIR/cycentra_sysmon_config.xml" << 'SXML'
-<!-- CyCentra360 Sysmon Configuration (schemaversion 4.90) -->
-<Sysmon schemaversion="4.90">
-  <HashAlgorithms>md5,sha256,imphash</HashAlgorithms>
-  <CheckRevocation/>
-  <EventFiltering>
-    <RuleGroup name="Process Create" groupRelation="or">
-      <ProcessCreate onmatch="exclude">
-        <Image condition="is">C:\Windows\System32\svchost.exe</Image>
-      </ProcessCreate>
-    </RuleGroup>
-    <RuleGroup name="Network Connect" groupRelation="or">
-      <NetworkConnect onmatch="include">
-        <DestinationPort condition="is">4444</DestinationPort>
-        <DestinationPort condition="is">6667</DestinationPort>
-        <DestinationPort condition="is">9001</DestinationPort>
-        <DestinationPort condition="is">31337</DestinationPort>
-        <DestinationPort condition="is">3389</DestinationPort>
-        <Image condition="contains">powershell</Image>
-        <Image condition="contains">cmd.exe</Image>
-        <Image condition="contains">wscript</Image>
-        <Image condition="contains">mshta</Image>
-      </NetworkConnect>
-    </RuleGroup>
-    <RuleGroup name="Registry Value Set" groupRelation="or">
-      <RegistryEvent onmatch="include">
-        <TargetObject condition="contains">CurrentVersion\Run</TargetObject>
-        <TargetObject condition="contains">CurrentVersion\RunOnce</TargetObject>
-        <TargetObject condition="contains">Winlogon\Userinit</TargetObject>
-        <TargetObject condition="contains">Policies\Explorer\Run</TargetObject>
-      </RegistryEvent>
-    </RuleGroup>
-    <RuleGroup name="DNS Query" groupRelation="or">
-      <DnsQuery onmatch="exclude">
-        <QueryName condition="end with">microsoft.com</QueryName>
-        <QueryName condition="end with">windowsupdate.com</QueryName>
-        <QueryName condition="end with">windows.com</QueryName>
-      </DnsQuery>
-    </RuleGroup>
-  </EventFiltering>
-</Sysmon>
-SXML
-        success "Sysmon config → $SYSMON_PKG_DIR/cycentra_sysmon_config.xml"
-    fi
-
-    if [[ ! -f "$SYSMON_PKG_DIR/deploy_sysmon.ps1" ]]; then
-        cat > "$SYSMON_PKG_DIR/deploy_sysmon.ps1" << 'PS1'
-# CyCentra360 — Sysmon Deployment
-# Download Sysmon64.exe: https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon
-# Place alongside this script and cycentra_sysmon_config.xml, then run as Admin
-param([string]$SysmonPath=".\Sysmon64.exe", [string]$ConfigPath=".\cycentra_sysmon_config.xml")
-if (-not (Test-Path $SysmonPath)) {
-    Write-Error "Sysmon64.exe not found. Download from Microsoft Sysinternals."
-    exit 1
-}
-$svc = Get-Service -Name "Sysmon64" -ErrorAction SilentlyContinue
-if ($svc) {
-    Write-Host "Updating Sysmon config..." -ForegroundColor Yellow
-    & $SysmonPath -c $ConfigPath
-} else {
-    Write-Host "Installing Sysmon64..." -ForegroundColor Cyan
-    & $SysmonPath -accepteula -i $ConfigPath
-}
-$s = Get-Service -Name "Sysmon64"
-Write-Host "Sysmon status: $($s.Status)" -ForegroundColor $(if($s.Status -eq "Running"){"Green"}else{"Red"})
-Write-Host "Wazuh will collect events from: Microsoft-Windows-Sysmon/Operational"
-PS1
-        success "Sysmon deploy script → $SYSMON_PKG_DIR/deploy_sysmon.ps1"
-    fi
-
-    if [[ ! -f "$SYSMON_PKG_DIR/apply_audit_policy.ps1" ]]; then
-        cat > "$SYSMON_PKG_DIR/apply_audit_policy.ps1" << 'PS1'
-# CyCentra360 — Advanced Audit Policy Setup
-# Run on each Domain Controller as Domain Admin (PowerShell, Run as Administrator)
-Write-Host "Applying Advanced Audit Policy for CyCentra360..." -ForegroundColor Cyan
-$cmds = @(
-  'auditpol /set /subcategory:"Credential Validation" /success:enable /failure:enable',
-  'auditpol /set /subcategory:"Kerberos Authentication Service" /success:enable /failure:enable',
-  'auditpol /set /subcategory:"Kerberos Service Ticket Operations" /success:enable /failure:enable',
-  'auditpol /set /subcategory:"Logon" /success:enable /failure:enable',
-  'auditpol /set /subcategory:"Account Lockout" /success:disable /failure:enable',
-  'auditpol /set /subcategory:"Special Logon" /success:enable /failure:disable',
-  'auditpol /set /subcategory:"Security Group Management" /success:enable /failure:disable',
-  'auditpol /set /subcategory:"User Account Management" /success:enable /failure:enable',
-  'auditpol /set /subcategory:"Sensitive Privilege Use" /success:enable /failure:enable',
-  'auditpol /set /subcategory:"Process Creation" /success:enable /failure:disable',
-  'auditpol /set /subcategory:"Directory Service Changes" /success:enable /failure:disable'
-)
-foreach ($cmd in $cmds) { Invoke-Expression $cmd; Write-Host "  OK: $cmd" -ForegroundColor Green }
-# Enable command line in 4688 events
-Set-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit" `
-  -Name "ProcessCreationIncludeCmdLine_Enabled" -Value 1 -Type DWord -Force
-Write-Host "Done. Verify: auditpol /get /category:*" -ForegroundColor Cyan
-PS1
-        success "Audit policy script → $SYSMON_PKG_DIR/apply_audit_policy.ps1"
-    fi
-
+fi  # end infra prerequisites block
     # ── 19.8 Reload Wazuh after config/decoder changes ────────────────────────
     /var/ossec/bin/wazuh-analysisd -t 2>/dev/null \
         && { systemctl reload wazuh-manager 2>/dev/null || systemctl restart wazuh-manager 2>/dev/null; \
