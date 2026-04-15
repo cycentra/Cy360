@@ -1764,7 +1764,6 @@ if [[ -d "/var/ossec" ]]; then
         cat > "$SYSMON_DECODER" << 'XML'
 <!-- CyCentra360 Sysmon Decoder for Windows Sysmon v14+ -->
 <decoder name="sysmon">
-  <parent>windows</parent>
   <prematch>Microsoft-Windows-Sysmon</prematch>
 </decoder>
 <decoder name="sysmon-process">
@@ -1795,7 +1794,14 @@ XML
         chown root:wazuh "$SYSMON_DECODER"; chmod 660 "$SYSMON_DECODER"
         success "Sysmon decoder deployed"
     else
-        success "Sysmon decoder already present"
+        # Remediate existing files that may contain the invalid <parent>windows</parent> line
+        # in the sysmon root decoder — Wazuh rejects child decoders used as parents (error 2101)
+        if grep -q '<parent>windows</parent>' "$SYSMON_DECODER" 2>/dev/null; then
+            sed -i '/<parent>windows<\/parent>/d' "$SYSMON_DECODER"
+            success "Sysmon decoder patched — removed invalid <parent>windows</parent> from root decoder"
+        else
+            success "Sysmon decoder already present"
+        fi
     fi
 
     # ── 19.4 Custom detection rules (100300–100309) ───────────────────────────
