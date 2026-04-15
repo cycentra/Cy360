@@ -1,3 +1,25 @@
+## v1.0.172 — 2026-04-15
+
+### Bug Fix — Wazuh fails to start: `Parent decoder name invalid: 'sysmon'` in `cycentra_sysmon_decoder.xml`
+
+**Root cause**: Step 19.3 of `cycentra-setup.sh` defined the `sysmon` root decoder with
+`<parent>windows</parent>`, making it a child decoder of `windows`. In Wazuh/OSSEC only
+**root** decoders (those without any `<parent>` element) may be referenced as a parent by
+other decoders. The four child decoders (`sysmon-process`, `sysmon-network`, `sysmon-registry`,
+`sysmon-dns`) all declare `<parent>sysmon</parent>`, which caused `wazuh-analysisd` to fail
+with `ERROR: (2101): Parent decoder name invalid: 'sysmon'` and refuse to load
+`cycentra_sysmon_decoder.xml`, preventing `wazuh-manager` from starting.
+
+**Fix**:
+- Removed `<parent>windows</parent>` from the `sysmon` root decoder in the
+  `cycentra_sysmon_decoder.xml` heredoc in `cycentra-setup.sh` (step 19.3).
+- Added idempotent remediation in the `else` branch of step 19.3: if a previously-deployed
+  `cycentra_sysmon_decoder.xml` contains the invalid `<parent>windows</parent>` line,
+  `sed -i` removes it in-place so re-running `--update` or the full setup heals existing
+  servers without manual intervention.
+
+---
+
 ## v1.0.171 — 2026-04-15
 
 ### Bug Fix — Wazuh fails to start: `Invalid decoder type 'json'` in `cycentra_saas_decoders.xml`
