@@ -1,3 +1,24 @@
+## v1.0.171 — 2026-04-15
+
+### Bug Fix — Wazuh fails to start: `Invalid decoder type 'json'` in `cycentra_saas_decoders.xml`
+
+**Root cause**: Step 19.5 of `cycentra-setup.sh` wrote `<type>json</type>` inside the `okta-event`
+and `duo-event` child decoders (i.e. decoders that have a `<parent>` element). In Wazuh/OSSEC,
+the `<type>` element is only valid on root/parent decoders — using it inside a child decoder is
+rejected at startup with `Invalid decoder type 'json'`, causing `wazuh-analysisd` to refuse to
+load `cycentra_saas_decoders.xml` entirely and `wazuh-manager` to fail to start. The `<type>json</type>`
+lines were also functionally redundant because JSON parsing is already handled at the log-collection
+layer via `<log_format>json</log_format>` in the `localfile` stubs deployed in step 19.6.
+
+**Fix**:
+- Removed `<type>json</type>` from the `okta-event` and `duo-event` child decoders in the
+  `cycentra_saas_decoders.xml` heredoc in `cycentra-setup.sh`.
+- Added idempotent remediation in the `else` branch of step 19.5: if a previously-deployed
+  `cycentra_saas_decoders.xml` contains the invalid lines, `sed -i` removes them in-place so
+  re-running `--update` or the full setup heals existing servers without manual intervention.
+
+---
+
 ## v1.0.162 – 2026-04-14
 
 ### Diff Summary (AI)
