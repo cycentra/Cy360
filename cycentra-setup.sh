@@ -228,7 +228,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.173"
+_SCRIPT_VERSION="v1.0.174"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -538,7 +538,7 @@ step_header "CySIEM → REDIS BRIDGE (Python watcher)"
 
 # Install redis-py if not already present
 python3 -c "import redis" 2>/dev/null \
-    || PIP_ROOT_USER_ACTION=ignore pip3 install --quiet redis
+    || PIP_ROOT_USER_ACTION=ignore pip3 install --break-system-packages --quiet redis
 
 # Ensure deploy directory exists
 mkdir -p /opt/cycentra
@@ -1133,6 +1133,7 @@ PIP_ROOT_USER_ACTION=ignore pip3 install \
     --extra-index-url https://pypi.org/simple/ \
     "${_WHL_FILE}" \
     --upgrade \
+    --break-system-packages \
     --ignore-installed \
     -q \
     && success "Installed: ${PKG_NAME}==${PKG_VER}" \
@@ -1734,7 +1735,7 @@ if [[ -d "/var/ossec" ]]; then
     # ── 19.1 geoip2 Python library ────────────────────────────────────────────
     if ! python3 -c "import geoip2" 2>/dev/null; then
         info "Installing geoip2 Python library..."
-        PIP_ROOT_USER_ACTION=ignore pip3 install geoip2 -q \
+        PIP_ROOT_USER_ACTION=ignore pip3 install geoip2 --break-system-packages -q \
             && success "geoip2 installed" \
             || warn "geoip2 install failed — GeoIP enrichment will be disabled"
     else
