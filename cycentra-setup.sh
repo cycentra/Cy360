@@ -25,6 +25,8 @@
 
 set -euo pipefail
 
+
+
 # ── Colours & helpers (defined early — used by license check below) ───────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; WHITE='\033[1;37m'; DIM='\033[2m'; NC='\033[0m'; BOLD='\033[1m'
@@ -228,7 +230,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.175"
+_SCRIPT_VERSION="v1.0.176"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -280,6 +282,14 @@ else
     echo -e "  ${DIM}MODE: FULL INSTALL${NC} — infrastructure + application"
 fi
 divider; echo ""
+
+# ── Step 1: Prompt for base domain ──────────────────────────────────────────
+if [[ "$MODE" == "full" && ! -f "/opt/cycentra/.env" ]]; then
+    step_header "BASE DOMAIN CONFIGURATION"
+    read -p "Enter your base domain name [cycentra.com]: " USER_DOMAIN
+    BASE_DOMAIN="${USER_DOMAIN:-cycentra.com}"
+fi
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # INFRASTRUCTURE BLOCK — skipped when MODE=update
@@ -813,10 +823,9 @@ fi
 # ── Step 6-9: Interactive config (full install only) ─────────────────────────
 
 if [[ "$MODE" == "full" ]]; then
-    # Prompt for domain if .env does not exist
+    # Use BASE_DOMAIN from earlier prompt or .env
     if [[ ! -f "/opt/cycentra/.env" ]]; then
-        read -p "Enter your base domain name [cycentra.com]: " USER_DOMAIN
-        BASE_DOMAIN="${USER_DOMAIN:-cycentra.com}"
+        BASE_DOMAIN="${BASE_DOMAIN:-cycentra.com}"
     else
         source /opt/cycentra/.env
         BASE_DOMAIN="${BASE_DOMAIN:-cycentra.com}"
@@ -1758,7 +1767,7 @@ if [[ -d "/var/ossec" ]]; then
                 success "GeoLite2-City.mmdb already present"
         fi
 
-fi  # end infra prerequisites block
+    # end infra prerequisites block
     # ── 19.8 Reload Wazuh after config/decoder changes ────────────────────────
     /var/ossec/bin/wazuh-analysisd -t 2>/dev/null \
         && { systemctl reload wazuh-manager 2>/dev/null || systemctl restart wazuh-manager 2>/dev/null; \
@@ -1773,7 +1782,7 @@ fi  # end infra prerequisites block
     info "  3. Sysmon: copy /opt/cycentra/sysmon/ to Windows endpoints + run deploy_sysmon.ps1"
     info "  4. Audit policy: run apply_audit_policy.ps1 on Domain Controllers"
 
-fi  # end infra prerequisites block
+    # end infra prerequisites block
 
 # ── Step 20: Platform branding (whitelabel) ───────────────────────────────────
 step_header "PLATFORM BRANDING (WHITELABEL)"
