@@ -37,10 +37,16 @@ log = logging.getLogger("cysiem_to_redis")
 
 
 def tail_forever() -> None:
+    log.info("connecting to redis %s:%d", REDIS_HOST, REDIS_PORT)
     r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
     r.ping()
+    log.info("redis connected") 
 
     path = Path(ALERTS_FILE)
+    while not path.exists():
+        log.warning("alerts file not found: %s — waiting 10s", ALERTS_FILE)
+        time.sleep(10)
+
     log.info("watching %s  →  redis:%d/%s", ALERTS_FILE, REDIS_PORT, REDIS_KEY)
 
     # Open in raw unbuffered binary mode so OS-level appends are immediately
@@ -50,6 +56,7 @@ def tail_forever() -> None:
         inode  = os.stat(path).st_ino
         buf    = b""
         pushed = 0
+        log.info("tail started at EOF, inode=%d", inode) 
 
         while True:
             chunk = fb.read(65536)
@@ -96,3 +103,4 @@ if __name__ == "__main__":
         except Exception as exc:
             log.error("fatal: %s — retrying in 5 s", exc)
             time.sleep(5)
+            log.info("retrying tail_forever()")

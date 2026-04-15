@@ -79,7 +79,11 @@ CREATE TABLE IF NOT EXISTS incidents (
     iris_case_status    TEXT,
     iris_case_url       TEXT,
     -- FP auto-scoring (v1.0.103+)
-    confidence_score    NUMERIC(5,1)
+    confidence_score    NUMERIC(5,1),
+    -- FP probability + SOAR (v1.0.120+)
+    fp_probability      NUMERIC(5,1),
+    asset_tier          INTEGER,
+    soar_actions        JSONB DEFAULT '[]'
 );
 
 CREATE INDEX IF NOT EXISTS idx_incidents_status           ON incidents (status);
