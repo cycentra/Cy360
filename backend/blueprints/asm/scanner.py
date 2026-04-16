@@ -180,6 +180,64 @@ def get_latest_scan():
         return jsonify({"error": str(e)}), 500
 
 
+# ── Scan history list ─────────────────────────────────────────────────────────
+
+@asm_bp.route("/api/scans/list")
+def list_scans():
+    import json as _json
+    uid   = request.args.get("uid", "")
+    limit = min(int(request.args.get("limit", 15)), 50)
+
+    search    = SCANS_DIR / uid / "scan_*.json" if uid else SCANS_DIR / "**" / "scan_*.json"
+    all_files = glob.glob(str(search), recursive=True)
+
+    if not all_files:
+        return jsonify([])
+
+    files_sorted = sorted(all_files, key=os.path.getmtime, reverse=True)[:limit]
+    scans = []
+    for f in files_sorted:
+        try:
+            with open(f) as fp:
+                d = _json.load(fp)
+            meta   = d.get("meta", {})
+            assets = d.get("assets", [])
+            vulns  = [v for a in assets for v in (a.get("vulnerabilities") or [])]
+            scans.append({
+                "scan_id":        meta.get("scan_id", os.path.basename(f)),
+                "domain":         meta.get("domain", ""),
+                "last_scan":      meta.get("last_scan", ""),
+                "scan_type":      meta.get("scan_type", "standard"),
+                "total_findings": len(vulns),
+                "critical":       sum(1 for v in vulns if v.get("severity") == "Critical"),
+                "high":           sum(1 for v in vulns if v.get("severity") == "High"),
+                "subdomains":     d.get("subdomain_summary", {}).get("total", 0),
+            })
+        except Exception:
+            continue
+    return jsonify(scans)
+
+
+# ── Fetch a specific historical scan by scan_id ───────────────────────────────
+
+@asm_bp.route("/api/scans/<scan_id>")
+def get_scan_by_id(scan_id):
+    import json as _json
+    uid       = request.args.get("uid", "")
+    search    = SCANS_DIR / uid / "scan_*.json" if uid else SCANS_DIR / "**" / "scan_*.json"
+    all_files = glob.glob(str(search), recursive=True)
+
+    for f in all_files:
+        try:
+            with open(f) as fp:
+                d = _json.load(fp)
+            if d.get("meta", {}).get("scan_id") == scan_id:
+                return jsonify(d)
+        except Exception:
+            continue
+    return jsonify({"error": "Scan not found"}), 404
+
+
 # ── ASM → CyIRIS escalation ───────────────────────────────────────────────────
 #
 # Severity → IRIS severity ID mapping (matches IRIS built-in severity table)

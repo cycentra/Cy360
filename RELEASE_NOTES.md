@@ -1,8 +1,63 @@
+## v1.0.184 -- 2026-04-16
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
 ## v1.0.183 -- 2026-04-16
 
 ### Improvements
 
   - Stability and performance improvements.
+  - Backend — scanner.py
+GET /api/scans/list — returns last 15 scan summaries (scan_id, domain, date, scan_type, total_findings, critical, high, subdomains)
+GET /api/scans/<scan_id> — returns full JSON for any historical scan by ID
+Frontend — adapter.js
+Bug fix: getWebSecStats no longer filters only module === "Web" — now catches all web/crypto/vuln_scanner/nuclei modules and source types
+Vulnerability enrichment: merges vuln_scanner + nuclei raw findings onto the vulnerabilities[] array, adding CVSS, EPSS, compliance_impact, source, discovered_at, template_id, cve_refs
+14 new fields on primary assets: osint_data, social_eng, mobile_api, whois_full, whois_history, dns_records, dns_ips, dns_takeovers, dns_unregistered, ssl_detail, pqc_data, http_analysis, api_endpoints, js_secrets
+New helpers: getOsintData(), getSocialEngData(), getMobileApiData(); expanded getBrandData() with full breach/HIBP detail; getSupplyChainRisk() now returns full risks[] array
+useAppState.js
+New state: scanHistory[], selectedScanId, historyLoading
+Fetches scan history list on login; refreshes after each new scan
+handleScanSelect(scanId) loads any historical scan and navigates to dashboard
+App.jsx
+ScanHistoryDropdown component in topbar — shows last 15 scans in a table (date, domain, type pill, findings count with critical badge, subdomain count); click any row to load that scan
+DashboardPage.jsx
+Scan type badge (DEEP/STD/PASS) in header
+"New Subdomains" stat card added
+Widget 2: adds PQC (Post-Quantum Crypto) status
+Widget 3: adds cloud bucket summary (public/private/total counts)
+Widget 4: adds DNSSEC, TLS-RPT rows; elite score/status; spoofing risk badge
+Widget 5: fixed module filter bug; shows JS secrets count, API endpoints count, CVSS on findings
+Widget 6: shows new subdomain count separately
+Widget 7: expanded to list top 4 risky libraries with library name, OSV ID, CVE IDs
+Widget 8: adds HIBP breach detail (name, year, data classes); social engineering exposure (exposed emails + risk level); OSINT/MISP hit count; CVSS on critical vuln list
+VulnerabilityPage.jsx
+Summary pills: critical / high / with-CVSS / with-EPSS counts
+CVSS pill (color-coded: red ≥9, orange ≥7, yellow ≥4)
+EPSS pill with percentage probability
+Source pill: port_banner, ssl_check, exposed_path, js_secret, nuclei, shodan
+Compliance card: NIS2/DORA/ISO 27001 impact when present
+Additional CVE refs from nuclei template; template_id, matched_at, discovered_at, risk_score in meta row
+AssetModal.jsx
+Tabbed navigation for primary assets: Overview / Vulns / DNS / SSL / Cloud / WHOIS / OSINT / Social Eng / Mobile/API / Supply Chain
+Overview tab: exposed paths list (all paths, not just count); IP enrichment for IP sub-assets (ASN, country, city, cloud provider, rDNS); full resolved_ips for subdomains
+DNS tab: full DNS record table by type (A/AAAA/MX/NS/TXT etc.); IP enrichment details; takeovers; unregistered typosquats
+SSL tab: cipher suite, protocol, chain validity, OCSP stapling, heartbleed, compression, SANs; PQC status; HTTP security headers/CORS analysis
+Cloud tab: provider list; K8s exposure banner; full bucket list with public/private status
+WHOIS tab: registrar, creation/expiry dates, name servers, status, DNSSEC, history
+OSINT tab: MISP threat intel hits; Shodan CVE findings with severity; Shodan raw results
+Social Eng tab: risk assessment with reasons; exposed employee emails with name/title/confidence; LinkedIn profiles; email patterns
+Mobile/API tab: API security findings (CORS, rate limiting, issues); APK secrets; app store links; deep links
+Supply Chain tab: full risk list with library name, OSV ID, CVE IDs, CVSS, severity, reason
+SiemFeedPage.jsx
+Critical / High filter buttons with counts
+Module tag on each alert card (color-coded)
+Full ISO timestamp (not just time)
+CVSS score pill, risk_score, source field on each alert
 
 ---
 

@@ -4,6 +4,9 @@
  * Central state hook. Owns all top-level useState, OAuth callback
  * parsing, session restore, and module/AI config persistence.
  *
+ * v2: Adds scanHistory[] + selectedScanId for the scan timeline dropdown.
+ *     handleScanSelect(scanId) loads any historical scan by ID.
+ *
  * Returns everything App.jsx needs — pages receive only the slice they use.
  */
 
@@ -29,6 +32,11 @@ export function useAppState() {
     fields:   { baseUrl: "", model: "mistral:7b" },
     prompts:  DEFAULT_PROMPTS,
   });
+
+  // ── Scan history ─────────────────────────────────────────────────────────────
+  const [scanHistory,    setScanHistory]    = useState([]);
+  const [selectedScanId, setSelectedScanId] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   // Persist active tab across refreshes
   function setActiveTab(tab) {
@@ -58,7 +66,7 @@ export function useAppState() {
 
     } else if (params.get("logged_out") === "1") {
       clearSSOToken();
-      setUser(null); setData(null); setAssets([]);
+      setUser(null); setData(null); setAssets([]); setScanHistory([]);
       setAuthReady(true);
       window.history.replaceState({}, document.title, window.location.pathname);
 
@@ -81,9 +89,11 @@ export function useAppState() {
     } catch {}
   }, []);
 
-  // ── Auto-load latest scan on login ──────────────────────────────────────────
+  // ── Auto-load latest scan + history on login ─────────────────────────────────
   useEffect(() => {
     if (!user || data) return;
+
+    // Load latest scan
     fetch(`${API_BASE}/api/scans/latest?uid=${encodeURIComponent(user.id || "")}`, {
       credentials: "include",
     })
@@ -91,22 +101,32 @@ export function useAppState() {
       .then(raw => {
         if (raw?.assets) {
           const adapted = adaptCyCentraJSON(raw);
-          // On initial load there are no prior statuses — _mergeStatuses is a no-op
-          // but keeps the code path consistent so future reloads also preserve state.
-          if (adapted) { setData(adapted); setAssets(prev => _mergeStatuses(adapted.assets, prev)); }
+          if (adapted) {
+            setData(adapted);
+            setSelectedScanId(adapted.meta?.scan_id || null);
+            setAssets(prev => _mergeStatuses(adapted.assets, prev));
+          }
         }
       })
       .catch(() => {});
+
+    // Load scan history list
+    _fetchHistory(user.id || "");
   }, [user, data]);
+
+  function _fetchHistory(uid) {
+    setHistoryLoading(true);
+    fetch(`${API_BASE}/api/scans/list?uid=${encodeURIComponent(uid)}&limit=15`, {
+      credentials: "include",
+    })
+      .then(res => res.ok ? res.json() : [])
+      .then(list => { setScanHistory(Array.isArray(list) ? list : []); })
+      .catch(() => setScanHistory([]))
+      .finally(() => setHistoryLoading(false));
+  }
 
   // ── Action handlers ─────────────────────────────────────────────────────────
 
-  /**
-   * Merge previously user-set statuses (open/in-review/resolved) into a freshly
-   * adapted asset list.  Keyed by `host` (stable across scans).
-   * Sources: in-memory prevAssets (highest priority) + localStorage fallback
-   * (survives page refresh).  Assets without a prior status keep "open".
-   */
   const _STATUS_KEY = "cycentra_asset_statuses";
 
   function _saveStatuses(updatedAssets) {
@@ -127,7 +147,6 @@ export function useAppState() {
   }
 
   function _mergeStatuses(newAssets, prevAssets) {
-    // Build combined status map: localStorage as base, in-memory prev overrides
     const savedMap = _loadStatusMap();
     const liveMap  = {};
     (prevAssets || []).forEach(a => {
@@ -138,6 +157,28 @@ export function useAppState() {
     return newAssets.map(a =>
       statusMap[a.host] ? { ...a, status: statusMap[a.host] } : a
     );
+  }
+
+  // Load a specific historical scan by scan_id
+  async function handleScanSelect(scanId) {
+    if (scanId === selectedScanId) return;
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/scans/${encodeURIComponent(scanId)}?uid=${encodeURIComponent(user?.id || "")}`,
+        { credentials: "include" }
+      );
+      if (!res.ok) return;
+      const raw = await res.json();
+      if (raw?.assets) {
+        const adapted = adaptCyCentraJSON(raw);
+        if (adapted) {
+          setData(adapted);
+          setSelectedScanId(scanId);
+          setAssets(prev => _mergeStatuses(adapted.assets, prev));
+          setActiveTab("dashboard");
+        }
+      }
+    } catch {}
   }
 
   function handleImport(raw) {
@@ -151,7 +192,7 @@ export function useAppState() {
   function handleStatusChange(id, status) {
     setAssets(prev => {
       const updated = prev.map(a => a.id === id ? { ...a, status } : a);
-      _saveStatuses(updated);   // persist across refreshes + rescans
+      _saveStatuses(updated);
       return updated;
     });
   }
@@ -181,7 +222,6 @@ export function useAppState() {
   async function handleSaveAIConfig(config) {
     setAiConfig(config);
     try { localStorage.setItem("cycentra_ai_config", JSON.stringify(config)); } catch {}
-    // Persist to backend so the ASM enrichment pipeline can read it server-side
     const res = await fetch(`${API_BASE}/api/ai/settings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -198,9 +238,11 @@ export function useAppState() {
     const adapted = adaptCyCentraJSON(raw);
     if (adapted) {
       setData(adapted);
-      // Preserve any statuses the user set before the rescan
+      setSelectedScanId(adapted.meta?.scan_id || null);
       setAssets(prev => _mergeStatuses(adapted.assets, prev));
       setActiveTab("dashboard");
+      // Refresh history list so new scan appears in dropdown
+      if (user) _fetchHistory(user.id || "");
     }
   }
 
@@ -222,11 +264,13 @@ export function useAppState() {
     // State
     user, authReady, data, assets, activeTab, selectedAsset, showImport,
     installedModules, aiConfig, stats, scanTime,
+    scanHistory, selectedScanId, historyLoading,
     // Setters
     setUser, setData, setAssets, setActiveTab,
     setSelectedAsset, setShowImport,
     // Handlers
     handleImport, handleStatusChange, handleInstallModule,
     handleUninstallModule, handleSaveAIConfig, handleScanComplete,
+    handleScanSelect,
   };
 }
