@@ -26,6 +26,9 @@ from modules.dark_web import gather_dark_web
 from tenant_manager import validate_tenant
 from utils import setup_logging
 
+from modules.vuln_scanner import gather_vuln_scanner
+from modules.debug_crypto import audit_crypto_deep
+
 # --- ENRICHMENT IMPORTS ---
 from google import genai
 from google.genai import types
@@ -38,24 +41,26 @@ logger = setup_logging()
 # is executed at the end. DNS Reconnaissance is always run as a baseline.
 # ─────────────────────────────────────────────────────────────────────────────
 SCAN_PROFILES = {
-    # Passive: read-only lookups only — no active probing, no subdomain brute-force
     "passive": {
-        "run_subdomains": False,
-        "modules": ["email_sec", "whois", "osint", "dark_web"],
-        "ai_enrichment": False,
+        "run_subdomains":   False,
+        "modules":          ["email_sec", "whois", "osint", "dark_web"],
+        "run_vuln_scanner": False,
+        "ai_enrichment":    False,
     },
-    # Standard: core active recon + surface checks, no heavy/slow modules
     "standard": {
-        "run_subdomains": True,
-        "modules": ["web", "crypto", "email_sec", "cloud", "whois", "osint"],
-        "ai_enrichment": False,
+        "run_subdomains":   True,
+        "modules":          ["web", "crypto", "email_sec", "cloud", "whois", "osint"],
+        "run_vuln_scanner": True,
+        "ai_enrichment":    False,
     },
-    # Deep: full module suite + AI enrichment
     "deep": {
-        "run_subdomains": True,
-        "modules": ["web", "crypto", "email_sec", "cloud", "whois", "osint",
-                    "dark_web", "supply_chain", "social_eng", "mobile_api"],
-        "ai_enrichment": True,
+        "run_subdomains":   True,
+        "modules":          [
+            "web", "crypto", "email_sec", "cloud", "whois", "osint",
+            "dark_web", "supply_chain", "social_eng", "mobile_api",
+        ],
+        "run_vuln_scanner": True,
+        "ai_enrichment":    True,
     },
 }
 
@@ -727,6 +732,33 @@ async def run_full_scan(
             results[key] = res
             if isinstance(res, dict) and "issues" in res:
                 all_issues.extend(res["issues"])
+
+    # ── Post-sequential enrichment ──────────────────────────────────────────
+    # vuln_scanner needs web results so runs after the sequential loop
+    if profile.get("run_vuln_scanner"):
+        _start("vuln_scanner")
+        try:
+            vuln_res = await gather_vuln_scanner(
+                domain,
+                web_results=results.get("web"),
+            )
+        except Exception as exc:
+            vuln_res = {"error": str(exc), "results": {}, "issues": []}
+        _done("vuln_scanner", vuln_res)
+        results["vuln_scanner"] = vuln_res
+        if isinstance(vuln_res, dict) and "issues" in vuln_res:
+            all_issues.extend(vuln_res["issues"])
+
+    if profile.get("run_vuln_scanner"):
+        _start("crypto_deep")
+        try:
+            crypto_deep_res = await audit_crypto_deep(domain)
+        except Exception as exc:
+            crypto_deep_res = {"error": str(exc), "results": {}, "issues": []}
+        _done("crypto_deep", crypto_deep_res)
+        results["crypto_deep"] = crypto_deep_res
+        if isinstance(crypto_deep_res, dict) and "issues" in crypto_deep_res:
+            all_issues.extend(crypto_deep_res["issues"])
 
     # ── Summary ───────────────────────────────────────────────────────────────
     live_count = sum(1 for e in subdomain_entries if isinstance(e, dict) and e.get("live"))

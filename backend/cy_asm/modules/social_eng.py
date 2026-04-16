@@ -1,43 +1,282 @@
-import json
-# CyCentra Social Engineering Vectors Module
+"""
+modules/social_eng.py
+CyCentra ASM — Social Engineering Vectors Module
+
+Enumerates exposed employee contact information that could be used
+for phishing, spear-phishing, or BEC attacks. Data sources:
+  1. Hunter.io domain search (requires HUNTER_API_KEY env var)
+  2. Email pattern inference from any discovered names
+  3. LinkedIn public profile enumeration via Google dork
+  4. Common corporate email format guessing
+
+All sources are passive — no direct interaction with target mail servers.
+"""
+
 import aiohttp
 import asyncio
-from typing import Dict, Any, List
-import asyncio
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote_plus
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from config import HUNTER_API_KEY, HTTP_TIMEOUT
 from utils import setup_logging, create_async_session
 
 logger = setup_logging()
 
-async def find_emails(domain: str, session: aiohttp.ClientSession) -> List[str]:
-    # Use Hunter.io or similar API (add key to config)
-    url = f"https://api.hunter.io/v2/domain-search?domain={domain}&api_key=YOUR_HUNTER_KEY"
-    try:
-        async with session.get(url) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                return [email['value'] for email in data['data']['emails']]
-    except:
+# ---------------------------------------------------------------------------
+# Hunter.io domain search
+# ---------------------------------------------------------------------------
+
+async def find_emails_hunter(
+    domain: str,
+    session: aiohttp.ClientSession,
+) -> List[Dict[str, Any]]:
+    """
+    Query Hunter.io for known email addresses at *domain*.
+    Returns list of {email, first_name, last_name, position, confidence}.
+    Skipped gracefully if HUNTER_API_KEY is not set.
+    """
+    if not HUNTER_API_KEY:
+        logger.info("[SocialEng] Hunter.io API key not set — skipping Hunter lookup.")
         return []
 
+    url = f"https://api.hunter.io/v2/domain-search"
+    params = {
+        "domain":  domain,
+        "api_key": HUNTER_API_KEY,
+        "limit":   20,
+    }
+    try:
+        async with session.get(
+            url,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT),
+        ) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                emails_raw = data.get("data", {}).get("emails", [])
+                results = []
+                for e in emails_raw:
+                    results.append({
+                        "email":      e.get("value", ""),
+                        "first_name": e.get("first_name", ""),
+                        "last_name":  e.get("last_name", ""),
+                        "position":   e.get("position", ""),
+                        "confidence": e.get("confidence", 0),
+                        "source":     "hunter.io",
+                    })
+                logger.info(f"[SocialEng] Hunter.io found {len(results)} email(s) for {domain}.")
+                return results
+            elif resp.status == 401:
+                logger.warning("[SocialEng] Hunter.io API key invalid or expired.")
+            elif resp.status == 429:
+                logger.warning("[SocialEng] Hunter.io rate limit hit.")
+            else:
+                logger.warning(f"[SocialEng] Hunter.io returned HTTP {resp.status}.")
+    except asyncio.TimeoutError:
+        logger.warning("[SocialEng] Hunter.io request timed out.")
+    except Exception as e:
+        logger.error(f"[SocialEng] Hunter.io lookup failed: {type(e).__name__}: {e}")
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Common email format guesser
+# ---------------------------------------------------------------------------
+
+_EMAIL_PATTERNS = [
+    "{first}.{last}@{domain}",
+    "{first}@{domain}",
+    "{f}{last}@{domain}",
+    "{first}{last}@{domain}",
+    "{first}_{last}@{domain}",
+    "{last}@{domain}",
+    "{last}.{first}@{domain}",
+]
+
+def generate_email_patterns(
+    first: str,
+    last: str,
+    domain: str,
+) -> List[str]:
+    """Generate likely corporate email addresses from a name + domain."""
+    if not first or not last:
+        return []
+    f = first[0].lower() if first else ""
+    return [
+        p.format(
+            first=first.lower(),
+            last=last.lower(),
+            f=f,
+            domain=domain,
+        )
+        for p in _EMAIL_PATTERNS
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Google dork for LinkedIn profiles (passive, no LinkedIn API needed)
+# ---------------------------------------------------------------------------
+
+async def find_linkedin_profiles(
+    domain: str,
+    session: aiohttp.ClientSession,
+) -> List[Dict[str, str]]:
+    """
+    Use a Google dork to find LinkedIn employee profiles for the company
+    behind *domain*. Returns list of {name, title, url}.
+
+    Note: Google may return a CAPTCHA for automated requests. This is a
+    best-effort passive check — failures are logged, not raised.
+    """
+    company = domain.split(".")[0]
+    dork    = f'site:linkedin.com/in "{company}" employee'
+    url     = f"https://www.google.com/search?q={quote_plus(dork)}&num=10"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+    }
+    profiles: List[Dict[str, str]] = []
+    try:
+        async with session.get(
+            url,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=12),
+            allow_redirects=True,
+        ) as resp:
+            if resp.status == 200:
+                text = await resp.text()
+                # Extract LinkedIn profile URLs
+                li_urls = re.findall(r'https://[a-z]+\.linkedin\.com/in/[a-zA-Z0-9_%-]+', text)
+                # Try to extract name from title tags adjacent to URLs
+                for li_url in list(set(li_urls))[:10]:
+                    slug = li_url.rstrip("/").split("/")[-1].replace("-", " ").title()
+                    profiles.append({
+                        "url":    li_url,
+                        "name":   slug,
+                        "source": "google_dork",
+                    })
+                logger.info(f"[SocialEng] Google dork found {len(profiles)} LinkedIn profile(s).")
+            elif resp.status == 429:
+                logger.warning("[SocialEng] Google rate-limited LinkedIn dork.")
+            elif resp.status == 403:
+                logger.info("[SocialEng] Google blocked dork request (CAPTCHA/bot detection).")
+    except Exception as e:
+        logger.debug(f"[SocialEng] LinkedIn dork failed: {type(e).__name__}: {e}")
+    return profiles
+
+
+# ---------------------------------------------------------------------------
+# Risk assessment
+# ---------------------------------------------------------------------------
+
+def _assess_risk(emails: List[Dict], profiles: List[Dict]) -> Dict[str, Any]:
+    """
+    Assess overall BEC/phishing risk based on exposed intel.
+    Returns {level, score, reasons}.
+    """
+    reasons = []
+    score   = 0
+
+    if len(emails) >= 10:
+        score += 3
+        reasons.append(f"{len(emails)} employee email addresses publicly enumerable")
+    elif len(emails) >= 3:
+        score += 2
+        reasons.append(f"{len(emails)} employee email addresses found")
+    elif emails:
+        score += 1
+        reasons.append(f"{len(emails)} email address found")
+
+    # High-value targets
+    privileged_roles = ["ceo", "cfo", "cto", "ciso", "director", "head of", "vp", "president"]
+    for e in emails:
+        pos = e.get("position", "").lower()
+        if any(r in pos for r in privileged_roles):
+            score += 2
+            reasons.append(f"Executive exposed: {e.get('first_name', '')} {e.get('last_name', '')} — {e.get('position', '')}")
+
+    if profiles:
+        score += 1
+        reasons.append(f"{len(profiles)} LinkedIn profiles linkable to domain")
+
+    level = "Critical" if score >= 5 else "High" if score >= 3 else "Medium" if score >= 1 else "Low"
+    return {"level": level, "score": score, "reasons": reasons}
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
 async def gather_social_eng(domain: str) -> Dict[str, Any]:
+    """
+    Enumerate social engineering attack surface for *domain*.
+    Returns standard cy_asm module dict: {results, issues, summary}
+    """
+    logger.info(f"[SocialEng] Starting social engineering intel for {domain}...")
+
     async with await create_async_session() as session:
-        emails = await find_emails(domain, session) or [] or []
-    issues = [f"Exposed email: {e}" for e in emails]
-    summary = f"Found {len(emails)} potential employee emails"
-    return {"results": emails, "issues": issues, "summary": summary}
+        # Run Hunter.io and LinkedIn dork concurrently
+        hunter_results, li_profiles = await asyncio.gather(
+            find_emails_hunter(domain, session),
+            find_linkedin_profiles(domain, session),
+            return_exceptions=True,
+        )
 
-    if len(sys.argv) != 2:
-        print(f"Usage: python modules/{__file__.split('/')[-1]} <domain>")
-        sys.exit(1)
+    emails   = hunter_results if isinstance(hunter_results, list) else []
+    profiles = li_profiles   if isinstance(li_profiles, list)   else []
 
-    domain = sys.argv[1].strip().lower()
-    logger = setup_logging()
-    logger.info(f"Running standalone {__file__.split('/')[-1]} on {domain}")
-    result = asyncio.run(gather_social_eng(domain))  # ← use your actual function name
-    print(json.dumps(result, indent=2, default=str))
+    # Generate additional email pattern variants for discovered names
+    pattern_emails: List[str] = []
+    for e in emails:
+        fn = e.get("first_name", "")
+        ln = e.get("last_name", "")
+        if fn and ln:
+            variants = generate_email_patterns(fn, ln, domain)
+            pattern_emails.extend(variants)
 
-    run_standalone(gather_social_eng)
+    risk = _assess_risk(emails, profiles)
+
+    issues = []
+    if risk["level"] in ("Critical", "High"):
+        issues.extend([f"[SocialEng] {r}" for r in risk["reasons"]])
+
+    email_list = [e["email"] for e in emails if e.get("email")]
+
+    summary = (
+        f"Social Eng: {len(email_list)} emails, "
+        f"{len(profiles)} LinkedIn profiles — Risk: {risk['level']}"
+    )
+    if not emails and not profiles:
+        summary = "Social Eng: No exposed employee data found (or API keys not configured)"
+
+    logger.info(f"[SocialEng] {summary}")
+
+    return {
+        "results": {
+            "emails":          emails,
+            "email_list":      email_list,
+            "email_patterns":  list(set(pattern_emails))[:20],
+            "linkedin":        profiles,
+            "risk_assessment": risk,
+        },
+        "issues":  issues,
+        "summary": summary,
+    }
+
 
 if __name__ == "__main__":
-    from . import run_standalone
-    run_standalone(gather_social_eng)
+    if len(sys.argv) < 2:
+        print("Usage: python modules/social_eng.py <domain>")
+        sys.exit(1)
+    target = sys.argv[1].strip().lower()
+    result = asyncio.run(gather_social_eng(target))
+    print(json.dumps(result, indent=2, default=str))
