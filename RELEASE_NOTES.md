@@ -1,3 +1,30 @@
+## v1.0.180 — 2026-04-16
+
+### cy_asm — Scanner Capability enhancements
+
+**Nuclei Template Scanner** (`modules/nuclei_scanner.py` — new)
+- Added Nuclei CLI integration covering 9,000+ CVE/exposure/misconfiguration templates
+- Runs as a post-sequential module on Standard and Deep scans
+- Gracefully skipped when nuclei binary is absent — zero-impact on existing installs
+- Requires: `apt install nuclei` on the scan host
+
+**OSV.dev Supply-Chain CVE Lookup** (`modules/supply_chain.py`)
+- Replaced static jQuery/Lodash heuristics with real-time queries to Google's OSV.dev API
+- Detected library + version from CDN URLs queried against 10 package patterns (jQuery, React, Vue, Lodash, Bootstrap, etc.)
+- Returns actual CVE/GHSA IDs with severity labels; static fallback retained for unversioned URLs
+- No API key required
+
+**NIS2 / DORA / ISO 27001 Compliance Tags** (`modules/vuln_scanner.py`)
+- Added `compliance_impact` field (`{nis2, dora, iso27001}`) to every finding produced by vuln_scanner
+- Covers port-banner CVEs, SSL/TLS protocol findings, exposed paths, OpenVAS results, and JS secret exposures
+- Bridges cy_asm findings directly to CyComp audit evidence generation
+
+**Shodan CVE Correlation** (`modules/passive_osint.py`)
+- Shodan `vulns{}` dict per host now parsed into structured findings in `results["shodan_cve_findings"]`
+- Shodan-confirmed CVEs with CVSS scores surfaced into `all_issues` alongside other scanner findings
+- No new configuration required — uses existing `SHODAN_API_KEY`
+
+
 ## v1.0.172 — 2026-04-15
 
 ### Bug Fix — Wazuh fails to start: `Parent decoder name invalid: 'sysmon'` in `cycentra_sysmon_decoder.xml`
