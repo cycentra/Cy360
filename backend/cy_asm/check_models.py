@@ -1,8 +1,15 @@
 from google import genai
 import os
 
-# Replace with your actual key or ensure GOOGLE_GEMINI_KEY is in your environment
-API_KEY = "AIzaSyCW5toVZORcf8VJmDp3qNFQQlqnqBI_c3w"
+try:
+    from core.kv_secrets import load_kv_secrets, ASM_KV_MAP
+    load_kv_secrets(ASM_KV_MAP)
+except Exception:
+    pass
+
+API_KEY = os.environ.get("GOOGLE_GEMINI_KEY", "")
+if not API_KEY:
+    raise RuntimeError("GOOGLE_GEMINI_KEY not set — add to Key Vault or /opt/cycentra/.env")
 client = genai.Client(api_key=API_KEY)
 
 print("--- Available Models for your API Key ---")

@@ -1,3 +1,11 @@
+## v1.0.183 -- 2026-04-16
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
 ## v1.0.180 — 2026-04-16
 
 ### cy_asm — Scanner Capability enhancements

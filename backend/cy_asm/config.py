@@ -48,6 +48,17 @@ def _load_dotenv():
 
 _load_dotenv()
 
+# ── Azure Key Vault bootstrap ──────────────────────────────────────────────────
+# Runs after dotenv so AZURE_KEYVAULT_URL is in env.  Fetches ASM API keys
+# (Shodan, VT, NVD, etc.) from KV when configured.  No-op if KV not set up.
+# When running inside the Flask process, core/config.py has already bootstrapped
+# the FLASK_KV_MAP — this call fetches only the ASM-specific keys on top.
+try:
+    from core.kv_secrets import load_kv_secrets, ASM_KV_MAP
+    load_kv_secrets(ASM_KV_MAP)
+except Exception:
+    pass
+
 # ---------------------------------------------------------------------------
 # API Keys — all from env, empty string = feature disabled
 # ---------------------------------------------------------------------------

@@ -1,6 +1,16 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
+# ── Azure Key Vault bootstrap ──────────────────────────────────────────────────
+# Must run before Settings() is instantiated so pydantic-settings sees the
+# injected values.  AZURE_KEYVAULT_URL must be present in cysiemstack.env
+# (or the process environment) for this to activate.
+try:
+    from core.kv_secrets import load_kv_secrets, ENGINE_KV_MAP
+    load_kv_secrets(ENGINE_KV_MAP)
+except Exception:
+    pass  # never block engine startup if KV is unreachable
+
 
 class Settings(BaseSettings):
     # Database — native PostgreSQL on localhost

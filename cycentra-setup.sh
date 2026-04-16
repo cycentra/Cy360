@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 — Setup # CyCentra 360 — Setup # CyCentra 360 — Setup # CyCentra 360 — Setup # CyCentra 360 — Setup & Update Wizard v1.0.171 — 2026-04-15 00:10 UTC Update Wizard v1.0.173 — 2026-04-16 11:20 UTC Update Wizard v1.0.179 — 2026-04-16 11:28 UTC Update Wizard v1.0.181 — 2026-04-16 21:21 UTC Update Wizard v1.0.182 — 2026-04-16 21:38 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.183 -- 2026-04-16 22:40 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -305,6 +305,7 @@ apt-get install -y -qq \
     python3 python3-pip \
     nmap whois rsync git openssl \
     nginx certbot python3-certbot-nginx \
+    nuclei \
     2>/dev/null
 success "System packages installed"
 
@@ -679,7 +680,8 @@ systemctl is-active cysiem-to-redis >/dev/null 2>&1 \
 # ── Download release bundle ───────────────────────────────────────────────────
 step_header "DOWNLOAD RELEASE BUNDLE"
 
-GH_TOKEN="${GH_TOKEN:-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}"
+GH_TOKEN="${GH_TOKEN:-}"
+[[ -z "$GH_TOKEN" ]] && { error "GH_TOKEN is not set. Export it before running: export GH_TOKEN=<token>"; exit 1; }
 GH_ORG="cycentra"
 GH_REPO="cycentra360"
 
@@ -837,11 +839,13 @@ if [[ "$MODE" == "full" ]]; then
     CLIENT_EMAIL="${CLIENT_EMAIL:-admin@cycentra.com}"
     BASE_DOMAIN="${BASE_DOMAIN:-cycentra.com}"
     OAUTH_PROVIDER="${OAUTH_PROVIDER:-google}"
-    # ── OAuth credentials (both providers embedded — switch via OAUTH_PROVIDER in .env)
-    GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-285657730533-82thtcs7mav8a4m3ei531uojq25kr8tn.apps.googleusercontent.com}"
-    GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-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}"
-    MICROSOFT_CLIENT_ID="${MICROSOFT_CLIENT_ID:-eb1f7367-fdd9-4f33-aa86-2a812a0292ff}"
-    MICROSOFT_CLIENT_SECRET="${MICROSOFT_CLIENT_SECRET:-rWM8Q~eehhadOmY_atOJTOxScCxa~qsye9yX_cGO}"
+    # ── OAuth credentials — loaded from Azure Key Vault at runtime.
+    # Written as empty here; the app fetches them from Key Vault on startup
+    # (AZURE_KEYVAULT_URL must be set in .env pointing to your vault).
+    GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}"
+    GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-}"
+    MICROSOFT_CLIENT_ID="${MICROSOFT_CLIENT_ID:-}"
+    MICROSOFT_CLIENT_SECRET="${MICROSOFT_CLIENT_SECRET:-}"
     AI_PROVIDER="none"; AI_API_KEY=""; AI_MODEL=""
     SMTP_HOST=""; SMTP_PORT=""; SMTP_USER=""; SMTP_PASS=""; SUPPORT_EMAIL="support@${BASE_DOMAIN}"
     INSTALL_CYSIEM=true; INSTALL_CYIRIS=true; INSTALL_CYSOAR=true
@@ -905,8 +909,9 @@ else
         cat >> "$_env" << PATCHEOF
 
 # ── Cloud CyMISP (Cycentra-managed MISP at cymisp.cycentra.com) ────────────────
-CLOUD_MISP_URL=https://cymisp.cycentra.com
-CLOUD_MISP_API_KEY=xM3sPTmaq2b6Z1PqgCzlPlB91W3plQn1rzotkySY
+CLOUD_MISP_URL=${CLOUD_MISP_URL:-}
+CLOUD_MISP_API_KEY=${CLOUD_MISP_API_KEY:-}
+AZURE_KEYVAULT_URL=${AZURE_KEYVAULT_URL:-}
 PATCHEOF
         info "Added CLOUD_MISP_* to .env"
     fi
@@ -976,7 +981,7 @@ CYSOAR_OIDC_SECRET=${CYSOAR_OIDC_SECRET}
 IRIS_SECRET=${IRIS_SECRET}
 IRIS_DB_PASS=${IRIS_DB_PASS}
 IRIS_ADM_EMAIL=${CLIENT_EMAIL}
-IRIS_ADM_PASSWORD=CyIRIS@CHANGE
+IRIS_ADM_PASSWORD=${IRIS_ADM_PASSWORD:-}
 CYCENTRA_PORTAL_URL=https://cysoc.${BASE_DOMAIN}
 IRIS_SECRET_KEY=${IRIS_SECRET}
 POSTGRES_PASSWORD=${IRIS_DB_PASS}
@@ -998,19 +1003,26 @@ GH_TOKEN=${GH_TOKEN:-}
 # When a customer selects "Cloud CyMISP" in System Settings > Integrations, the
 # backend uses these credentials automatically.  CLOUD_MISP_API_KEY must be set
 # to the vendor-issued API key for this installation.
-CLOUD_MISP_URL=https://cymisp.cycentra.com
+CLOUD_MISP_URL=${CLOUD_MISP_URL:-}
 CLOUD_MISP_API_KEY=${CLOUD_MISP_API_KEY:-}
 
 # ── Cloud CyIRIS (Cycentra-managed DFIR IRIS at cyiris.cycentra.com) ──────────
 # When a customer selects "Cloud CyIRIS" in System Settings > Integrations, the
 # backend uses these credentials automatically.  CLOUD_IRIS_API_KEY must be set
 # to the vendor-issued API key for this installation.
-CLOUD_IRIS_URL=https://cyiris.cycentra.com
+CLOUD_IRIS_URL=${CLOUD_IRIS_URL:-}
 CLOUD_IRIS_API_KEY=${CLOUD_IRIS_API_KEY:-}
 CLOUD_IRIS_CUSTOMER_ID=${CLOUD_IRIS_CUSTOMER_ID:-1}
+
+# ── Azure Key Vault — set to your vault URL to enable secret bootstrap ─────────
+# The app fetches GOOGLE_CLIENT_ID/SECRET, MICROSOFT_CLIENT_ID/SECRET,
+# MAXMIND_KEY, GH_TOKEN, IRIS_ADM_PASSWORD, CLOUD_MISP_*, CLOUD_IRIS_*
+# from Key Vault at startup when this is set.
+# Auth: Managed Identity (Azure VM) or AZURE_CLIENT_ID/SECRET/TENANT_ID env vars.
+AZURE_KEYVAULT_URL=${AZURE_KEYVAULT_URL:-}
 ENVEOF
-    # Hardcode MAXMIND_KEY in .env
-    echo "MAXMIND_KEY=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" >> /opt/cycentra/.env
+    # MAXMIND_KEY pulled from Key Vault at runtime — not written here
+    echo "MAXMIND_KEY=${MAXMIND_KEY:-}" >> /opt/cycentra/.env
     chmod 600 /opt/cycentra/.env
    # mkdir -p /root/cy-asm && cp /opt/cycentra/.env /root/cy-asm/.env
    # success "Main .env written → /opt/cycentra/.env"
@@ -1052,6 +1064,8 @@ MISP_ENABLED=false
 MCP_ENABLED=true
 # Standalone key so --update mode can read the password without parsing DATABASE_URL
 POSTGRES_PASSWORD=${CORR_DB_PASS}
+# Azure Key Vault — engine fetches WAZUH_API_PASSWORD from KV when set
+AZURE_KEYVAULT_URL=${AZURE_KEYVAULT_URL:-}
 SIEMEOF
     chmod 600 /opt/cycentra/cysiemstack.env
     success "cysiemstack.env written → /opt/cycentra/cysiemstack.env"

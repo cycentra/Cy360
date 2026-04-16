@@ -21,6 +21,15 @@ try:
 except ImportError:
     pass  # dotenv optional — system env is used directly
 
+# ── Azure Key Vault bootstrap ──────────────────────────────────────────────────
+# Runs after dotenv so AZURE_KEYVAULT_URL is already in env from .env file.
+# Injects KV secrets into os.environ before any os.environ.get() calls below.
+try:
+    from core.kv_secrets import load_kv_secrets, FLASK_KV_MAP
+    load_kv_secrets(FLASK_KV_MAP)
+except Exception:
+    pass  # never block app startup if KV is unreachable
+
 
 # ── Domain & URL ───────────────────────────────────────────────────────────────
 BASE_DOMAIN  = os.environ.get("BASE_DOMAIN",  "cycentra.com")
