@@ -1,5 +1,5 @@
 """
-modules/debug_crypto.py
+modules/debug_crypto.py.
 CyCentra ASM — SSL/TLS Deep Diagnostic Utility
 
 Standalone tool for in-depth SSL/TLS auditing beyond what crypto_checks.py

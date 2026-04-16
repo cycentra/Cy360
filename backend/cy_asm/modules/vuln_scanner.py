@@ -78,6 +78,48 @@ def _risk_score(cvss: float, epss: float) -> int:
     return max(1, min(10, round(weighted)))
 
 
+
+# ---------------------------------------------------------------------------
+# NIS2 / DORA / ISO 27001 compliance impact tags
+# ---------------------------------------------------------------------------
+# Maps lowercase vulnerability keywords to specific regulatory article refs.
+# NIS2 Directive (EU) 2022/2555 — Article 21 essential-entity requirements
+# DORA Regulation (EU) 2022/2554 — ICT risk management articles
+# ISO/IEC 27001:2022 — Annex A technical controls
+_COMPLIANCE_MAP: Dict[str, Dict[str, str]] = {
+    "ssl":       {"nis2": "Art.21.2.h", "dora": "Art.9.2", "iso27001": "A.8.24"},
+    "tls":       {"nis2": "Art.21.2.h", "dora": "Art.9.2", "iso27001": "A.8.24"},
+    "beast":     {"nis2": "Art.21.2.h", "dora": "Art.9.2", "iso27001": "A.8.24"},
+    "poodle":    {"nis2": "Art.21.2.h", "dora": "Art.9.2", "iso27001": "A.8.24"},
+    "drown":     {"nis2": "Art.21.2.h", "dora": "Art.9.2", "iso27001": "A.8.24"},
+    "lucky13":   {"nis2": "Art.21.2.h", "dora": "Art.9.2", "iso27001": "A.8.24"},
+    "exposed":   {"nis2": "Art.21.2.e", "dora": "Art.9.4", "iso27001": "A.8.3"},
+    "admin":     {"nis2": "Art.21.2.e", "dora": "Art.9.3", "iso27001": "A.8.3"},
+    "backup":    {"nis2": "Art.21.2.e", "dora": "Art.9.4", "iso27001": "A.8.9"},
+    "git":       {"nis2": "Art.21.2.e", "dora": "Art.9.4", "iso27001": "A.8.3"},
+    "env":       {"nis2": "Art.21.2.d", "dora": "Art.9.3", "iso27001": "A.8.12"},
+    "secret":    {"nis2": "Art.21.2.d", "dora": "Art.9.3", "iso27001": "A.8.12"},
+    "token":     {"nis2": "Art.21.2.d", "dora": "Art.9.3", "iso27001": "A.8.12"},
+    "key":       {"nis2": "Art.21.2.d", "dora": "Art.9.3", "iso27001": "A.8.12"},
+    "cve":       {"nis2": "Art.21.2.e", "dora": "Art.7.2", "iso27001": "A.8.8"},
+    "openvas":   {"nis2": "Art.21.2.e", "dora": "Art.7.2", "iso27001": "A.8.8"},
+    "_default":  {"nis2": "Art.21.2.e", "dora": "Art.9.2", "iso27001": "A.8.8"},
+}
+
+
+def _compliance_tags(vuln_id: str, source: str = "") -> Dict[str, str]:
+    """
+    Return NIS2/DORA/ISO 27001 article references for a finding.
+    Matches the first keyword found in the combined vuln_id+source string.
+    Always returns a dict — _default is the catch-all.
+    """
+    combined = (vuln_id + " " + source).lower()
+    for keyword, tags in _COMPLIANCE_MAP.items():
+        if keyword != "_default" and keyword in combined:
+            return tags
+    return _COMPLIANCE_MAP["_default"]
+
+
 # ---------------------------------------------------------------------------
 # NVD CVE lookup
 # ---------------------------------------------------------------------------
@@ -223,6 +265,7 @@ async def enrich_port_findings(
                 "risk_score":     risk,
                 "description":    cve["description"],
                 "recommendation": _remediation_hint(port, cve_id, cvss),
+                "compliance_impact": _compliance_tags(cve_id, "cve"),
                 "domain":         domain,
                 "discovered_at":  datetime.now(timezone.utc).isoformat(),
             })
@@ -295,6 +338,7 @@ async def scan_ssl_vulnerabilities(domain: str) -> List[Dict[str, Any]]:
                             "risk_score":     _risk_score(cvss, 0.0),
                             "description":    f"{vuln_name}: server accepted {proto_name} connection from {domain}",
                             "recommendation": rec,
+                            "compliance_impact": _compliance_tags(vuln_name, "ssl tls"),
                             "domain":         domain,
                             "discovered_at":  datetime.now(timezone.utc).isoformat(),
                         })
@@ -363,6 +407,7 @@ async def enrich_exposed_paths(
                 "risk_score":     _risk_score(cvss, 0.0),
                 "description":    f"Exposed path {path} on {domain} returned HTTP {ep.get('status')}.{extra_note}",
                 "recommendation": rec,
+                "compliance_impact": _compliance_tags(cve_ref, path),
                 "domain":         domain,
                 "discovered_at":  datetime.now(timezone.utc).isoformat(),
             })
@@ -380,6 +425,7 @@ async def enrich_exposed_paths(
                 "risk_score":     ep.get("severity") == "Critical" and 8 or 5,
                 "description":    f"Sensitive path {path} is accessible on {domain}",
                 "recommendation": f"Restrict access to {path} via server configuration or firewall rule.",
+                "compliance_impact": _compliance_tags("exposed", path),
                 "domain":         domain,
                 "discovered_at":  datetime.now(timezone.utc).isoformat(),
             })
@@ -476,6 +522,7 @@ async def run_openvas_scan(
                     "risk_score":     _risk_score(cvss, 0.0),
                     "description":    desc[:500],
                     "recommendation": f"Remediate {name} — see OpenVAS result for full details.",
+                    "compliance_impact": _compliance_tags(name, "openvas cve"),
                     "domain":         domain,
                     "discovered_at":  datetime.now(timezone.utc).isoformat(),
                 })
@@ -524,6 +571,7 @@ def enrich_js_secrets(js_secrets: List[Dict[str, Any]], domain: str) -> List[Dic
                 f"on {domain}. Value prefix: {str(secret.get('value', ''))[:12]}..."
             ),
             "recommendation": rec,
+            "compliance_impact": _compliance_tags(stype, "secret token key"),
             "domain":         domain,
             "discovered_at":  datetime.now(timezone.utc).isoformat(),
         })

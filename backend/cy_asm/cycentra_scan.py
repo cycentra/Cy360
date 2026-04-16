@@ -28,6 +28,7 @@ from utils import setup_logging
 
 from modules.vuln_scanner import gather_vuln_scanner
 from modules.debug_crypto import audit_crypto_deep
+from modules.nuclei_scanner import gather_nuclei_scanner
 
 # --- ENRICHMENT IMPORTS ---
 from google import genai
@@ -651,6 +652,7 @@ async def run_full_scan(
         "supply_chain": "Supply Chain Analysis",
         "social_eng":   "Social Engineering Intel",
         "mobile_api":   "Mobile & API Checks",
+        "nuclei":       "Nuclei Template Scan",
     }
 
     def _start(key: str):
@@ -759,6 +761,17 @@ async def run_full_scan(
         results["crypto_deep"] = crypto_deep_res
         if isinstance(crypto_deep_res, dict) and "issues" in crypto_deep_res:
             all_issues.extend(crypto_deep_res["issues"])
+
+    if profile.get("run_vuln_scanner"):
+        logger.info("[Nuclei Scanner] Starting...")
+        try:
+            nuclei_res = await gather_nuclei_scanner(domain)
+        except Exception as exc:
+            nuclei_res = {"error": str(exc), "results": {}, "issues": []}
+        logger.info("📥 [Nuclei Scanner] Complete.")
+        results["nuclei"] = nuclei_res
+        if isinstance(nuclei_res, dict) and "issues" in nuclei_res:
+            all_issues.extend(nuclei_res["issues"])
 
     # ── Summary ───────────────────────────────────────────────────────────────
     live_count = sum(1 for e in subdomain_entries if isinstance(e, dict) and e.get("live"))

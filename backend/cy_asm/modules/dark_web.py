@@ -4,7 +4,8 @@ import asyncio
 from bs4 import BeautifulSoup
 from typing import Dict, List, Any
 from utils import setup_logging, create_async_session
-from config import HTTP_TIMEOUT
+from config import HTTP_TIMEOUT, HIBP_API_KEY
+
 
 logger = setup_logging()
 
@@ -36,7 +37,7 @@ async def scan_ahmia(domain: str, subdomains: List[str], session: aiohttp.Client
 async def scan_hibp(domain: str, session: aiohttp.ClientSession) -> List[Dict[str, Any]]:
     results = []
     headers = {
-        "hibp-api-key": "YOUR_HIBP_KEY_IF_ANY",  
+        "hibp-api-key": HIBP_API_KEY,
         "User-Agent": "CyCentra/1.0",
     }
     url = f"https://haveibeenpwned.com/api/v3/breaches?domain={domain}"

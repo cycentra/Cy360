@@ -141,21 +141,59 @@ async def gather_passive_osint(domain: str) -> Dict[str, Any]:
 
         # Shodan
         shodan_results = await search_shodan(domain, session)
-        shodan_issues = []
+        shodan_issues: List[str] = []
+        shodan_cve_findings: List[Dict[str, Any]] = []
+
         for m in shodan_results:
-            port = m.get("port")
-            ip = m.get("ip_str")
-            vulns = m.get("vulns", {})
+            port  = m.get("port")
+            ip    = m.get("ip_str", "")
+            vulns = m.get("vulns") or {}  # dict: {CVE-ID: {cvss, summary, ...}}
+
             if port and ip:
                 shodan_issues.append(f"Exposed service: {ip}:{port} (Shodan)")
-            if vulns:
-                for v in vulns:
-                    shodan_issues.append(f"Vulnerability {v} on {ip}:{port} (Shodan)")
+
+            for cve_id, vuln_meta in vulns.items():
+                if isinstance(vuln_meta, dict):
+                    cvss    = float(vuln_meta.get("cvss", 5.0))
+                    summary = vuln_meta.get("summary", "")[:200]
+                else:
+                    cvss, summary = 5.0, ""
+
+                severity = (
+                    "Critical" if cvss >= 9.0 else
+                    "High"     if cvss >= 7.0 else
+                    "Medium"   if cvss >= 4.0 else "Low"
+                )
+                from datetime import datetime, timezone as _tz
+                shodan_cve_findings.append({
+                    "vulnerability": cve_id.upper(),
+                    "module":        "passive_osint",
+                    "source":        "shodan",
+                    "ip":            ip,
+                    "port":          port,
+                    "cvss":          cvss,
+                    "severity":      severity,
+                    "risk_score":    max(1, min(10, round(cvss))),
+                    "description":   (
+                        summary or f"Shodan-confirmed {cve_id} on {ip}:{port}"
+                    ),
+                    "recommendation": (
+                        f"Patch {cve_id} on {ip}:{port}. "
+                        f"Verify with vendor advisory and apply available fix."
+                    ),
+                    "domain":        domain,
+                    "discovered_at": datetime.now(_tz.utc).isoformat(),
+                })
+                shodan_issues.append(
+                    f"{severity} — {cve_id} on {ip}:{port} "
+                    f"(Shodan-confirmed, CVSS {cvss})"
+                )
 
         # Merge results
         results = {
-            "misp": attrs,
-            "shodan": shodan_results,
+            "misp":                attrs,
+            "shodan":              shodan_results,
+            "shodan_cve_findings": shodan_cve_findings,
         }
         issues = misp_issues + shodan_issues
         summary = f"MISP: {misp_summary} | Shodan: {len(shodan_results)} result(s)"
