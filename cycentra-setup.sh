@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.193 -- 2026-04-17 12:59 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.194 -- 2026-04-17 14:14 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -230,7 +230,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.193"
+_SCRIPT_VERSION="v1.0.194"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -545,6 +545,142 @@ if [[ -f "$WAZUH_YML" ]]; then
     success "CySIEM Dashboard configured: host=127.0.0.1, port=5601"
 
 fi
+
+# ── Step 4.3: CySIEM OIDC SSO ────────────────────────────────────────────────
+# Configures OpenSearch Dashboards + Indexer to accept CyCentra 360 OIDC tokens.
+# Runs in all modes (full / update). Idempotent. No-op if CySIEM not installed.
+_WAZUH_DASH_YML="/etc/wazuh-dashboard/opensearch_dashboards.yml"
+if [[ -f "$_WAZUH_DASH_YML" ]]; then
+    step_header "CySIEM OIDC SSO"
+
+    # Secrets live as bash vars in full mode (just generated in Step 9).
+    # In update mode they are loaded via: set -a; source /opt/cycentra/.env
+    _cy_siem_secret="${CYSIEM_OIDC_SECRET:-}"
+    [[ -z "$_cy_siem_secret" ]] && \
+        _cy_siem_secret=$(grep "^CYSIEM_OIDC_SECRET=" /opt/cycentra/.env 2>/dev/null \
+                          | cut -d= -f2- || true)
+    _cy_jwt_secret="${JWT_SECRET:-}"
+    [[ -z "$_cy_jwt_secret" ]] && \
+        _cy_jwt_secret=$(grep "^JWT_SECRET=" /opt/cycentra/.env 2>/dev/null \
+                         | cut -d= -f2- || true)
+
+    if [[ -z "$_cy_siem_secret" || -z "$_cy_jwt_secret" ]]; then
+        warn "CYSIEM_OIDC_SECRET or JWT_SECRET not available — Step 4.3 deferred; re-run --update after main .env is written"
+    else
+        # ── Part A: OpenSearch Dashboards — OIDC auth mode ───────────────────
+        if grep -q 'opensearch_security.auth.type:.*openid' "$_WAZUH_DASH_YML" 2>/dev/null; then
+            info "CySIEM OIDC: Dashboards config already present"
+        else
+            cp "$_WAZUH_DASH_YML" "${_WAZUH_DASH_YML}.pre-oidc-$(date +%Y%m%d)" 2>/dev/null || true
+            cat >> "$_WAZUH_DASH_YML" << CYSIEM_OIDC_EOF
+# CyCentra 360 OIDC SSO — written by cycentra-setup.sh
+opensearch_security.auth.type: "openid"
+opensearch_security.openid.base_redirect_url: "https://cysiem.${BASE_DOMAIN}"
+opensearch_security.openid.connect_url: "https://cyasm.${BASE_DOMAIN}/oidc/.well-known/openid-configuration"
+opensearch_security.openid.client_id: "cysiem"
+opensearch_security.openid.client_secret: "${_cy_siem_secret}"
+opensearch_security.openid.scope: "openid email profile"
+opensearch_security.openid.logout_url: "https://cysoc.${BASE_DOMAIN}/auth/logout"
+opensearch_security.openid.trust_dynamic_headers: true
+CYSIEM_OIDC_EOF
+            success "CySIEM Dashboard: OIDC settings written"
+        fi
+
+        # ── Part B: OpenSearch Indexer — JWT auth domain + role mapping ──────
+        _CY_SEC_DIR="/etc/wazuh-indexer/opensearch-security"
+        if [[ -d "$_CY_SEC_DIR" ]]; then
+            export CY_JWT_B64
+            CY_JWT_B64=$(echo -n "${_cy_jwt_secret}" | base64 -w 0 2>/dev/null \
+                         || echo -n "${_cy_jwt_secret}" | base64)
+
+            python3 << 'CY_WAZUH_PY'
+import yaml, sys, os
+
+sec_dir = "/etc/wazuh-indexer/opensearch-security"
+jwt_b64 = os.environ.get("CY_JWT_B64", "")
+
+# config.yml — add JWT auth domain so Indexer trusts CyCentra-issued tokens
+cfg_path = os.path.join(sec_dir, "config.yml")
+if os.path.exists(cfg_path):
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f) or {}
+    authc = cfg.get("config", {}).get("dynamic", {}).get("authc", {})
+    if "cycentra_jwt" in authc:
+        print("config.yml: JWT domain already present")
+    else:
+        authc["cycentra_jwt"] = {
+            "description": "CyCentra 360 JWT tokens (HS256)",
+            "http_enabled": True,
+            "transport_enabled": True,
+            "order": 0,
+            "http_authenticator": {
+                "type": "jwt",
+                "challenge": False,
+                "config": {
+                    "signing_key": jwt_b64,
+                    "jwt_header": "Authorization",
+                    "subject_key": "sub",
+                    "roles_key": "roles",
+                }
+            },
+            "authentication_backend": {"type": "noop"}
+        }
+        cfg.setdefault("config", {}).setdefault("dynamic", {})["authc"] = authc
+        with open(cfg_path, "w") as f:
+            yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+        print("config.yml: JWT domain added")
+else:
+    print("config.yml not found — skipping")
+
+# roles_mapping.yml — map CyCentra roles to Wazuh backend roles
+rm_path = os.path.join(sec_dir, "roles_mapping.yml")
+if os.path.exists(rm_path):
+    with open(rm_path) as f:
+        rm = yaml.safe_load(f) or {}
+    changed = False
+    for wazuh_role, cy_roles in [
+        ("all_access",          ["admin"]),
+        ("readall_and_monitor", ["analyst"]),
+    ]:
+        entry = rm.setdefault(wazuh_role, {})
+        br    = entry.setdefault("backend_roles", [])
+        for r in cy_roles:
+            if r not in br:
+                br.append(r); changed = True
+    if changed:
+        with open(rm_path, "w") as f:
+            yaml.dump(rm, f, default_flow_style=False, allow_unicode=True)
+        print("roles_mapping.yml: CyCentra roles mapped")
+    else:
+        print("roles_mapping.yml: mapping already present")
+else:
+    print("roles_mapping.yml not found — skipping")
+CY_WAZUH_PY
+
+            # Apply security config via securityadmin.sh
+            _CY_ADMIN_SH=$(find /usr/share/wazuh-indexer/plugins/opensearch-security/tools \
+                               -name "securityadmin.sh" 2>/dev/null | head -1 || true)
+            if [[ -n "$_CY_ADMIN_SH" ]]; then
+                _CY_CERT_DIR="/etc/wazuh-indexer/certs"
+                bash "$_CY_ADMIN_SH" \
+                    -cd "$_CY_SEC_DIR" -icl -nhnv \
+                    -cacert "${_CY_CERT_DIR}/root-ca.pem" \
+                    -cert   "${_CY_CERT_DIR}/admin.pem" \
+                    -key    "${_CY_CERT_DIR}/admin-key.pem" \
+                    -h 127.0.0.1 2>/dev/null \
+                && success "OpenSearch security config applied" \
+                || warn    "securityadmin.sh failed — re-run: sudo bash /opt/cycentra/cycentra-setup.sh --update"
+            else
+                warn "securityadmin.sh not found — config staged; apply manually after indexer is installed"
+            fi
+        else
+            warn "OpenSearch security dir not found — JWT config skipped (indexer may not be installed yet)"
+        fi
+
+        systemctl restart wazuh-dashboard 2>/dev/null || true
+        success "CySIEM OIDC SSO configured"
+    fi
+fi  # end Wazuh OIDC step
 
 # ── Step 4.2: Auto-detect CySIEM API password ─────────────────────────────────
 # Read the wazuh-wui password from the dashboard config file.
@@ -902,6 +1038,7 @@ if [[ "$MODE" == "full" ]]; then
     ADMIN_API_KEY=$(gen_secret)
     CYIRIS_OIDC_SECRET=$(gen_secret)
     CYSOAR_OIDC_SECRET=$(gen_secret)
+    CYSIEM_OIDC_SECRET=$(gen_secret)
     success "All secrets ready"
 
 else
@@ -958,6 +1095,12 @@ PATCHEOF
         info "Added CLOUD_IRIS_* to .env"
     fi
 
+    # Add CYSIEM_OIDC_SECRET if missing (SSO v1 — introduced with full OIDC)
+    if ! grep -q "^CYSIEM_OIDC_SECRET=" "$_env" 2>/dev/null; then
+        echo "CYSIEM_OIDC_SECRET=$(openssl rand -hex 32)" >> "$_env"
+        info "Added CYSIEM_OIDC_SECRET to .env"
+    fi
+
     chmod 600 "$_env"
     success ".env patched"
 fi
@@ -1007,6 +1150,7 @@ ENVEOF
 
 CYIRIS_OIDC_SECRET=${CYIRIS_OIDC_SECRET}
 CYSOAR_OIDC_SECRET=${CYSOAR_OIDC_SECRET}
+CYSIEM_OIDC_SECRET=${CYSIEM_OIDC_SECRET}
 
 IRIS_SECRET=${IRIS_SECRET}
 IRIS_DB_PASS=${IRIS_DB_PASS}
@@ -1931,6 +2075,10 @@ _port_up 6379 && success "Redis           :6379 UP" || warn "Redis           :63
 _port_up 5601 && success "CySIEM Dashboard :5601 UP" || warn "CySIEM Dashboard :5601 DOWN (install via portal)"
 _port_up 4433 && success "CyIRIS          :4433 UP" || warn "CyIRIS          :4433 DOWN (install via portal)"
 _port_up 1880 && success "CySOAR          :1880 UP" || warn "CySOAR          :1880 DOWN (install via portal)"
+curl -sk --max-time 5 "http://127.0.0.1:5252/oidc/.well-known/openid-configuration" \
+    | python3 -c "import sys,json; d=json.load(sys.stdin); assert '/oidc' in d.get('issuer',''), 'bad issuer'" 2>/dev/null \
+    && success "OIDC IdP discovery  UP  (issuer OK)" \
+    || warn    "OIDC IdP discovery  DOWN or issuer mismatch — check cycentra-backend"
 
 echo ""; info "── Systemd services ──"
 for svc in cycentra-backend cysiemstack-engine postgresql redis-server nginx cysiem-to-redis; do

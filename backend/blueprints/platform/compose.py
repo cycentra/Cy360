@@ -58,11 +58,13 @@ services:
       IRIS_SECRET_KEY: "${{IRIS_SECRET_KEY:-change_in_production}}"
       IRIS_ADM_EMAIL: "${{IRIS_ADM_EMAIL:-admin@cycentra.com}}"
       IRIS_ADM_PASSWORD: "${{IRIS_ADM_PASSWORD}}"
-      OIDC_ENABLED: "true"
-      OIDC_ISSUER: "${{CYCENTRA_PORTAL_URL}}/oidc"
+      IRIS_AUTHENTICATION_TYPE: "oidc"
+      OIDC_ISSUER_URL: "https://cyasm.${{BASE_DOMAIN}}/oidc"
       OIDC_CLIENT_ID: "cyiris"
       OIDC_CLIENT_SECRET: "${{CYIRIS_OIDC_SECRET}}"
-      OIDC_REDIRECT_URI: "${{CYCENTRA_PORTAL_URL}}/cyiris/auth/oidc/callback"
+      OIDC_MAPPING_EMAIL: "email"
+      OIDC_MAPPING_USERNAME: "email"
+      AUTHENTICATION_CREATE_USER_IF_NOT_EXIST: "true"
     volumes:
       - cyiris_app_data:/home/iris/iriswebapp/app/static/assets/files
       - cyiris_user_data:/home/iris/iriswebapp/user_data
@@ -84,10 +86,10 @@ services:
     ports:
       - "1880:1880"
     environment:
-      - OIDC_ISSUER=${{CYCENTRA_PORTAL_URL}}/oidc
+      - OIDC_ISSUER=https://cyasm.${{BASE_DOMAIN}}/oidc
       - OIDC_CLIENT_ID=cysoar
       - OIDC_CLIENT_SECRET=${{CYSOAR_OIDC_SECRET}}
-      - OIDC_REDIRECT_URI=https://cysoar.${{BASE_DOMAIN}}/auth/callback
+      - OIDC_REDIRECT_URI=https://cysoc.${{BASE_DOMAIN}}/cysoar/auth/callback
       - SESSION_SECRET=${{CYSOAR_SESSION_SECRET}}
       - IRIS_URL=https://cyiris.${{BASE_DOMAIN}}
       - WAZUH_URL=https://cysiem.${{BASE_DOMAIN}}

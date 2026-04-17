@@ -39,7 +39,7 @@ oidc_bp = Blueprint("oidc", __name__)
 @oidc_bp.route("/oidc/.well-known/openid-configuration")
 def oidc_discovery():
     return jsonify({
-        "issuer":                                BASE_URL,
+        "issuer":                                f"{BASE_URL}/oidc",
         "authorization_endpoint":                f"{BASE_URL}/oidc/authorize",
         "token_endpoint":                        f"{BASE_URL}/oidc/token",
         "userinfo_endpoint":                     f"{BASE_URL}/oidc/userinfo",
@@ -129,7 +129,7 @@ def oidc_token():
 
     if _JWT_AVAILABLE:
         id_token = pyjwt.encode({
-            "iss":   BASE_URL,
+            "iss":   f"{BASE_URL}/oidc",
             "sub":   email,
             "aud":   client_id,
             "iat":   now,
@@ -140,7 +140,7 @@ def oidc_token():
             "apps":  get_user_apps(email),
         }, JWT_SECRET, algorithm="HS256")
     else:
-        payload  = json.dumps({"sub": email, "email": email, "iss": BASE_URL}).encode()
+        payload  = json.dumps({"sub": email, "email": email, "iss": f"{BASE_URL}/oidc"}).encode()
         id_token = base64.b64encode(payload).decode()
 
     access_token = hashlib.sha256(
