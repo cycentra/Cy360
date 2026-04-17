@@ -175,7 +175,6 @@ export function useAppState() {
           setData(adapted);
           setSelectedScanId(scanId);
           setAssets(prev => _mergeStatuses(adapted.assets, prev));
-          setActiveTab("dashboard");
         }
       }
     } catch {}

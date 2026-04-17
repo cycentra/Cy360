@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.187 -- 2026-04-17 10:19 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.188 -- 2026-04-17 10:52 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1828,7 +1828,7 @@ if [[ -d "/var/ossec" ]]; then
 # ── Step 20: Platform branding (cylogo) ──────────────────────────────────────
 step_header "PLATFORM BRANDING (CYLOGO)"
 
-_CYLOGO_DIR="$BUNDLE_DIR/backend/blueprints/cylogo"
+_CYLOGO_DIR="/usr/local/lib/python3.12/dist-packages/cy_asm/cylogo"
 
 for script in apply-favicons apply-logos enable-multitenancy apply-custom-branding apply-plugin-branding; do
     _SPATH="$_CYLOGO_DIR/${script}.sh"

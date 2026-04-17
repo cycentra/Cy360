@@ -27,7 +27,6 @@ import { UseCasesPage }      from './pages/usecases/UseCasesPage.jsx';
 import { SystemSettingsPage } from './pages/settings/SystemSettingsPage.jsx';
 import { AssetModal }        from './pages/assets/AssetModal.jsx';
 import { ImportModal }       from './pages/assets/ImportModal.jsx';
-import { ScanHistoryPage }   from './pages/history/ScanHistoryPage.jsx';
 
 // ── Scan History Dropdown ─────────────────────────────────────────────────────
 
@@ -299,8 +298,7 @@ export default function App() {
             {activeTab==="scan"           && <ScanPage user={user} onScanComplete={handleScanComplete}/>}
             {activeTab==="dashboard"      && <DashboardPage assets={assets} data={data} stats={stats} installedModules={installedModules} setActiveTab={setActiveTab} setSelectedAsset={setSelectedAsset} setShowImport={setShowImport}/>}
             {activeTab==="assets"         && <AssetsPage assets={assets} setSelectedAsset={setSelectedAsset} setShowImport={setShowImport}/>}
-            {activeTab==="vulns"          && <VulnerabilityPage assets={assets}/>}
-            {activeTab==="scan-history"   && <ScanHistoryPage scanHistory={scanHistory} selectedScanId={selectedScanId} onScanSelect={handleScanSelect} historyLoading={historyLoading}/>}
+            {activeTab==="vulns"          && <VulnerabilityPage assets={assets} scanHistory={scanHistory} selectedScanId={selectedScanId} onScanSelect={handleScanSelect}/>}
             {activeTab==="siem-incidents" && <SiemIncidentsPage/>}
             {activeTab==="siem-risk"      && <SiemRiskScoresPage/>}
             {activeTab==="siem-ueba"      && <SiemUebaPage/>}
