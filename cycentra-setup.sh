@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.195 -- 2026-04-17 17:50 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.196 -- 2026-04-17 17:55 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -320,7 +320,7 @@ success "System packages installed"
 
 # ── Python reporting prerequisites ────────────────────────────────────────────
 _PY_REPORT_PKGS=(reportlab matplotlib numpy pillow)
-_PY_IMPORT_MAP=([reportlab]=reportlab [matplotlib]=matplotlib [numpy]=numpy [pillow]=PIL)
+declare -A _PY_IMPORT_MAP=([reportlab]=reportlab [matplotlib]=matplotlib [numpy]=numpy [pillow]=PIL)
 _PY_MISSING=()
 for _pkg in "${_PY_REPORT_PKGS[@]}"; do
     _import="${_PY_IMPORT_MAP[$_pkg]:-${_pkg,,}}"
