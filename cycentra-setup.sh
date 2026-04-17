@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.184 -- 2026-04-16 23:19 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.185 -- 2026-04-17 09:52 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -305,7 +305,6 @@ apt-get install -y -qq \
     python3 python3-pip \
     nmap whois rsync git openssl \
     nginx certbot python3-certbot-nginx \
-    nuclei \
     2>/dev/null
 success "System packages installed"
 
@@ -433,6 +432,37 @@ REDISEOF
 
 systemctl enable redis-server
 systemctl restart redis-server
+
+# ── Step 4: Nuclei (ProjectDiscovery — not in standard apt repos) ─────────────
+step_header "NUCLEI SCANNER"
+
+if command -v nuclei >/dev/null 2>&1; then
+    success "Nuclei already installed — $(nuclei -version 2>&1 | head -1)"
+else
+    info "Installing Nuclei from ProjectDiscovery releases..."
+    apt-get install -y -qq unzip 2>/dev/null || true
+
+    _NUCLEI_URL=$(curl -fsSL https://api.github.com/repos/projectdiscovery/nuclei/releases/latest \
+        | python3 -c "import sys,json; assets=json.load(sys.stdin)['assets']; print(next(a['browser_download_url'] for a in assets if 'linux_amd64.zip' in a['name']))" \
+        2>/dev/null)
+
+    if [[ -z "$_NUCLEI_URL" ]]; then
+        warn "Could not resolve Nuclei download URL — skipping. Install manually later."
+    else
+        curl -fsSL "$_NUCLEI_URL" -o /tmp/nuclei_linux_amd64.zip
+        unzip -o /tmp/nuclei_linux_amd64.zip nuclei -d /usr/local/bin/ 2>/dev/null
+        chmod +x /usr/local/bin/nuclei
+        rm -f /tmp/nuclei_linux_amd64.zip
+
+        if command -v nuclei >/dev/null 2>&1; then
+            nuclei -update-templates -silent 2>/dev/null || true
+            success "Nuclei installed — $(nuclei -version 2>&1 | head -1)"
+        else
+            warn "Nuclei binary install failed — ASM Nuclei scanner will be skipped at runtime"
+        fi
+    fi
+fi
+
 sleep 2
 redis-cli ping 2>/dev/null | grep -q "PONG" \
     && success "Redis running on :6379" \
@@ -1089,11 +1119,8 @@ else
     warn "portal/dist not in bundle"; ERRORS+=("Portal dist missing")
 fi
 
-# Deploy branding and config assets from bundle
-BRANDING_DIR="/opt/cycentra-branding"
-mkdir -p "$BRANDING_DIR" /tmp/cycentra-config
-[[ -d "$BUNDLE_DIR/scripts"       ]] && cp -r "$BUNDLE_DIR/scripts/."       "$BRANDING_DIR/scripts/"
-[[ -d "$BUNDLE_DIR/assets"        ]] && cp -r "$BUNDLE_DIR/assets/."        "$BRANDING_DIR/assets/"
+# Deploy config assets from bundle
+mkdir -p /tmp/cycentra-config
 [[ -d "$BUNDLE_DIR/CYSIEM-Config" ]] && cp -r "$BUNDLE_DIR/CYSIEM-Config/." "/tmp/cycentra-config/"
 
 mkdir -p /var/log/cycentra/cy-asm/scans
@@ -1798,17 +1825,20 @@ if [[ -d "/var/ossec" ]]; then
 
     # end infra prerequisites block
 
-# ── Step 20: Platform branding (whitelabel) ───────────────────────────────────
-step_header "PLATFORM BRANDING (WHITELABEL)"
+# ── Step 20: Platform branding (cylogo) ──────────────────────────────────────
+step_header "PLATFORM BRANDING (CYLOGO)"
+
+_CYLOGO_DIR="$BUNDLE_DIR/backend/blueprints/cylogo"
 
 for script in apply-favicons apply-logos enable-multitenancy apply-custom-branding apply-plugin-branding; do
-    SPATH="$BRANDING_DIR/scripts/${script}.sh"
-    if [[ -f "$SPATH" ]]; then
-        bash "$SPATH" \
+    _SPATH="$_CYLOGO_DIR/${script}.sh"
+    if [[ -f "$_SPATH" ]]; then
+        chmod +x "$_SPATH"
+        bash "$_SPATH" \
             && success "${script}.sh applied" \
             || warn "${script}.sh returned non-zero — check output above"
     else
-        info "${script}.sh not in bundle — skipping"
+        warn "${script}.sh not found at ${_SPATH} — skipping"
     fi
 done
 
@@ -2016,7 +2046,7 @@ Paths:
   RBAC         : /opt/cycentra/rbac.json
   Portal files : /var/www/cycentra360
   nginx config : /etc/nginx/sites-available/cycentra-modules
-  Branding     : /opt/cycentra-branding
+  Branding     : $BUNDLE_DIR/backend/blueprints/cylogo
 
 Next steps:
   1. Verify WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env (auto-detected if CySIEM is installed)

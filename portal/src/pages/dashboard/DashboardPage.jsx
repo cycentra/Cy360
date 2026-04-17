@@ -166,31 +166,6 @@ function CertTimeline({ assets }) {
   );
 }
 
-// ── CySIEMFeed ────────────────────────────────────────────────────────────────
-function CySIEMFeed({ alerts }) {
-  if (!alerts?.length) return <div style={{ color:"rgba(255,255,255,0.3)", fontSize:12, fontFamily:"monospace" }}>No alerts forwarded</div>;
-  return (
-    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-      {alerts.map((a,i) => {
-        const lvlColor = a.level>=12?"#ff3b3b":a.level>=8?"#ff8c00":"#f5c518";
-        return (
-          <div key={i} style={{ background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.06)",
-            borderLeft:`3px solid ${lvlColor}`, padding:"10px 14px", borderRadius:"2px" }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
-              <span style={{ color:lvlColor, fontSize:10, fontFamily:"monospace", fontWeight:700 }}>LEVEL {a.level} · {a.rule_id}</span>
-              <span style={{ color:"rgba(255,255,255,0.3)", fontSize:10, fontFamily:"monospace" }}>{new Date(a.ts).toLocaleTimeString()}</span>
-            </div>
-            <div style={{ color:"rgba(255,255,255,0.8)", fontSize:12 }}>{a.description}</div>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:4 }}>
-              <span style={{ color:"rgba(255,255,255,0.35)", fontSize:11, fontFamily:"monospace" }}>→ {a.asset}</span>
-              {a.cvss && <span style={{ color:"rgba(255,140,0,0.7)", fontSize:9, fontFamily:"monospace" }}>CVSS {a.cvss}</span>}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 // ── Main component ────────────────────────────────────────────────────────────
 export function DashboardPage({ assets, data, stats, installedModules, setActiveTab, setSelectedAsset, setShowImport }) {
@@ -403,7 +378,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
       </div>
 
       {/* ROW 3 */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:14 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
         {/* Widget 7 — Supply Chain (expanded with risk list) */}
         <ASMWidget title="7. Supply Chain Risk" accent="#f5c518" badge={supply.high>0?`${supply.high} HIGH`:null}>
           {supply.count>0 ? (
@@ -519,11 +494,6 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
           )}
         </ASMWidget>
 
-        <ASMWidget title="CySIEM Alerts" accent="#ff3b3b"
-          onViewAll={()=>setActiveTab("cysiemfeed")}
-          badge={`${data?.cysiemAlerts?.length||0} FORWARDED`}>
-          <CySIEMFeed alerts={data?.cysiemAlerts?.slice(0,3)||[]}/>
-        </ASMWidget>
       </div>
 
       {/* Add-on modules strip */}

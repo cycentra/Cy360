@@ -15,6 +15,7 @@ const SvgAsset = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" str
 const SvgVuln  = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4M12 16h.01"/></svg>;
 const SvgSIEM  = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>;
 const SvgScan  = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35M11 8v6M8 11h6"/></svg>;
+const SvgHist  = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/><path d="M3.05 11a9 9 0 1 1 .5 4"/><polyline points="1 12 3 10 5 12"/></svg>;
 const SvgUC    = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 6h16M4 10h16M4 14h10M4 18h6"/></svg>;
 const SvgMods  = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>;
 const SvgAI    = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>;
@@ -36,10 +37,11 @@ export function buildNavSections({ installedModules = {}, data = null }) {
     {
       section: "THREAT INTELLIGENCE",
       items: [
-        { id: "dashboard",  label: "External Threat Overview", icon: SvgDash  },
-        { id: "assets",     label: "Asset Inventory",          icon: SvgAsset },
-        { id: "vulns",      label: "Findings",                 icon: SvgVuln  },
-        { id: "cysiemfeed", label: "Alert Feed",               icon: SvgSIEM, badge: data?.cysiemAlerts?.length || 0 },
+        { id: "dashboard",     label: "External Threat Overview", icon: SvgDash  },
+        { id: "assets",        label: "Asset Inventory",          icon: SvgAsset },
+        { id: "vulns",         label: "Findings",                 icon: SvgVuln  },
+        { id: "cysiemfeed",    label: "Alert Feed",               icon: SvgSIEM, badge: data?.cysiemAlerts?.length || 0 },
+        { id: "scan-history",  label: "Scan Timeline",            icon: SvgHist, accent: "#4d9eff" },
       ],
     },
     {
