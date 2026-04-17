@@ -208,15 +208,15 @@ def oidc_token():
         **( {"nonce": code_data["nonce"]} if code_data.get("nonce") else {} ),
     }
     # pyoidc-based clients (e.g. cyiris) verify id_token using client_secret (HS256).
-    # They do not fetch JWKS, so RS256 fails silently — id_token dropped from response.
-    # OpenSearch (cysiem) requires RS256 verifiable via JWKS.
-    # All other clients (cysoar) don't verify id_token at all — either works.
+    # OIDC Core 1.0 §10.1: HS256 ID tokens MUST be signed with client_secret,
+    # not with the server's generic JWT_SECRET.
     _RS256_CLIENTS = {"cysiem"}
     if _JWT_AVAILABLE and _RSA_AVAILABLE and client_id in _RS256_CLIENTS:
         id_token = pyjwt.encode(payload, _JWT_PRIVATE_KEY, algorithm="RS256",
                                 headers={"kid": _kid})
     elif _JWT_AVAILABLE:
-        id_token = pyjwt.encode(payload, JWT_SECRET, algorithm="HS256")
+        # Sign with this client's own client_secret so pyoidc can verify with its keyjar
+        id_token = pyjwt.encode(payload, client["client_secret"], algorithm="HS256")
     else:
         payload  = json.dumps({"sub": email, "email": email, "iss": f"{BASE_URL}/oidc"}).encode()
         id_token = base64.b64encode(payload).decode()

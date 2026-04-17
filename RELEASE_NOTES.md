@@ -1,3 +1,26 @@
+## v1.0.201 -- 2026-04-17
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.201 -- 2026-04-17
+
+### Bug Fixes
+
+  - **CyIRIS OIDC `jwkest.BadSignature` — HS256 ID token signed with wrong key**:
+    OIDC Core 1.0 §10.1 requires HS256 ID tokens to be signed with the client's
+    `client_secret` so the relying party can verify using the secret it already
+    holds.  The `/oidc/token` endpoint was signing with the server-wide `JWT_SECRET`
+    instead.  pyoidc's `jwkest` library verifies using the `client_secret` stored
+    in `store_registration_info()` → mismatched key → `BadSignature` → `id_token`
+    not set in `AccessTokenResponse` → `KeyError: \'id_token\'` in CyIRIS
+    `login_routes.py:183`.  Fix: sign HS256 ID tokens with `client["client_secret"]`.
+
+---
+
 ## v1.0.200 -- 2026-04-17
 
 ### Improvements
