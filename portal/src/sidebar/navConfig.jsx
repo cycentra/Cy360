@@ -40,7 +40,6 @@ export function buildNavSections({ installedModules = {}, data = null }) {
         { id: "dashboard",     label: "External Threat Overview", icon: SvgDash  },
         { id: "assets",        label: "Asset Inventory",          icon: SvgAsset },
         { id: "vulns",         label: "Findings",                 icon: SvgVuln  },
-        { id: "cysiemfeed",    label: "Alert Feed",               icon: SvgSIEM, badge: data?.cysiemAlerts?.length || 0 },
         { id: "scan-history",  label: "Scan Timeline",            icon: SvgHist, accent: "#4d9eff" },
       ],
     },
