@@ -14,10 +14,12 @@ Routes (all under /oidc/):
 
 import hashlib
 import json
+import os
 import time
 import uuid
 import urllib.parse
 import base64
+from pathlib import Path
 
 from flask import Blueprint, request, redirect, jsonify, session
 
@@ -30,6 +32,54 @@ try:
     _JWT_AVAILABLE = True
 except ImportError:
     _JWT_AVAILABLE = False
+
+# ── RSA key for RS256 JWT signing (required for OpenSearch/Wazuh OIDC) ────────
+_RSA_KEY_FILE = Path(os.environ.get("OIDC_RSA_KEY_FILE", "/opt/cycentra/oidc_private.pem"))
+_RSA_AVAILABLE  = False
+_JWT_PRIVATE_KEY = None
+_JWT_PUBLIC_KEY  = None
+_JWK_CACHE: dict = {}
+
+if _JWT_AVAILABLE:
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.hazmat.backends import default_backend
+
+        if _RSA_KEY_FILE.exists():
+            with open(_RSA_KEY_FILE, "rb") as _f:
+                _JWT_PRIVATE_KEY = serialization.load_pem_private_key(_f.read(), password=None)
+        else:
+            _JWT_PRIVATE_KEY = rsa.generate_private_key(
+                public_exponent=65537, key_size=2048, backend=default_backend()
+            )
+            try:
+                _RSA_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+                with open(_RSA_KEY_FILE, "wb") as _f:
+                    _f.write(_JWT_PRIVATE_KEY.private_bytes(
+                        encoding=serialization.Encoding.PEM,
+                        format=serialization.PrivateFormat.TraditionalOpenSSL,
+                        encryption_algorithm=serialization.NoEncryption(),
+                    ))
+            except OSError:
+                pass  # in-memory key only; persisted on next writable startup
+
+        _JWT_PUBLIC_KEY = _JWT_PRIVATE_KEY.public_key()
+        pub_numbers = _JWT_PUBLIC_KEY.public_numbers()
+
+        def _int_to_base64url(n: int) -> str:
+            length = (n.bit_length() + 7) // 8
+            return base64.urlsafe_b64encode(n.to_bytes(length, "big")).rstrip(b"=").decode()
+
+        _kid = hashlib.sha256(str(pub_numbers.n).encode()).hexdigest()[:16]
+        _JWK_CACHE = {
+            "kty": "RSA", "use": "sig", "alg": "RS256", "kid": _kid,
+            "n": _int_to_base64url(pub_numbers.n),
+            "e": _int_to_base64url(pub_numbers.e),
+        }
+        _RSA_AVAILABLE = True
+    except Exception:
+        _RSA_AVAILABLE = False
 
 oidc_bp = Blueprint("oidc", __name__)
 
@@ -51,7 +101,7 @@ def oidc_discovery():
         "response_types_supported":              ["code"],
         "grant_types_supported":                 ["authorization_code"],
         "subject_types_supported":               ["public"],
-        "id_token_signing_alg_values_supported": ["HS256"],
+        "id_token_signing_alg_values_supported": ["RS256", "HS256"],
         "scopes_supported":                      ["openid", "email", "profile"],
         "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
         "claims_supported":                      ["sub", "iss", "email", "name", "roles", "apps"],
@@ -60,6 +110,8 @@ def oidc_discovery():
 
 @oidc_bp.route("/oidc/jwks")
 def oidc_jwks():
+    if _RSA_AVAILABLE and _JWK_CACHE:
+        return jsonify({"keys": [_JWK_CACHE]})
     return jsonify({"keys": []})
 
 
@@ -132,19 +184,23 @@ def oidc_token():
     email = code_data["email"]
     now   = int(time.time())
 
-    if _JWT_AVAILABLE:
-        id_token = pyjwt.encode({
-            "iss":   f"{BASE_URL}/oidc",
-            "sub":   email,
-            "aud":   client_id,
-            "iat":   now,
-            "exp":   now + TOKEN_TTL,
-            "email": email,
-            "name":  session.get("user_name", ""),
-            "roles": [get_user_role(email)],
-            "apps":  get_user_apps(email),
-            **( {"nonce": code_data["nonce"]} if code_data.get("nonce") else {} ),
-        }, JWT_SECRET, algorithm="HS256")
+    payload = {
+        "iss":   f"{BASE_URL}/oidc",
+        "sub":   email,
+        "aud":   client_id,
+        "iat":   now,
+        "exp":   now + TOKEN_TTL,
+        "email": email,
+        "name":  session.get("user_name", ""),
+        "roles": [get_user_role(email)],
+        "apps":  get_user_apps(email),
+        **( {"nonce": code_data["nonce"]} if code_data.get("nonce") else {} ),
+    }
+    if _JWT_AVAILABLE and _RSA_AVAILABLE:
+        id_token = pyjwt.encode(payload, _JWT_PRIVATE_KEY, algorithm="RS256",
+                                headers={"kid": _kid})
+    elif _JWT_AVAILABLE:
+        id_token = pyjwt.encode(payload, JWT_SECRET, algorithm="HS256")
     else:
         payload  = json.dumps({"sub": email, "email": email, "iss": f"{BASE_URL}/oidc"}).encode()
         id_token = base64.b64encode(payload).decode()

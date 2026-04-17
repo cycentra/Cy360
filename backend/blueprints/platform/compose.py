@@ -65,17 +65,13 @@ services:
       OIDC_MAPPING_EMAIL: "email"
       OIDC_MAPPING_USERNAME: "email"
       AUTHENTICATION_CREATE_USER_IF_NOT_EXIST: "true"
-      # Explicit endpoints — fallback if TLS discovery fails (e.g. staging cert)
+      # Explicit endpoints — fallback if OIDC discovery fails
       OIDC_AUTH_ENDPOINT: "https://cyasm.${{BASE_DOMAIN}}/oidc/authorize"
       OIDC_TOKEN_ENDPOINT: "https://cyasm.${{BASE_DOMAIN}}/oidc/token"
       OIDC_END_SESSION_ENDPOINT: "https://cyasm.${{BASE_DOMAIN}}/oidc/logout"
-      # Point pyoidc to the server cert so staging CA is trusted
-      REQUESTS_CA_BUNDLE: "/etc/ssl/certs/cycentra.crt"
-      SSL_CERT_FILE: "/etc/ssl/certs/cycentra.crt"
     volumes:
       - cyiris_app_data:/home/iris/iriswebapp/app/static/assets/files
       - cyiris_user_data:/home/iris/iriswebapp/user_data
-      - /opt/cycentra/certs/cycentra.crt:/etc/ssl/certs/cycentra.crt:ro
 
 volumes:
   cyiris_db_data:

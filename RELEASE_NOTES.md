@@ -1,3 +1,61 @@
+## v1.0.197 -- 2026-04-17
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.197 -- 2026-04-17
+
+### Bug Fix — CyIRIS OIDC: SSL certificate verification failure (`unable to get issuer certificate`)
+
+**Root cause**: `REQUESTS_CA_BUNDLE` and `SSL_CERT_FILE` in the CyIRIS compose template
+pointed to the server's own TLS certificate chain file. This overrode the system CA trust
+store with an incomplete bundle (the cross-signed `GTS Root R4` intermediate is not a
+self-signed root, so OpenSSL couldn't complete the chain). The server uses a valid
+Google Trust Services production cert — no custom CA bundle is needed.
+
+**Fix**: Removed `REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE` and the `/opt/cycentra/certs/cycentra.crt`
+volume mount from `compose.py` cyiris template. The system CA bundle inside the container
+already trusts Google Trust Services. The explicit OIDC endpoint env vars are retained as
+a valid discovery fallback.
+
+### Bug Fix — CySOAR OIDC: Page loads partially, URL stuck at `/cysoar/?`
+
+**Root cause (1 — path)**: `httpAdminRoot` was not set in `settings.js`. Node-RED served
+its admin API at root (`/`). When proxied under `/cysoar/`, the editor JS made API calls to
+absolute paths like `/red/nodes` — which hit the CyCentra portal (not Node-RED) → 404 →
+partial page load. Additionally nginx stripped the `/cysoar/` prefix via a trailing slash
+in `proxy_pass http://127.0.0.1:1880/`, so Node-RED never saw the sub-path.
+
+**Root cause (2 — verify)**: `passport-openidconnect` v0.1.2 dispatches the verify
+callback by function arity. For arity-4, it calls `verify(iss, profile, context, done)` —
+not `verify(iss, sub, profile, done)` as previously declared. The `profile` arg therefore
+received the context object, making email extraction fail silently (username became
+`[object Object]`).
+
+**Fix**: Added `httpAdminRoot: '/cysoar'` to `settings.js` and the routes.py `_cysoar_settings`
+string. Changed nginx `proxy_pass` to `http://127.0.0.1:1880` (no trailing slash — passes
+full `/cysoar/...` path to Node-RED). Removed the now-unnecessary `proxy_redirect / /cysoar/`.
+Fixed verify function signature to `(iss, profile, context, done)` with `profile.id` as
+the fallback sub identifier.
+
+### Feature — Wazuh/CySIEM OIDC SSO: RS256 JWT support in OIDC provider
+
+**Root cause**: The OIDC `cysiem` client was registered and `CYSIEM_OIDC_SECRET` was set,
+but the OIDC provider signed ID tokens with HS256 and the JWKS endpoint returned an empty
+key set. OpenSearch's OIDC auth domain requires RS256 (asymmetric) JWTs verifiable via JWKS.
+
+**Fix**: `provider.py` now generates (or loads from `/opt/cycentra/oidc_private.pem`) an
+RSA-2048 key pair on startup. ID tokens are signed with RS256; `kid` header is included.
+`/oidc/jwks` now returns the public key as a proper JWK. Discovery endpoint updated to
+advertise `["RS256", "HS256"]`. Gracefully falls back to HS256 if `cryptography` is
+unavailable. Server-side Wazuh Dashboard and OpenSearch indexer OIDC configuration is
+applied via server patch (see deployment notes).
+
+---
+
 ## v1.0.196 -- 2026-04-17
 
 ### Improvements
