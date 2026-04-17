@@ -1,3 +1,27 @@
+## v1.0.200 -- 2026-04-17
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.200 -- 2026-04-17
+
+### Bug Fixes
+
+  - **CyIRIS OIDC login — `KeyError: 'id_token'`**: pyoidc sends token-endpoint
+    credentials via `Authorization: Basic` header (`client_secret_basic`) by default.
+    The `/oidc/token` endpoint only read `client_id`/`client_secret` from the POST
+    form body (`client_secret_post`), so both values were `None` and the endpoint
+    returned `{"error": "invalid_client"}, 401`.  pyoidc parsed this as an
+    `ErrorResponse` with no `id_token`, causing the `KeyError` in CyIRIS
+    `login_routes.py:183`.  Fix: parse `Authorization: Basic` header as fallback
+    when form params are absent.  CySOAR (Node-oauth) was unaffected because it
+    sends credentials in the form body.
+
+---
+
 ## v1.0.199 -- 2026-04-17
 
 ### Improvements

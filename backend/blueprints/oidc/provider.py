@@ -168,6 +168,17 @@ def oidc_token():
     client_id     = request.form.get("client_id")
     client_secret = request.form.get("client_secret")
 
+    # Support client_secret_basic (RFC 6749 §2.3.1) — pyoidc sends credentials
+    # in Authorization: Basic header by default; client_secret_post reads from form.
+    if not client_id or not client_secret:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+                client_id, client_secret = decoded.split(":", 1)
+            except Exception:
+                pass
+
     if grant_type != "authorization_code":
         return jsonify({"error": "unsupported_grant_type"}), 400
 
