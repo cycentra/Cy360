@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.194 -- 2026-04-17 14:14 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.195 -- 2026-04-17 17:50 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -60,14 +60,8 @@ _LIC_FILE="/opt/cycentra/cycentra.lic"
     _LIC_FILE_LOCAL="${_SCRIPT_DIR:-$(dirname "${BASH_SOURCE[0]:-$0}")}/cycentra.lic" && \
     [[ -f "$_LIC_FILE_LOCAL" ]] && _LIC_FILE="$_LIC_FILE_LOCAL"
 
-# ── Certbot environment: use --staging if no license file is present ─────────
-if [[ ! -f "$_LIC_FILE" ]]; then
-    CERTBOT_ENV="--staging"
-    info "No license file detected — using Let's Encrypt staging environment for certbot."
-else
-    CERTBOT_ENV=""
-    info "License file detected — using Let's Encrypt production environment for certbot."
-fi
+# ── Certbot environment: set during fresh install prompt (Step 1a below) ─────
+CERTBOT_ENV="--staging"   # safe default; overridden to "" for PROD during fresh install
 
 if [[ "$MODE" == "full" ]]; then
     # Write embedded validator to a secure temp file
@@ -290,6 +284,22 @@ if [[ "$MODE" == "full" && ! -f "/opt/cycentra/.env" ]]; then
     BASE_DOMAIN="${USER_DOMAIN:-cycentra.com}"
 fi
 
+# ── Step 1a: Prompt for environment type (fresh install only) ────────────────
+if [[ "$MODE" == "full" && ! -f "/opt/cycentra/.env" ]]; then
+    step_header "ENVIRONMENT TYPE"
+    echo "  Select environment type:"
+    echo "    [1] PROD     — request a real Let's Encrypt certificate"
+    echo "    [2] STAGING  — use Let's Encrypt staging (no browser-trusted cert)"
+    read -p "  Choice [1/2, default=2]: " _ENV_CHOICE
+    if [[ "$_ENV_CHOICE" == "1" ]]; then
+        CERTBOT_ENV=""
+        info "PROD selected — using Let's Encrypt production environment for certbot."
+    else
+        CERTBOT_ENV="--staging"
+        info "STAGING selected — using Let's Encrypt staging environment for certbot."
+    fi
+fi
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # INFRASTRUCTURE BLOCK — skipped when MODE=update
@@ -307,6 +317,24 @@ apt-get install -y -qq \
     nginx certbot python3-certbot-nginx \
     2>/dev/null
 success "System packages installed"
+
+# ── Python reporting prerequisites ────────────────────────────────────────────
+_PY_REPORT_PKGS=(reportlab matplotlib numpy pillow)
+_PY_IMPORT_MAP=([reportlab]=reportlab [matplotlib]=matplotlib [numpy]=numpy [pillow]=PIL)
+_PY_MISSING=()
+for _pkg in "${_PY_REPORT_PKGS[@]}"; do
+    _import="${_PY_IMPORT_MAP[$_pkg]:-${_pkg,,}}"
+    python3 -c "import $_import" 2>/dev/null || _PY_MISSING+=("$_pkg")
+done
+if [[ ${#_PY_MISSING[@]} -eq 0 ]]; then
+    success "Python reporting packages already installed — skipping"
+else
+    info "Installing Python reporting packages: ${_PY_MISSING[*]} ..."
+    PIP_ROOT_USER_ACTION=ignore pip3 install "${_PY_MISSING[@]}" \
+        --break-system-packages -q \
+        && success "Installed: ${_PY_MISSING[*]}" \
+        || { error "Failed to install Python reporting packages"; ERRORS+=("pip reporting prereqs failed"); }
+fi
 
 # ── Docker install ─────────────────────────────────────────────────────────────
 if command -v docker >/dev/null 2>&1 && docker --version | grep -q "2[4-9]\.\|[3-9][0-9]\."; then

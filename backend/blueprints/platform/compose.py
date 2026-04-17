@@ -65,9 +65,17 @@ services:
       OIDC_MAPPING_EMAIL: "email"
       OIDC_MAPPING_USERNAME: "email"
       AUTHENTICATION_CREATE_USER_IF_NOT_EXIST: "true"
+      # Explicit endpoints — fallback if TLS discovery fails (e.g. staging cert)
+      OIDC_AUTH_ENDPOINT: "https://cyasm.${{BASE_DOMAIN}}/oidc/authorize"
+      OIDC_TOKEN_ENDPOINT: "https://cyasm.${{BASE_DOMAIN}}/oidc/token"
+      OIDC_END_SESSION_ENDPOINT: "https://cyasm.${{BASE_DOMAIN}}/oidc/logout"
+      # Point pyoidc to the server cert so staging CA is trusted
+      REQUESTS_CA_BUNDLE: "/etc/ssl/certs/cycentra.crt"
+      SSL_CERT_FILE: "/etc/ssl/certs/cycentra.crt"
     volumes:
       - cyiris_app_data:/home/iris/iriswebapp/app/static/assets/files
       - cyiris_user_data:/home/iris/iriswebapp/user_data
+      - /opt/cycentra/certs/cycentra.crt:/etc/ssl/certs/cycentra.crt:ro
 
 volumes:
   cyiris_db_data:
@@ -84,16 +92,17 @@ services:
     container_name: cysoar
     restart: unless-stopped
     ports:
-      - "1880:1880"
+      - "127.0.0.1:1880:1880"
     environment:
       - OIDC_ISSUER=https://cyasm.${{BASE_DOMAIN}}/oidc
       - OIDC_CLIENT_ID=cysoar
       - OIDC_CLIENT_SECRET=${{CYSOAR_OIDC_SECRET}}
-      - OIDC_REDIRECT_URI=https://cysoc.${{BASE_DOMAIN}}/cysoar/auth/callback
+      - OIDC_REDIRECT_URI=https://cysoc.${{BASE_DOMAIN}}/cysoar/auth/strategy/callback
       - SESSION_SECRET=${{CYSOAR_SESSION_SECRET}}
       - IRIS_URL=https://cyiris.${{BASE_DOMAIN}}
       - WAZUH_URL=https://cysiem.${{BASE_DOMAIN}}
       - CYCENTRA_PORTAL_URL=${{CYCENTRA_PORTAL_URL}}
+      - NODE_TLS_REJECT_UNAUTHORIZED=0
     volumes:
       - cysoar_data:/data
 

@@ -1015,6 +1015,13 @@ def main():
 
         logger.info(f"✅ Portal JSON saved → {portal_file}")
 
+        # ── Generate PDF Reports (Executive + Technical) ─────────────────────
+        try:
+            from reporting.generate_reports import hook_into_scan
+            hook_into_scan(portal_payload, final_tenant_id, domain, timestamp)
+        except Exception as _rpt_err:
+            logger.warning(f"⚠️ [Reports] PDF generation failed (scan unaffected): {_rpt_err}")
+
     except Exception as e:
         logger.error(f"❌ Failed to save portal JSON: {e}")
 
@@ -1027,6 +1034,7 @@ def main():
         f"   AI Findings : {len(enriched_issues)} enriched issues\n"
         f"   Reports     : {report_file}\n"
         f"              : {portal_file}\n"
+        f"   PDF Reports : /var/log/cycentra/cy-asm/reports/{final_tenant_id}/\n"
         f"{'='*60}"
     )
     logger.info("✅ Portal JSON saved — scan complete")

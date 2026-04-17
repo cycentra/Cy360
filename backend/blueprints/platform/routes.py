@@ -255,6 +255,8 @@ def _nginx_inject_cysoar(base_domain: str, log_fn):
         "        proxy_set_header Host $host;\n"
         "        proxy_read_timeout 120s;\n"
         "        proxy_buffering off;\n"
+        "        # Rewrite Node-RED post-auth redirect so browser lands back on /cysoar/\n"
+        "        proxy_redirect / /cysoar/;\n"
         "    }\n"
     )
 
@@ -491,6 +493,35 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
             compose_path.write_text(compose_text)
             log(f"CyIRIS setup complete: hardcoded password into docker-compose.yml")
 
+            # 5. Ensure staging/self-signed cert is available for REQUESTS_CA_BUNDLE
+            #    (pyoidc needs to verify TLS to the OIDC issuer)
+            import subprocess as _subp
+            certs_dir = Path("/opt/cycentra/certs")
+            certs_dir.mkdir(parents=True, exist_ok=True)
+            cert_dest = certs_dir / "cycentra.crt"
+            if not cert_dest.exists() or cert_dest.stat().st_size < 100:
+                try:
+                    result = _subp.run(
+                        ["openssl", "s_client", "-connect",
+                         f"cyasm.{base_domain}:443", "-showcerts"],
+                        input=b"", capture_output=True, timeout=10
+                    )
+                    # Extract all PEM certs from output
+                    out = result.stdout.decode("utf-8", errors="replace")
+                    pem_chain = "\n".join(
+                        "\n".join(block.splitlines())
+                        for block in out.split("-----BEGIN CERTIFICATE-----")[1:]
+                        if block.strip()
+                        for block in ["-----BEGIN CERTIFICATE-----" + block.split("-----END CERTIFICATE-----")[0] + "-----END CERTIFICATE-----"]
+                    )
+                    if "BEGIN CERTIFICATE" in pem_chain:
+                        cert_dest.write_text(pem_chain)
+                        log(f"CyIRIS: wrote TLS cert chain to {cert_dest}")
+                    else:
+                        log("CyIRIS: WARNING — could not extract cert chain; OIDC token exchange may fail over staging TLS")
+                except Exception as _ce:
+                    log(f"CyIRIS: WARNING — cert extraction error: {_ce}")
+
         elif module_id == "cysoar":
             # Pre-install cleanup — stale volumes cause httpStatic issues
             print(f"DEBUG: Current module_id is: '{module_id}'")
@@ -697,6 +728,75 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
 
             # This must align with the 'print' and 'for' to be inside the 'if'
             _nginx_inject_cysoar(base_domain, log)
+
+            # ── Install passport packages + write OIDC settings.js ─────────────
+            log("CySOAR: installing passport+openidconnect packages")
+            run("docker exec -u root cysoar npm install --prefix /usr/src/node-red "
+                "passport passport-openidconnect --no-save --quiet", timeout=120)
+
+            _cysoar_settings = (
+                "'use strict';\n\n"
+                "// Allow self-signed / staging TLS for internal OIDC calls\n"
+                "process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';\n\n"
+                "const OpenIDConnectStrategy = "
+                "require('/usr/src/node-red/node_modules/passport-openidconnect');\n\n"
+                "const OIDC_ISSUER        = process.env.OIDC_ISSUER        || '';\n"
+                "const OIDC_CLIENT_ID     = process.env.OIDC_CLIENT_ID     || '';\n"
+                "const OIDC_CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET || '';\n"
+                "const OIDC_REDIRECT_URI  = process.env.OIDC_REDIRECT_URI  || '';\n\n"
+                "module.exports = {\n"
+                "  uiPort: 1880,\n"
+                "  adminAuth: {\n"
+                "    type: 'strategy',\n"
+                "    strategy: {\n"
+                "      name:     'openidconnect',\n"
+                "      label:    'Sign in with CyCentra SSO',\n"
+                "      icon:     'fa-lock',\n"
+                "      strategy: OpenIDConnectStrategy,\n"
+                "      options: {\n"
+                "        issuer:           OIDC_ISSUER,\n"
+                "        authorizationURL: OIDC_ISSUER + '/authorize',\n"
+                "        tokenURL:         OIDC_ISSUER + '/token',\n"
+                "        userInfoURL:      OIDC_ISSUER + '/userinfo',\n"
+                "        clientID:         OIDC_CLIENT_ID,\n"
+                "        clientSecret:     OIDC_CLIENT_SECRET,\n"
+                "        callbackURL:      OIDC_REDIRECT_URI,\n"
+                "        scope:            ['email', 'profile'],\n"
+                "        verify: function(iss, sub, profile, done) {\n"
+                "          const email =\n"
+                "            (profile && profile.emails && profile.emails[0] && profile.emails[0].value) ||\n"
+                "            (profile && profile._json && profile._json.email) || sub;\n"
+                "          return done(null, { username: email, permissions: '*' });\n"
+                "        },\n"
+                "      },\n"
+                "    },\n"
+                "    users: function(username) {\n"
+                "      return Promise.resolve({ username: username, permissions: '*' });\n"
+                "    },\n"
+                "  },\n"
+                "  flowFile:         '/data/flows.json',\n"
+                "  credentialSecret: process.env.SESSION_SECRET || 'cycentra-secret-change-me',\n"
+                "  httpStatic:   '/data/custom-theme',\n"
+                "  editorTheme: {\n"
+                "    page:   { title: 'CyCentra', favicon: '/data/custom-theme/favicon.png',\n"
+                "              css: '/data/custom-theme/custom.css', scripts: '/data/custom-theme/inject.js' },\n"
+                "    header: { title: 'CyCentra', image: '/data/custom-theme/logo.png' },\n"
+                "    login:  { image: '/data/custom-theme/logo-login.png' },\n"
+                "    menu:   { 'menu-item-help': { label: 'Documentation', url: 'https://cycentra.com' } },\n"
+                "  },\n"
+                "  contextStorage: { default: { module: 'memory' }, persistent: { module: 'localfilesystem' } },\n"
+                "  logging:        { console: { level: 'info', metric: false, audit: false } },\n"
+                "  debugMaxLength: 1000,\n"
+                "};\n"
+            )
+            settings_tmp = module_dir / "settings.js"
+            settings_tmp.write_text(_cysoar_settings)
+            run(f"docker cp {settings_tmp} cysoar:/data/settings.js", timeout=10)
+            settings_tmp.unlink(missing_ok=True)
+            log("CySOAR: settings.js written to volume")
+
+            run("docker restart cysoar", timeout=30)
+            log("CySOAR: restarted with OIDC settings")
         
         # ── Final state ───────────────────────────────────────────────────────
         time.sleep(5)

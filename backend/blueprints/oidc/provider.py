@@ -33,6 +33,9 @@ except ImportError:
 
 oidc_bp = Blueprint("oidc", __name__)
 
+# Server-side auth code store (avoids client-session limitation on s2s token exchange)
+_AUTH_CODES: dict = {}
+
 
 # ── Discovery & JWKS ─────────────────────────────────────────────────────────
 
@@ -67,6 +70,7 @@ def oidc_authorize():
     client_id    = request.args.get("client_id", "")
     redirect_uri = request.args.get("redirect_uri", "")
     state        = request.args.get("state", "")
+    nonce        = request.args.get("nonce", "")
 
     client = OIDC_CLIENTS.get(client_id)
     if not client:
@@ -76,7 +80,7 @@ def oidc_authorize():
 
     user_email = session.get("user_email")
     if not user_email:
-        return_to = request.url
+        return_to = BASE_URL + "/oidc/authorize?" + urllib.parse.urlencode(request.args)
         return redirect(f"{FRONTEND_URL}?oidc_return={urllib.parse.quote(return_to)}")
 
     if not user_can_access_client(user_email, client_id):
@@ -91,10 +95,11 @@ def oidc_authorize():
         f"{user_email}:{client_id}:{state}:{time.time()}".encode()
     ).hexdigest()[:32]
 
-    session[f"oidc_code_{code}"] = {
+    _AUTH_CODES[code] = {
         "email":        user_email,
         "client_id":    client_id,
         "redirect_uri": redirect_uri,
+        "nonce":        nonce,
         "expires":      time.time() + 300,
     }
 
@@ -118,7 +123,7 @@ def oidc_token():
     if not client or client["client_secret"] != client_secret:
         return jsonify({"error": "invalid_client"}), 401
 
-    code_data = session.pop(f"oidc_code_{code}", None)
+    code_data = _AUTH_CODES.pop(code, None)
     if not code_data or code_data.get("client_id") != client_id:
         return jsonify({"error": "invalid_grant"}), 400
     if time.time() > code_data.get("expires", 0):
@@ -138,6 +143,7 @@ def oidc_token():
             "name":  session.get("user_name", ""),
             "roles": [get_user_role(email)],
             "apps":  get_user_apps(email),
+            **( {"nonce": code_data["nonce"]} if code_data.get("nonce") else {} ),
         }, JWT_SECRET, algorithm="HS256")
     else:
         payload  = json.dumps({"sub": email, "email": email, "iss": f"{BASE_URL}/oidc"}).encode()

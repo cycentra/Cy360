@@ -54,7 +54,7 @@ OIDC_CLIENTS = {
     "cyiris": {
         "client_secret": os.environ.get("CYIRIS_OIDC_SECRET", ""),
         "redirect_uris": [
-            f"https://cysoc.{BASE_DOMAIN}/cyiris/auth/oidc/callback",
+            f"https://cyiris.{BASE_DOMAIN}/oidc-authorize",
             f"https://cyiris.{BASE_DOMAIN}/auth/oidc/callback",
         ],
         "allowed_scopes": ["openid", "email", "profile"],
@@ -63,12 +63,21 @@ OIDC_CLIENTS = {
     "cysoar": {
         "client_secret": os.environ.get("CYSOAR_OIDC_SECRET", ""),
         "redirect_uris": [
+            f"https://cysoc.{BASE_DOMAIN}/cysoar/auth/strategy/callback",
             f"https://cysoc.{BASE_DOMAIN}/cysoar/auth/callback",
             f"https://cysoc.{BASE_DOMAIN}/node-red/auth/callback",
             f"https://cysoar.{BASE_DOMAIN}/auth/callback",
         ],
         "allowed_scopes": ["openid", "email", "profile"],
         "allowed_roles":  ["admin", "analyst", "cysoar"],
+    },
+    "cysiem": {
+        "client_secret": os.environ.get("CYSIEM_OIDC_SECRET", ""),
+        "redirect_uris": [
+            f"https://cysiem.{BASE_DOMAIN}/auth/openid/login",
+        ],
+        "allowed_scopes": ["openid", "email", "profile"],
+        "allowed_roles":  ["admin", "analyst"],
     },
 }
 
