@@ -1,3 +1,27 @@
+## v1.0.205 -- 2026-04-17
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.205 -- 2026-04-18
+
+### Bug Fixes
+
+  - **`_SCRIPT_VERSION` not stamped by `git-push.sh`**: `git-push.sh` was using a
+    hardcoded line number (`233`) to update `_SCRIPT_VERSION` in `cycentra-setup.sh`.
+    After earlier edits the variable moved to a different line, so all releases since
+    v1.0.195 were published with `_SCRIPT_VERSION="v1.0.194"`.  The banner displayed
+    the correct version (from the line-3 header stamp), but `--update` version
+    comparison logic read the stale variable.
+    Fix: replaced the hardcoded-line `sed` with a pattern-based match so it always
+    finds and updates the variable regardless of line position.
+    (`git-push.sh`)
+
+---
+
 ## v1.0.204 -- 2026-04-17
 
 ### Improvements
