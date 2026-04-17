@@ -27,7 +27,7 @@ import { UseCasesPage }      from './pages/usecases/UseCasesPage.jsx';
 import { SystemSettingsPage } from './pages/settings/SystemSettingsPage.jsx';
 import { AssetModal }        from './pages/assets/AssetModal.jsx';
 import { ImportModal }       from './pages/assets/ImportModal.jsx';
-import { SiemFeedPage }      from './pages/siem/SiemFeedPage.jsx';
+import { SiemFeedPage }      from './siem/SiemFeedPage.jsx';
 import { ScanHistoryPage }   from './pages/history/ScanHistoryPage.jsx';
 
 // ── Scan History Dropdown ─────────────────────────────────────────────────────
