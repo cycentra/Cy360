@@ -66,6 +66,7 @@ services:
       OIDC_MAPPING_USERNAME: "email"
       AUTHENTICATION_CREATE_USER_IF_NOT_EXIST: "true"
       IRIS_AUTHENTICATION_CREATE_USER_IF_NOT_EXIST: "True"
+      IRIS_AUTHENTICATION_LOCAL_FALLBACK: "False"
       # Explicit endpoints — fallback if OIDC discovery fails
       OIDC_AUTH_ENDPOINT: "https://cyasm.${{BASE_DOMAIN}}/oidc/authorize"
       OIDC_TOKEN_ENDPOINT: "https://cyasm.${{BASE_DOMAIN}}/oidc/token"

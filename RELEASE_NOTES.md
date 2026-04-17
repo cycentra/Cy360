@@ -1,3 +1,36 @@
+## v1.0.203 -- 2026-04-17
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.203 -- 2026-04-17
+
+### Bug Fixes
+
+  - **CyIRIS OIDC — infinite redirect loop after successful login**: After
+    `wrap_login_user()` called `login_user()` and returned a `302` redirect from
+    the `/oidc-authorize` callback, certain browsers (and browser/Cloudflare
+    combinations) would not flush the `Set-Cookie` header to the cookie store
+    before following the redirect, causing `current_user.is_authenticated` to
+    return `False` on `/dashboard`.  Fix: for OIDC logins (`is_oidc=True`),
+    `wrap_login_user` now returns a `200` HTML page with a `<meta http-equiv=refresh>`
+    and `window.location.replace()`, giving the browser a committed first-party
+    response to store the session cookie before navigating.
+    (`CyIRIS/source/app/business/auth.py`)
+
+### Features
+
+  - **CyIRIS auto-login (no login button)**: When `IRIS_AUTHENTICATION_LOCAL_FALLBACK`
+    is `"False"`, CyIRIS's `/login` route immediately redirects to `/oidc-login`,
+    bypassing the local login form exactly like Wazuh/CySIEM.  The compose template
+    now sets `IRIS_AUTHENTICATION_LOCAL_FALLBACK: "False"` by default.
+    (`backend/blueprints/platform/compose.py`)
+
+---
+
 ## v1.0.202 -- 2026-04-17
 
 ### Improvements
