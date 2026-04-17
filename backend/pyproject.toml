@@ -38,4 +38,4 @@ exclude = [
 
 # Non-Python files that ship inside the wheel
 [tool.setuptools.package-data]
-"*" = ["*.json", "*.yaml", "*.yml", "*.html", "*.txt", "*.sql", "*.xml"]
+"*" = ["*.json", "*.yaml", "*.yml", "*.html", "*.txt", "*.sql", "*.xml", "*.sh", "*.png", "*.svg", "*.ico", "*.webp"]
