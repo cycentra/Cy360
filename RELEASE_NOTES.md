@@ -1,3 +1,30 @@
+## v1.0.199 -- 2026-04-17
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.199 -- 2026-04-17
+
+### Bug Fix — CyIRIS OIDC: `KeyError: 'id_token'` after successful token exchange
+
+**Root cause**: pyoidc (used by CyIRIS) verifies `id_token` JWTs before storing them in the
+`AccessTokenResponse` object. With RS256, pyoidc needs to fetch an RSA public key from the
+`jwks_uri`. When `provider_config()` falls back to the manual `ProviderConfigurationResponse`
+(which does not include `jwks_uri`), pyoidc has no key to verify against. Signature
+verification fails silently — pyoidc drops `id_token` from the parsed response dict entirely.
+Subsequent access of `access_token_resp['id_token']` raises `KeyError`.
+
+**Fix**: Per-client JWT algorithm selection in the OIDC token endpoint. `cysiem` (OpenSearch)
+receives RS256 tokens verifiable via JWKS — required by the OpenSearch security plugin.
+All other clients (`cyiris`, `cysoar`, etc.) receive HS256 tokens. pyoidc automatically
+verifies HS256 using the stored `client_secret` (via `RegistrationResponse`) — no JWKS
+fetch required. Node-RED (CySOAR) does not verify `id_token` at all, so either works.
+
+---
+
 ## v1.0.198 -- 2026-04-17
 
 ### Improvements
