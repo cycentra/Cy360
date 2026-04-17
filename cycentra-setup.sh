@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.197 -- 2026-04-17 20:53 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.198 -- 2026-04-17 20:56 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -583,6 +583,10 @@ if [[ -f "$_WAZUH_DASH_YML" ]]; then
 
     # Secrets live as bash vars in full mode (just generated in Step 9).
     # In update mode they are loaded via: set -a; source /opt/cycentra/.env
+    # BASE_DOMAIN may not be in scope yet in --update mode — load it defensively.
+    [[ -z "${BASE_DOMAIN:-}" ]] && \
+        BASE_DOMAIN=$(grep "^BASE_DOMAIN=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2- || true)
+    BASE_DOMAIN="${BASE_DOMAIN:-cycentra.com}"
     _cy_siem_secret="${CYSIEM_OIDC_SECRET:-}"
     [[ -z "$_cy_siem_secret" ]] && \
         _cy_siem_secret=$(grep "^CYSIEM_OIDC_SECRET=" /opt/cycentra/.env 2>/dev/null \

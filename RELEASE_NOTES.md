@@ -1,8 +1,22 @@
-## v1.0.197 -- 2026-04-17
+## v1.0.198 -- 2026-04-17
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.198 -- 2026-04-17
+
+### Bug Fix — `cycentra-setup.sh --update` aborts: `BASE_DOMAIN: unbound variable` in CySIEM OIDC step
+
+`BASE_DOMAIN` is loaded from `/opt/cycentra/.env` at line ~1079 of setup.sh but the
+CySIEM OIDC SSO step (Step 4.3) uses it in a heredoc at line ~603 — before the `.env`
+source. In `--update` mode, the OIDC step ran before `BASE_DOMAIN` was in scope, causing
+`set -euo pipefail` to abort with `unbound variable`.
+
+**Fix**: Added a defensive `BASE_DOMAIN` load at the top of Step 4.3 (reading from
+`/opt/cycentra/.env` when not already set), so the step is safe in all execution paths.
 
 ---
 
