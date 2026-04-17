@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.190 -- 2026-04-17 11:23 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.191 -- 2026-04-17 11:38 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -230,7 +230,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.190"
+_SCRIPT_VERSION="v1.0.191"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -1828,7 +1828,7 @@ if [[ -d "/var/ossec" ]]; then
 # ── Step 20: Platform branding (cylogo) ──────────────────────────────────────
 step_header "PLATFORM BRANDING (CYLOGO)"
 
-_CYLOGO_DIR="/usr/local/lib/python3.12/dist-packages/cy_asm/cylogo"
+_CYLOGO_DIR="/usr/local/lib/python3.12/dist-packages/cy_asm/modules/cylogo"
 
 for script in apply-favicons apply-logos enable-multitenancy apply-custom-branding apply-plugin-branding; do
     _SPATH="$_CYLOGO_DIR/${script}.sh"

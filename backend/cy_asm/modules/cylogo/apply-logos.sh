@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-SRC="/usr/local/lib/python3.12/dist-packages/cy_asm/cylogo/logos"
+SRC="/usr/local/lib/python3.12/dist-packages/cy_asm/modules/cylogo/logos"
 DEST="/usr/share/wazuh-dashboard/src/core/server/core_app/assets/logos"
 
 FILES=(

@@ -1,3 +1,11 @@
+## v1.0.191 -- 2026-04-17
+
+### New Features
+
+  - add __init__.py to cylogo/wordlists/Utils; expand package-data to include .sh and image files
+
+---
+
 ## v1.0.190 -- 2026-04-17
 
 ### Improvements

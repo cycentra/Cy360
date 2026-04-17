@@ -2,7 +2,7 @@
 set -e
 
 WAZUH_CONF="/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml"
-SRC_DIR="/usr/local/lib/python3.12/dist-packages/cy_asm/cylogo/app-logos"
+SRC_DIR="/usr/local/lib/python3.12/dist-packages/cy_asm/modules/cylogo/app-logos"
 IMG_DIR="/usr/share/wazuh-dashboard/plugins/wazuh/public/assets/custom/images"
 
 echo "[+] Applying Wazuh Plugin internal branding..."
