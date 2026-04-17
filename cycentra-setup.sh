@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.191 -- 2026-04-17 11:38 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.192 -- 2026-04-17 11:57 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -230,7 +230,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.191"
+_SCRIPT_VERSION="v1.0.192"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -1841,6 +1841,8 @@ for script in apply-favicons apply-logos enable-multitenancy apply-custom-brandi
         warn "${script}.sh not found at ${_SPATH} — skipping"
     fi
 done
+
+systemctl restart wazuh-dashboard.service 
 
 # ── Step 21: Inject domain into portal index.html ────────────────────────────
 step_header "PORTAL DOMAIN INJECTION"

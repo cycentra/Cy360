@@ -2,16 +2,16 @@
 set -e
 
 WAZUH_CONF="/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml"
-SRC_DIR="/usr/local/lib/python3.12/dist-packages/cy_asm/modules/cylogo/app-logos"
+SRC_DIR="/usr/local/lib/python3.12/dist-packages/cy_asm/modules/cylogo/logos/app-logos"
 IMG_DIR="/usr/share/wazuh-dashboard/plugins/wazuh/public/assets/custom/images"
 
 echo "[+] Applying Wazuh Plugin internal branding..."
 
 # 1. Ensure the image directory exists and move the logos
 sudo mkdir -p "$IMG_DIR"
-sudo cp "$SRC_DIR/app.svg" "$IMG_DIR/customization.logo.app.svg"
-sudo cp "$SRC_DIR/healthcheck.svg" "$IMG_DIR/customization.logo.healthcheck.svg"
-sudo cp "$SRC_DIR/reports.png" "$IMG_DIR/customization.logo.reports.png"
+sudo cp "$SRC_DIR/cy.svg" "$IMG_DIR/customization.logo.app.svg"
+sudo cp "$SRC_DIR/cy.svg" "$IMG_DIR/customization.logo.healthcheck.svg"
+sudo cp "$SRC_DIR/cy.svg" "$IMG_DIR/customization.logo.reports.png"
 sudo chown -R wazuh-dashboard:wazuh-dashboard /usr/share/wazuh-dashboard/plugins/wazuh/public/assets/custom/
 
 # 2. CLEAN UP: Remove any previous Custom Branding blocks to prevent duplicates
