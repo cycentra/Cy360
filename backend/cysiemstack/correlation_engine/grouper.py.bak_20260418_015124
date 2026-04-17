@@ -61,32 +61,18 @@ async def find_matching_incident(
 ) -> Optional[Incident]:
     """
     Find an open incident that this alert belongs to.
-
-    Two independent guards must BOTH pass:
-
-    1. Idle-gap  (last_seen >= activity_cutoff):
-       The incident had activity within CORRELATION_WINDOW_MINUTES.
-       Prevents linking alerts from separate sessions with a quiet gap.
-
-    2. Hard ceiling (first_seen >= age_cutoff):
-       The incident was opened within INCIDENT_MAX_AGE_MINUTES.
-       Without this guard a continuous stream (e.g. brute-force) advances
-       last_seen on every merge, so the incident grows without bound.
-
-    Tune both via /opt/cycentra/cysiemstack.env.
+    Matching criteria (all must hold):
+      - status = 'open' or 'investigating'
+      - same agent_id in affected_agents
+      - last_seen within correlation window
     """
-    window  = timedelta(minutes=settings.correlation_window_minutes)
-    max_age = timedelta(minutes=settings.incident_max_age_minutes)
-    now     = alert['timestamp']
-
-    activity_cutoff = now - window   # idle-gap guard
-    age_cutoff      = now - max_age  # hard-ceiling guard
+    window = timedelta(minutes=settings.correlation_window_minutes)
+    cutoff = alert['timestamp'] - window
 
     result = await db.execute(
         select(Incident).where(
             Incident.status.in_(['open', 'investigating']),
-            Incident.last_seen  >= activity_cutoff,   # guard 1
-            Incident.first_seen >= age_cutoff,        # guard 2 — THE FIX
+            Incident.last_seen >= cutoff,
         ).order_by(Incident.last_seen.desc()).limit(20)
     )
     candidates = result.scalars().all()

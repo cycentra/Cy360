@@ -40,14 +40,7 @@ class Settings(BaseSettings):
     llm_enabled: bool = True
 
     # Correlation engine tuning
-    # CORRELATION_WINDOW_MINUTES — idle gap: no activity for N min → next alert
-    #   opens a new incident. Effective for spaced attacks.
-    # INCIDENT_MAX_AGE_MINUTES   — hard ceiling: an incident stops absorbing
-    #   alerts unconditionally after this age, regardless of activity.
-    #   This guard is what prevents continuous brute-force from growing one
-    #   incident forever.  Set both values in /opt/cycentra/cysiemstack.env.
     correlation_window_minutes: int = 15
-    incident_max_age_minutes:   int = 30
     ueba_baseline_days: int = 30
     risk_decay_hours: int = 24
     incident_id_prefix: str = "INC"
