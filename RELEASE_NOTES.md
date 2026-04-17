@@ -1,3 +1,25 @@
+## v1.0.202 -- 2026-04-17
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.202 -- 2026-04-18
+
+### Bug Fixes
+
+  - **CyIRIS OIDC — "User not found in IRIS"**: `AUTHENTICATION_CREATE_USER_IF_NOT_EXIST`
+    env var was ignored because CyIRIS config reads env vars using `{SECTION}_{OPTION}`
+    naming convention (`IRIS_AUTHENTICATION_CREATE_USER_IF_NOT_EXIST`), not the bare
+    option name.  Additionally the comparison in `configuration.py` is case-sensitive
+    (`== "True"`), so the lowercase `"true"` value also evaluated to `False`.
+    Fix: compose template now sets `IRIS_AUTHENTICATION_CREATE_USER_IF_NOT_EXIST: "True"`
+    (correct prefix, correct case) alongside the old key for backwards compatibility.
+
+---
+
 ## v1.0.201 -- 2026-04-17
 
 ### Improvements
