@@ -1,8 +1,31 @@
-## v1.0.203 -- 2026-04-17
+## v1.0.204 -- 2026-04-17
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.204 -- 2026-04-18
+
+### Bug Fixes
+
+  - **CyIRIS OIDC — 500 / `KeyError: 'oidc_state'` after auto-login redirect**:
+    With `AUTHENTICATION_LOCAL_FALLBACK=False`, `/oidc-login` wrote
+    `session["oidc_state"]` and `session["oidc_nonce"]` then returned a `302`
+    to the IdP.  Same browser cookie-store race as v1.0.203: `Set-Cookie` from
+    the `302` was not committed before the browser followed to Google, so the
+    callback arrived with an empty session → `KeyError: 'oidc_state'` → HTTP 500.
+    Fix: `oidc_login` now returns a `200` HTML page with `<meta http-equiv=refresh>`
+    and `window.location.replace()`.
+    (`CyIRIS/source/app/blueprints/pages/login/login_routes.py`)
+
+### Features
+
+  - **CySOAR auto-login (no login button)**: Added `autoLogin: true` to the
+    Node-RED `adminAuth.strategy` config.  Node-RED 4.x skips the SSO button
+    page and redirects directly to the OIDC provider, matching Wazuh/CySIEM.
+    (`CySOAR/data/settings.js`)
 
 ---
 
