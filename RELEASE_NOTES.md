@@ -1,8 +1,19 @@
-## v1.0.216 -- 2026-04-18
+## v1.0.217 -- 2026-04-18
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.216 -- 2026-04-18
+
+### Bug Fixes
+
+  - **IAP / CySIEM**: Fixed CySIEM (Wazuh) proxy auth not working OOB — setup.sh now enables `proxy_auth_domain` in OpenSearch Security `config.yml` and applies it via `securityadmin.sh` automatically during install.
+  - **IAP / CySIEM**: Added `x-proxy-user` and `x-proxy-roles` to Wazuh Dashboard `requestHeadersAllowlist` during setup — previously missing, causing 401s even with proxy auth type set.
+  - **IAP / CyIRIS**: Fixed CyIRIS nginx block using `cysoc.DOMAIN` cert path — `routes.py` now runs `certbot --nginx -d cyiris.DOMAIN` to obtain a dedicated cert and uses that cert path in the nginx server block.
+  - **Platform / CySOAR nginx injection**: Fixed nginx syntax error after CySOAR install — routes.py was leaving trailing anchor text (` by routes.py when CySOAR is installed via portal`) in the config after injecting the `/cysoar/` block. Now correctly slices to end-of-line before injection.
 
 ---
 

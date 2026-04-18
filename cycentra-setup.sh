@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.216 -- 2026-04-18 16:39 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.217 -- 2026-04-18 17:28 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -224,7 +224,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.216"
+_SCRIPT_VERSION="v1.0.217"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -1269,6 +1269,7 @@ remove_prefixes = [
     "opensearch_security.auth.type",
     "opensearch_security.proxycache.",
     "opensearch_security.openid.",
+    "opensearch.requestHeadersAllowlist",
     "# CyCentra 360 IAP proxy auth",
     "# Authentication gate:",
     "# Wazuh trusts",
@@ -1282,11 +1283,67 @@ cleaned += (
     "opensearch_security.auth.type: proxy\n"
     "opensearch_security.proxycache.user_header: \"x-proxy-user\"\n"
     "opensearch_security.proxycache.roles_header: \"x-proxy-roles\"\n"
+    "opensearch.requestHeadersAllowlist: [\"securitytenant\",\"Authorization\",\"x-proxy-user\",\"x-proxy-roles\"]\n"
 )
 with open(path, "w") as f:
     f.write(cleaned)
 print("Wazuh proxy auth config written")
 WAZUH_PY_EOF
+
+        # ── OpenSearch Security: enable proxy_auth_domain ────────────────────────
+        # The Dashboard proxycache auth requires OpenSearch to accept proxy headers.
+        # Enable http_enabled under proxy_auth_domain in the security config and
+        # apply via securityadmin.sh (required — file edit alone has no effect).
+        _OS_SEC_CFG="/etc/wazuh-indexer/opensearch-security/config.yml"
+        if [[ -f "$_OS_SEC_CFG" ]]; then
+            python3 - "$_OS_SEC_CFG" << 'OS_SEC_PY_EOF'
+import sys, re
+path = sys.argv[1]
+with open(path, "r") as f:
+    text = f.read()
+# Enable http_enabled under the proxy_auth_domain block only.
+# Use a state-machine approach: track whether we are inside proxy_auth_domain.
+lines = text.splitlines()
+out = []
+in_proxy_domain = False
+for line in lines:
+    stripped = line.lstrip()
+    indent = len(line) - len(stripped)
+    if stripped.startswith("proxy_auth_domain:"):
+        in_proxy_domain = True
+        out.append(line)
+        continue
+    if in_proxy_domain:
+        # A new top-level key (indent <= 4) ends the proxy_auth_domain block
+        if indent <= 4 and stripped and not stripped.startswith("#"):
+            in_proxy_domain = False
+        elif stripped.startswith("http_enabled:"):
+            out.append(line.replace("http_enabled: false", "http_enabled: true"))
+            continue
+    out.append(line)
+with open(path, "w") as f:
+    f.write("\n".join(out) + "\n")
+print("OpenSearch proxy_auth_domain enabled")
+OS_SEC_PY_EOF
+
+            # Apply the security config change to the running OpenSearch cluster
+            _SEC_ADMIN="/usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh"
+            _CERT_DIR="/etc/wazuh-indexer/certs"
+            if [[ -x "$_SEC_ADMIN" && -f "${_CERT_DIR}/admin.pem" ]]; then
+                export JAVA_HOME=/usr/share/wazuh-indexer/jdk
+                "$_SEC_ADMIN" \
+                    -f "$_OS_SEC_CFG" -t config \
+                    -icl -nhnv \
+                    -cacert "${_CERT_DIR}/root-ca.pem" \
+                    -cert   "${_CERT_DIR}/admin.pem" \
+                    -key    "${_CERT_DIR}/admin-key.pem" \
+                    -h 127.0.0.1 2>/dev/null \
+                    && success "OpenSearch proxy_auth_domain applied via securityadmin" \
+                    || warn "securityadmin.sh failed — Wazuh proxy auth may need manual config"
+            else
+                warn "securityadmin.sh or admin certs not found — skipping OpenSearch security config"
+            fi
+        fi
 
         systemctl restart wazuh-dashboard 2>/dev/null || true
         success "CySIEM Dashboard: proxy auth configured (X-Proxy-User from nginx)"
@@ -1877,8 +1934,9 @@ SSLOPTEOF
         -m "$CLIENT_EMAIL" -d cysiem.${BASE_DOMAIN} \
         && success "SSL cert ready (cysiem)" \
         || true
-    # NOTE: cyiris.DOMAIN cert is obtained by routes.py via certbot --expand when CyIRIS is installed.
-    # NOTE: cymisp.DOMAIN cert is obtained by routes.py via certbot --expand when CyMISP is installed.
+    # NOTE: cyiris/cymisp certs are obtained by routes.py (certbot --nginx -d cyiris.DOMAIN)
+    # when those modules are installed via the portal. No cert is needed here
+    # because no cyiris/cymisp nginx block exists until the module is installed.
 
     [[ -n "${DHPARAM_PID:-}" ]] && wait "$DHPARAM_PID" 2>/dev/null || true
 

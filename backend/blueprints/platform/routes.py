@@ -266,11 +266,11 @@ def _nginx_inject_cysoar(base_domain: str, log_fn):
     # Anchor 1: comment placed by setup.sh as explicit injection point
     anchor = "    # location /cysoar/ is injected here"
     if anchor in text:
-        # Insert the block BEFORE the comment line, then remove the comment
-        ins  = text.find(anchor)
-        text = text[:ins] + block + text[ins + len(anchor):]
-        # Strip trailing content of that comment line up to newline
-        text = re.sub(r"    # location /cysoar/ is injected here[^\n]*\n", "", text)
+        # Replace the ENTIRE comment line (anchor + any trailing text up to \n) with the block
+        ins = text.find(anchor)
+        eol = text.find("\n", ins)
+        eol = eol if eol != -1 else len(text) - 1
+        text = text[:ins] + block + text[eol + 1:]
         NGINX_CONF.write_text(text)
         rc, _, err = run("nginx -t && systemctl reload nginx", timeout=15)
         log_fn("cysoar: /cysoar/ location injected and nginx reloaded" if rc == 0
@@ -311,6 +311,17 @@ def _nginx_add_cyiris(base_domain: str, log_fn):
         log_fn(f"cyiris: nginx block already present")
         return
 
+    # Obtain a dedicated LE cert for cyiris.DOMAIN (webroot — nginx must be up)
+    cyiris_cert = f"/etc/letsencrypt/live/cyiris.{base_domain}/fullchain.pem"
+    import os as _os
+    if not _os.path.exists(cyiris_cert):
+        rc_cb, _, _ = run(
+            f"certbot certonly --nginx --non-interactive --agree-tos"
+            f" -d cyiris.{base_domain} 2>/dev/null || true",
+            timeout=120,
+        )
+        log_fn(f"cyiris: certbot {'succeeded' if _os.path.exists(cyiris_cert) else 'failed — cert may be missing'}")
+
     block = (
         "\nserver {\n"
         "    listen 80; server_name cyiris." + base_domain + ";\n"
@@ -318,8 +329,8 @@ def _nginx_add_cyiris(base_domain: str, log_fn):
         "}\n"
         "server {\n"
         "    listen 443 ssl http2; server_name cyiris." + base_domain + ";\n"
-        "    ssl_certificate     /etc/letsencrypt/live/cysoc." + base_domain + "/fullchain.pem;\n"
-        "    ssl_certificate_key /etc/letsencrypt/live/cysoc." + base_domain + "/privkey.pem;\n"
+        "    ssl_certificate     /etc/letsencrypt/live/cyiris." + base_domain + "/fullchain.pem;\n"
+        "    ssl_certificate_key /etc/letsencrypt/live/cyiris." + base_domain + "/privkey.pem;\n"
         "    include             /etc/letsencrypt/options-ssl-nginx.conf;\n"
         "    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;\n"
         "    add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;\n"
