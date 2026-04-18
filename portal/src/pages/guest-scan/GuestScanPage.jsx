@@ -253,6 +253,21 @@ export function GuestScanPage() {
   const circumference = 2 * Math.PI * 54;
   const strokeDash    = circumference - (progress / 100) * circumference;
 
+  // Retry fetching the scan result — the log says "done" before the JSON is flushed to disk
+  const fetchResultWithRetry = async (uid, attempts = 8, delayMs = 2500) => {
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const r = await fetch(`${API_BASE}/api/scans/latest?uid=${encodeURIComponent(uid)}`);
+        if (r.ok) {
+          const raw = await r.json();
+          if (raw?.assets || raw?.meta) return raw; // valid result
+        }
+      } catch {}
+      if (i < attempts - 1) await new Promise(res => setTimeout(res, delayMs));
+    }
+    return null;
+  };
+
   const pollStatus = () => {
     let noProgressCount = 0, pollCount = 0;
     pollRef.current = setInterval(async () => {
@@ -276,30 +291,30 @@ export function GuestScanPage() {
         if (isDone) {
           clearInterval(pollRef.current); clearInterval(timerRef.current);
           setProgress(100); setCurrentModule("Complete"); setScanState("done");
-          try {
-            const r2 = await fetch(`${API_BASE}/api/scans/latest?uid=${encodeURIComponent(uidRef.current)}`);
-            if (r2.ok) setScanData(await r2.json());
-          } catch {}
+          setLastLog("Loading your results...");
+          // Retry loop: the JSON file may not be flushed yet when the log fires
+          const raw = await fetchResultWithRetry(uidRef.current);
+          if (raw) {
+            setScanData(raw);
+          } else {
+            setLastLog("Results unavailable — please try scanning again.");
+            setScanState("error");
+          }
           return;
         }
 
         if (pollCount > 8 && s.running === false && (s.progress || 0) < 5) {
           noProgressCount++;
           if (noProgressCount >= 4) {
-            try {
-              const r2 = await fetch(`${API_BASE}/api/scans/latest?uid=${encodeURIComponent(uidRef.current)}`);
-              if (r2.ok) {
-                const raw = await r2.json();
-                if (raw?.assets?.length) {
-                  clearInterval(pollRef.current); clearInterval(timerRef.current);
-                  setProgress(100); setScanState("done"); setScanData(raw);
-                } else {
-                  clearInterval(pollRef.current); clearInterval(timerRef.current);
-                  setLastLog("Scan engine not responding. Please try again later.");
-                  setScanState("error");
-                }
-              }
-            } catch {}
+            const raw = await fetchResultWithRetry(uidRef.current, 3, 1500);
+            if (raw?.assets?.length) {
+              clearInterval(pollRef.current); clearInterval(timerRef.current);
+              setProgress(100); setScanState("done"); setScanData(raw);
+            } else {
+              clearInterval(pollRef.current); clearInterval(timerRef.current);
+              setLastLog("Scan engine not responding. Please try again later.");
+              setScanState("error");
+            }
           }
         } else if (s.running === true || s.progress > 0) {
           noProgressCount = 0;
@@ -516,9 +531,18 @@ export function GuestScanPage() {
               <button onClick={resetScan} style={{ flex: 1, background: "transparent", color: "rgba(255,255,255,0.5)",
                 border: "1px solid rgba(255,255,255,0.15)", borderRadius: 4, padding: "12px", fontFamily: "monospace",
                 fontSize: 12, cursor: "pointer" }}>New Scan</button>
-              <button style={{ flex: 1, background: "rgba(0,229,160,0.1)", color: "rgba(0,229,160,0.4)",
-                border: "1px solid rgba(0,229,160,0.2)", borderRadius: 4, padding: "12px", fontFamily: "monospace",
-                fontSize: 12, cursor: "not-allowed" }}>Loading results...</button>
+              <button
+                onClick={async () => {
+                  setLastLog("Retrying...");
+                  const raw = await fetchResultWithRetry(uidRef.current, 5, 2000);
+                  if (raw) setScanData(raw);
+                  else setLastLog("Still loading — please wait a moment and try again.");
+                }}
+                style={{ flex: 1, background: "rgba(0,229,160,0.08)", color: "#00e5a0",
+                  border: "1px solid rgba(0,229,160,0.25)", borderRadius: 4, padding: "12px", fontFamily: "monospace",
+                  fontSize: 12, cursor: "pointer", fontWeight: 700 }}>
+                View Results →
+              </button>
             </div>
           )}
 

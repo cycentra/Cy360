@@ -1,8 +1,16 @@
-## v1.0.210 -- 2026-04-18
+## v1.0.211 -- 2026-04-18
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.210 -- 2026-04-18
+
+### Bug Fixes
+
+  - Fix IAP oauth2-proxy 500 on callback: OIDC provider now signs `oauth2proxy` client id_tokens with RS256 (RSA) so oauth2-proxy can verify via JWKS. Previously only `cysiem` was in RS256_CLIENTS; all other clients received HS256 tokens which oauth2-proxy could not verify.
 
 ---
 

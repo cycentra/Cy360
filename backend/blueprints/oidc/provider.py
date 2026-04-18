@@ -210,7 +210,7 @@ def oidc_token():
     # pyoidc-based clients (e.g. cyiris) verify id_token using client_secret (HS256).
     # OIDC Core 1.0 §10.1: HS256 ID tokens MUST be signed with client_secret,
     # not with the server's generic JWT_SECRET.
-    _RS256_CLIENTS = {"cysiem"}
+    _RS256_CLIENTS = {"cysiem", "oauth2proxy"}
     if _JWT_AVAILABLE and _RSA_AVAILABLE and client_id in _RS256_CLIENTS:
         id_token = pyjwt.encode(payload, _JWT_PRIVATE_KEY, algorithm="RS256",
                                 headers={"kid": _kid})
