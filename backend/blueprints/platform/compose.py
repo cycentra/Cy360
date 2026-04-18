@@ -58,22 +58,17 @@ services:
       IRIS_SECRET_KEY: "${{IRIS_SECRET_KEY:-change_in_production}}"
       IRIS_ADM_EMAIL: "${{IRIS_ADM_EMAIL:-admin@cycentra.com}}"
       IRIS_ADM_PASSWORD: "${{IRIS_ADM_PASSWORD}}"
-      IRIS_AUTHENTICATION_TYPE: "oidc"
-      OIDC_ISSUER_URL: "https://cyasm.${{BASE_DOMAIN}}/oidc"
-      OIDC_CLIENT_ID: "cyiris"
-      OIDC_CLIENT_SECRET: "${{CYIRIS_OIDC_SECRET}}"
-      OIDC_MAPPING_EMAIL: "email"
-      OIDC_MAPPING_USERNAME: "email"
-      AUTHENTICATION_CREATE_USER_IF_NOT_EXIST: "true"
+      # IAP mode: oauth2-proxy gates the subdomain; CyIRIS trusts X-Email header (lazy verify)
+      IRIS_AUTHENTICATION_TYPE: "oidc_proxy"
+      OIDC_IRIS_TOKEN_VERIFY_MODE: "lazy"
+      OIDC_IRIS_DISCOVERY_URL: "https://cyasm.${{BASE_DOMAIN}}/oidc/.well-known/openid-configuration"
+      TLS_ROOT_CA: "/opt/cycentra/certs/cycentra.crt"
       IRIS_AUTHENTICATION_CREATE_USER_IF_NOT_EXIST: "True"
       IRIS_AUTHENTICATION_LOCAL_FALLBACK: "False"
-      # Explicit endpoints — fallback if OIDC discovery fails
-      OIDC_AUTH_ENDPOINT: "https://cyasm.${{BASE_DOMAIN}}/oidc/authorize"
-      OIDC_TOKEN_ENDPOINT: "https://cyasm.${{BASE_DOMAIN}}/oidc/token"
-      OIDC_END_SESSION_ENDPOINT: "https://cyasm.${{BASE_DOMAIN}}/oidc/logout"
     volumes:
       - cyiris_app_data:/home/iris/iriswebapp/app/static/assets/files
       - cyiris_user_data:/home/iris/iriswebapp/user_data
+      - /opt/cycentra/certs:/opt/cycentra/certs:ro
 
 volumes:
   cyiris_db_data:
@@ -92,15 +87,12 @@ services:
     ports:
       - "127.0.0.1:1880:1880"
     environment:
-      - OIDC_ISSUER=https://cyasm.${{BASE_DOMAIN}}/oidc
-      - OIDC_CLIENT_ID=cysoar
-      - OIDC_CLIENT_SECRET=${{CYSOAR_OIDC_SECRET}}
-      - OIDC_REDIRECT_URI=https://cysoc.${{BASE_DOMAIN}}/cysoar/auth/strategy/callback
+      # IAP mode: oauth2-proxy gates /cysoar/ via nginx auth_request.
+      # No OIDC credentials needed here — authentication is handled upstream.
       - SESSION_SECRET=${{CYSOAR_SESSION_SECRET}}
       - IRIS_URL=https://cyiris.${{BASE_DOMAIN}}
       - WAZUH_URL=https://cysiem.${{BASE_DOMAIN}}
       - CYCENTRA_PORTAL_URL=${{CYCENTRA_PORTAL_URL}}
-      - NODE_TLS_REJECT_UNAUTHORIZED=0
     volumes:
       - cysoar_data:/data
 

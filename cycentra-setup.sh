@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.208 -- 2026-04-18 00:25 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.209 -- 2026-04-18 11:24 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -224,7 +224,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.208"
+_SCRIPT_VERSION="v1.0.209"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -574,145 +574,12 @@ if [[ -f "$WAZUH_YML" ]]; then
 
 fi
 
-# ── Step 4.3: CySIEM OIDC SSO ────────────────────────────────────────────────
-# Configures OpenSearch Dashboards + Indexer to accept CyCentra 360 OIDC tokens.
-# Runs in all modes (full / update). Idempotent. No-op if CySIEM not installed.
+# ── Step 4.3: CySIEM proxy auth (IAP mode) ───────────────────────────────────
+# Wazuh Dashboard is gated by oauth2-proxy (auth_request in nginx).
+# Dashboard auth.type is set to "proxy" — it trusts X-Proxy-User from nginx.
+# This replaces the old OIDC + securityadmin.sh approach entirely.
+# Configured after .env is written (step 4.3b below).
 _WAZUH_DASH_YML="/etc/wazuh-dashboard/opensearch_dashboards.yml"
-if [[ -f "$_WAZUH_DASH_YML" ]]; then
-    step_header "CySIEM OIDC SSO"
-
-    # Secrets live as bash vars in full mode (just generated in Step 9).
-    # In update mode they are loaded via: set -a; source /opt/cycentra/.env
-    # BASE_DOMAIN may not be in scope yet in --update mode — load it defensively.
-    [[ -z "${BASE_DOMAIN:-}" ]] && \
-        BASE_DOMAIN=$(grep "^BASE_DOMAIN=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2- || true)
-    BASE_DOMAIN="${BASE_DOMAIN:-cycentra.com}"
-    _cy_siem_secret="${CYSIEM_OIDC_SECRET:-}"
-    [[ -z "$_cy_siem_secret" ]] && \
-        _cy_siem_secret=$(grep "^CYSIEM_OIDC_SECRET=" /opt/cycentra/.env 2>/dev/null \
-                          | cut -d= -f2- || true)
-    _cy_jwt_secret="${JWT_SECRET:-}"
-    [[ -z "$_cy_jwt_secret" ]] && \
-        _cy_jwt_secret=$(grep "^JWT_SECRET=" /opt/cycentra/.env 2>/dev/null \
-                         | cut -d= -f2- || true)
-
-    if [[ -z "$_cy_siem_secret" || -z "$_cy_jwt_secret" ]]; then
-        warn "CYSIEM_OIDC_SECRET or JWT_SECRET not available — Step 4.3 deferred; re-run --update after main .env is written"
-    else
-        # ── Part A: OpenSearch Dashboards — OIDC auth mode ───────────────────
-        if grep -q 'opensearch_security.auth.type:.*openid' "$_WAZUH_DASH_YML" 2>/dev/null; then
-            info "CySIEM OIDC: Dashboards config already present"
-        else
-            cp "$_WAZUH_DASH_YML" "${_WAZUH_DASH_YML}.pre-oidc-$(date +%Y%m%d)" 2>/dev/null || true
-            cat >> "$_WAZUH_DASH_YML" << CYSIEM_OIDC_EOF
-# CyCentra 360 OIDC SSO — written by cycentra-setup.sh
-opensearch_security.auth.type: "openid"
-opensearch_security.openid.base_redirect_url: "https://cysiem.${BASE_DOMAIN}"
-opensearch_security.openid.connect_url: "https://cyasm.${BASE_DOMAIN}/oidc/.well-known/openid-configuration"
-opensearch_security.openid.client_id: "cysiem"
-opensearch_security.openid.client_secret: "${_cy_siem_secret}"
-opensearch_security.openid.scope: "openid email profile"
-opensearch_security.openid.logout_url: "https://cysoc.${BASE_DOMAIN}/auth/logout"
-opensearch_security.openid.trust_dynamic_headers: true
-CYSIEM_OIDC_EOF
-            success "CySIEM Dashboard: OIDC settings written"
-        fi
-
-        # ── Part B: OpenSearch Indexer — JWT auth domain + role mapping ──────
-        _CY_SEC_DIR="/etc/wazuh-indexer/opensearch-security"
-        if [[ -d "$_CY_SEC_DIR" ]]; then
-            export CY_JWT_B64
-            CY_JWT_B64=$(echo -n "${_cy_jwt_secret}" | base64 -w 0 2>/dev/null \
-                         || echo -n "${_cy_jwt_secret}" | base64)
-
-            python3 << 'CY_WAZUH_PY'
-import yaml, sys, os
-
-sec_dir = "/etc/wazuh-indexer/opensearch-security"
-jwt_b64 = os.environ.get("CY_JWT_B64", "")
-
-# config.yml — add JWT auth domain so Indexer trusts CyCentra-issued tokens
-cfg_path = os.path.join(sec_dir, "config.yml")
-if os.path.exists(cfg_path):
-    with open(cfg_path) as f:
-        cfg = yaml.safe_load(f) or {}
-    authc = cfg.get("config", {}).get("dynamic", {}).get("authc", {})
-    if "cycentra_jwt" in authc:
-        print("config.yml: JWT domain already present")
-    else:
-        authc["cycentra_jwt"] = {
-            "description": "CyCentra 360 JWT tokens (HS256)",
-            "http_enabled": True,
-            "transport_enabled": True,
-            "order": 0,
-            "http_authenticator": {
-                "type": "jwt",
-                "challenge": False,
-                "config": {
-                    "signing_key": jwt_b64,
-                    "jwt_header": "Authorization",
-                    "subject_key": "sub",
-                    "roles_key": "roles",
-                }
-            },
-            "authentication_backend": {"type": "noop"}
-        }
-        cfg.setdefault("config", {}).setdefault("dynamic", {})["authc"] = authc
-        with open(cfg_path, "w") as f:
-            yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
-        print("config.yml: JWT domain added")
-else:
-    print("config.yml not found — skipping")
-
-# roles_mapping.yml — map CyCentra roles to Wazuh backend roles
-rm_path = os.path.join(sec_dir, "roles_mapping.yml")
-if os.path.exists(rm_path):
-    with open(rm_path) as f:
-        rm = yaml.safe_load(f) or {}
-    changed = False
-    for wazuh_role, cy_roles in [
-        ("all_access",          ["admin"]),
-        ("readall_and_monitor", ["analyst"]),
-    ]:
-        entry = rm.setdefault(wazuh_role, {})
-        br    = entry.setdefault("backend_roles", [])
-        for r in cy_roles:
-            if r not in br:
-                br.append(r); changed = True
-    if changed:
-        with open(rm_path, "w") as f:
-            yaml.dump(rm, f, default_flow_style=False, allow_unicode=True)
-        print("roles_mapping.yml: CyCentra roles mapped")
-    else:
-        print("roles_mapping.yml: mapping already present")
-else:
-    print("roles_mapping.yml not found — skipping")
-CY_WAZUH_PY
-
-            # Apply security config via securityadmin.sh
-            _CY_ADMIN_SH=$(find /usr/share/wazuh-indexer/plugins/opensearch-security/tools \
-                               -name "securityadmin.sh" 2>/dev/null | head -1 || true)
-            if [[ -n "$_CY_ADMIN_SH" ]]; then
-                _CY_CERT_DIR="/etc/wazuh-indexer/certs"
-                bash "$_CY_ADMIN_SH" \
-                    -cd "$_CY_SEC_DIR" -icl -nhnv \
-                    -cacert "${_CY_CERT_DIR}/root-ca.pem" \
-                    -cert   "${_CY_CERT_DIR}/admin.pem" \
-                    -key    "${_CY_CERT_DIR}/admin-key.pem" \
-                    -h 127.0.0.1 2>/dev/null \
-                && success "OpenSearch security config applied" \
-                || warn    "securityadmin.sh failed — re-run: sudo bash /opt/cycentra/cycentra-setup.sh --update"
-            else
-                warn "securityadmin.sh not found — config staged; apply manually after indexer is installed"
-            fi
-        else
-            warn "OpenSearch security dir not found — JWT config skipped (indexer may not be installed yet)"
-        fi
-
-        systemctl restart wazuh-dashboard 2>/dev/null || true
-        success "CySIEM OIDC SSO configured"
-    fi
-fi  # end Wazuh OIDC step
 
 # ── Step 4.2: Auto-detect CySIEM API password ─────────────────────────────────
 # Read the wazuh-wui password from the dashboard config file.
@@ -1071,6 +938,9 @@ if [[ "$MODE" == "full" ]]; then
     CYIRIS_OIDC_SECRET=$(gen_secret)
     CYSOAR_OIDC_SECRET=$(gen_secret)
     CYSIEM_OIDC_SECRET=$(gen_secret)
+    # oauth2-proxy: client secret (used by CyCentra OIDC) + 32-byte cookie secret
+    OAUTH2PROXY_SECRET=$(gen_secret)
+    OAUTH2PROXY_COOKIE_SECRET=$(openssl rand -base64 32 | tr -d '\n' | head -c 32)
     success "All secrets ready"
 
 else
@@ -1133,6 +1003,22 @@ PATCHEOF
         info "Added CYSIEM_OIDC_SECRET to .env"
     fi
 
+    # Add IAP oauth2-proxy secrets if missing (introduced with IAP switch)
+    if ! grep -q "^OAUTH2PROXY_SECRET=" "$_env" 2>/dev/null; then
+        _new_oauth2_secret=$(openssl rand -hex 32)
+        _new_cookie_secret=$(openssl rand -base64 32 | tr -d '\n' | head -c 32)
+        cat >> "$_env" << PATCHEOF
+
+# ── IAP oauth2-proxy secrets ───────────────────────────────────────────────────
+OAUTH2PROXY_SECRET=${_new_oauth2_secret}
+OAUTH2PROXY_COOKIE_SECRET=${_new_cookie_secret}
+PATCHEOF
+        info "Added OAUTH2PROXY_SECRET + OAUTH2PROXY_COOKIE_SECRET to .env"
+        # Export into current session so the IAP setup step below can use them
+        OAUTH2PROXY_SECRET="$_new_oauth2_secret"
+        OAUTH2PROXY_COOKIE_SECRET="$_new_cookie_secret"
+    fi
+
     chmod 600 "$_env"
     success ".env patched"
 fi
@@ -1183,6 +1069,12 @@ ENVEOF
 CYIRIS_OIDC_SECRET=${CYIRIS_OIDC_SECRET}
 CYSOAR_OIDC_SECRET=${CYSOAR_OIDC_SECRET}
 CYSIEM_OIDC_SECRET=${CYSIEM_OIDC_SECRET}
+
+# ── IAP oauth2-proxy ────────────────────────────────────────────────────────────
+# oauth2-proxy uses OIDC against cyasm.DOMAIN. It is the single SSO gate for
+# cyiris, cysoar, and cysiem subdomains via nginx auth_request.
+OAUTH2PROXY_SECRET=${OAUTH2PROXY_SECRET}
+OAUTH2PROXY_COOKIE_SECRET=${OAUTH2PROXY_COOKIE_SECRET}
 
 IRIS_SECRET=${IRIS_SECRET}
 IRIS_DB_PASS=${IRIS_DB_PASS}
@@ -1282,34 +1174,111 @@ SIEMEOF
     chmod 755 /opt/cycentra/ml_models
     success "ML model directory created → /opt/cycentra/ml_models"
 
-    # ── Step 4.3b: CySIEM OIDC SSO (fresh install — run now that .env is written) ──
-    # On fresh install, step 4.3 above was deferred because CYSIEM_OIDC_SECRET was
-    # not generated yet. The secrets are now in memory and in .env — run it here.
-    if [[ -f "$_WAZUH_DASH_YML" ]] && \
-       ! grep -q 'opensearch_security.auth.type:.*openid' "$_WAZUH_DASH_YML" 2>/dev/null; then
+fi  # end full env block
 
-        _cy_siem_secret="${CYSIEM_OIDC_SECRET:-}"
-        _cy_jwt_secret="${JWT_SECRET:-}"
-        if [[ -n "$_cy_siem_secret" && -n "$_cy_jwt_secret" ]]; then
-            step_header "CySIEM OIDC SSO (post-env)"
-            cp "$_WAZUH_DASH_YML" "${_WAZUH_DASH_YML}.pre-oidc-$(date +%Y%m%d)" 2>/dev/null || true
-            cat >> "$_WAZUH_DASH_YML" << CYSIEM_OIDC2_EOF
-# CyCentra 360 OIDC SSO — written by cycentra-setup.sh
-opensearch_security.auth.type: "openid"
-opensearch_security.openid.base_redirect_url: "https://cysiem.${BASE_DOMAIN}"
-opensearch_security.openid.connect_url: "https://cyasm.${BASE_DOMAIN}/oidc/.well-known/openid-configuration"
-opensearch_security.openid.client_id: "cysiem"
-opensearch_security.openid.client_secret: "${_cy_siem_secret}"
-opensearch_security.openid.scope: "openid email profile"
-opensearch_security.openid.logout_url: "https://cysoc.${BASE_DOMAIN}/auth/logout"
-opensearch_security.openid.trust_dynamic_headers: true
-CYSIEM_OIDC2_EOF
-            systemctl restart wazuh-dashboard 2>/dev/null || true
-            success "CySIEM OIDC SSO configured (post-env step)"
+# ── Step 4.3b: IAP Gateway — oauth2-proxy + Wazuh proxy auth ─────────────────
+# Runs in all modes (full / update). Idempotent.
+# oauth2-proxy: single OIDC gate for cyiris, cysoar, cysiem subdomains.
+# Wazuh: switches Dashboard to proxy auth mode (reads X-Proxy-User from nginx).
+# No securityadmin.sh needed — proxy mode is simpler and more reliable.
+
+step_header "IAP GATEWAY (oauth2-proxy)"
+
+# Load vars from .env if not already in memory (update mode)
+[[ -z "${BASE_DOMAIN:-}" ]] && \
+    BASE_DOMAIN=$(grep "^BASE_DOMAIN=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2- || true)
+BASE_DOMAIN="${BASE_DOMAIN:-cycentra.com}"
+[[ -z "${OAUTH2PROXY_SECRET:-}" ]] && \
+    OAUTH2PROXY_SECRET=$(grep "^OAUTH2PROXY_SECRET=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2- || true)
+[[ -z "${OAUTH2PROXY_COOKIE_SECRET:-}" ]] && \
+    OAUTH2PROXY_COOKIE_SECRET=$(grep "^OAUTH2PROXY_COOKIE_SECRET=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2- || true)
+
+if [[ -z "$OAUTH2PROXY_SECRET" || -z "$OAUTH2PROXY_COOKIE_SECRET" ]]; then
+    warn "oauth2-proxy secrets missing in .env — IAP setup skipped; re-run --update"
+else
+    # ── Pull and start oauth2-proxy container ───────────────────────────────────
+    # Runs on 127.0.0.1:4180. nginx uses it as an internal auth_request backend.
+    # Cookie domain .BASE_DOMAIN means ONE login covers all subdomains.
+    _OAUTH2_PROXY_IMAGE="quay.io/oauth2-proxy/oauth2-proxy:latest"
+
+    if docker ps -q --filter "name=cy-proxy" 2>/dev/null | grep -q .; then
+        info "cy-proxy container already running — checking config..."
+        # Compare cookie domain to detect domain change; recreate if needed
+        _running_domain=$(docker inspect cy-proxy 2>/dev/null \
+            | python3 -c "import sys,json; e=json.load(sys.stdin)[0]['Config']['Env']; \
+              print(next((x.split('=',1)[1] for x in e if x.startswith('OAUTH2_PROXY_COOKIE_DOMAINS=')),'')" 2>/dev/null || true)
+        if [[ "$_running_domain" == ".${BASE_DOMAIN}" ]]; then
+            info "cy-proxy already configured for .${BASE_DOMAIN} — no restart needed"
+        else
+            info "cy-proxy domain changed — recreating container"
+            docker rm -f cy-proxy 2>/dev/null || true
         fi
     fi
 
-fi  # end full env block
+    if ! docker ps -q --filter "name=cy-proxy" 2>/dev/null | grep -q .; then
+        docker pull "$_OAUTH2_PROXY_IMAGE" 2>/dev/null || \
+            warn "oauth2-proxy pull failed — using cached image if available"
+
+        docker run -d \
+            --name cy-proxy \
+            --restart unless-stopped \
+            --network host \
+            -e OAUTH2_PROXY_PROVIDER=oidc \
+            -e OAUTH2_PROXY_OIDC_ISSUER_URL="https://cyasm.${BASE_DOMAIN}/oidc" \
+            -e OAUTH2_PROXY_CLIENT_ID=oauth2proxy \
+            -e OAUTH2_PROXY_CLIENT_SECRET="${OAUTH2PROXY_SECRET}" \
+            -e OAUTH2_PROXY_REDIRECT_URL="https://cysoc.${BASE_DOMAIN}/oauth2/callback" \
+            -e OAUTH2_PROXY_HTTP_ADDRESS="127.0.0.1:4180" \
+            -e OAUTH2_PROXY_COOKIE_SECRET="${OAUTH2PROXY_COOKIE_SECRET}" \
+            -e OAUTH2_PROXY_COOKIE_DOMAINS=".${BASE_DOMAIN}" \
+            -e OAUTH2_PROXY_WHITELIST_DOMAINS=".${BASE_DOMAIN}" \
+            -e OAUTH2_PROXY_EMAIL_DOMAINS="*" \
+            -e OAUTH2_PROXY_SCOPE="openid email profile" \
+            -e OAUTH2_PROXY_SET_XAUTHREQUEST=true \
+            -e OAUTH2_PROXY_PASS_ACCESS_TOKEN=false \
+            -e OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER=false \
+            -e OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true \
+            -e OAUTH2_PROXY_SKIP_JWT_BEARER_TOKENS=false \
+            -e OAUTH2_PROXY_SSL_INSECURE_SKIP_VERIFY=true \
+            -e OAUTH2_PROXY_COOKIE_SECURE=true \
+            -e OAUTH2_PROXY_COOKIE_SAMESITE=lax \
+            -e OAUTH2_PROXY_SESSION_STORE_TYPE=cookie \
+            -e OAUTH2_PROXY_UPSTREAMS="http://127.0.0.1:5252" \
+            "$_OAUTH2_PROXY_IMAGE" \
+        && success "cy-proxy (oauth2-proxy) started on 127.0.0.1:4180" \
+        || { warn "oauth2-proxy container failed to start — check: docker logs cy-proxy"; \
+             ERRORS+=("oauth2-proxy failed to start"); }
+    fi
+
+    # ── Wazuh Dashboard: switch to proxy auth mode ──────────────────────────────
+    # Remove all OIDC settings, add proxy auth. No indexer changes needed —
+    # proxy mode uses the Dashboard service account to talk to OpenSearch.
+    if [[ -f "$_WAZUH_DASH_YML" ]]; then
+        step_header "CySIEM PROXY AUTH"
+        cp "$_WAZUH_DASH_YML" "${_WAZUH_DASH_YML}.pre-iap-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+
+        # Remove all old OIDC/openid lines (idempotent)
+        sed -i '/^opensearch_security\.auth\.type:.*openid/d' "$_WAZUH_DASH_YML" 2>/dev/null || true
+        sed -i '/^opensearch_security\.openid\./d'            "$_WAZUH_DASH_YML" 2>/dev/null || true
+        # Remove any leftover proxy auth lines before re-adding
+        sed -i '/^opensearch_security\.auth\.type:.*proxy/d'       "$_WAZUH_DASH_YML" 2>/dev/null || true
+        sed -i '/^opensearch_security\.proxycache\./d'              "$_WAZUH_DASH_YML" 2>/dev/null || true
+
+        cat >> "$_WAZUH_DASH_YML" << WAZUH_PROXY_EOF
+# CyCentra 360 IAP proxy auth — written by cycentra-setup.sh
+# Authentication gate: oauth2-proxy via nginx auth_request.
+# Wazuh trusts X-Proxy-User + X-Proxy-Roles headers set by nginx.
+opensearch_security.auth.type: "proxy"
+opensearch_security.proxycache.user_header: "x-proxy-user"
+opensearch_security.proxycache.roles_header: "x-proxy-roles"
+WAZUH_PROXY_EOF
+
+        systemctl restart wazuh-dashboard 2>/dev/null || true
+        success "CySIEM Dashboard: proxy auth configured (X-Proxy-User from nginx)"
+    else
+        info "Wazuh not installed — CySIEM proxy auth will run when Wazuh is deployed"
+    fi
+fi  # end IAP setup
 
 # ── Step 11: Deploy portal static files ──────────────────────────────────────
 step_header "DEPLOYING PORTAL"
@@ -1660,7 +1629,25 @@ server {
     location /api/  { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; proxy_read_timeout 180s; }
     location /auth/ { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; }
     location /oidc/ { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; }
-    # location cysoar is injected here by routes.py when CySOAR is installed via portal
+    # ── IAP: oauth2-proxy sign-in / callback / sign-out ─────────────────────
+    location /oauth2/ {
+        proxy_pass       http://127.0.0.1:4180;
+        proxy_set_header Host              \$host;
+        proxy_set_header X-Real-IP         \$remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Auth-Request-Redirect \$request_uri;
+    }
+    # Internal auth-check endpoint used by auth_request in other server blocks
+    location = /oauth2/auth {
+        internal;
+        proxy_pass              http://127.0.0.1:4180;
+        proxy_pass_request_body off;
+        proxy_set_header        Content-Length "";
+        proxy_set_header        X-Original-URI \$request_uri;
+        proxy_set_header        X-Scheme \$scheme;
+    }
+    location @error401 { return 302 https://cysoc.${BASE_DOMAIN}/oauth2/sign_in?rd=https://\$host\$request_uri; }
+    # location /cysoar/ is injected here by routes.py when CySOAR is installed via portal
 }
 
 # ── Backend / OIDC IdP (cyasm) ──────────────────────────────────────────────
@@ -1700,6 +1687,19 @@ server {
     add_header Strict-Transport-Security "max-age=31536000" always;
     add_header X-Frame-Options "" always;
     add_header Content-Security-Policy "frame-ancestors 'self' https://cysoc.${BASE_DOMAIN}" always;
+    # IAP gate — only authenticated CyCentra users reach Wazuh Dashboard
+    auth_request     /oauth2/auth;
+    error_page 401 = @error401;
+    auth_request_set \$proxy_user  \$upstream_http_x_auth_request_email;
+    location @error401 { return 302 https://cysoc.${BASE_DOMAIN}/oauth2/sign_in?rd=https://\$host\$request_uri; }
+    location = /oauth2/auth {
+        internal;
+        proxy_pass              http://127.0.0.1:4180;
+        proxy_pass_request_body off;
+        proxy_set_header        Content-Length "";
+        proxy_set_header        X-Original-URI \$request_uri;
+        proxy_set_header        X-Scheme \$scheme;
+    }
     location / {
         proxy_pass https://127.0.0.1:5601;
         proxy_ssl_verify off;
@@ -1708,6 +1708,9 @@ server {
         proxy_set_header Connection \$connection_upgrade;
         proxy_set_header Host \$host;
         proxy_set_header X-Forwarded-Proto https;
+        # Pass authenticated identity to Wazuh Dashboard (proxy auth mode)
+        proxy_set_header X-Proxy-User  \$proxy_user;
+        proxy_set_header X-Proxy-Roles admin;
         proxy_read_timeout 120;
         proxy_buffering off;
         proxy_cookie_flags ~ samesite=none secure;

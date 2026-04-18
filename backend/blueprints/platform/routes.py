@@ -247,12 +247,17 @@ def _nginx_inject_cysoar(base_domain: str, log_fn):
         return
 
     block = (
+        "    # IAP gate for /cysoar/ — oauth2-proxy validates session before proxying\n"
         "    location /cysoar/ {\n"
+        "        auth_request        /oauth2/auth;\n"
+        "        error_page 401    = @error401;\n"
+        "        auth_request_set    $proxy_email $upstream_http_x_auth_request_email;\n"
         "        proxy_pass http://127.0.0.1:1880;\n"
         "        proxy_http_version 1.1;\n"
         "        proxy_set_header Upgrade $http_upgrade;\n"
         "        proxy_set_header Connection $connection_upgrade;\n"
         "        proxy_set_header Host $host;\n"
+        "        proxy_set_header X-Email $proxy_email;\n"
         "        proxy_read_timeout 120s;\n"
         "        proxy_buffering off;\n"
         "    }\n"
@@ -297,7 +302,7 @@ def _nginx_inject_cysoar(base_domain: str, log_fn):
 
 
 def _nginx_add_cyiris(base_domain: str, log_fn):
-    """Add the cyiris.DOMAIN server block — exact block matching the original."""
+    """Add the cyiris.DOMAIN server block with IAP oauth2-proxy auth_request gate."""
     if not NGINX_CONF.exists():
         log_fn("cyiris: nginx config not found")
         return
@@ -320,8 +325,21 @@ def _nginx_add_cyiris(base_domain: str, log_fn):
         "    add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;\n"
         "    add_header X-Frame-Options \"\" always;\n"
         "    add_header Content-Security-Policy \"frame-ancestors 'self' https://cysoc." + base_domain + "\" always;\n"
-        "    add_header Access-Control-Allow-Origin \"https://cysoc." + base_domain + "\" always;\n"
-        "    add_header Access-Control-Allow-Credentials \"true\" always;\n"
+        "    # IAP gate — oauth2-proxy validates the wildcard ." + base_domain + " session cookie\n"
+        "    auth_request        /oauth2/auth;\n"
+        "    error_page 401    = @error401;\n"
+        "    auth_request_set    $proxy_email $upstream_http_x_auth_request_email;\n"
+        "    location @error401 {\n"
+        "        return 302 https://cysoc." + base_domain + "/oauth2/sign_in?rd=https://$host$request_uri;\n"
+        "    }\n"
+        "    location = /oauth2/auth {\n"
+        "        internal;\n"
+        "        proxy_pass              http://127.0.0.1:4180;\n"
+        "        proxy_pass_request_body off;\n"
+        "        proxy_set_header        Content-Length \"\";\n"
+        "        proxy_set_header        X-Original-URI $request_uri;\n"
+        "        proxy_set_header        X-Scheme $scheme;\n"
+        "    }\n"
         "    if ($request_method = OPTIONS) { return 204; }\n"
         "    location / {\n"
         "        proxy_pass http://127.0.0.1:4433;\n"
@@ -329,6 +347,7 @@ def _nginx_add_cyiris(base_domain: str, log_fn):
         "        proxy_set_header Host $host;\n"
         "        proxy_set_header X-Real-IP $remote_addr;\n"
         "        proxy_set_header X-Forwarded-Proto https;\n"
+        "        proxy_set_header X-Email $proxy_email;\n"
         "        proxy_read_timeout 300;\n"
         "        proxy_buffer_size 128k;\n"
         "        proxy_buffers 4 256k;\n"
@@ -491,8 +510,8 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
             compose_path.write_text(compose_text)
             log(f"CyIRIS setup complete: hardcoded password into docker-compose.yml")
 
-            # 5. Ensure staging/self-signed cert is available for REQUESTS_CA_BUNDLE
-            #    (pyoidc needs to verify TLS to the OIDC issuer)
+            # 5. Ensure TLS cert is available for CyIRIS container to validate
+            #    cyasm.DOMAIN at startup (needed by oidc_proxy discovery URL fetch)
             import subprocess as _subp
             certs_dir = Path("/opt/cycentra/certs")
             certs_dir.mkdir(parents=True, exist_ok=True)
@@ -504,7 +523,6 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
                          f"cyasm.{base_domain}:443", "-showcerts"],
                         input=b"", capture_output=True, timeout=10
                     )
-                    # Extract all PEM certs from output
                     out = result.stdout.decode("utf-8", errors="replace")
                     pem_chain = "\n".join(
                         "\n".join(block.splitlines())
@@ -514,15 +532,14 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
                     )
                     if "BEGIN CERTIFICATE" in pem_chain:
                         cert_dest.write_text(pem_chain)
-                        log(f"CyIRIS: wrote TLS cert chain to {cert_dest}")
+                        log(f"CyIRIS: wrote TLS cert chain to {cert_dest} (for oidc_proxy discovery)")
                     else:
-                        log("CyIRIS: WARNING — could not extract cert chain; OIDC token exchange may fail over staging TLS")
+                        log("CyIRIS: WARNING — cert extraction skipped; discovery URL validation may fail on staging TLS")
                 except Exception as _ce:
                     log(f"CyIRIS: WARNING — cert extraction error: {_ce}")
 
         elif module_id == "cysoar":
             # Pre-install cleanup — stale volumes cause httpStatic issues
-            print(f"DEBUG: Current module_id is: '{module_id}'")
             log("CySOAR pre-install cleanup — removing stale containers and volumes")
             run("docker compose down -v", cwd=str(module_dir), timeout=60)
             rc, c_out, _ = run("docker ps -aq --filter 'name=cysoar'", timeout=10)
@@ -539,8 +556,8 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
             log("CySOAR pre-install cleanup complete")
 
             cysoar_env = {
+                # IAP mode: OIDC env vars removed — oauth2-proxy handles auth upstream
                 "CYCENTRA_PORTAL_URL":      os.environ.get("CYCENTRA_PORTAL_URL") or os.environ.get("FRONTEND_URL", ""),
-                "CYSOAR_OIDC_SECRET":       os.environ.get("CYSOAR_OIDC_SECRET", ""),
                 "CYSOAR_SESSION_SECRET":    os.environ.get("NODE_RED_CREDENTIAL_SECRET", ""),
                 "BASE_DOMAIN":              base_domain,
                 "SMTP_HOST":                os.environ.get("SMTP_HOST", ""),
@@ -709,9 +726,6 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
         # ── CySOAR: inject /cysoar/ location into portal server ───────────────
 
         if module_id == "cysoar":
-            print(f"DEBUG: Current module_id is: '{module_id}'")
-            
-            # Standardize indentation (4 spaces is the Python standard)
             for _ in range(6):
                 time.sleep(5)
                 # Check if the container is up and the service is responding
@@ -727,78 +741,13 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
             # This must align with the 'print' and 'for' to be inside the 'if'
             _nginx_inject_cysoar(base_domain, log)
 
-            # ── Install passport packages + write OIDC settings.js ─────────────
-            log("CySOAR: installing passport+openidconnect packages")
-            run("docker exec -u root cysoar npm install --prefix /usr/src/node-red "
-                "passport passport-openidconnect --no-save --quiet", timeout=120)
-
-            _cysoar_settings = (
-                "'use strict';\n\n"
-                "// Allow self-signed / staging TLS for internal OIDC calls\n"
-                "process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';\n\n"
-                "const OpenIDConnectStrategy = "
-                "require('/usr/src/node-red/node_modules/passport-openidconnect');\n\n"
-                "const OIDC_ISSUER        = process.env.OIDC_ISSUER        || '';\n"
-                "const OIDC_CLIENT_ID     = process.env.OIDC_CLIENT_ID     || '';\n"
-                "const OIDC_CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET || '';\n"
-                "const OIDC_REDIRECT_URI  = process.env.OIDC_REDIRECT_URI  || '';\n\n"
-                "module.exports = {\n"
-                "  uiPort: 1880,\n"
-                "  httpAdminRoot: '/cysoar',\n"
-                "  adminAuth: {\n"
-                "    type: 'strategy',\n"
-                "    strategy: {\n"
-                "      name:       'openidconnect',\n"
-                "      label:      'Sign in with CyCentra SSO',\n"
-                "      icon:       'fa-lock',\n"
-                "      autoLogin:  true,\n"
-                "      strategy: OpenIDConnectStrategy,\n"
-                "      options: {\n"
-                "        issuer:           OIDC_ISSUER,\n"
-                "        authorizationURL: OIDC_ISSUER + '/authorize',\n"
-                "        tokenURL:         OIDC_ISSUER + '/token',\n"
-                "        userInfoURL:      OIDC_ISSUER + '/userinfo',\n"
-                "        clientID:         OIDC_CLIENT_ID,\n"
-                "        clientSecret:     OIDC_CLIENT_SECRET,\n"
-                "        callbackURL:      OIDC_REDIRECT_URI,\n"
-                "        scope:            ['email', 'profile'],\n"
-                "        // passport-openidconnect v0.1.x dispatches arity-4 as (iss, profile, context, done)\n"
-                "        verify: function(iss, profile, context, done) {\n"
-                "          const email =\n"
-                "            (profile && profile.emails && profile.emails[0] && profile.emails[0].value) ||\n"
-                "            (profile && profile._json && profile._json.email) ||\n"
-                "            (profile && profile.id) || profile;\n"
-                "          return done(null, { username: String(email), permissions: '*' });\n"
-                "        },\n"
-                "      },\n"
-                "    },\n"
-                "    users: function(username) {\n"
-                "      return Promise.resolve({ username: username, permissions: '*' });\n"
-                "    },\n"
-                "  },\n"
-                "  flowFile:         '/data/flows.json',\n"
-                "  credentialSecret: process.env.SESSION_SECRET || 'cycentra-secret-change-me',\n"
-                "  httpStatic:   '/data/custom-theme',\n"
-                "  editorTheme: {\n"
-                "    page:   { title: 'CyCentra', favicon: '/data/custom-theme/favicon.png',\n"
-                "              css: '/data/custom-theme/custom.css', scripts: '/data/custom-theme/inject.js' },\n"
-                "    header: { title: 'CyCentra', image: '/data/custom-theme/logo.png' },\n"
-                "    login:  { image: '/data/custom-theme/logo-login.png' },\n"
-                "    menu:   { 'menu-item-help': { label: 'Documentation', url: 'https://cycentra.com' } },\n"
-                "  },\n"
-                "  contextStorage: { default: { module: 'memory' }, persistent: { module: 'localfilesystem' } },\n"
-                "  logging:        { console: { level: 'info', metric: false, audit: false } },\n"
-                "  debugMaxLength: 1000,\n"
-                "};\n"
-            )
-            settings_tmp = module_dir / "settings.js"
-            settings_tmp.write_text(_cysoar_settings)
-            run(f"docker cp {settings_tmp} cysoar:/data/settings.js", timeout=10)
-            settings_tmp.unlink(missing_ok=True)
-            log("CySOAR: settings.js written to volume")
-
+            # ── IAP mode: no per-app OIDC needed ────────────────────────────────
+            # Authentication is handled by oauth2-proxy + nginx auth_request.
+            # CySOAR settings.js has no adminAuth — the container is open to
+            # whatever nginx allows through (only authenticated users).
+            log("CySOAR: IAP mode — no OIDC settings needed")
             run("docker restart cysoar", timeout=30)
-            log("CySOAR: restarted with OIDC settings")
+            log("CySOAR: restarted")
         
         # ── Final state ───────────────────────────────────────────────────────
         time.sleep(5)

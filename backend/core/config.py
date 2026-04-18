@@ -37,9 +37,11 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", f"https://cysoc.{BASE_DOMAIN}")
 BASE_URL     = os.environ.get("BASE_URL",      f"https://cyasm.{BASE_DOMAIN}")
 
 # ── Secrets ────────────────────────────────────────────────────────────────────
-SECRET_KEY   = os.environ.get("SECRET_KEY", "change_this_to_something_secure_32ch")
-JWT_SECRET   = os.environ.get("JWT_SECRET", SECRET_KEY)
-TOKEN_TTL    = 3600  # seconds
+SECRET_KEY            = os.environ.get("SECRET_KEY", "change_this_to_something_secure_32ch")
+JWT_SECRET            = os.environ.get("JWT_SECRET", SECRET_KEY)
+TOKEN_TTL             = 3600  # seconds
+OAUTH2PROXY_SECRET    = os.environ.get("OAUTH2PROXY_SECRET", "")
+OAUTH2PROXY_COOKIE_SECRET = os.environ.get("OAUTH2PROXY_COOKIE_SECRET", "")
 
 # ── OAuth — Google ─────────────────────────────────────────────────────────────
 GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "")
@@ -50,34 +52,18 @@ MS_CLIENT_ID     = os.environ.get("MICROSOFT_CLIENT_ID", "")
 MS_CLIENT_SECRET = os.environ.get("MICROSOFT_CLIENT_SECRET", "")
 
 # ── OIDC clients ───────────────────────────────────────────────────────────────
+# oauth2-proxy is the single IAP gate for all subdomains.
+# CyIRIS and CySOAR no longer register individual OIDC clients — they trust
+# the X-Email header injected by nginx after oauth2-proxy validates the session.
+# cysiem (Wazuh) uses proxy auth mode — not OIDC — so no client needed there.
 OIDC_CLIENTS = {
-    "cyiris": {
-        "client_secret": os.environ.get("CYIRIS_OIDC_SECRET", ""),
+    "oauth2proxy": {
+        "client_secret": os.environ.get("OAUTH2PROXY_SECRET", ""),
         "redirect_uris": [
-            f"https://cyiris.{BASE_DOMAIN}/oidc-authorize",
-            f"https://cyiris.{BASE_DOMAIN}/auth/oidc/callback",
+            f"https://cysoc.{BASE_DOMAIN}/oauth2/callback",
         ],
         "allowed_scopes": ["openid", "email", "profile"],
-        "allowed_roles":  ["admin", "analyst", "cyiris"],
-    },
-    "cysoar": {
-        "client_secret": os.environ.get("CYSOAR_OIDC_SECRET", ""),
-        "redirect_uris": [
-            f"https://cysoc.{BASE_DOMAIN}/cysoar/auth/strategy/callback",
-            f"https://cysoc.{BASE_DOMAIN}/cysoar/auth/callback",
-            f"https://cysoc.{BASE_DOMAIN}/node-red/auth/callback",
-            f"https://cysoar.{BASE_DOMAIN}/auth/callback",
-        ],
-        "allowed_scopes": ["openid", "email", "profile"],
-        "allowed_roles":  ["admin", "analyst", "cysoar"],
-    },
-    "cysiem": {
-        "client_secret": os.environ.get("CYSIEM_OIDC_SECRET", ""),
-        "redirect_uris": [
-            f"https://cysiem.{BASE_DOMAIN}/auth/openid/login",
-        ],
-        "allowed_scopes": ["openid", "email", "profile"],
-        "allowed_roles":  ["admin", "analyst"],
+        "allowed_roles":  ["admin", "analyst", "viewer", "cyiris", "cysoar"],
     },
 }
 
