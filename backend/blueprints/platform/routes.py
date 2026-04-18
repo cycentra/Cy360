@@ -242,7 +242,7 @@ def _nginx_inject_cysoar(base_domain: str, log_fn):
         log_fn("cysoar: nginx config not found — skipping /cysoar/ injection")
         return
     text = NGINX_CONF.read_text()
-    if "location /cysoar/" in text:
+    if "location /cysoar/ {" in text:
         log_fn("cysoar: /cysoar/ location block already present")
         return
 

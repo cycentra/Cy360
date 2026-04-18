@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.211 -- 2026-04-18 15:27 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.212 -- 2026-04-18 15:40 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -224,7 +224,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.211"
+_SCRIPT_VERSION="v1.0.212"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -1257,21 +1257,37 @@ else
         step_header "CySIEM PROXY AUTH"
         cp "$_WAZUH_DASH_YML" "${_WAZUH_DASH_YML}.pre-iap-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
 
-        # Remove all old OIDC/openid lines (idempotent)
-        sed -i '/^opensearch_security\.auth\.type:.*openid/d' "$_WAZUH_DASH_YML" 2>/dev/null || true
-        sed -i '/^opensearch_security\.openid\./d'            "$_WAZUH_DASH_YML" 2>/dev/null || true
-        # Remove any leftover proxy auth lines before re-adding
-        sed -i '/^opensearch_security\.auth\.type:.*proxy/d'       "$_WAZUH_DASH_YML" 2>/dev/null || true
-        sed -i '/^opensearch_security\.proxycache\./d'              "$_WAZUH_DASH_YML" 2>/dev/null || true
-
-        cat >> "$_WAZUH_DASH_YML" << WAZUH_PROXY_EOF
-# CyCentra 360 IAP proxy auth — written by cycentra-setup.sh
-# Authentication gate: oauth2-proxy via nginx auth_request.
-# Wazuh trusts X-Proxy-User + X-Proxy-Roles headers set by nginx.
-opensearch_security.auth.type: "proxy"
-opensearch_security.proxycache.user_header: "x-proxy-user"
-opensearch_security.proxycache.roles_header: "x-proxy-roles"
-WAZUH_PROXY_EOF
+        # Use Python to rewrite cleanly — avoids null bytes from shell heredocs,
+        # idempotent (strips old proxy/OIDC lines before re-adding).
+        python3 - "$_WAZUH_DASH_YML" << 'WAZUH_PY_EOF'
+import sys
+path = sys.argv[1]
+with open(path, "rb") as f:
+    raw = f.read().replace(b"\x00", b"")
+text = raw.decode("utf-8")
+remove_prefixes = [
+    "opensearch_security.auth.type",
+    "opensearch_security.proxycache.",
+    "opensearch_security.openid.",
+    "# CyCentra 360 IAP proxy auth",
+    "# Authentication gate:",
+    "# Wazuh trusts",
+]
+cleaned = "\n".join(
+    line for line in text.splitlines()
+    if not any(line.strip().startswith(p) for p in remove_prefixes)
+).rstrip() + "\n"
+cleaned += (
+    "# CyCentra 360 IAP proxy auth — written by cycentra-setup.sh\n"
+    "opensearch_security.auth.type: proxy\n"
+    "opensearch_security.proxycache.user_header: \"x-proxy-user\"\n"
+    "opensearch_security.proxycache.roles_header: \"x-proxy-roles\"\n"
+    "opensearch_security.proxycache.proxy_ip: \"127.0.0.1\"\n"
+)
+with open(path, "w") as f:
+    f.write(cleaned)
+print("Wazuh proxy auth config written")
+WAZUH_PY_EOF
 
         systemctl restart wazuh-dashboard 2>/dev/null || true
         success "CySIEM Dashboard: proxy auth configured (X-Proxy-User from nginx)"
