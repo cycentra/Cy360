@@ -1,8 +1,29 @@
-## v1.0.220 -- 2026-04-18
+## v1.0.221 -- 2026-04-18
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.221 -- 2026-04-19
+
+### Bug Fixes
+
+  - **CyIRIS logout — `KeyError: 'current_case'`**: `session['current_case']` raised
+    `KeyError` for new SSO users whose session never had a case set. Changed to
+    `session.get('current_case')`. File: `CyIRIS/source/app/blueprints/rest/dashboard_routes.py`.
+
+  - **CyIRIS logout — re-logs user in immediately after logout**: `is_authentication_oidc()`
+    returns `False` for `oidc_proxy` mode so the OIDC end-session block was skipped,
+    leaving the oauth2-proxy cookie intact. Added an explicit `AUTHENTICATION_PROXY_LOGOUT_URL`
+    redirect block (`/oauth2/sign_out?rd=<cysoc_url>`) that fires for `oidc_proxy` mode.
+    File: `CyIRIS/source/app/blueprints/rest/dashboard_routes.py`.
+
+  - **CyIRIS logout — redirect target**: After oauth2-proxy sign-out, users were redirected
+    back to `/dashboard` on `cyiris.DOMAIN`. Redirect now points to `https://cysoc.DOMAIN/`
+    using `BASE_DOMAIN` env var. Files: `cycentra360/backend/blueprints/platform/compose.py`
+    (added `BASE_DOMAIN` to CyIRIS env), `CyIRIS/source/app/configuration.py`.
 
 ---
 

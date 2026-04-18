@@ -58,6 +58,7 @@ services:
       IRIS_SECRET_KEY: "${{IRIS_SECRET_KEY:-change_in_production}}"
       IRIS_ADM_EMAIL: "${{IRIS_ADM_EMAIL:-admin@cycentra.com}}"
       IRIS_ADM_PASSWORD: "${{IRIS_ADM_PASSWORD}}"
+      BASE_DOMAIN: "${{BASE_DOMAIN}}"
       # IAP mode: oauth2-proxy gates the subdomain; CyIRIS trusts X-Email header (lazy verify)
       IRIS_AUTHENTICATION_TYPE: "oidc_proxy"
       OIDC_IRIS_TOKEN_VERIFY_MODE: "lazy"
