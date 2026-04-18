@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.206 -- 2026-04-17 23:54 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.207 -- 2026-04-18 00:15 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -224,7 +224,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.206"
+_SCRIPT_VERSION="v1.0.207"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -1281,6 +1281,33 @@ SIEMEOF
     mkdir -p /opt/cycentra/ml_models
     chmod 755 /opt/cycentra/ml_models
     success "ML model directory created → /opt/cycentra/ml_models"
+
+    # ── Step 4.3b: CySIEM OIDC SSO (fresh install — run now that .env is written) ──
+    # On fresh install, step 4.3 above was deferred because CYSIEM_OIDC_SECRET was
+    # not generated yet. The secrets are now in memory and in .env — run it here.
+    if [[ -f "$_WAZUH_DASH_YML" ]] && \
+       ! grep -q 'opensearch_security.auth.type:.*openid' "$_WAZUH_DASH_YML" 2>/dev/null; then
+
+        _cy_siem_secret="${CYSIEM_OIDC_SECRET:-}"
+        _cy_jwt_secret="${JWT_SECRET:-}"
+        if [[ -n "$_cy_siem_secret" && -n "$_cy_jwt_secret" ]]; then
+            step_header "CySIEM OIDC SSO (post-env)"
+            cp "$_WAZUH_DASH_YML" "${_WAZUH_DASH_YML}.pre-oidc-$(date +%Y%m%d)" 2>/dev/null || true
+            cat >> "$_WAZUH_DASH_YML" << CYSIEM_OIDC2_EOF
+# CyCentra 360 OIDC SSO — written by cycentra-setup.sh
+opensearch_security.auth.type: "openid"
+opensearch_security.openid.base_redirect_url: "https://cysiem.${BASE_DOMAIN}"
+opensearch_security.openid.connect_url: "https://cyasm.${BASE_DOMAIN}/oidc/.well-known/openid-configuration"
+opensearch_security.openid.client_id: "cysiem"
+opensearch_security.openid.client_secret: "${_cy_siem_secret}"
+opensearch_security.openid.scope: "openid email profile"
+opensearch_security.openid.logout_url: "https://cysoc.${BASE_DOMAIN}/auth/logout"
+opensearch_security.openid.trust_dynamic_headers: true
+CYSIEM_OIDC2_EOF
+            systemctl restart wazuh-dashboard 2>/dev/null || true
+            success "CySIEM OIDC SSO configured (post-env step)"
+        fi
+    fi
 
 fi  # end full env block
 
