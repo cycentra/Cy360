@@ -6,7 +6,10 @@
  */
 
 import { useState, useRef } from "react";
-import { API_BASE } from '../../core/constants.js';
+import { API_BASE, _BASE_DOMAIN } from '../../core/constants.js';
+
+// Locked to the customer's own base domain — not a free-entry field
+const CUSTOMER_DOMAIN = window.__CYCENTRA_DOMAIN__ || _BASE_DOMAIN || "";
 
 const MODULES = [
   "DNS Reconnaissance", "Subdomain Enumeration", "Web Analysis", "Crypto & SSL Audit",
@@ -15,9 +18,9 @@ const MODULES = [
 ];
 
 export function ScanPage({ user, onScanComplete }) {
-  const [domain,            setDomain]     = useState("");
+  const [domain,            setDomain]     = useState(CUSTOMER_DOMAIN);
   const [email,             setEmail]      = useState(user?.email || "");
-  const [scanType,          setScanType]   = useState("standard");
+  const [scanType,          setScanType]   = useState("deep");
   const [includeSubdomains, setIncludeSub] = useState(true);
   const [scanState,         setScanState]  = useState("idle");
   const [progress,          setProgress]   = useState(0);
@@ -88,7 +91,7 @@ export function ScanPage({ user, onScanComplete }) {
   };
 
   const startScan = async () => {
-    if (!domain) return;
+    if (!domain) return; // domain is fixed to CUSTOMER_DOMAIN but guard stays as safety
     setScanState("running"); setProgress(2); setElapsed(0);
     setLastLog("Connecting to scan engine..."); setCurrentModule("Initialising...");
 
@@ -148,23 +151,30 @@ export function ScanPage({ user, onScanComplete }) {
         {/* Form panel */}
         <div style={{ background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:6, padding:28 }}>
 
-          {[
-            ["Target Domain *","domain","text","example.com",domain,e=>setDomain(e.target.value)],
-            ["Notify Email","email","email","security@company.com",email,e=>setEmail(e.target.value)],
-          ].map(([label,name,type,ph,val,onChange]) => (
-            <div key={name} style={{ marginBottom:18 }}>
-              <label style={{ color:"rgba(255,255,255,0.5)", fontSize:10, letterSpacing:"1.5px", textTransform:"uppercase", fontFamily:"monospace", display:"block", marginBottom:8 }}>{label}</label>
-              <input type={type} value={val} onChange={onChange} placeholder={ph} disabled={scanState==="running"}
-                style={{ width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)", color:"white", padding:"12px 16px", borderRadius:4, fontSize:14, fontFamily:"monospace", outline:"none", boxSizing:"border-box", opacity:scanState==="running"?0.5:1 }}/>
+          {/* Domain — locked to the customer's own base domain */}
+          <div style={{ marginBottom:18 }}>
+            <label style={{ color:"rgba(255,255,255,0.5)", fontSize:10, letterSpacing:"1.5px", textTransform:"uppercase", fontFamily:"monospace", display:"block", marginBottom:8 }}>Target Domain</label>
+            <div style={{ display:"flex", alignItems:"center", gap:10, background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:4, padding:"12px 16px" }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(0,229,160,0.6)" strokeWidth="2">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+              <span style={{ color:"#00e5a0", fontSize:14, fontFamily:"monospace", fontWeight:600 }}>{domain}</span>
+              <span style={{ marginLeft:"auto", color:"rgba(255,255,255,0.2)", fontSize:9, fontFamily:"monospace" }}>YOUR DOMAIN</span>
             </div>
-          ))}
+          </div>
+
+          {/* Notify Email */}
+          <div style={{ marginBottom:18 }}>
+            <label style={{ color:"rgba(255,255,255,0.5)", fontSize:10, letterSpacing:"1.5px", textTransform:"uppercase", fontFamily:"monospace", display:"block", marginBottom:8 }}>Notify Email</label>
+            <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="security@company.com" disabled={scanState==="running"}
+              style={{ width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)", color:"white", padding:"12px 16px", borderRadius:4, fontSize:14, fontFamily:"monospace", outline:"none", boxSizing:"border-box", opacity:scanState==="running"?0.5:1 }}/>
+          </div>
 
           <div style={{ marginBottom:18 }}>
             <label style={{ color:"rgba(255,255,255,0.5)", fontSize:10, letterSpacing:"1.5px", textTransform:"uppercase", fontFamily:"monospace", display:"block", marginBottom:10 }}>Scan Type</label>
             {[
-              {id:"standard", label:"Standard (Recommended)", desc:"DNS, Web, Crypto, Email, OSINT — ~45s"},
-              {id:"deep",     label:"Deep Scan",              desc:"Full suite + AI enrichment — ~90s"},
-              {id:"passive",  label:"Passive Scan",           desc:"Read-only, no active probing — ~20s"},
+              {id:"deep",    label:"Deep Scan",   desc:"Full suite + AI enrichment — ~90s"},
+              {id:"passive", label:"Passive Scan", desc:"Read-only, no active probing — ~20s"},
             ].map(t => (
               <div key={t.id} onClick={() => scanState!=="running" && setScanType(t.id)}
                 style={{ display:"flex", alignItems:"flex-start", gap:12, padding:"12px 14px", marginBottom:6, background:scanType===t.id?"rgba(0,229,160,0.08)":"rgba(255,255,255,0.02)", border:`1px solid ${scanType===t.id?"rgba(0,229,160,0.3)":"rgba(255,255,255,0.06)"}`, borderRadius:4, cursor:scanState==="running"?"not-allowed":"pointer" }}>
@@ -186,8 +196,8 @@ export function ScanPage({ user, onScanComplete }) {
           </div>
 
           {scanState==="idle" && (
-            <button onClick={startScan} disabled={!domain}
-              style={{ width:"100%", background:domain?"#00e5a0":"rgba(0,229,160,0.2)", color:domain?"#0d0f14":"rgba(0,229,160,0.3)", fontFamily:"'Space Mono',monospace", fontWeight:700, fontSize:13, letterSpacing:"1px", padding:"14px 24px", border:"none", borderRadius:4, cursor:domain?"pointer":"not-allowed", textTransform:"uppercase" }}>
+            <button onClick={startScan}
+              style={{ width:"100%", background:"#00e5a0", color:"#0d0f14", fontFamily:"'Space Mono',monospace", fontWeight:700, fontSize:13, letterSpacing:"1px", padding:"14px 24px", border:"none", borderRadius:4, cursor:"pointer", textTransform:"uppercase" }}>
               Launch ASM Scan →
             </button>
           )}
@@ -211,7 +221,7 @@ export function ScanPage({ user, onScanComplete }) {
 
           <div style={{ marginTop:14, background:"rgba(0,0,0,0.3)", border:"1px solid rgba(255,255,255,0.05)", borderRadius:4, padding:"10px 14px" }}>
             <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginBottom:4 }}>CLI EQUIVALENT</div>
-            <code style={{ color:"#00e5a0", fontSize:11 }}>python3 cycentra_scan.py {domain||"<domain>"} {user?.id||"<uid>"}</code>
+            <code style={{ color:"#00e5a0", fontSize:11 }}>python3 cycentra_scan.py {domain} {user?.id||"<uid>"} {scanType}</code>
           </div>
         </div>
 

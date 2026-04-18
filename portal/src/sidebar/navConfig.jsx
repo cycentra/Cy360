@@ -40,6 +40,7 @@ export function buildNavSections({ installedModules = {}, data = null }) {
         { id: "dashboard",     label: "External Threat Overview", icon: SvgDash  },
         { id: "assets",        label: "Asset Inventory",          icon: SvgAsset },
         { id: "vulns",         label: "Findings",                 icon: SvgVuln  },
+        { id: "scan",          label: "Run Scan",                 icon: SvgScan,  accent: "#00e5a0" },
       ],
     },
     {
@@ -53,7 +54,6 @@ export function buildNavSections({ installedModules = {}, data = null }) {
     {
       section: "ACTIONS",
       items: [
-        { id: "scan",      label: "Run Scan",    icon: SvgScan, accent: "#00e5a0" },
         { id: "usecases",  label: "Use Cases",   icon: SvgUC,   accent: "#4d9eff" },
       ],
     },
