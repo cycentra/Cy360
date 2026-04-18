@@ -1,3 +1,50 @@
+## v1.0.220 -- 2026-04-18
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.220 -- 2026-04-18
+
+### Bug Fixes
+
+  - **IAP / CySIEM SSO — Wazuh Dashboard still prompting for credentials**: nginx was
+    sending `X-Proxy-Roles: admin` to Wazuh Dashboard via proxy auth. OpenSearch
+    Security's default `roles_mapping.yml` has **no entry** for backend role `admin`,
+    so authenticated users arrived with zero security roles and were denied.
+    Fix: changed `X-Proxy-Roles` to `all_access` (the built-in backend role pre-mapped
+    to the `all_access` security role) in the nginx `cysiem` server block in
+    `cycentra-setup.sh`.  An idempotent `sed` patch step was also added to the IAP
+    setup section so that existing servers are fixed automatically on the next
+    `--update` run.
+    (`cycentra-setup.sh`)
+
+  - **IAP / CyIRIS SSO — container crash-loops on startup (TLS_ROOT_CA)**: In
+    `oidc_proxy` auth mode CyIRIS calls `requests.get(discovery_url, verify=tls_root_ca)`
+    at startup to fetch OIDC metadata.  `TLS_ROOT_CA` was set to
+    `/opt/cycentra/certs/cycentra.crt` — a server leaf certificate, not a CA bundle.
+    `requests` raises `SSLError` (cert is not a CA) or `FileNotFoundError` (file absent
+    after a fresh install), which triggers `exit(0)` in the `except` block → Docker
+    restart loop → 502 on `cyiris.DOMAIN`.
+    Fix: removed `TLS_ROOT_CA` from the CyIRIS compose template; the system CA bundle
+    inside the container already trusts Let's Encrypt/OIDC provider certs.
+    (`backend/blueprints/platform/compose.py`)
+
+  - **IAP / CyIRIS SSO — new users unable to log in (oidc_proxy lazy mode)**: Even
+    after the container started, any user other than the seeded admin was rejected.
+    `_authenticate_with_email()` called `get_user(email)` and returned `False` when
+    the user wasn't found, silently ignoring `AUTHENTICATION_CREATE_USER_IF_NOT_EXIST:
+    "True"`.  The create-user code path existed in the full OIDC flow
+    (`login_routes.py`) but was not ported to the `oidc_proxy` lazy path.
+    Fix: added auto-provisioning in `_authenticate_with_email` — when the user is
+    not found and `AUTHENTICATION_CREATE_USER_IF_NOT_EXIST` is enabled, a new account is
+    created with a random password (login is always via SSO so the password is unused).
+    (`CyIRIS/source/app/blueprints/access_controls.py`)
+
+---
+
 ## v1.0.219 -- 2026-04-18
 
 ### Improvements

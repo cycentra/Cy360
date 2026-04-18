@@ -521,34 +521,6 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
             compose_path.write_text(compose_text)
             log(f"CyIRIS setup complete: hardcoded password into docker-compose.yml")
 
-            # 5. Ensure TLS cert is available for CyIRIS container to validate
-            #    cyasm.DOMAIN at startup (needed by oidc_proxy discovery URL fetch)
-            import subprocess as _subp
-            certs_dir = Path("/opt/cycentra/certs")
-            certs_dir.mkdir(parents=True, exist_ok=True)
-            cert_dest = certs_dir / "cycentra.crt"
-            if not cert_dest.exists() or cert_dest.stat().st_size < 100:
-                try:
-                    result = _subp.run(
-                        ["openssl", "s_client", "-connect",
-                         f"cyasm.{base_domain}:443", "-showcerts"],
-                        input=b"", capture_output=True, timeout=10
-                    )
-                    out = result.stdout.decode("utf-8", errors="replace")
-                    pem_chain = "\n".join(
-                        "\n".join(block.splitlines())
-                        for block in out.split("-----BEGIN CERTIFICATE-----")[1:]
-                        if block.strip()
-                        for block in ["-----BEGIN CERTIFICATE-----" + block.split("-----END CERTIFICATE-----")[0] + "-----END CERTIFICATE-----"]
-                    )
-                    if "BEGIN CERTIFICATE" in pem_chain:
-                        cert_dest.write_text(pem_chain)
-                        log(f"CyIRIS: wrote TLS cert chain to {cert_dest} (for oidc_proxy discovery)")
-                    else:
-                        log("CyIRIS: WARNING — cert extraction skipped; discovery URL validation may fail on staging TLS")
-                except Exception as _ce:
-                    log(f"CyIRIS: WARNING — cert extraction error: {_ce}")
-
         elif module_id == "cysoar":
             # Pre-install cleanup — stale volumes cause httpStatic issues
             log("CySOAR pre-install cleanup — removing stale containers and volumes")

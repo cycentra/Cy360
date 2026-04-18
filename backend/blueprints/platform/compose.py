@@ -62,13 +62,14 @@ services:
       IRIS_AUTHENTICATION_TYPE: "oidc_proxy"
       OIDC_IRIS_TOKEN_VERIFY_MODE: "lazy"
       OIDC_IRIS_DISCOVERY_URL: "https://cyasm.${{BASE_DOMAIN}}/oidc/.well-known/openid-configuration"
-      TLS_ROOT_CA: "/opt/cycentra/certs/cycentra.crt"
       IRIS_AUTHENTICATION_CREATE_USER_IF_NOT_EXIST: "True"
       IRIS_AUTHENTICATION_LOCAL_FALLBACK: "False"
+      # TLS_ROOT_CA intentionally omitted — the system CA bundle inside the container
+      # already trusts Let's Encrypt.  Pointing it at a server-cert path causes
+      # requests.get() to fail at startup → exit(0) crash-loop (v1.0.197 rationale).
     volumes:
       - cyiris_app_data:/home/iris/iriswebapp/app/static/assets/files
       - cyiris_user_data:/home/iris/iriswebapp/user_data
-      - /opt/cycentra/certs:/opt/cycentra/certs:ro
 
 volumes:
   cyiris_db_data:

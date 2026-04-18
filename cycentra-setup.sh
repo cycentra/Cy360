@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.219 -- 2026-04-18 20:23 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.220 -- 2026-04-18 22:09 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -224,7 +224,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.219"
+_SCRIPT_VERSION="v1.0.220"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -1356,6 +1356,18 @@ OS_SEC_PY_EOF
     else
         info "Wazuh not installed — CySIEM proxy auth will run when Wazuh is deployed"
     fi
+
+    # ── Patch running nginx cysiem block: all_access role (idempotent) ────────
+    # Earlier installs wrote X-Proxy-Roles admin which has no OpenSearch roles_mapping
+    # entry by default.  all_access is the built-in backend role pre-mapped to the
+    # all_access security role in every vanilla OpenSearch installation.
+    _NGINX_MOD="/etc/nginx/sites-available/cycentra-modules"
+    if [[ -f "$_NGINX_MOD" ]] && grep -q 'X-Proxy-Roles admin' "$_NGINX_MOD" 2>/dev/null; then
+        sed -i 's/X-Proxy-Roles admin;/X-Proxy-Roles all_access;/g' "$_NGINX_MOD" || true
+        nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
+            success "nginx cysiem: X-Proxy-Roles patched to all_access" || \
+            warn "nginx reload failed after X-Proxy-Roles patch — check: nginx -t"
+    fi
 fi  # end IAP setup
 
 # ── Step 11: Deploy portal static files ──────────────────────────────────────
@@ -1788,7 +1800,7 @@ server {
         proxy_set_header X-Forwarded-Proto https;
         # Pass authenticated identity to Wazuh Dashboard (proxy auth mode)
         proxy_set_header X-Proxy-User  \$proxy_user;
-        proxy_set_header X-Proxy-Roles admin;
+        proxy_set_header X-Proxy-Roles all_access;
         proxy_read_timeout 120;
         proxy_buffering off;
         proxy_cookie_flags ~ samesite=none secure;
