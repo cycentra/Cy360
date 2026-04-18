@@ -83,8 +83,11 @@ if _JWT_AVAILABLE:
 
 oidc_bp = Blueprint("oidc", __name__)
 
-# Server-side auth code store (avoids client-session limitation on s2s token exchange)
+# Server-side stores — avoids client-session limitation on s2s token exchange.
+# oauth2-proxy calls /oidc/userinfo server-to-server (no browser cookie) so
+# access tokens MUST be stored here, not in Flask session.
 _AUTH_CODES: dict = {}
+_ACCESS_TOKENS: dict = {}
 
 
 # ── Discovery & JWKS ─────────────────────────────────────────────────────────
@@ -224,9 +227,11 @@ def oidc_token():
     access_token = hashlib.sha256(
         f"{email}:{now}:{uuid.uuid4()}".encode()
     ).hexdigest()
-    session[f"at_{access_token}"] = {
+    # Store server-side so oauth2-proxy userinfo s2s call (no browser cookie) works
+    _ACCESS_TOKENS[access_token] = {
         "email":     email,
         "client_id": client_id,
+        "name":      session.get("user_name", ""),
         "exp":       now + TOKEN_TTL,
     }
 
@@ -246,18 +251,20 @@ def oidc_token():
 def oidc_userinfo():
     auth  = request.headers.get("Authorization", "")
     token = auth.replace("Bearer ", "").strip()
-    data  = session.get(f"at_{token}")
+    # Check server-side store first (s2s calls from oauth2-proxy have no session cookie)
+    data  = _ACCESS_TOKENS.get(token) or session.get(f"at_{token}")
 
     if not data or time.time() > data.get("exp", 0):
         return jsonify({"error": "invalid_token"}), 401
 
     email = data["email"]
     return jsonify({
-        "sub":   email,
-        "email": email,
-        "name":  session.get("user_name", ""),
-        "roles": [get_user_role(email)],
-        "apps":  get_user_apps(email),
+        "sub":    email,
+        "email":  email,
+        "name":   data.get("name", ""),
+        "roles":  [get_user_role(email)],
+        "groups": [get_user_role(email)],
+        "apps":   get_user_apps(email),
     })
 
 
@@ -267,7 +274,7 @@ def oidc_userinfo():
 def oidc_introspect():
     token     = request.form.get("token", "")
     client_id = request.form.get("client_id", "")
-    data      = session.get(f"at_{token}")
+    data      = _ACCESS_TOKENS.get(token) or session.get(f"at_{token}")
 
     if not data or time.time() > data.get("exp", 0):
         return jsonify({"active": False})
