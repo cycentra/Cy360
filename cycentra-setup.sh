@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.218 -- 2026-04-18 20:11 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.219 -- 2026-04-18 20:23 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -224,7 +224,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.218"
+_SCRIPT_VERSION="v1.0.219"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -318,6 +318,12 @@ apt-get install -y -qq \
     2>/dev/null
 success "System packages installed"
 
+# ── pip3 compatibility: --break-system-packages (pip >= 23.x / Python 3.11+) ─
+# Older distros (Ubuntu 20.04, pip 21.x) reject this flag with "no such option".
+# Detect support once and store in _PIP_BSP for reuse everywhere.
+_PIP_BSP=""
+pip3 install --break-system-packages --dry-run pip 2>&1 | grep -q "no such option" || _PIP_BSP="--break-system-packages"
+
 # ── Python reporting prerequisites ────────────────────────────────────────────
 _PY_REPORT_PKGS=(reportlab matplotlib numpy pillow)
 declare -A _PY_IMPORT_MAP=([reportlab]=reportlab [matplotlib]=matplotlib [numpy]=numpy [pillow]=PIL)
@@ -331,7 +337,7 @@ if [[ ${#_PY_MISSING[@]} -eq 0 ]]; then
 else
     info "Installing Python reporting packages: ${_PY_MISSING[*]} ..."
     PIP_ROOT_USER_ACTION=ignore pip3 install "${_PY_MISSING[@]}" \
-        --break-system-packages -q \
+        ${_PIP_BSP} -q \
         && success "Installed: ${_PY_MISSING[*]}" \
         || { error "Failed to install Python reporting packages"; ERRORS+=("pip reporting prereqs failed"); }
 fi
@@ -614,7 +620,7 @@ step_header "CySIEM → REDIS BRIDGE (Python watcher)"
 
 # Install redis-py if not already present
 python3 -c "import redis" 2>/dev/null \
-    || PIP_ROOT_USER_ACTION=ignore pip3 install --break-system-packages --quiet redis
+    || PIP_ROOT_USER_ACTION=ignore pip3 install ${_PIP_BSP} --quiet redis
 
 # Ensure deploy directory exists
 mkdir -p /opt/cycentra
@@ -1428,7 +1434,7 @@ PIP_ROOT_USER_ACTION=ignore pip3 install \
     --extra-index-url https://pypi.org/simple/ \
     "${_WHL_FILE}" \
     --upgrade \
-    --break-system-packages \
+    ${_PIP_BSP} \
     --ignore-installed \
     -q \
     && success "Installed: ${PKG_NAME}==${PKG_VER}" \
@@ -2055,7 +2061,7 @@ if [[ -d "/var/ossec" ]]; then
         # ── 19.1 geoip2 Python library ────────────────────────────────────────────
         if ! python3 -c "import geoip2" 2>/dev/null; then
                 info "Installing geoip2 Python library..."
-                PIP_ROOT_USER_ACTION=ignore pip3 install geoip2 --break-system-packages -q \
+                PIP_ROOT_USER_ACTION=ignore pip3 install geoip2 ${_PIP_BSP} -q \
                         && success "geoip2 installed" \
                         || warn "geoip2 install failed — GeoIP enrichment will be disabled"
         else

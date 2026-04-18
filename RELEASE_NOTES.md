@@ -1,8 +1,16 @@
-## v1.0.218 -- 2026-04-18
+## v1.0.219 -- 2026-04-18
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.218 -- 2026-04-18
+
+### Bug Fixes
+
+  - **Setup / pip3**: Fixed `no such option: --break-system-packages` fatal error during Step 10 (CySIEM Redis bridge) on Ubuntu 20.04 and systems with pip < 23.x. The flag is now detected at startup (`_PIP_BSP`) and used only when supported — all four `pip3 install` calls in setup.sh are covered.
 
 ---
 
