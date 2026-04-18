@@ -101,6 +101,7 @@ def oidc_discovery():
         "userinfo_endpoint":                     f"{BASE_URL}/oidc/userinfo",
         "introspection_endpoint":                f"{BASE_URL}/oidc/introspect",
         "jwks_uri":                              f"{BASE_URL}/oidc/jwks",
+        "end_session_endpoint":                   f"{BASE_URL}/auth/logout",
         "response_types_supported":              ["code"],
         "grant_types_supported":                 ["authorization_code"],
         "subject_types_supported":               ["public"],
