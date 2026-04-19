@@ -1220,7 +1220,10 @@ fi  # end full env block
 # Runs in all modes (full / update). Idempotent.
 # oauth2-proxy: single OIDC gate for cyiris, cysoar, cysiem subdomains.
 # Wazuh: switches Dashboard to proxy auth mode (reads X-Proxy-User from nginx).
-# No securityadmin.sh needed — proxy mode is simpler and more reliable.
+# OpenSearch Security also needs proxy_auth_domain enabled and rolesmapping updated
+# (all_access backend role → all_access OpenSearch role) for Dashboard proxy auth to
+# work end-to-end.  Both are applied below via REST API (primary) and
+# securityadmin.sh (fallback).
 
 step_header "IAP GATEWAY (oauth2-proxy)"
 
@@ -1291,8 +1294,11 @@ else
     fi
 
     # ── Wazuh Dashboard: switch to proxy auth mode ──────────────────────────────
-    # Remove all OIDC settings, add proxy auth. No indexer changes needed —
-    # proxy mode uses the Dashboard service account to talk to OpenSearch.
+    # Remove all OIDC settings, add proxy auth.
+    # NOTE: proxy mode still requires two OpenSearch Security changes:
+    #   1. proxy_auth_domain http_enabled: true  (applied via securityadmin.sh)
+    #   2. all_access rolesmapping entry          (applied via REST API or securityadmin.sh)
+    # Both are attempted below; see "OpenSearch Security" section.
     if [[ -f "$_WAZUH_DASH_YML" ]]; then
         step_header "CySIEM PROXY AUTH"
         cp "$_WAZUH_DASH_YML" "${_WAZUH_DASH_YML}.pre-iap-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
@@ -1366,29 +1372,102 @@ with open(path, "w") as f:
 print("OpenSearch proxy_auth_domain enabled")
 OS_SEC_PY_EOF
 
-            # Apply the security config change to the running OpenSearch cluster
+            # ── Apply OpenSearch Security changes for proxy auth ──────────────────
+            # Two changes are required:
+            #   1. proxy_auth_domain http_enabled: true  — allows Dashboard to forward
+            #      proxy headers to OpenSearch Security for user authentication.
+            #   2. all_access rolesmapping               — maps the "all_access" backend
+            #      role (sent by nginx as X-Proxy-Roles) to the all_access OpenSearch role.
+            # Without both, the Wazuh Dashboard returns 401 for ALL proxy-authenticated
+            # users ({"statusCode":401,"error":"Unauthorized","message":"Unauthorized"}).
+            #
+            # Strategy: wait for the indexer to be ready, then try the REST API first
+            # (more reliable — no JVM dependency, no "cd /" requirement), and fall back
+            # to securityadmin.sh if the REST API is unavailable.
             _SEC_ADMIN="/usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh"
             _CERT_DIR="/etc/wazuh-indexer/certs"
-            if [[ -x "$_SEC_ADMIN" && -f "${_CERT_DIR}/admin.pem" ]]; then
-                export JAVA_HOME=/usr/share/wazuh-indexer/jdk
-                cd /
-                "$_SEC_ADMIN" \
-                    -f "$_OS_SEC_CFG" -t config \
-                    -icl -nhnv \
-                    -cacert "${_CERT_DIR}/root-ca.pem" \
-                    -cert   "${_CERT_DIR}/admin.pem" \
-                    -key    "${_CERT_DIR}/admin-key.pem" \
-                    -h 127.0.0.1 2>/dev/null \
-                    && success "OpenSearch proxy_auth_domain applied via securityadmin" \
-                    || warn "securityadmin.sh failed — Wazuh proxy auth may need manual config"
 
-                # ── Apply rolesmapping: kibana_server service account + all_access SSO role ──
-                # CRITICAL: securityadmin -f with -t rolesmapping REPLACES the entire
-                # rolesmapping, wiping the kibana_server→kibanaserver user mapping that
-                # the Dashboard service account depends on.  We must include both entries.
-                # all_access backend_role: maps to the all_access OpenSearch role so that
-                # nginx X-Proxy-Roles: all_access grants full access to SSO users.
-                cat > /tmp/_cy_rolesmapping.yml << 'CY_ROLES_EOF'
+            if [[ -f "${_CERT_DIR}/admin.pem" ]]; then
+                # ── 1. Wait for OpenSearch indexer (up to 90 s) ──────────────────────
+                # securityadmin.sh silently fails when the indexer hasn't finished
+                # starting.  A readiness check prevents the silent failure that leaves
+                # proxy_auth_domain disabled and causes the 401 loop.
+                info "Waiting for OpenSearch indexer to be ready (up to 90 s)..."
+                _INDEXER_READY=false
+                for _idx_n in $(seq 1 18); do
+                    _idx_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+                        --cert "${_CERT_DIR}/admin.pem" \
+                        --key  "${_CERT_DIR}/admin-key.pem" \
+                        "https://127.0.0.1:9200/_cluster/health" 2>/dev/null || true)
+                    # Accept only 2xx — 3xx redirects indicate misconfiguration
+                    if [[ "$_idx_code" =~ ^2 ]]; then
+                        _INDEXER_READY=true
+                        success "OpenSearch indexer ready (HTTP ${_idx_code})"
+                        break
+                    fi
+                    sleep 5
+                done
+
+                if [[ "$_INDEXER_READY" != "true" ]]; then
+                    warn "OpenSearch indexer not reachable after 90 s — security config skipped; re-run --update once Wazuh is healthy"
+                else
+                    # ── 2. Enable proxy_auth_domain via securityadmin.sh ─────────────
+                    # The per-auth-domain config.yml change requires securityadmin.sh
+                    # (there is no safe per-domain REST API patch in OpenSearch 2.x).
+                    if [[ -x "$_SEC_ADMIN" ]]; then
+                        export JAVA_HOME=/usr/share/wazuh-indexer/jdk
+                        cd /
+                        "$_SEC_ADMIN" \
+                            -f "$_OS_SEC_CFG" -t config \
+                            -icl -nhnv \
+                            -cacert "${_CERT_DIR}/root-ca.pem" \
+                            -cert   "${_CERT_DIR}/admin.pem" \
+                            -key    "${_CERT_DIR}/admin-key.pem" \
+                            -h 127.0.0.1 2>/dev/null \
+                            && success "OpenSearch proxy_auth_domain applied via securityadmin" \
+                            || warn "securityadmin.sh failed for config.yml — proxy_auth_domain may need manual enable"
+                    else
+                        warn "securityadmin.sh not found — proxy_auth_domain config skipped"
+                    fi
+
+                    # ── 3. Apply rolesmapping: REST API (primary) or securityadmin (fallback) ─
+                    # The REST API PUT per-role endpoint is preferred: it patches only the
+                    # target roles without wiping the full rolesmapping, requires no JVM,
+                    # and uses the same admin certs via mTLS.
+                    # CRITICAL roles:
+                    #   all_access   — backend_roles ["admin","all_access"] lets nginx
+                    #                  X-Proxy-Roles: all_access grant full Dashboard access.
+                    #   kibana_server — maps kibanaserver service account (Dashboard→OpenSearch).
+                    _RM_APPLIED=false
+
+                    _rm_aa_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+                        --cert "${_CERT_DIR}/admin.pem" \
+                        --key  "${_CERT_DIR}/admin-key.pem" \
+                        -X PUT "https://127.0.0.1:9200/_plugins/_security/api/rolesmapping/all_access" \
+                        -H 'Content-Type: application/json' \
+                        -d '{"backend_roles":["admin","all_access"],"hosts":[],"users":[]}' \
+                        2>/dev/null || true)
+                    _rm_ks_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+                        --cert "${_CERT_DIR}/admin.pem" \
+                        --key  "${_CERT_DIR}/admin-key.pem" \
+                        -X PUT "https://127.0.0.1:9200/_plugins/_security/api/rolesmapping/kibana_server" \
+                        -H 'Content-Type: application/json' \
+                        -d '{"backend_roles":[],"hosts":[],"users":["kibanaserver"]}' \
+                        2>/dev/null || true)
+
+                    if [[ "$_rm_aa_code" =~ ^(200|201)$ && "$_rm_ks_code" =~ ^(200|201)$ ]]; then
+                        # REST API returns 200 when updating an existing mapping,
+                        # 201 when creating a new one — both are success.
+                        _RM_APPLIED=true
+                        success "OpenSearch rolesmapping applied via REST API (all_access + kibana_server)"
+                    else
+                        warn "REST API rolesmapping returned ${_rm_aa_code}/${_rm_ks_code} — trying securityadmin fallback"
+                    fi
+
+                    # Fallback: securityadmin.sh -t rolesmapping (replaces entire mapping —
+                    # must include all critical entries to avoid wiping kibana_server)
+                    if [[ "$_RM_APPLIED" != "true" && -x "$_SEC_ADMIN" ]]; then
+                        cat > /tmp/_cy_rolesmapping.yml << 'CY_ROLES_EOF'
 _meta:
   type: "rolesmapping"
   config_version: 2
@@ -1439,18 +1518,24 @@ own_index:
   - "*"
   and_backend_roles: []
 CY_ROLES_EOF
-                "$_SEC_ADMIN" \
-                    -f /tmp/_cy_rolesmapping.yml -t rolesmapping \
-                    -icl -nhnv \
-                    -cacert "${_CERT_DIR}/root-ca.pem" \
-                    -cert   "${_CERT_DIR}/admin.pem" \
-                    -key    "${_CERT_DIR}/admin-key.pem" \
-                    -h 127.0.0.1 2>/dev/null \
-                    && success "OpenSearch rolesmapping applied (all_access + kibana_server)" \
-                    || warn "rolesmapping apply failed — check securityadmin manually"
-                rm -f /tmp/_cy_rolesmapping.yml
+                        "$_SEC_ADMIN" \
+                            -f /tmp/_cy_rolesmapping.yml -t rolesmapping \
+                            -icl -nhnv \
+                            -cacert "${_CERT_DIR}/root-ca.pem" \
+                            -cert   "${_CERT_DIR}/admin.pem" \
+                            -key    "${_CERT_DIR}/admin-key.pem" \
+                            -h 127.0.0.1 2>/dev/null \
+                            && { _RM_APPLIED=true; \
+                                 success "OpenSearch rolesmapping applied via securityadmin (all_access + kibana_server)"; } \
+                            || warn "rolesmapping apply failed — Wazuh SSO users may lack access; re-run --update"
+                        rm -f /tmp/_cy_rolesmapping.yml
+                    fi
+
+                    [[ "$_RM_APPLIED" != "true" ]] && \
+                        warn "OpenSearch rolesmapping not applied — X-Proxy-Roles: all_access will not grant Dashboard access until rolesmapping is updated"
+                fi
             else
-                warn "securityadmin.sh or admin certs not found — skipping OpenSearch security config"
+                warn "admin.pem not found at ${_CERT_DIR} — OpenSearch security config skipped"
             fi
         fi
 

@@ -214,6 +214,11 @@ def oidc_token():
     # pyoidc-based clients (e.g. cyiris) verify id_token using client_secret (HS256).
     # OIDC Core 1.0 §10.1: HS256 ID tokens MUST be signed with client_secret,
     # not with the server's generic JWT_SECRET.
+    # cysiem: Wazuh/OpenSearch OIDC domain requires RS256 (asymmetric JWT verifiable
+    #         via JWKS). CYSIEM_OIDC_SECRET is registered in OIDC_CLIENTS so this
+    #         path is live when the Dashboard uses opensearch_security.auth.type: openid.
+    # oauth2proxy: uses RS256 so that oauth2-proxy can verify the id_token via JWKS
+    #              (oauth2-proxy cannot verify HS256 tokens signed with a shared secret).
     _RS256_CLIENTS = {"cysiem", "oauth2proxy"}
     if _JWT_AVAILABLE and _RSA_AVAILABLE and client_id in _RS256_CLIENTS:
         id_token = pyjwt.encode(payload, _JWT_PRIVATE_KEY, algorithm="RS256",
