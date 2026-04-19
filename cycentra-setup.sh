@@ -1497,7 +1497,7 @@ try:
                     "roles_header": "x-proxy-roles",
                 },
             },
-            "authentication_backend": {"type": "noop", "config": {}},
+            "authentication_backend": {"type": "noop"},
         }
         print("proxy_auth_domain block created via REST patch")
     else:

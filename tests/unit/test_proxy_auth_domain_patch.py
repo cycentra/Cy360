@@ -25,6 +25,7 @@ import tempfile
 import subprocess
 
 import pytest
+import yaml
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +235,6 @@ class TestProxyDomainPatchFound:
                 break
 
     def test_output_is_valid_yaml(self):
-        import yaml  # noqa: PLC0415
         result, _ = _patch_config_yml(WAZUH_CONFIG_STANDARD)
         parsed = yaml.safe_load(result)
         assert parsed is not None
@@ -295,7 +295,6 @@ class TestProxyDomainPatchAbsent:
         )
 
     def test_injected_output_is_valid_yaml(self):
-        import yaml  # noqa: PLC0415
         result, _ = _patch_config_yml(WAZUH_CONFIG_NO_PROXY_DOMAIN)
         parsed = yaml.safe_load(result)
         assert parsed is not None
