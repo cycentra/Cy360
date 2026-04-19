@@ -164,21 +164,91 @@ Wazuh Dashboard uses OpenSearch Security plugin's **proxy auth** mode:
   header name configuration regardless of which type is set
 - **Version**: cycentra360 v1.0.225
 
-### Issue 5: `all_access` backend_role not mapped in OpenSearch (ongoing on existing servers)
+### Issue 5: `all_access` backend_role not mapped in OpenSearch (resolved — v1.0.225)
 - **Symptom**: Even after all config is correct, Dashboard returns 401 for proxy-authed requests
 - **Cause**: Vanilla Wazuh OpenSearch does not pre-map the `all_access` backend_role.
   `X-Proxy-Roles: all_access` is passed correctly but OpenSearch has no rolesmapping
   entry for it → user has no permissions
-- **Fix**: Apply rolesmapping via securityadmin (see Issue 3 fix — same yml covers this)
-- **Status**: ⏳ Still returning 401 on the dev server after all fixes above.
-  Suspected remaining cause: the `proxy` auth type in this Wazuh Dashboard build may
-  not forward the proxy headers to OpenSearch's security plugin the same way `proxycache`
-  does. Fresh install via new setup.sh should resolve — start new investigation if issue
-  persists post-reinstall.
+- **Fix**: Apply rolesmapping via REST API (`PUT /_plugins/_security/api/rolesmapping/all_access`)
+  as the primary method; securityadmin.sh with a full rolesmapping YAML as fallback
+- **Version**: cycentra360 v1.0.225
+
+### Issue 6: `proxy_auth_domain` never enabled — Wazuh shows native login screen (resolved — v1.0.228)
+- **Symptom**: After the v1.0.225 rolesmapping fix, the `{"statusCode":401}` JSON error
+  disappears but the Wazuh Dashboard's native username/password login screen appears
+  instead of logging the user in automatically
+- **Root cause (A — Python state-machine bug)**: The Python script that patches
+  `proxy_auth_domain.http_enabled: false → true` in `config.yml` used
+  `indent <= 4` as the exit condition for the block detector. Because
+  `proxy_auth_domain:` is typically at indent 6, sibling keys (also at indent 6) never
+  triggered the exit — the state machine never left `in_proxy_domain` mode and
+  potentially modified sibling domains as a side-effect. More critically, the script
+  always printed `"OpenSearch proxy_auth_domain enabled"` and exited 0 even when the
+  block was never found, creating a false-success signal before `securityadmin.sh` was
+  called. `securityadmin.sh` then uploaded an unchanged `config.yml` (still
+  `http_enabled: false`), and the login screen persisted.
+- **Root cause (B — no REST API fallback)**: Only `securityadmin.sh` was used to apply
+  the `config.yml` change. If `securityadmin.sh` failed (JVM errors, heap exhaustion,
+  port issues), its stderr was discarded (`2>/dev/null`) and the failure was silently
+  treated as a warning with no retry mechanism.
+- **Fix**:
+  1. **Python state machine**: exit condition changed from `indent <= 4` to
+     `indent <= proxy_dom_indent` (the actual indent of the `proxy_auth_domain:` key).
+     This correctly detects sibling keys and does not modify other auth domains.
+  2. **Block injection**: if `proxy_auth_domain` is absent entirely (some Wazuh builds
+     omit it), the script now inserts the full block immediately before
+     `basic_internal_auth_domain:`, using its indent level as the anchor.
+  3. **Honest exit code**: script exits 1 and prints to stderr when no change was made,
+     so the caller can skip the securityadmin upload and log a real warning.
+  4. **REST API primary path**: before calling `securityadmin.sh`, setup.sh now attempts
+     `GET /_plugins/_security/api/securityconfig` → patch `proxy_auth_domain.http_enabled`
+     in Python → `PUT /_plugins/_security/api/securityconfig/config`. This path requires
+     no JVM and is unaffected by Java heap or timeout issues. Falls back to
+     `securityadmin.sh` if the endpoint returns non-200.
+  5. **securityadmin.sh stderr logging**: stderr is now appended to
+     `/var/log/cycentra/securityadmin.log` instead of `/dev/null`, making JVM errors
+     and YAML validation failures visible for post-install diagnosis.
+- **Version**: cycentra360 v1.0.228
+- **Manual fix for existing installs**:
+  ```bash
+  # Step 1 — patch config.yml
+  OS_CFG="/etc/wazuh-indexer/opensearch-security/config.yml"
+  python3 - "$OS_CFG" << 'EOF'
+  import sys
+  path = sys.argv[1]
+  with open(path) as f: lines = f.read().splitlines()
+  out, inside, dom_indent, patched = [], False, -1, False
+  for line in lines:
+      s = line.lstrip(); indent = len(line) - len(s)
+      if s.startswith("proxy_auth_domain:"):
+          inside, dom_indent = True, indent; out.append(line); continue
+      if inside:
+          if s and not s.startswith("#") and indent <= dom_indent:
+              inside = False
+          elif s.startswith("http_enabled:") and not patched:
+              out.append(line.replace("http_enabled: false", "http_enabled: true"))
+              patched = True; continue
+      out.append(line)
+  with open(path, "w") as f: f.write("\n".join(out) + "\n")
+  print("patched" if patched else "WARNING: block not found")
+  EOF
+
+  # Step 2 — apply via securityadmin
+  export JAVA_HOME=/usr/share/wazuh-indexer/jdk
+  cd /
+  /usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh \
+    -f "$OS_CFG" -t config -icl -nhnv \
+    -cacert /etc/wazuh-indexer/certs/root-ca.pem \
+    -cert   /etc/wazuh-indexer/certs/admin.pem \
+    -key    /etc/wazuh-indexer/certs/admin-key.pem \
+    -h 127.0.0.1
+
+  systemctl restart wazuh-dashboard
+  ```
 
 ---
 
-## Quick Diagnostic Checklist — Wazuh 401
+## Quick Diagnostic Checklist — Wazuh 401 / login screen
 
 Run in order, stop when you find a failure:
 
@@ -203,6 +273,8 @@ C="/etc/wazuh-indexer/certs"
   -cacert "$C/root-ca.pem" -cert "$C/admin.pem" -key "$C/admin-key.pem" -h 127.0.0.1
 grep -A5 "proxy_auth_domain" /tmp/sec-dump/config.yml
 # Expect: http_enabled: true
+# If http_enabled: false → Issue 6; re-run: sudo bash /opt/cycentra/cycentra-setup.sh --update
+# Check securityadmin errors: cat /var/log/cycentra/securityadmin.log
 
 # 4. Is all_access rolesmapping present?
 grep -A5 "all_access:" /tmp/sec-dump/rolesmapping.yml
@@ -229,3 +301,5 @@ grep -A5 "kibana_server:" /tmp/sec-dump/rolesmapping.yml
 | cy360 v1.0.223 | `blueprints/platform/routes.py` | Absolute logout URL + nginx /logout location |
 | cy360 v1.0.224 | `blueprints/platform/routes.py` | BASE_DOMAIN in cyiris_env dict |
 | cy360 v1.0.225 | `cycentra-setup.sh` | kibanaserver credential inject + rolesmapping with `_meta` + `cd /` before securityadmin |
+| cy360 v1.0.228 | `cycentra-setup.sh` | Fix proxy_auth_domain state-machine; REST API primary path for securityconfig; stderr to log file |
+| cy360 v1.0.228 | `docs/SSO-Troubleshooting.md` | Document Issue 6 (login screen RCA + manual fix) |
