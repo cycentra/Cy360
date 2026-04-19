@@ -1,3 +1,26 @@
+## v1.0.227 -- 2026-04-19
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.227 -- 2026-04-19
+
+### Bug Fixes
+
+  - **setup.sh: `_CYSIEM_KS_PASS: unbound variable` crash during update/existing-install runs**:
+    `_CYSIEM_KS_PASS` was only assigned inside the fresh Wazuh install `else` branch.
+    When Wazuh was already installed, the variable was never declared and `set -u`
+    threw `unbound variable` at Step 8 (CySIEM Dashboard Configuration), aborting
+    the entire setup run.
+    Fixed: initialised `_CYSIEM_KS_PASS=""` alongside `_CYSIEM_WUI_PASS=""` before
+    the Wazuh install block so the variable is always defined regardless of install path.
+    File: `cycentra-setup.sh`.
+
+---
+
 ## v1.0.226 -- 2026-04-19
 
 ### Improvements
