@@ -1,8 +1,26 @@
-## v1.0.223 -- 2026-04-19
+## v1.0.224 -- 2026-04-19
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.224 -- 2026-04-19
+
+### Bug Fixes
+
+  - **CyIRIS crash-loop: `BASE_DOMAIN` blank — DNS failure on OIDC discovery URL**:
+    `cyiris_env` in `_install_module_async` never included `BASE_DOMAIN`, so the
+    module `.env` file had no `BASE_DOMAIN=` entry. Docker Compose substituted
+    `${BASE_DOMAIN}` as empty string → `OIDC_IRIS_DISCOVERY_URL` became
+    `https://cyasm./oidc/...` → DNS failure → `exit(0)` crash-loop.
+    Fixed: added `"BASE_DOMAIN": base_domain` to `cyiris_env` dict.
+    File: `backend/blueprints/platform/routes.py`.
+
+---
+
+## v1.0.223 -- 2026-04-19
 
 ---
 

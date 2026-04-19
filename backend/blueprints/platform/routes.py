@@ -502,6 +502,7 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
                 "CYCENTRA_PORTAL_URL": os.environ.get("CYCENTRA_PORTAL_URL") or os.environ.get("FRONTEND_URL", ""),
                 "IRIS_ADM_EMAIL":      os.environ.get("IRIS_ADM_EMAIL", "admin@cycentra.com"),
                 "IRIS_ADM_PASSWORD":   _final_password,
+                "BASE_DOMAIN":         base_domain,
             }
             env_vars.pop("IRIS_ADM_PASSWORD", None)
             cyiris_env.update(env_vars)
