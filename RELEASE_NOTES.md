@@ -1,8 +1,30 @@
+## v1.0.222 -- 2026-04-19
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
 ## v1.0.221 -- 2026-04-18
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.222 -- 2026-04-19
+
+### Bug Fixes
+
+  - **CyIRIS SSO users get no permissions after first login**: `create_user()` creates the
+    DB record but does not assign a group. Auto-provisioned SSO users had zero group
+    membership → no permissions. Fixed: `_authenticate_with_email` now calls
+    `add_user_to_group(user.id, initial_group.group_id)` using `IRIS_NEW_USERS_DEFAULT_GROUP`
+    after creating the user (mirrors the `ldap_handler.py` pattern).
+    Files: `CyIRIS/source/app/blueprints/access_controls.py`,
+    `backend/blueprints/platform/compose.py` (sets `IRIS_NEW_USERS_DEFAULT_GROUP: Administrators`).
 
 ---
 

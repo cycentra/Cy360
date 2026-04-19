@@ -65,6 +65,7 @@ services:
       OIDC_IRIS_DISCOVERY_URL: "https://cyasm.${{BASE_DOMAIN}}/oidc/.well-known/openid-configuration"
       IRIS_AUTHENTICATION_CREATE_USER_IF_NOT_EXIST: "True"
       IRIS_AUTHENTICATION_LOCAL_FALLBACK: "False"
+      IRIS_NEW_USERS_DEFAULT_GROUP: "Administrators"
       # TLS_ROOT_CA intentionally omitted — the system CA bundle inside the container
       # already trusts Let's Encrypt.  Pointing it at a server-cert path causes
       # requests.get() to fail at startup → exit(0) crash-loop (v1.0.197 rationale).
