@@ -1,8 +1,46 @@
-## v1.0.224 -- 2026-04-19
+## v1.0.225 -- 2026-04-19
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.225 -- 2026-04-19
+
+### Bug Fixes
+
+  - **CySIEM (Wazuh) SSO: kibanaserver credentials left commented-out on fresh install**:
+    Wazuh installer generates a random `kibanaserver` password but leaves
+    `opensearch.username` / `opensearch.password` commented in `opensearch_dashboards.yml`.
+    Dashboard has no service account → every request returns 401 before proxy headers
+    are evaluated. `cycentra-setup.sh` Step 4.1 now extracts the kibanaserver password
+    from the installer tar (or falls back to `wazuh-passwords-tool.sh`) and injects
+    active credentials into the Dashboard config automatically.
+    File: `cycentra-setup.sh`.
+
+  - **CySIEM (Wazuh) SSO: securityadmin rolesmapping patch missing `_meta` header**:
+    Previous securityadmin calls used a YAML without the required `_meta` block,
+    causing `A version of 2 must have a _meta key for ROLESMAPPING` error and silently
+    leaving the rolesmapping unchanged. Fixed: all securityadmin rolesmapping YAMLs
+    now include `_meta: {type: rolesmapping, config_version: 2}`.
+    File: `cycentra-setup.sh`.
+
+  - **CySIEM (Wazuh) SSO: partial rolesmapping wipes kibana_server user mapping**:
+    `securityadmin.sh -f <file> -t rolesmapping` replaces the *entire* rolesmapping.
+    Patching only `all_access` removed `kibana_server → kibanaserver` causing
+    `no permissions for cluster:monitor/nodes/info` cascade. Fixed: setup.sh now
+    applies a complete rolesmapping including `kibana_server`, `kibana_user`,
+    `wazuh_ui_user`, `wazuh_ui_admin`, `own_index`, and `all_access` entries.
+    File: `cycentra-setup.sh`.
+
+  - **CySIEM (Wazuh) SSO: `cd /` guard before securityadmin calls**:
+    `securityadmin.sh` emits `getcwd` Java errors when run from a directory that
+    no longer exists. Added `cd /` before every securityadmin invocation.
+    File: `cycentra-setup.sh`.
+
+  - **Docs: added `docs/SSO-Troubleshooting.md`** with full RCA history for CyIRIS
+    and Wazuh SSO issues, diagnostic checklist, and per-version file change table.
 
 ---
 

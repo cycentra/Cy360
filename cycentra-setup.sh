@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.224 -- 2026-04-19 09:39 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.225 -- 2026-04-19 12:40 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -224,7 +224,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.224"
+_SCRIPT_VERSION="v1.0.225"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -550,8 +550,9 @@ if [[ "$MODE" == "full" ]]; then
         _CYSIEM_FRESH=true
         # Capture generated credentials from passwords file (non-fatal — Step 4.2 auto-detects from dashboard config)
         _cysiem_pwfile=$(tar -xOf ~/wazuh-install-files.tar wazuh-install-files/wazuh-passwords.txt 2>/dev/null || echo "")
-        _CYSIEM_ADMIN_PASS=$(echo "$_cysiem_pwfile" | grep -A 1 "^username: admin$"   | grep "^password:" | awk '{print $2}' || true)
-        _CYSIEM_WUI_PASS=$(echo  "$_cysiem_pwfile" | grep -A 1 "^username: wazuh-wui$" | grep "^password:" | awk '{print $2}' || true)
+        _CYSIEM_ADMIN_PASS=$(echo "$_cysiem_pwfile" | grep -A 1 "^username: admin$"      | grep "^password:" | awk '{print $2}' || true)
+        _CYSIEM_WUI_PASS=$(echo  "$_cysiem_pwfile" | grep -A 1 "^username: wazuh-wui$"   | grep "^password:" | awk '{print $2}' || true)
+        _CYSIEM_KS_PASS=$(echo   "$_cysiem_pwfile" | grep -A 1 "^username: kibanaserver$" | grep "^password:" | awk '{print $2}' || true)
         # Fallback: Wazuh 4.x installer prints credentials in stdout summary — capture if tar extract above found nothing
         if [[ -z "$_CYSIEM_ADMIN_PASS" ]]; then
             _CYSIEM_ADMIN_PASS=$(grep -oP '(?<=Password: )\S+' ~/wazuh-install-files.tar 2>/dev/null | head -1 || true)
@@ -575,6 +576,38 @@ if [[ -f "$WAZUH_YML" ]]; then
     grep -q "^server.port:" "$WAZUH_YML" \
         && sed -i 's|^server.port:.*|server.port: 5601|' "$WAZUH_YML" \
         || echo 'server.port: 5601' >> "$WAZUH_YML"
+
+    # ── Ensure kibanaserver service-account credentials are active ────────────
+    # Wazuh installer generates a random kibanaserver password but may leave the
+    # credential lines commented in opensearch_dashboards.yml.  Dashboard cannot
+    # reach OpenSearch without them → every request returns 401 regardless of
+    # proxy auth config.
+    # Priority: (1) uncomment existing real password, (2) inject from installer
+    # tar, (3) fall-back to checking if tar is available from a previous install.
+    _ks_line_user=$(grep -E "^#?\s*opensearch\.username:" "$WAZUH_YML" | head -1)
+    _ks_line_pass=$(grep -E "^#?\s*opensearch\.password:" "$WAZUH_YML" | head -1)
+    _ks_pass_val=$(echo "$_ks_line_pass" | awk '{print $NF}' | tr -d '"')
+    if [[ -n "$_ks_line_user" && -n "$_ks_pass_val" && "$_ks_pass_val" != "kibanaserver" ]]; then
+        # Lines exist with a real (non-placeholder) password — uncomment if needed
+        sed -i 's|^#\s*\(opensearch\.username:\)|\1|' "$WAZUH_YML" || true
+        sed -i 's|^#\s*\(opensearch\.password:\)|\1|' "$WAZUH_YML" || true
+        success "CySIEM Dashboard: kibanaserver credentials uncommented"
+    else
+        # Try to obtain the real password: installer variable, then fall back to tar
+        if [[ -z "$_CYSIEM_KS_PASS" && -f ~/wazuh-install-files.tar ]]; then
+            _pwfile2=$(tar -xOf ~/wazuh-install-files.tar wazuh-install-files/wazuh-passwords.txt 2>/dev/null || true)
+            _CYSIEM_KS_PASS=$(echo "$_pwfile2" | grep -A 1 "^username: kibanaserver$" | grep "^password:" | awk '{print $2}' || true)
+        fi
+        if [[ -n "$_CYSIEM_KS_PASS" ]]; then
+            # Remove any existing (commented or not) username/password lines and rewrite
+            sed -i '/^#\?\s*opensearch\.username:/d; /^#\?\s*opensearch\.password:/d' "$WAZUH_YML" || true
+            printf 'opensearch.username: kibanaserver\nopensearch.password: "%s"\n' "$_CYSIEM_KS_PASS" >> "$WAZUH_YML"
+            success "CySIEM Dashboard: kibanaserver credentials set from installer"
+        else
+            warn "kibanaserver password unknown — opensearch.username/password may be missing from opensearch_dashboards.yml. Dashboard→OpenSearch auth will fail if so."
+        fi
+    fi
+
     systemctl restart wazuh-dashboard 2>/dev/null || true
     success "CySIEM Dashboard configured: host=127.0.0.1, port=5601"
 
@@ -1337,6 +1370,7 @@ OS_SEC_PY_EOF
             _CERT_DIR="/etc/wazuh-indexer/certs"
             if [[ -x "$_SEC_ADMIN" && -f "${_CERT_DIR}/admin.pem" ]]; then
                 export JAVA_HOME=/usr/share/wazuh-indexer/jdk
+                cd /
                 "$_SEC_ADMIN" \
                     -f "$_OS_SEC_CFG" -t config \
                     -icl -nhnv \
@@ -1346,6 +1380,74 @@ OS_SEC_PY_EOF
                     -h 127.0.0.1 2>/dev/null \
                     && success "OpenSearch proxy_auth_domain applied via securityadmin" \
                     || warn "securityadmin.sh failed — Wazuh proxy auth may need manual config"
+
+                # ── Apply rolesmapping: kibana_server service account + all_access SSO role ──
+                # CRITICAL: securityadmin -f with -t rolesmapping REPLACES the entire
+                # rolesmapping, wiping the kibana_server→kibanaserver user mapping that
+                # the Dashboard service account depends on.  We must include both entries.
+                # all_access backend_role: maps to the all_access OpenSearch role so that
+                # nginx X-Proxy-Roles: all_access grants full access to SSO users.
+                cat > /tmp/_cy_rolesmapping.yml << 'CY_ROLES_EOF'
+_meta:
+  type: "rolesmapping"
+  config_version: 2
+
+all_access:
+  reserved: false
+  hidden: false
+  backend_roles:
+  - "admin"
+  - "all_access"
+  hosts: []
+  users: []
+  and_backend_roles: []
+
+kibana_server:
+  reserved: true
+  hidden: false
+  backend_roles: []
+  hosts: []
+  users:
+  - "kibanaserver"
+  and_backend_roles: []
+
+kibana_user:
+  reserved: false
+  hidden: false
+  backend_roles:
+  - "kibanauser"
+  hosts: []
+  users: []
+  and_backend_roles: []
+
+wazuh_ui_user:
+  reserved: false
+  backend_roles:
+  - "wazuh_ui_user"
+  users: []
+
+wazuh_ui_admin:
+  reserved: false
+  backend_roles:
+  - "wazuh_ui_admin"
+  users: []
+
+own_index:
+  reserved: false
+  users:
+  - "*"
+  and_backend_roles: []
+CY_ROLES_EOF
+                "$_SEC_ADMIN" \
+                    -f /tmp/_cy_rolesmapping.yml -t rolesmapping \
+                    -icl -nhnv \
+                    -cacert "${_CERT_DIR}/root-ca.pem" \
+                    -cert   "${_CERT_DIR}/admin.pem" \
+                    -key    "${_CERT_DIR}/admin-key.pem" \
+                    -h 127.0.0.1 2>/dev/null \
+                    && success "OpenSearch rolesmapping applied (all_access + kibana_server)" \
+                    || warn "rolesmapping apply failed — check securityadmin manually"
+                rm -f /tmp/_cy_rolesmapping.yml
             else
                 warn "securityadmin.sh or admin certs not found — skipping OpenSearch security config"
             fi
