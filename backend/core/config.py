@@ -55,7 +55,13 @@ MS_CLIENT_SECRET = os.environ.get("MICROSOFT_CLIENT_SECRET", "")
 # oauth2-proxy is the single IAP gate for all subdomains.
 # CyIRIS and CySOAR no longer register individual OIDC clients — they trust
 # the X-Email header injected by nginx after oauth2-proxy validates the session.
-# cysiem (Wazuh) uses proxy auth mode — not OIDC — so no client needed there.
+# cysiem (Wazuh) uses nginx proxy auth mode as the primary SSO path (X-Proxy-User /
+# X-Proxy-Roles headers). The `cysiem` client here is the secondary/fallback OIDC
+# path — it was historically the original CySIEM auth approach and keeps the
+# CYSIEM_OIDC_SECRET (already generated and stored in .env by setup.sh) active so
+# that the Wazuh Dashboard can authenticate via direct OIDC if the proxy auth domain
+# in OpenSearch Security fails to apply (e.g. first-run before securityadmin.sh
+# completes).  Wazuh Dashboard redirect_uri: /auth/openid/login on cysiem.DOMAIN.
 OIDC_CLIENTS = {
     "oauth2proxy": {
         "client_secret": os.environ.get("OAUTH2PROXY_SECRET", ""),
@@ -64,6 +70,19 @@ OIDC_CLIENTS = {
         ],
         "allowed_scopes": ["openid", "email", "profile"],
         "allowed_roles":  ["admin", "analyst", "viewer", "cyiris", "cysoar"],
+    },
+    # cysiem (Wazuh Dashboard) — OIDC fallback path for CySIEM SSO.
+    # Used when the Dashboard is configured for openid auth type rather than proxy
+    # auth (opensearch_security.auth.type: openid).  CYSIEM_OIDC_SECRET is generated
+    # by cycentra-setup.sh and stored in /opt/cycentra/.env.
+    # Token algorithm: RS256 (OpenSearch Security OIDC domain requires asymmetric JWT).
+    "cysiem": {
+        "client_secret": os.environ.get("CYSIEM_OIDC_SECRET", ""),
+        "redirect_uris": [
+            f"https://cysiem.{BASE_DOMAIN}/auth/openid/login",
+        ],
+        "allowed_scopes": ["openid", "email", "profile"],
+        "allowed_roles":  ["admin", "analyst", "viewer"],
     },
 }
 
