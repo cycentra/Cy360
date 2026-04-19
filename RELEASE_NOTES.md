@@ -1,8 +1,26 @@
-## v1.0.222 -- 2026-04-19
+## v1.0.223 -- 2026-04-19
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.223 -- 2026-04-19
+
+### Bug Fixes
+
+  - **CyIRIS logout redirects to `cyiris.DOMAIN/oauth2/sign_out` (404)**: The proxy
+    logout URL was a relative path (`/oauth2/sign_out`). The browser resolved it against
+    `cyiris.DOMAIN` which has no `/oauth2/` handler — nginx proxied it to CyIRIS → 404.
+    Fixed: `AUTHENTICATION_PROXY_LOGOUT_URL` is now a fully-qualified URL
+    (`https://cysoc.DOMAIN/oauth2/sign_out?rd=https://cysoc.DOMAIN/`) using `BASE_DOMAIN`
+    env var. Files: `CyIRIS/source/app/configuration.py`, `backend/blueprints/platform/routes.py`
+    (added `location = /logout` intercept in cyiris nginx block as belt-and-suspenders).
+
+---
+
+## v1.0.222 -- 2026-04-19
 
 ---
 
