@@ -1337,40 +1337,92 @@ print("Wazuh proxy auth config written")
 WAZUH_PY_EOF
 
         # ── OpenSearch Security: enable proxy_auth_domain ────────────────────────
-        # The Dashboard proxycache auth requires OpenSearch to accept proxy headers.
+        # The Dashboard proxy auth requires OpenSearch to accept proxy headers.
         # Enable http_enabled under proxy_auth_domain in the security config and
-        # apply via securityadmin.sh (required — file edit alone has no effect).
+        # apply via the REST API (primary) or securityadmin.sh (fallback).
         _OS_SEC_CFG="/etc/wazuh-indexer/opensearch-security/config.yml"
+        _CY_SEC_LOG="/var/log/cycentra/securityadmin.log"
+        mkdir -p /var/log/cycentra 2>/dev/null || true
         if [[ -f "$_OS_SEC_CFG" ]]; then
+            # Patch config.yml on disk: enable proxy_auth_domain.http_enabled.
+            # Bugs in the previous state-machine:
+            #   1. Exit condition "indent <= 4" never fired for blocks at indent 6
+            #      (siblings were not detected, other domains got patched too).
+            #   2. Script always printed "enabled" even when the block was absent
+            #      (file written back unchanged, securityadmin then uploaded a
+            #      config that still had http_enabled: false — silent no-op).
+            # Fixed: use indent-relative exit; create the block if absent; exit 1
+            # when no change was made so the caller can report a real warning.
             python3 - "$_OS_SEC_CFG" << 'OS_SEC_PY_EOF'
-import sys, re
+import sys
 path = sys.argv[1]
 with open(path, "r") as f:
     text = f.read()
-# Enable http_enabled under the proxy_auth_domain block only.
-# Use a state-machine approach: track whether we are inside proxy_auth_domain.
 lines = text.splitlines()
 out = []
-in_proxy_domain = False
+in_proxy_domain   = False
+proxy_dom_indent  = -1
+found             = False
+patched           = False
 for line in lines:
     stripped = line.lstrip()
-    indent = len(line) - len(stripped)
+    indent   = len(line) - len(stripped)
     if stripped.startswith("proxy_auth_domain:"):
-        in_proxy_domain = True
+        in_proxy_domain  = True
+        proxy_dom_indent = indent
+        found            = True
         out.append(line)
         continue
     if in_proxy_domain:
-        # A new top-level key (indent <= 4) ends the proxy_auth_domain block
-        if indent <= 4 and stripped and not stripped.startswith("#"):
+        # Exit when we reach a sibling key (same indent) or a parent (shallower).
+        # This replaces the previous "indent <= 4" heuristic which never fired
+        # for blocks indented at 6+ spaces and caused unintended side-effects on
+        # sibling auth domains (e.g. jwt_auth_domain, ldap).
+        if stripped and not stripped.startswith("#") and indent <= proxy_dom_indent:
             in_proxy_domain = False
-        elif stripped.startswith("http_enabled:"):
+            # fall through to normal append below
+        elif stripped.startswith("http_enabled:") and not patched:
             out.append(line.replace("http_enabled: false", "http_enabled: true"))
+            patched = True
             continue
     out.append(line)
+# If the block was absent altogether, inject it just before
+# basic_internal_auth_domain so the indentation matches the rest of authc.
+if not found:
+    new_lines = []
+    for line in out:
+        if line.lstrip().startswith("basic_internal_auth_domain:") and not patched:
+            base_indent = " " * (len(line) - len(line.lstrip()))
+            child_indent = base_indent + "  "
+            new_lines += [
+                base_indent + "proxy_auth_domain:",
+                child_indent + 'description: "CyCentra 360 IAP proxy authentication"',
+                child_indent + "http_enabled: true",
+                child_indent + "transport_enabled: false",
+                child_indent + "order: 1",
+                child_indent + "http_authenticator:",
+                child_indent + "  type: proxy",
+                child_indent + "  challenge: false",
+                child_indent + "  config:",
+                child_indent + '    user_header: "x-proxy-user"',
+                child_indent + '    roles_header: "x-proxy-roles"',
+                child_indent + "authentication_backend:",
+                child_indent + "  type: noop",
+            ]
+            patched = True
+        new_lines.append(line)
+    out = new_lines
 with open(path, "w") as f:
     f.write("\n".join(out) + "\n")
-print("OpenSearch proxy_auth_domain enabled")
+if patched:
+    print("OpenSearch proxy_auth_domain patched in config.yml")
+    sys.exit(0)
+else:
+    print("WARNING: proxy_auth_domain not found and basic_internal_auth_domain "
+          "anchor missing — config.yml not modified", file=sys.stderr)
+    sys.exit(1)
 OS_SEC_PY_EOF
+            _cfg_py_rc=$?
 
             # ── Apply OpenSearch Security changes for proxy auth ──────────────────
             # Two changes are required:
@@ -1378,12 +1430,12 @@ OS_SEC_PY_EOF
             #      proxy headers to OpenSearch Security for user authentication.
             #   2. all_access rolesmapping               — maps the "all_access" backend
             #      role (sent by nginx as X-Proxy-Roles) to the all_access OpenSearch role.
-            # Without both, the Wazuh Dashboard returns 401 for ALL proxy-authenticated
-            # users ({"statusCode":401,"error":"Unauthorized","message":"Unauthorized"}).
+            # Without both, the Wazuh Dashboard shows the native login screen for ALL
+            # proxy-authenticated users instead of logging them in automatically.
             #
-            # Strategy: wait for the indexer to be ready, then try the REST API first
-            # (more reliable — no JVM dependency, no "cd /" requirement), and fall back
-            # to securityadmin.sh if the REST API is unavailable.
+            # Strategy: wait for the indexer to be ready, then try:
+            #   (a) REST API securityconfig GET+PATCH+PUT (primary — no JVM required)
+            #   (b) securityadmin.sh with the on-disk config.yml (fallback)
             _SEC_ADMIN="/usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh"
             _CERT_DIR="/etc/wazuh-indexer/certs"
 
@@ -1391,7 +1443,7 @@ OS_SEC_PY_EOF
                 # ── 1. Wait for OpenSearch indexer (up to 90 s) ──────────────────────
                 # securityadmin.sh silently fails when the indexer hasn't finished
                 # starting.  A readiness check prevents the silent failure that leaves
-                # proxy_auth_domain disabled and causes the 401 loop.
+                # proxy_auth_domain disabled and causes the login-screen loop.
                 info "Waiting for OpenSearch indexer to be ready (up to 90 s)..."
                 _INDEXER_READY=false
                 for _idx_n in $(seq 1 18); do
@@ -1411,24 +1463,102 @@ OS_SEC_PY_EOF
                 if [[ "$_INDEXER_READY" != "true" ]]; then
                     warn "OpenSearch indexer not reachable after 90 s — security config skipped; re-run --update once Wazuh is healthy"
                 else
-                    # ── 2. Enable proxy_auth_domain via securityadmin.sh ─────────────
-                    # The per-auth-domain config.yml change requires securityadmin.sh
-                    # (there is no safe per-domain REST API patch in OpenSearch 2.x).
-                    if [[ -x "$_SEC_ADMIN" ]]; then
-                        export JAVA_HOME=/usr/share/wazuh-indexer/jdk
-                        cd /
-                        "$_SEC_ADMIN" \
-                            -f "$_OS_SEC_CFG" -t config \
-                            -icl -nhnv \
-                            -cacert "${_CERT_DIR}/root-ca.pem" \
-                            -cert   "${_CERT_DIR}/admin.pem" \
-                            -key    "${_CERT_DIR}/admin-key.pem" \
-                            -h 127.0.0.1 2>/dev/null \
-                            && success "OpenSearch proxy_auth_domain applied via securityadmin" \
-                            || warn "securityadmin.sh failed for config.yml — proxy_auth_domain may need manual enable"
+                    # ── 2a. Enable proxy_auth_domain via REST API (primary) ───────────
+                    # GET the live security config, patch proxy_auth_domain.http_enabled
+                    # in Python, then PUT it back.  This is more reliable than
+                    # securityadmin.sh (no JVM dependency, no "cd /" requirement, no
+                    # Java heap / timeout issues).  Falls back to securityadmin.sh when
+                    # the endpoint returns a non-200 or the PUT is rejected.
+                    _CONFIG_APPLIED=false
+                    _cfg_get_code=$(curl -sk -o /tmp/_cy_sec_cfg.json -w '%{http_code}' \
+                        --cert "${_CERT_DIR}/admin.pem" \
+                        --key  "${_CERT_DIR}/admin-key.pem" \
+                        "https://127.0.0.1:9200/_plugins/_security/api/securityconfig" \
+                        2>/dev/null || true)
+                    if [[ "$_cfg_get_code" == "200" && -s /tmp/_cy_sec_cfg.json ]]; then
+                        python3 - /tmp/_cy_sec_cfg.json /tmp/_cy_sec_patch.json << 'SEC_REST_PY'
+import json, sys
+src, dst = sys.argv[1], sys.argv[2]
+try:
+    with open(src) as f:
+        raw = json.load(f)
+    dynamic = raw.get("config", {}).get("dynamic", {})
+    authc   = dynamic.setdefault("authc", {})
+    if "proxy_auth_domain" not in authc:
+        authc["proxy_auth_domain"] = {
+            "http_enabled": True,
+            "transport_enabled": False,
+            "order": 1,
+            "http_authenticator": {
+                "type": "proxy",
+                "challenge": False,
+                "config": {
+                    "user_header": "x-proxy-user",
+                    "roles_header": "x-proxy-roles",
+                },
+            },
+            "authentication_backend": {"type": "noop", "config": {}},
+        }
+        print("proxy_auth_domain block created via REST patch")
+    else:
+        authc["proxy_auth_domain"]["http_enabled"] = True
+        print("proxy_auth_domain http_enabled set via REST patch")
+    with open(dst, "w") as f:
+        json.dump({"dynamic": dynamic}, f)
+    sys.exit(0)
+except Exception as exc:
+    print(f"REST patch error: {exc}", file=sys.stderr)
+    sys.exit(1)
+SEC_REST_PY
+                        if [[ $? -eq 0 && -s /tmp/_cy_sec_patch.json ]]; then
+                            _cfg_put_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+                                --cert "${_CERT_DIR}/admin.pem" \
+                                --key  "${_CERT_DIR}/admin-key.pem" \
+                                -X PUT \
+                                "https://127.0.0.1:9200/_plugins/_security/api/securityconfig/config" \
+                                -H "Content-Type: application/json" \
+                                -d @/tmp/_cy_sec_patch.json \
+                                2>/dev/null || true)
+                            if [[ "$_cfg_put_code" =~ ^(200|201)$ ]]; then
+                                _CONFIG_APPLIED=true
+                                success "OpenSearch proxy_auth_domain enabled via REST API"
+                            else
+                                info "REST API securityconfig PUT returned ${_cfg_put_code} — trying securityadmin fallback"
+                            fi
+                            rm -f /tmp/_cy_sec_patch.json
+                        fi
+                        rm -f /tmp/_cy_sec_cfg.json
                     else
-                        warn "securityadmin.sh not found — proxy_auth_domain config skipped"
+                        info "GET securityconfig returned ${_cfg_get_code} — trying securityadmin fallback"
+                        rm -f /tmp/_cy_sec_cfg.json
                     fi
+
+                    # ── 2b. Enable proxy_auth_domain via securityadmin.sh (fallback) ──
+                    # Stderr is written to $_CY_SEC_LOG instead of /dev/null so any
+                    # JVM or YAML errors are visible for post-install diagnosis.
+                    if [[ "$_CONFIG_APPLIED" != "true" ]]; then
+                        if [[ -x "$_SEC_ADMIN" && "$_cfg_py_rc" -eq 0 ]]; then
+                            export JAVA_HOME=/usr/share/wazuh-indexer/jdk
+                            cd /
+                            "$_SEC_ADMIN" \
+                                -f "$_OS_SEC_CFG" -t config \
+                                -icl -nhnv \
+                                -cacert "${_CERT_DIR}/root-ca.pem" \
+                                -cert   "${_CERT_DIR}/admin.pem" \
+                                -key    "${_CERT_DIR}/admin-key.pem" \
+                                -h 127.0.0.1 2>>"$_CY_SEC_LOG" \
+                                && { _CONFIG_APPLIED=true; \
+                                     success "OpenSearch proxy_auth_domain applied via securityadmin"; } \
+                                || warn "securityadmin.sh failed for config.yml — see ${_CY_SEC_LOG} for details"
+                        elif [[ ! -x "$_SEC_ADMIN" ]]; then
+                            warn "securityadmin.sh not found — proxy_auth_domain config skipped"
+                        else
+                            warn "config.yml patch failed (Python exit ${_cfg_py_rc}) — securityadmin skipped; check ${_OS_SEC_CFG}"
+                        fi
+                    fi
+
+                    [[ "$_CONFIG_APPLIED" != "true" ]] && \
+                        warn "proxy_auth_domain NOT enabled in OpenSearch — Wazuh SSO will show a login screen; re-run --update to retry"
 
                     # ── 3. Apply rolesmapping: REST API (primary) or securityadmin (fallback) ─
                     # The REST API PUT per-role endpoint is preferred: it patches only the

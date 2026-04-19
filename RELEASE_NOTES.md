@@ -1,10 +1,33 @@
-## v1.0.227 -- 2026-04-19
+## v1.0.228 -- 2026-04-19
 
-### Improvements
+### Bug Fixes
 
-  - Stability and performance improvements.
+  - **CySIEM SSO: Wazuh login screen shown instead of automatic sign-in (proxy_auth_domain never enabled)**:
+    After the v1.0.225 kibanaserver / rolesmapping fixes the `{"statusCode":401}` error was
+    resolved, but users still landed on Wazuh Dashboard's native login screen instead of being
+    signed in automatically.
+    Root cause A — Python state-machine bug: the `config.yml` patcher used `indent <= 4` as
+    the exit condition for the `proxy_auth_domain` block, but that block is typically indented
+    at 6 spaces; sibling keys (also at 6 spaces) never triggered the exit.  More importantly
+    the script always exited 0 and printed `"OpenSearch proxy_auth_domain enabled"` even when
+    the `proxy_auth_domain` key was never found in the file — `securityadmin.sh` then uploaded
+    an unchanged `config.yml` (still `http_enabled: false`), silently leaving proxy auth
+    disabled.
+    Root cause B — no REST API fallback: `securityadmin.sh` was the only path to apply the
+    config change.  Its stderr was discarded (`2>/dev/null`), so JVM or YAML failures were
+    invisible and there was no retry.
+    Fixes applied: (1) state-machine exit condition changed to `indent <= proxy_dom_indent`
+    (the actual indent of `proxy_auth_domain:`); (2) script now exits 1 when no change was
+    made; (3) if `proxy_auth_domain` is absent entirely the full block is injected before
+    `basic_internal_auth_domain`; (4) a REST API primary path is added —
+    `GET /_plugins/_security/api/securityconfig` → patch → `PUT .../config` — which requires
+    no JVM and is immune to Java heap / timeout issues; (5) `securityadmin.sh` stderr is
+    appended to `/var/log/cycentra/securityadmin.log` for post-install diagnosis.
+    File: `cycentra-setup.sh`, `docs/SSO-Troubleshooting.md`.
 
 ---
+
+
 
 ## v1.0.227 -- 2026-04-19
 
