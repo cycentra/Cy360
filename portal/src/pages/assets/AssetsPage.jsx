@@ -28,22 +28,19 @@ function StatusBadge({ status }) {
   );
 }
 
-// ── Asset detail slide-out panel ──────────────────────────────────────────────
+// ── Status sub-panel (second slide-out, zIndex 3002) ─────────────────────────
 
-function AssetDrawer({ asset, status, onClose, onStatusChange }) {
+function AssetStatusPanel({ asset, status, onClose, onStatusChange }) {
   const [txTarget,  setTxTarget]  = useState(null);
   const [txComment, setTxComment] = useState("");
   const [txErr,     setTxErr]     = useState("");
   const [txBusy,    setTxBusy]    = useState(false);
 
-  if (!asset) return null;
-
-  const a        = asset;
-  const riskCfg  = RISK_CONFIG[a.risk] || RISK_CONFIG.low;
-  const curStat  = status || a.status || "open";
+  const rawStat  = status || asset.status || "open";
+  const curStat  = (typeof rawStat === "object" ? rawStat?.status : rawStat) || "open";
   const targets  = STATUS_TRANSITIONS[curStat] || [];
   const statCfg  = STATUS_CONFIG[curStat] || STATUS_CONFIG.open;
-  const assetId  = a.host;
+  const assetId  = asset.host;
 
   const startTx  = (t) => { setTxTarget(t); setTxComment(""); setTxErr(""); };
   const cancelTx = () => setTxTarget(null);
@@ -63,10 +60,130 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
       } else {
         onStatusChange(assetId, txTarget);
         setTxTarget(null);
+        onClose();
       }
     } catch { setTxErr("Network error."); }
     setTxBusy(false);
   };
+
+  return (
+    <div style={{
+      position: "fixed", top: 0, right: 480, bottom: 0, zIndex: 3002,
+      width: 340, background: "#0b0f1c",
+      borderLeft: `2px solid ${statCfg.color}50`,
+      display: "flex", flexDirection: "column",
+      boxShadow: "-12px 0 32px rgba(0,0,0,0.6)",
+      overflow: "hidden",
+    }}>
+      {/* Header */}
+      <div style={{
+        padding: "16px 18px 12px", flexShrink: 0,
+        borderBottom: `1px solid ${statCfg.color}20`,
+        background: `${statCfg.color}06`,
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+              letterSpacing: "1.5px", marginBottom: 4 }}>UPDATE STATUS</div>
+            <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 13,
+              fontFamily: "monospace", fontWeight: 700 }}>{asset.host}</div>
+          </div>
+          <button onClick={onClose} style={{
+            background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
+            color: "rgba(255,255,255,0.5)", width: 28, height: 28, borderRadius: 4,
+            cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center",
+          }}>✕</button>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "18px" }}>
+        {/* Current state */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+          <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>Current:</span>
+          <span style={{
+            background: `${statCfg.color}18`, color: statCfg.color,
+            border: `1px solid ${statCfg.color}50`, fontSize: 11, fontWeight: 700,
+            fontFamily: "monospace", padding: "3px 10px", borderRadius: 3,
+          }}>{statCfg.label}</span>
+        </div>
+
+        {txTarget ? (
+          <div>
+            <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 10,
+              fontFamily: "monospace", marginBottom: 6 }}>
+              Transitioning to:{" "}
+              <span style={{ color: STATUS_CONFIG[txTarget]?.color || "#888", fontWeight: 700 }}>
+                {STATUS_CONFIG[txTarget]?.label || txTarget}
+              </span>
+            </div>
+            <textarea value={txComment} onChange={e => setTxComment(e.target.value)}
+              placeholder="Reason for this status change (required for audit trail)…"
+              rows={4}
+              style={{
+                width: "100%", boxSizing: "border-box",
+                background: "rgba(255,255,255,0.03)",
+                border: `1px solid ${txErr ? "#ff3b3b" : "rgba(255,255,255,0.1)"}`,
+                borderRadius: 3, color: "rgba(255,255,255,0.8)", fontSize: 12,
+                fontFamily: "monospace", padding: "8px 10px", resize: "vertical",
+              }} />
+            {txErr && <div style={{ color: "#ff6464", fontSize: 11, fontFamily: "monospace", marginTop: 4 }}>{txErr}</div>}
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button onClick={cancelTx} style={{
+                background: "none", border: "1px solid rgba(255,255,255,0.1)",
+                color: "rgba(255,255,255,0.4)", padding: "5px 12px", borderRadius: 3,
+                fontFamily: "monospace", fontSize: 11, cursor: "pointer",
+              }}>Cancel</button>
+              <button onClick={confirmTx} disabled={txBusy} style={{
+                background: `${STATUS_CONFIG[txTarget]?.color || "#888"}20`,
+                border: `1px solid ${STATUS_CONFIG[txTarget]?.color || "#888"}50`,
+                color: STATUS_CONFIG[txTarget]?.color || "#888",
+                padding: "5px 14px", borderRadius: 3, fontFamily: "monospace",
+                fontSize: 12, fontWeight: 700, cursor: txBusy ? "wait" : "pointer",
+              }}>{txBusy ? "Saving…" : "Confirm"}</button>
+            </div>
+          </div>
+        ) : (
+          targets.length > 0 ? (
+            <div>
+              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9,
+                fontFamily: "monospace", letterSpacing: "1px", marginBottom: 8 }}>TRANSITION TO</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {targets.map(t => {
+                  const tc = STATUS_CONFIG[t] || { color: "#888", label: t };
+                  return (
+                    <button key={t} onClick={() => startTx(t)} style={{
+                      background: `${tc.color}08`, border: `1px solid ${tc.color}35`,
+                      color: tc.color, fontSize: 11, fontFamily: "monospace", fontWeight: 700,
+                      padding: "9px 14px", borderRadius: 3, cursor: "pointer", textAlign: "left",
+                    }}>→ {tc.label}</button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11,
+              fontFamily: "monospace" }}>No transitions available.</div>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Asset detail slide-out panel ──────────────────────────────────────────────
+
+function AssetDrawer({ asset, status, onClose, onStatusChange }) {
+  const [showStatusPanel, setShowStatusPanel] = useState(false);
+
+  if (!asset) return null;
+
+  const a        = asset;
+  const riskCfg  = RISK_CONFIG[a.risk] || RISK_CONFIG.low;
+  // status prop can be plain string or full {status, audit_log} object
+  const rawStat  = status || a.status || "open";
+  const curStat  = (typeof rawStat === "object" ? rawStat?.status : rawStat) || "open";
+  const statCfg  = STATUS_CONFIG[curStat] || STATUS_CONFIG.open;
 
   const vulns     = a.vulnerabilities || [];
   const critCount = vulns.filter(v => v.severity === "Critical").length;
@@ -79,6 +196,16 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
         position: "fixed", inset: 0, zIndex: 3000, background: "rgba(0,0,0,0.55)",
       }} />
 
+      {/* Status sub-panel — second slide-out */}
+      {showStatusPanel && (
+        <AssetStatusPanel
+          asset={a}
+          status={status}
+          onClose={() => setShowStatusPanel(false)}
+          onStatusChange={onStatusChange}
+        />
+      )}
+
       {/* Panel */}
       <div style={{
         position: "fixed", top: 0, right: 0, bottom: 0, zIndex: 3001,
@@ -86,6 +213,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
         borderLeft: `2px solid ${riskCfg.color}40`,
         display: "flex", flexDirection: "column",
         boxShadow: `-16px 0 40px rgba(0,0,0,0.6)`,
+        overflow: "hidden",
       }}>
         {/* Header */}
         <div style={{
@@ -105,12 +233,22 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
               </div>
               {a.owner && <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginTop: 2 }}>{a.owner}</div>}
             </div>
-            <button onClick={onClose} style={{
-              background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
-              color: "rgba(255,255,255,0.5)", width: 28, height: 28, borderRadius: 4,
-              cursor: "pointer", fontSize: 14, flexShrink: 0,
-              display: "flex", alignItems: "center", justifyContent: "center",
-            }}>✕</button>
+            <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+              <button onClick={() => setShowStatusPanel(s => !s)} style={{
+                background: showStatusPanel ? `${statCfg.color}18` : "rgba(255,255,255,0.04)",
+                border: `1px solid ${showStatusPanel ? statCfg.color + "50" : "rgba(255,255,255,0.1)"}`,
+                color: showStatusPanel ? statCfg.color : "rgba(255,255,255,0.45)",
+                fontSize: 9, fontFamily: "monospace", fontWeight: 700,
+                padding: "4px 9px", borderRadius: 3, cursor: "pointer",
+                letterSpacing: "0.8px",
+              }}>UPDATE STATUS</button>
+              <button onClick={onClose} style={{
+                background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
+                color: "rgba(255,255,255,0.5)", width: 28, height: 28, borderRadius: 4,
+                cursor: "pointer", fontSize: 14,
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>✕</button>
+            </div>
           </div>
         </div>
 
@@ -191,7 +329,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
             </div>
           )}
 
-          {/* ── Rich asset context sections ───────────────────────────── */}
+          {/* ── Rich asset context sections ─── (SSL, DNS, HTTP, etc.) ── */}
 
           {/* SSL / TLS */}
           {a.ssl_detail && (
@@ -322,79 +460,6 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
             </div>
           )}
 
-          {/* ── Status lifecycle section ────────────────────────────────── */}
-          <div style={{
-            background: "rgba(255,255,255,0.025)",
-            border: "1px solid rgba(255,255,255,0.08)",
-            borderRadius: 5, padding: "14px 16px",
-          }}>
-            <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace",
-              letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 10 }}>
-              Status Lifecycle
-            </div>
-
-            {/* Current active state */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-              <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>Current:</span>
-              <span style={{
-                background: `${statCfg.color}18`, color: statCfg.color,
-                border: `1px solid ${statCfg.color}50`, fontSize: 11, fontWeight: 700,
-                fontFamily: "monospace", padding: "3px 10px", borderRadius: 3,
-              }}>{statCfg.label}</span>
-            </div>
-
-            {/* Inline transition */}
-            {txTarget ? (
-              <div>
-                <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 10, fontFamily: "monospace", marginBottom: 6 }}>
-                  Transitioning to:{" "}
-                  <span style={{ color: STATUS_CONFIG[txTarget]?.color || "#888", fontWeight: 700 }}>
-                    {STATUS_CONFIG[txTarget]?.label || txTarget}
-                  </span>
-                </div>
-                <textarea value={txComment} onChange={e => setTxComment(e.target.value)}
-                  placeholder="Reason for this status change (required for audit trail)…"
-                  rows={3}
-                  style={{
-                    width: "100%", boxSizing: "border-box",
-                    background: "rgba(255,255,255,0.03)",
-                    border: `1px solid ${txErr ? "#ff3b3b" : "rgba(255,255,255,0.1)"}`,
-                    borderRadius: 3, color: "rgba(255,255,255,0.8)", fontSize: 12,
-                    fontFamily: "monospace", padding: "8px 10px", resize: "vertical",
-                  }} />
-                {txErr && <div style={{ color: "#ff6464", fontSize: 11, fontFamily: "monospace", marginTop: 4 }}>{txErr}</div>}
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button onClick={cancelTx} style={{ background: "none", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", padding: "5px 12px", borderRadius: 3, fontFamily: "monospace", fontSize: 11, cursor: "pointer" }}>Cancel</button>
-                  <button onClick={confirmTx} disabled={txBusy} style={{
-                    background: `${STATUS_CONFIG[txTarget]?.color || "#888"}20`,
-                    border: `1px solid ${STATUS_CONFIG[txTarget]?.color || "#888"}50`,
-                    color: STATUS_CONFIG[txTarget]?.color || "#888",
-                    padding: "5px 14px", borderRadius: 3, fontFamily: "monospace",
-                    fontSize: 12, fontWeight: 700, cursor: txBusy ? "wait" : "pointer",
-                  }}>{txBusy ? "Saving…" : "Confirm"}</button>
-                </div>
-              </div>
-            ) : (
-              targets.length > 0 && (
-                <div>
-                  <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 6 }}>TRANSITION TO</div>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {targets.map(t => {
-                      const tc = STATUS_CONFIG[t] || { color: "#888", label: t };
-                      return (
-                        <button key={t} onClick={() => startTx(t)} style={{
-                          background: `${tc.color}12`, border: `1px solid ${tc.color}40`,
-                          color: tc.color, fontSize: 10, fontFamily: "monospace", fontWeight: 700,
-                          padding: "4px 10px", borderRadius: 3, cursor: "pointer",
-                        }}>→ {tc.label}</button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )
-            )}
-          </div>
-
         </div>
       </div>
     </>
@@ -418,7 +483,9 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
   const handleStatusChange = (assetId, newStatus) =>
     setAssetStatuses(prev => ({ ...prev, [assetId]: newStatus }));
 
-  const openDrawer  = (a, e) => { e.stopPropagation(); setActiveAsset(a); if (setSelectedAsset) setSelectedAsset(a); };
+  // Do NOT call setSelectedAsset here — that would open the redundant AssetModal
+  // from App.jsx level. The AssetDrawer is the single detailed view.
+  const openDrawer  = (a, e) => { e.stopPropagation(); setActiveAsset(a); };
   const closeDrawer = () => setActiveAsset(null);
 
   return (
@@ -460,7 +527,8 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
         )}
 
         {assets.map((a, i) => {
-          const curStat  = assetStatuses[a.host] || a.status || "open";
+          const _aEntry  = assetStatuses[a.host];
+          const curStat  = (typeof _aEntry === "object" ? _aEntry?.status : _aEntry) || a.status || "open";
           const isActive = activeAsset?.host === a.host;
           return (
             <div key={a.id}

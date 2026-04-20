@@ -1,10 +1,61 @@
-## v1.0.233 -- 2026-04-20
+## v1.0.234 -- 2026-04-20
 
 ### Improvements
 
   - Stability and performance improvements.
 
 ---
+
+## v1.0.233 -- 2026-04-20
+
+### Bug Fixes
+
+  - **ASM Findings — black page on row click**: `findingStatuses[fid]` is now a full
+    `{status, audit_log}` object returned by `/api/asm/statuses`. The table rows were
+    passing the raw object to `StatusBadge` → `STATUS_CONFIG[object]` returned `undefined`
+    → accessing `.color` threw and React's error boundary blanked the page. Fixed: all
+    table rows now unwrap with `(typeof entry === "object" ? entry?.status : entry) || "open"`.
+
+  - **FindingDrawer scroll regression**: the panel container had both `display:flex,
+    flexDirection:column` and `overflowY:auto`. The inner scrollable body's `flex:1`
+    could not size correctly because the parent itself could scroll. Fixed: panel
+    container changed to `overflow:hidden`; the inner body div remains `flex:1,
+    overflowY:auto` and scrolls correctly.
+
+  - **Asset Inventory — dual panel on row click**: clicking a row in Asset Inventory
+    triggered both the `AssetDrawer` (zIndex 3001) inside `AssetsPage` and the legacy
+    `AssetModal` (zIndex 100) via the App.jsx-level `selectedAsset` state. The `AssetModal`
+    remained visible when the `AssetDrawer` was closed. Fixed: `openDrawer` no longer
+    calls `setSelectedAsset()` — the `AssetModal` is only opened from Dashboard asset
+    clicks where it serves a distinct purpose.
+
+  - **Asset Inventory — status object unwrap**: `assetStatuses[host]` can be a full
+    `{status, audit_log}` object (mirrors the findings format). Table rows and
+    `AssetDrawer` now correctly unwrap before reading current state.
+
+### Improvements
+
+  - **Asset Inventory — Status as second slide-out panel**: the Status Lifecycle controls
+    have been extracted from the `AssetDrawer` body into a dedicated `AssetStatusPanel`
+    component that renders at zIndex 3002, width 340px, sliding in to the left of the
+    detail panel. An "UPDATE STATUS" toggle button in the detail panel header opens/closes
+    the sub-panel. Transition buttons are now displayed vertically for easier touch targets.
+
+  - **ASM Automation — State Transition Matrix (active)**: confidence-driven status
+    suggestions are visible in the FindingDrawer as soon as the panel opens (black-page
+    bug is now fixed). The `AutoStatusBanner` shows when `computeAutoStatus()` returns a
+    suggestion and the one-click Apply posts to `/api/asm/findings/<id>/status` with an
+    auto-generated audit comment.
+
+    | From          | To            | Trigger                                         | Method      |
+    |---------------|---------------|-------------------------------------------------|-------------|
+    | open          | investigating | confidence ≥ 75  OR  cvss ≥ 7.0  OR  epss ≥ 60% | Automated   |
+    | open          | investigating | confidence ≥ 90 (Critical)                      | Automated   |
+    | investigating | in_review     | cvss ≥ 9.0  OR  epss ≥ 75%  OR  risk_score ≥ 8  | Automated   |
+    | all others    | —             | analyst decision with audit comment             | Manual only |
+
+---
+
 
 ## v1.0.233 -- 2026-04-20
 
