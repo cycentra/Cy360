@@ -108,6 +108,30 @@ class Incident(Base):
     )
 
 
+# ── Audit Log ─────────────────────────────────────────────────────────────────
+# Immutable record of every status transition and manual action performed on
+# incidents, ASM findings, or asset records.  Written by the ingestor pipeline
+# (actor="system") and by the /transition endpoint (actor=analyst email).
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+
+    id           = Column(BigInteger, primary_key=True, autoincrement=True)
+    entity_type  = Column(Text, nullable=False)   # "incident" | "asm_finding" | "asset"
+    entity_id    = Column(Text, nullable=False)   # incident id, finding_id, or asset hostname
+    action       = Column(Text, nullable=False)   # "status_change" | "iris_created" | "soar_triggered" | "auto_fp" | "comment"
+    from_status  = Column(Text, nullable=True)
+    to_status    = Column(Text, nullable=True)
+    comment      = Column(Text, nullable=True)    # mandatory for analyst-initiated transitions
+    actor        = Column(Text, nullable=False)   # email or "system"
+    created_at   = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+    extra        = Column(JSONB, default=dict)    # fp_score, rule_ids, iris_case_id, etc.
+
+    __table_args__ = (
+        Index("ix_audit_entity", "entity_type", "entity_id"),
+    )
+
+
 class UEBABaseline(Base):
     __tablename__ = "ueba_baselines"
 

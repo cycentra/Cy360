@@ -40,7 +40,7 @@ from sqlalchemy import select, func, desc, delete
 from pydantic import BaseModel
 
 from config import get_settings
-from models import get_db, init_db, Alert, Incident, UEBABaseline, UEBAAnomaly, RiskScore
+from models import get_db, init_db, Alert, Incident, UEBABaseline, UEBAAnomaly, RiskScore, AuditLog
 from ingestor import run_ingestor
 from risk_scorer import recalculate_all
 from normaliser import normalise
@@ -495,14 +495,24 @@ async def health():
 async def stats(db: AsyncSession = Depends(get_db)):
     total_alerts    = (await db.execute(select(func.count()).select_from(Alert))).scalar()
     total_incidents = (await db.execute(select(func.count()).select_from(Incident))).scalar()
-    open_incidents  = (await db.execute(
-        select(func.count()).select_from(Incident).where(Incident.status == "open")
-    )).scalar()
     uptime = (datetime.now(timezone.utc) - _start_time).total_seconds()
+
+    # Per-status counts for the dashboard widget
+    _STATUS_NAMES = ("open", "investigating", "in_review", "held",
+                     "resolved", "false_positive", "closed")
+    status_counts: dict[str, int] = {}
+    for stat in _STATUS_NAMES:
+        cnt = (await db.execute(
+            select(func.count()).select_from(Incident).where(Incident.status == stat)
+        )).scalar()
+        status_counts[stat] = cnt or 0
+
+    open_incidents = status_counts.get("open", 0) + status_counts.get("investigating", 0)
     return {
         "total_alerts":     total_alerts,
         "total_incidents":  total_incidents,
         "open_incidents":   open_incidents,
+        "status_counts":    status_counts,
         "ws_clients":       len(manager.active),
         "uptime_seconds":   int(uptime),
     }
@@ -629,6 +639,112 @@ async def patch_incident(
         inc.iris_case_status = body.iris_case_status
 
     inc.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    return _incident_to_dict(inc)
+
+
+# ── Audit log ─────────────────────────────────────────────────────────────────
+
+def _audit_to_dict(a: AuditLog) -> dict:
+    return {
+        "id":          a.id,
+        "entity_type": a.entity_type,
+        "entity_id":   a.entity_id,
+        "action":      a.action,
+        "from_status": a.from_status,
+        "to_status":   a.to_status,
+        "comment":     a.comment,
+        "actor":       a.actor,
+        "created_at":  a.created_at.isoformat() if a.created_at else None,
+        "extra":       a.extra or {},
+    }
+
+
+@app.get("/incidents/{incident_id}/audit")
+async def get_incident_audit(incident_id: str, db: AsyncSession = Depends(get_db)):
+    """Return the full chronological audit trail for an incident."""
+    inc = (await db.execute(
+        select(Incident).where(Incident.id == incident_id)
+    )).scalar_one_or_none()
+    if not inc:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    entries = (await db.execute(
+        select(AuditLog)
+        .where(AuditLog.entity_type == "incident", AuditLog.entity_id == incident_id)
+        .order_by(AuditLog.created_at.asc())
+    )).scalars().all()
+    return [_audit_to_dict(e) for e in entries]
+
+
+# ── Status transition (analyst-initiated, with mandatory audit comment) ───────
+
+# Valid analyst-driven transitions
+_ALLOWED_TRANSITIONS: dict[str, set[str]] = {
+    "open":          {"investigating", "in_review", "resolved", "false_positive", "closed"},
+    "investigating": {"in_review", "resolved", "false_positive", "closed"},
+    "in_review":     {"resolved", "false_positive", "closed", "investigating"},
+    "held":          {"investigating", "in_review", "resolved", "false_positive", "closed"},
+    "resolved":      {"investigating", "in_review", "closed"},
+    "false_positive":{"investigating", "closed"},
+    "closed":        {"investigating"},
+}
+
+
+class StatusTransition(BaseModel):
+    to_status: str
+    comment:   str
+    actor:     Optional[str] = "analyst"
+
+
+@app.post("/incidents/{incident_id}/transition")
+async def transition_incident(
+    incident_id: str,
+    body: StatusTransition,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Analyst-initiated status transition with mandatory audit comment.
+    Validates the transition is allowed and records an immutable audit entry.
+    """
+    if not body.comment or not body.comment.strip():
+        raise HTTPException(status_code=422,
+                            detail="Audit comment is required for status transitions.")
+
+    inc = (await db.execute(
+        select(Incident).where(Incident.id == incident_id)
+    )).scalar_one_or_none()
+    if not inc:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    from_st = inc.status or "open"
+    to_st   = body.to_status
+
+    allowed = _ALLOWED_TRANSITIONS.get(from_st, set())
+    if to_st not in allowed:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Transition '{from_st}' → '{to_st}' is not allowed. "
+                   f"Allowed: {sorted(allowed)}",
+        )
+
+    from iris_connector import write_audit
+    inc.status     = to_st
+    inc.updated_at = datetime.now(timezone.utc)
+    if to_st in ("resolved", "closed", "false_positive"):
+        inc.closed_at = datetime.now(timezone.utc)
+    if to_st == "false_positive" and body.comment:
+        inc.false_positive_reason = body.comment.strip()
+
+    await db.flush()
+    await write_audit(
+        db, "incident", incident_id,
+        action="status_change",
+        actor=body.actor or "analyst",
+        from_status=from_st,
+        to_status=to_st,
+        comment=body.comment.strip(),
+    )
     await db.commit()
     return _incident_to_dict(inc)
 

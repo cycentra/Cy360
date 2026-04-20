@@ -349,3 +349,177 @@ async def auto_close_fp(db: AsyncSession, incident: Incident,
         return True
 
     return False
+
+
+# ── Audit log writer ──────────────────────────────────────────────────────────
+
+async def write_audit(
+    db: AsyncSession,
+    entity_type: str,
+    entity_id: str,
+    action: str,
+    actor: str,
+    from_status: str | None = None,
+    to_status: str | None = None,
+    comment: str | None = None,
+    extra: dict | None = None,
+) -> None:
+    """Append an immutable audit entry to the audit_log table."""
+    from models import AuditLog
+    entry = AuditLog(
+        entity_type = entity_type,
+        entity_id   = entity_id,
+        action      = action,
+        actor       = actor,
+        from_status = from_status,
+        to_status   = to_status,
+        comment     = comment,
+        extra       = extra or {},
+        created_at  = datetime.now(timezone.utc),
+    )
+    db.add(entry)
+    # Do NOT commit here — caller owns the transaction.
+
+
+# ── Confidence-score-based status advancement ─────────────────────────────────
+#
+# Bands (configurable via ai_settings.json → iris.fpWatchZoneUpper / fpThreshold):
+#   fp ≥ watch_zone_upper (default 90)  →  false_positive  (auto-close, no IRIS ticket)
+#   fp ≥ fp_threshold (default 70)      →  held            (re-enrich, no IRIS ticket yet)
+#   fp ≥ 40 and < fp_threshold          →  investigating   (needs more data)
+#   fp < 40                             →  in_review       + create IRIS ticket if high/critical
+
+async def advance_incident_status(
+    db: AsyncSession,
+    incident: Incident,
+    fp_score: float,
+    actor: str = "system",
+    enriched: bool = False,
+) -> tuple[str, dict]:
+    """
+    Apply confidence-score-based status transition and write an audit entry.
+
+    Parameters
+    ----------
+    enriched : bool
+        True when called after full MISP+LLM enrichment has completed —
+        allows advancing to ``in_review`` and opening an IRIS ticket.
+
+    Returns (new_status, iris_result)
+    """
+    cfg             = _load_iris_config()
+    threshold       = cfg["fp_threshold"] if cfg else settings.iris_fp_threshold
+    watch_upper     = _get_watch_zone_upper()
+
+    prev_status = incident.status
+
+    # ── Band 1: very likely FP → auto-close ──────────────────────────────────
+    if fp_score >= watch_upper:
+        if incident.status not in ("closed", "false_positive"):
+            incident.status               = "false_positive"
+            incident.closed_at            = datetime.now(timezone.utc)
+            incident.updated_at           = datetime.now(timezone.utc)
+            incident.false_positive_reason = (
+                f"Auto-closed: FP probability {fp_score:.1f} ≥ watch zone upper {watch_upper:.1f}"
+            )
+            await db.flush()
+            await write_audit(
+                db, "incident", incident.id,
+                action="auto_fp",
+                actor=actor,
+                from_status=prev_status,
+                to_status="false_positive",
+                comment=incident.false_positive_reason,
+                extra={"fp_score": fp_score, "watch_zone_upper": watch_upper},
+            )
+            log.info("incident_advanced_auto_fp",
+                     id=incident.id, fp=fp_score, threshold=watch_upper)
+        return "false_positive", {}
+
+    # ── Band 2: watch zone → held ─────────────────────────────────────────────
+    if fp_score >= threshold:
+        if incident.status not in ("closed", "false_positive", "held"):
+            incident.status     = "held"
+            incident.updated_at = datetime.now(timezone.utc)
+            await db.flush()
+            await write_audit(
+                db, "incident", incident.id,
+                action="status_change",
+                actor=actor,
+                from_status=prev_status,
+                to_status="held",
+                comment=f"Held for re-enrichment: FP probability {fp_score:.1f} in watch zone [{threshold:.1f}–{watch_upper:.1f}]",
+                extra={"fp_score": fp_score},
+            )
+        return "held", {}
+
+    # ── Band 3: moderate FP → keep investigating ──────────────────────────────
+    if fp_score >= 40.0 or not enriched:
+        if incident.status not in ("closed", "false_positive", "held", "in_review", "resolved"):
+            new_s = "investigating"
+            if incident.status != new_s:
+                incident.status     = new_s
+                incident.updated_at = datetime.now(timezone.utc)
+                await db.flush()
+                await write_audit(
+                    db, "incident", incident.id,
+                    action="status_change",
+                    actor=actor,
+                    from_status=prev_status,
+                    to_status=new_s,
+                    comment=f"Under investigation: FP probability {fp_score:.1f}",
+                    extra={"fp_score": fp_score},
+                )
+        return incident.status, {}
+
+    # ── Band 4: low FP + enrichment complete → in_review + IRIS ticket ───────
+    iris_result = {}
+    if incident.status not in ("closed", "false_positive", "resolved", "in_review"):
+        incident.status     = "in_review"
+        incident.updated_at = datetime.now(timezone.utc)
+        await db.flush()
+        await write_audit(
+            db, "incident", incident.id,
+            action="status_change",
+            actor=actor,
+            from_status=prev_status,
+            to_status="in_review",
+            comment=f"Advanced to review: FP probability {fp_score:.1f} below threshold {threshold:.1f}",
+            extra={"fp_score": fp_score},
+        )
+
+    # Create IRIS ticket if conditions met and not already ticketed
+    should_ticket = (
+        not incident.iris_case_id
+        and incident.severity in ("critical", "high")
+        and incident.alert_count >= 3
+    )
+    if should_ticket and cfg:
+        iris_result = await create_iris_case(db, incident)
+        if iris_result:
+            await write_audit(
+                db, "incident", incident.id,
+                action="iris_created",
+                actor=actor,
+                from_status="in_review",
+                to_status="in_review",
+                comment=f"IRIS case #{iris_result.get('iris_case_id')} created automatically",
+                extra={"iris_case_id": iris_result.get("iris_case_id"),
+                       "fp_score": fp_score},
+            )
+
+    return "in_review", iris_result
+
+
+def _get_watch_zone_upper() -> float:
+    """Read fpWatchZoneUpper from ai_settings.json or fall back to config."""
+    try:
+        raw = _AI_SETTINGS_FILE.read_text() if _AI_SETTINGS_FILE.exists() else "{}"
+        stored = json.loads(raw)
+        val = stored.get("iris", {}).get("fpWatchZoneUpper")
+        if val is not None:
+            return float(val)
+    except Exception:
+        pass
+    return settings.fp_watch_zone_upper
+

@@ -24,7 +24,7 @@ from ueba import analyse_alert
 from risk_scorer import calculate_entity_risk, compute_fp_score
 from misp_enricher import enrich_incident
 from llm_enricher import enrich_incident as llm_enrich_incident
-from iris_connector import create_iris_case, auto_close_fp
+from iris_connector import advance_incident_status, write_audit
 from ueba_ml import ml_analyse_alert
 from cysoar_connector import cysoar_trigger
 from config import get_settings
@@ -161,12 +161,28 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                     await calculate_entity_risk(db, alert["username"], alert["username"], "user")
                     _last_risk_calc[user_key] = now_ts
 
+            # 1b. New incident → set initial status to "investigating" + audit entry
+            if created:
+                incident.status = "investigating"
+                await db.flush()
+                await write_audit(
+                    db, "incident", incident.id,
+                    action="status_change",
+                    actor="system",
+                    from_status="open",
+                    to_status="investigating",
+                    comment="Incident created automatically by correlation engine",
+                    extra={"alert_count": incident.alert_count,
+                           "severity": incident.severity},
+                )
+
             # 5. MISP enrichment (new incidents or new correlation rules)
             misp_result = {}
             if created or new_rules:
                 misp_result = await enrich_incident(db, incident)
 
             # 6. LLM enrichment (critical/high with ≥3 alerts, throttled)
+            # NOTE: LLM runs BEFORE SOAR — SOAR uses the enriched narrative.
             llm_result = {}
             if (incident.severity in LLM_TRIGGER_SEVERITY and
                     incident.alert_count >= LLM_TRIGGER_MIN_ALERTS and
@@ -181,7 +197,6 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                         float(r.get("confidence", 0.5)) for r in rules
                     ) / len(rules)
                 else:
-                    # No correlation rules → likely noise
                     avg_conf = 0.3 if inc.severity in ("low", "medium") else 0.7
                 return compute_fp_score(
                     avg_conf          = avg_conf,
@@ -191,44 +206,33 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                     asset_tier        = inc.asset_tier,
                 )
 
-            fp_score = _fp_score_for(incident, ueba_anomalies, misp_result)
-
-            # Re-score AFTER enrichment completes with updated incident state
-            # (MISP may have set ioc_hits; LLM may have updated stage info)
+            # Re-score with final enrichment state (MISP IOC hits may have updated)
             fp_score = _fp_score_for(incident, ueba_anomalies,
                                      incident.misp_enrichment or {})
+            incident.fp_probability = fp_score
 
-            # 6b. CySOAR trigger (after LLM, before IRIS)
-            await cysoar_trigger(db, incident)
+            # 6b. CySOAR trigger (after AI enrichment, before IRIS decision)
+            soar_actions = await cysoar_trigger(db, incident)
+            if soar_actions:
+                await write_audit(
+                    db, "incident", incident.id,
+                    action="soar_triggered",
+                    actor="system",
+                    comment=f"CySOAR triggered: {len(soar_actions)} action(s) taken",
+                    extra={"soar_actions": soar_actions},
+                )
 
-            # 7. CyIRIS integration — false-positive auto-close OR ticket creation
-            #    Watch-zone: mid-range FP scores get "held" for re-enrichment.
-            iris_result = {}
-            iris_auto_closed = False
-
-            if incident.status not in ("closed", "false_positive", "held"):
-                # Read watch-zone upper threshold from ai_settings.json or config
-                watch_zone_upper = _get_watch_zone_upper()
-                iris_threshold   = _get_fp_threshold()
-
-                incident.fp_probability = fp_score
-
-                if fp_score > watch_zone_upper:
-                    # High FP score → auto-close
-                    iris_auto_closed = await auto_close_fp(db, incident, fp_score)
-                elif fp_score > iris_threshold and fp_score <= watch_zone_upper:
-                    # Mid-range → hold for re-enrichment
-                    incident.status     = "held"
-                    incident.updated_at = datetime.now(timezone.utc)
-                    await db.flush()
-                    asyncio.create_task(_reenrich_held_incident(incident.id))
-                    log.info("incident_held_for_reenrichment",
-                             incident_id=incident.id, fp_score=fp_score)
-                else:
-                    # Low FP score → create IRIS ticket
-                    iris_auto_closed = await auto_close_fp(db, incident, fp_score)
-                    if not iris_auto_closed and (created or new_rules):
-                        iris_result = await create_iris_case(db, incident)
+            # 7. Confidence-score-based status advancement + IRIS ticket
+            #    advance_incident_status() handles all bands and writes audit entries.
+            enriched = bool(misp_result or llm_result)
+            new_status, iris_result = await advance_incident_status(
+                db, incident, fp_score,
+                actor="system",
+                enriched=enriched,
+            )
+            # Schedule re-enrichment for held incidents
+            if new_status == "held":
+                asyncio.create_task(_reenrich_held_incident(incident.id))
 
             await db.commit()
 
@@ -246,7 +250,7 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                 "misp_hits":         len(misp_result.get("ioc_hits", [])),
                 "llm_ready":         bool(llm_result),
                 "iris_case_id":      iris_result.get("iris_case_id"),
-                "iris_auto_closed":  iris_auto_closed,
+                "iris_auto_closed":  new_status == "false_positive",
                 "fp_probability":    fp_score,
                 "agent_name":        alert.get("agent_name"),
                 "rule_desc":         alert.get("rule_desc"),
@@ -261,21 +265,6 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
         except Exception as e:
             await db.rollback()
             log.error("alert_processing_error", error=str(e), exc_info=True)
-
-
-def _get_watch_zone_upper() -> float:
-    """Read fpWatchZoneUpper from ai_settings.json or fall back to config."""
-    try:
-        from pathlib import Path
-        import json as _j
-        raw = Path("/opt/cycentra/ai_settings.json").read_text()
-        stored = _j.loads(raw)
-        val = stored.get("iris", {}).get("fpWatchZoneUpper")
-        if val is not None:
-            return float(val)
-    except Exception:
-        pass
-    return settings.fp_watch_zone_upper
 
 
 def _get_fp_threshold() -> float:
@@ -294,8 +283,8 @@ def _get_fp_threshold() -> float:
 
 
 async def _reenrich_held_incident(incident_id: str) -> None:
-    """Re-enrich a held incident after 30 minutes and promote/close it."""
-    await asyncio.sleep(settings.hold_window_minutes * 60)   # configurable hold window
+    """Re-enrich a held incident after the configured hold window and re-advance status."""
+    await asyncio.sleep(settings.hold_window_minutes * 60)
     try:
         from sqlalchemy import select as sa_select
         async with AsyncSessionLocal() as db:
@@ -310,40 +299,35 @@ async def _reenrich_held_incident(incident_id: str) -> None:
             if not incident:
                 return   # already handled by analyst
 
-            # Re-run MISP enrichment with fresh data
             misp_result = await enrich_incident(db, incident)
 
-            # Re-score with updated enrichment
             rules = incident.correlated_rules or []
             avg_conf = (
                 sum(float(r.get("confidence", 0.5)) for r in rules) / len(rules)
                 if rules else 0.3
             )
-            ueba_count = len(incident.ueba_flags or [])
             fp_score = compute_fp_score(
                 avg_conf            = avg_conf,
-                ueba_anomaly_count  = ueba_count,
+                ueba_anomaly_count  = len(incident.ueba_flags or []),
                 misp_ioc_hits       = len(misp_result.get("ioc_hits", [])),
                 kill_chain_stage_name = incident.kill_chain_stage_name,
                 asset_tier          = incident.asset_tier,
             )
             incident.fp_probability = fp_score
 
-            iris_threshold   = _get_fp_threshold()
-            watch_zone_upper = _get_watch_zone_upper()
+            # Temporarily reset to investigating so advance_incident_status can promote
+            incident.status = "investigating"
+            await db.flush()
 
-            if fp_score > watch_zone_upper:
-                await auto_close_fp(db, incident, fp_score)
-            else:
-                # Promote to open so IRIS ticket gets created
-                incident.status     = "open"
-                incident.updated_at = datetime.now(timezone.utc)
-                await db.flush()
-                await create_iris_case(db, incident)
-
+            await advance_incident_status(
+                db, incident, fp_score,
+                actor="system",
+                enriched=True,
+            )
             await db.commit()
             log.info("held_incident_reprocessed",
-                     incident_id=incident_id, fp_score=fp_score)
+                     incident_id=incident_id, fp_score=fp_score,
+                     new_status=incident.status)
     except Exception as e:
         log.error("reenrich_held_incident_error",
                   incident_id=incident_id, error=str(e))

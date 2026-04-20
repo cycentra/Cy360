@@ -143,6 +143,54 @@ def siem_incident_patch(incident_id):
     return _proxy(f"/incidents/{incident_id}", method="PATCH")
 
 
+@siem_bp.route("/incidents/<incident_id>/audit", methods=["GET"])
+@require_siem_auth
+def siem_incident_audit(incident_id):
+    """Fetch the full audit trail for an incident."""
+    return _proxy(f"/incidents/{incident_id}/audit")
+
+
+@siem_bp.route("/incidents/<incident_id>/audit", methods=["OPTIONS"])
+def siem_incident_audit_options(incident_id):
+    from core.helpers import add_cors_headers
+    from flask import make_response
+    return add_cors_headers(make_response('', 204))
+
+
+@siem_bp.route("/incidents/<incident_id>/transition", methods=["POST"])
+@require_siem_analyst
+def siem_incident_transition(incident_id):
+    """Analyst-initiated status transition with mandatory audit comment.
+    Proxied directly to the correlation engine's /transition endpoint.
+    The actor field is injected server-side from the session email.
+    """
+    import json as _json
+    body = request.get_json(silent=True) or {}
+    if not body.get("comment", "").strip():
+        return jsonify({"error": "Audit comment is required for status transitions."}), 422
+    body["actor"] = session.get("user_email", "analyst")
+    resp = None
+    try:
+        resp = _req.post(
+            f"{SIEM_ENGINE_URL}/incidents/{incident_id}/transition",
+            json=body,
+            timeout=PROXY_TIMEOUT,
+        )
+        return Response(resp.content, status=resp.status_code,
+                        headers=dict(resp.headers))
+    except _req.exceptions.ConnectionError:
+        return _engine_offline_response()
+    except _req.exceptions.Timeout:
+        return jsonify({"error": "Engine request timed out"}), 504
+
+
+@siem_bp.route("/incidents/<incident_id>/transition", methods=["OPTIONS"])
+def siem_incident_transition_options(incident_id):
+    from core.helpers import add_cors_headers
+    from flask import make_response
+    return add_cors_headers(make_response('', 204))
+
+
 @siem_bp.route("/incidents/<incident_id>/escalate", methods=["POST"])
 @require_siem_analyst
 def siem_incident_escalate(incident_id):

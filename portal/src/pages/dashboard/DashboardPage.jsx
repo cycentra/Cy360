@@ -10,6 +10,7 @@
 
 import { useState, useEffect } from "react";
 import { RISK_CONFIG } from '../../core/constants.js';
+import { STATUS_CONFIG } from '../../core/constants.js';
 import { getModuleUrl } from '../../core/constants.js';
 import {
   getEmailSecData, getWebSecStats, getInfraStats,
@@ -168,6 +169,110 @@ function CertTimeline({ assets }) {
 
 
 // ── Main component ────────────────────────────────────────────────────────────
+// ── IncidentStateWidget ────────────────────────────────────────────────────────
+// Fetches /api/siem/stats and displays incident counts per lifecycle state
+// as an animated bar chart. Refreshes every 60 s.
+
+const _STATE_DEFS = [
+  { key: "investigating",  label: "Investigating",  color: "#ff8c00" },
+  { key: "in_review",      label: "In Review",      color: "#f5c518" },
+  { key: "held",           label: "Held",           color: "#b36bff" },
+  { key: "open",           label: "Open",           color: "#ff3b3b" },
+  { key: "resolved",       label: "Resolved",       color: "#00e5a0" },
+  { key: "false_positive", label: "False Positive", color: "#888888" },
+  { key: "closed",         label: "Closed",         color: "#444444" },
+];
+
+function IncidentStateWidget({ onViewAll }) {
+  const [counts, setCounts] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [offline, setOffline] = useState(false);
+
+  const fetchStats = async () => {
+    try {
+      const r = await fetch("/api/siem/stats", { credentials: "include" });
+      if (!r.ok) { setOffline(true); setLoading(false); return; }
+      const d = await r.json();
+      setCounts(d.status_counts || {});
+      setOffline(false);
+    } catch {
+      setOffline(true);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchStats();
+    const t = setInterval(fetchStats, 60_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const total = counts ? Object.values(counts).reduce((a, b) => a + b, 0) : 0;
+  const maxVal = counts ? Math.max(...Object.values(counts), 1) : 1;
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
+      borderTop: "2px solid #4d9eff", borderRadius: 5, padding: "18px 22px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
+          textTransform: "uppercase", fontFamily: "monospace" }}>
+          Incident State Overview
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {!loading && !offline && (
+            <span style={{ background: "rgba(77,158,255,0.12)", color: "#4d9eff", fontSize: 10,
+              fontFamily: "monospace", padding: "2px 8px", borderRadius: 2, fontWeight: 700 }}>
+              {total} TOTAL
+            </span>
+          )}
+          {onViewAll && (
+            <button onClick={onViewAll}
+              style={{ background: "none", border: "none", color: "#4d9eff", fontSize: 10,
+                fontFamily: "monospace", cursor: "pointer", opacity: 0.7 }}>
+              View All ↗
+            </button>
+          )}
+        </div>
+      </div>
+
+      {loading && (
+        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace",
+          padding: "10px 0" }}>Loading…</div>
+      )}
+      {!loading && offline && (
+        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace",
+          padding: "10px 0" }}>CySIEM engine offline</div>
+      )}
+      {!loading && !offline && counts && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {_STATE_DEFS.map(({ key, label, color }) => {
+            const val = counts[key] || 0;
+            const pct = total > 0 ? (val / maxVal) * 100 : 0;
+            return (
+              <div key={key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 100, color: "rgba(255,255,255,0.45)", fontSize: 11,
+                  fontFamily: "monospace", flexShrink: 0 }}>{label}</div>
+                <div style={{ flex: 1, height: 12, background: "rgba(255,255,255,0.05)",
+                  borderRadius: 2, overflow: "hidden" }}>
+                  <div style={{ width: `${pct}%`, height: "100%", background: color,
+                    borderRadius: 2, transition: "width 0.6s ease",
+                    minWidth: val > 0 ? 4 : 0 }} />
+                </div>
+                <div style={{ width: 28, color: val > 0 ? color : "rgba(255,255,255,0.2)",
+                  fontSize: 12, fontFamily: "monospace", fontWeight: 700,
+                  textAlign: "right", flexShrink: 0 }}>
+                  {val}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 export function DashboardPage({ assets, data, stats, installedModules, setActiveTab, setSelectedAsset, setShowImport }) {
   const emailSec        = getEmailSecData(assets);
   const webSec          = getWebSecStats(assets);
@@ -519,6 +624,11 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
           </div>
         </div>
       )}
+
+      {/* Incident State Widget */}
+      <div style={{ marginBottom: 14 }}>
+        <IncidentStateWidget onViewAll={() => setActiveTab("siem")} />
+      </div>
 
       {/* Critical & High vuln list */}
       <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:4, padding:"18px 22px" }}>

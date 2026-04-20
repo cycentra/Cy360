@@ -84,6 +84,16 @@ export const siemApi = {
    */
   escalateIncident: (id) => _post(`/incidents/${id}/escalate`, {}),
 
+  /** Fetch the full chronological audit trail for an incident. */
+  getAuditLog: (id) => _get(`/incidents/${id}/audit`),
+
+  /**
+   * Analyst-initiated status transition with mandatory audit comment.
+   * @param {string} id Incident ID
+   * @param {{ to_status: string, comment: string }} body
+   */
+  transitionIncident: (id, body) => _post(`/incidents/${id}/transition`, body),
+
   /** Returns integration URLs (iris_url, wazuh_url, iris_enabled, wazuh_enabled) */
   getUebaIntegrations: () => _get("/ueba/integrations"),
 

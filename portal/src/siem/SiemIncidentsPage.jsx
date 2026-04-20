@@ -7,7 +7,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { siemApi, siemFetch } from "./siemApi";
 import { SiemEngineStatus } from "./SiemEngineStatus";
-import { RISK_CONFIG, STATUS_CONFIG } from "../core/constants";
+import { RISK_CONFIG, STATUS_CONFIG, STATUS_TRANSITIONS } from "../core/constants";
 
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 
@@ -77,22 +77,30 @@ const CAT_COLORS = {
 function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
   const [inc, setInc]           = useState(initialIncident);
   const [loadingDetail, setLoadingDetail] = useState(true);
-  const [status, setStatus]     = useState(initialIncident.status || "open");
   const [notes, setNotes]       = useState(initialIncident.notes || "");
   const [assignee, setAssignee] = useState(initialIncident.assigned_to || "");
   const [saving, setSaving]     = useState(false);
   const [saved, setSaved]       = useState(false);
   const [alertsExpanded, setAlertsExpanded] = useState(false);
-  const [raising, setRaising]   = useState(false);   // manual IRIS escalation
+  const [raising, setRaising]   = useState(false);
   const [raiseErr, setRaiseErr] = useState("");
+  // Transition modal state
+  const [showTransition, setShowTransition] = useState(false);
+  const [transitionTo, setTransitionTo]     = useState("");
+  const [transitionComment, setTransitionComment] = useState("");
+  const [transitioning, setTransitioning]   = useState(false);
+  const [transitionErr, setTransitionErr]   = useState("");
+  // Audit trail
+  const [auditLog, setAuditLog] = useState([]);
+  const [auditVisible, setAuditVisible] = useState(false);
+  const [auditLoading, setAuditLoading] = useState(false);
 
-  // Fetch full incident detail (includes alerts array) on mount
+  // Fetch full incident detail on mount
   useEffect(() => {
     (async () => {
       const data = await siemFetch(siemApi.getIncident(initialIncident.id));
       if (!data._error && !data._offline) {
         setInc(data);
-        setStatus(data.status || "open");
         setNotes(data.notes || "");
         setAssignee(data.assigned_to || "");
       }
@@ -100,16 +108,59 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
     })();
   }, [initialIncident.id]);
 
+  const fetchAudit = async () => {
+    setAuditLoading(true);
+    const data = await siemFetch(siemApi.getAuditLog(inc.id));
+    setAuditLoading(false);
+    if (!data._error && !data._offline) setAuditLog(Array.isArray(data) ? data : []);
+  };
+
+  const toggleAudit = () => {
+    if (!auditVisible && auditLog.length === 0) fetchAudit();
+    setAuditVisible(v => !v);
+  };
+
+  // Open the transition modal for a target status
+  const openTransition = (toStatus) => {
+    setTransitionTo(toStatus);
+    setTransitionComment("");
+    setTransitionErr("");
+    setShowTransition(true);
+  };
+
+  const confirmTransition = async () => {
+    if (!transitionComment.trim()) {
+      setTransitionErr("Audit comment is required.");
+      return;
+    }
+    setTransitioning(true);
+    setTransitionErr("");
+    const data = await siemFetch(
+      siemApi.transitionIncident(inc.id, { to_status: transitionTo, comment: transitionComment.trim() })
+    );
+    setTransitioning(false);
+    if (data._error || data._offline) {
+      setTransitionErr(data._error || "Request failed — engine may be offline.");
+      return;
+    }
+    setInc(data);
+    setShowTransition(false);
+    onPatched?.(data);
+    // Refresh audit log
+    fetchAudit();
+    setAuditVisible(true);
+  };
+
   const handleSave = async () => {
     setSaving(true);
     const data = await siemFetch(
-      siemApi.patchIncident(inc.id, { status, notes, assigned_to: assignee })
+      siemApi.patchIncident(inc.id, { notes, assigned_to: assignee })
     );
     setSaving(false);
     if (!data._error && !data._offline) {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-      const updated = { ...inc, status, notes, assigned_to: assignee };
+      const updated = { ...inc, notes, assigned_to: assignee };
       setInc(updated);
       onPatched?.(updated);
     }
@@ -505,32 +556,97 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
           </>
         )}
 
-        {/* Update controls */}
-        <SectionLabel>UPDATE INCIDENT</SectionLabel>
+        {/* Status transitions */}
+        <SectionLabel>STATUS TRANSITION</SectionLabel>
+        <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+          borderRadius: 4, padding: "16px 18px", marginBottom: 8 }}>
+          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace", marginBottom: 10 }}>
+            Current: <StatBadge status={inc.status} />
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {(STATUS_TRANSITIONS[inc.status] || []).map(st => {
+              const cfg = STATUS_CONFIG[st] || { color: "#888", label: st.toUpperCase() };
+              return (
+                <button key={st} onClick={() => openTransition(st)}
+                  style={{ background: `${cfg.color}12`, border: `1px solid ${cfg.color}40`,
+                    color: cfg.color, padding: "5px 12px", borderRadius: 3,
+                    cursor: "pointer", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>
+                  → {cfg.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Audit trail toggle */}
+        <button onClick={toggleAudit}
+          style={{ background: "none", border: "none", color: "#4d9eff", fontSize: 11,
+            fontFamily: "monospace", cursor: "pointer", padding: "6px 0", marginBottom: 8 }}>
+          {auditVisible ? "▲ Hide Audit Trail" : "▼ Show Audit Trail"}
+          {auditLog.length > 0 && ` (${auditLog.length})`}
+        </button>
+        {auditVisible && (
+          <div style={{ marginBottom: 18, border: "1px solid rgba(255,255,255,0.07)",
+            borderRadius: 4, overflow: "hidden" }}>
+            {auditLoading && <div style={{ padding: "12px 16px", color: "rgba(255,255,255,0.3)",
+              fontSize: 11, fontFamily: "monospace" }}>Loading…</div>}
+            {!auditLoading && auditLog.length === 0 && (
+              <div style={{ padding: "12px 16px", color: "rgba(255,255,255,0.2)",
+                fontSize: 11, fontFamily: "monospace" }}>No audit entries yet.</div>
+            )}
+            {auditLog.map((entry, i) => {
+              const isSystem = entry.actor === "system";
+              const actionColor = {
+                status_change: "#f5c518", iris_created: "#4d9eff",
+                soar_triggered: "#b36bff", auto_fp: "#888", comment: "#00e5a0",
+              }[entry.action] || "#888";
+              return (
+                <div key={i} style={{ padding: "10px 16px",
+                  borderBottom: i < auditLog.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none",
+                  display: "flex", gap: 12, alignItems: "flex-start" }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%",
+                    background: actionColor, flexShrink: 0, marginTop: 4 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
+                      marginBottom: 3 }}>
+                      <span style={{ color: actionColor, fontSize: 10, fontFamily: "monospace",
+                        fontWeight: 700, textTransform: "uppercase" }}>{entry.action?.replace("_", " ")}</span>
+                      {entry.from_status && entry.to_status && (
+                        <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace" }}>
+                          {entry.from_status} → {entry.to_status}
+                        </span>
+                      )}
+                      <span style={{ color: isSystem ? "rgba(255,255,255,0.3)" : "#00e5a0",
+                        fontSize: 10, fontFamily: "monospace" }}>
+                        {isSystem ? "⚙ system" : `👤 ${entry.actor}`}
+                      </span>
+                      <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, marginLeft: "auto" }}>
+                        {entry.created_at ? new Date(entry.created_at).toLocaleString() : ""}
+                      </span>
+                    </div>
+                    {entry.comment && (
+                      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace" }}>
+                        {entry.comment}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Notes / Assignee (no status change here) */}
+        <SectionLabel>NOTES & ASSIGNMENT</SectionLabel>
         <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
           borderRadius: 4, padding: "16px 18px" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
-            <div>
-              <label style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace" }}>Status</label>
-              <select value={status} onChange={e => setStatus(e.target.value)}
-                style={{ width: "100%", background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.12)", color: "white",
-                  padding: "8px 10px", borderRadius: 4, fontSize: 12, marginTop: 4 }}>
-                <option value="open">Open</option>
-                <option value="investigating">Investigating</option>
-                <option value="in-review">In Review</option>
-                <option value="resolved">Resolved</option>
-                <option value="false_positive">False Positive</option>
-              </select>
-            </div>
-            <div>
-              <label style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace" }}>Assigned To</label>
-              <input value={assignee} onChange={e => setAssignee(e.target.value)}
-                placeholder="analyst email…"
-                style={{ width: "100%", background: "rgba(255,255,255,0.05)",
-                  border: "1px solid rgba(255,255,255,0.12)", color: "white",
-                  padding: "8px 10px", borderRadius: 4, fontSize: 12, marginTop: 4, boxSizing: "border-box" }} />
-            </div>
+          <div style={{ marginBottom: 10 }}>
+            <label style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace" }}>Assigned To</label>
+            <input value={assignee} onChange={e => setAssignee(e.target.value)}
+              placeholder="analyst email…"
+              style={{ width: "100%", background: "rgba(255,255,255,0.05)",
+                border: "1px solid rgba(255,255,255,0.12)", color: "white",
+                padding: "8px 10px", borderRadius: 4, fontSize: 12, marginTop: 4, boxSizing: "border-box" }} />
           </div>
           <div style={{ marginBottom: 10 }}>
             <label style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace" }}>Notes</label>
@@ -546,10 +662,63 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
               border: `1px solid rgba(0,229,160,${saved ? 0.6 : 0.4})`,
               color: "#00e5a0", padding: "9px 20px", borderRadius: 4, cursor: "pointer",
               fontSize: 13, fontFamily: "monospace", fontWeight: 700 }}>
-            {saving ? "Saving…" : saved ? "✓ Saved" : "Save Changes"}
+            {saving ? "Saving…" : saved ? "✓ Saved" : "Save Notes"}
           </button>
         </div>
       </div>
+
+      {/* Transition modal */}
+      {showTransition && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 300,
+          background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={e => e.target === e.currentTarget && setShowTransition(false)}>
+          <div style={{ background: "#0d1117", border: "1px solid rgba(255,255,255,0.12)",
+            borderRadius: 6, padding: "28px 32px", width: "min(480px, 92vw)" }}>
+            <div style={{ color: "white", fontSize: 15, fontWeight: 700, marginBottom: 20 }}>
+              Transition Incident Status
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 20 }}>
+              <StatBadge status={inc.status} />
+              <span style={{ color: "rgba(255,255,255,0.3)" }}>→</span>
+              <StatBadge status={transitionTo} />
+            </div>
+            <label style={{ color: "rgba(255,255,255,0.5)", fontSize: 11,
+              fontFamily: "monospace", display: "block", marginBottom: 6 }}>
+              AUDIT COMMENT (required)
+            </label>
+            <textarea
+              autoFocus
+              value={transitionComment}
+              onChange={e => setTransitionComment(e.target.value)}
+              rows={4}
+              placeholder="Describe why you are changing this status…"
+              style={{ width: "100%", background: "rgba(255,255,255,0.05)",
+                border: `1px solid ${transitionErr ? "#ff3b3b" : "rgba(255,255,255,0.15)"}`,
+                color: "white", padding: "10px 12px", borderRadius: 4, fontSize: 12,
+                fontFamily: "monospace", resize: "vertical", boxSizing: "border-box", marginBottom: 8 }}
+            />
+            {transitionErr && (
+              <div style={{ color: "#ff6464", fontSize: 11, fontFamily: "monospace", marginBottom: 8 }}>
+                ✗ {transitionErr}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button onClick={() => setShowTransition(false)}
+                style={{ background: "none", border: "1px solid rgba(255,255,255,0.15)",
+                  color: "rgba(255,255,255,0.5)", padding: "8px 18px", borderRadius: 4,
+                  cursor: "pointer", fontSize: 12, fontFamily: "monospace" }}>
+                Cancel
+              </button>
+              <button onClick={confirmTransition} disabled={transitioning}
+                style={{ background: "rgba(0,229,160,0.12)", border: "1px solid rgba(0,229,160,0.4)",
+                  color: "#00e5a0", padding: "8px 22px", borderRadius: 4, cursor: "pointer",
+                  fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>
+                {transitioning ? "Transitioning…" : "Confirm Transition"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

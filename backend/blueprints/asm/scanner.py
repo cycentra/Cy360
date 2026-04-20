@@ -344,3 +344,203 @@ def asm_escalate_to_iris():
         return jsonify({"error": "CyIRIS request timed out."}), 504
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── ASM finding / asset status management ─────────────────────────────────────
+#
+# Finding and asset statuses are stored in a lightweight JSON file because ASM
+# scan output files are immutable historic artifacts.  The status overlay is
+# keyed by a stable finding_id (constructed by the frontend as
+# "<asset>:<vulnerability>:<module>" slugified) or by asset hostname.
+#
+# Status lifecycle:
+#   open  →  investigating  →  in_review  →  resolved / false_positive
+#
+# All transitions require a non-empty audit comment from the analyst.
+
+_ASM_STATUSES_FILE = Path("/opt/cycentra/asm_statuses.json")
+_ASSET_STATUSES_FILE = Path("/opt/cycentra/asset_statuses.json")
+
+_ASM_ALLOWED_TRANSITIONS = {
+    "open":          {"investigating", "in_review", "resolved", "false_positive"},
+    "investigating": {"in_review", "resolved", "false_positive"},
+    "in_review":     {"resolved", "false_positive", "investigating"},
+    "resolved":      {"investigating"},
+    "false_positive":{"investigating"},
+}
+
+
+def _load_status_file(path: Path) -> dict:
+    if path.exists():
+        try:
+            import json as _j
+            return _j.loads(path.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def _save_status_file(path: Path, data: dict) -> None:
+    import json as _j
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_j.dumps(data, indent=2))
+
+
+# ── Preflight handlers ────────────────────────────────────────────────────────
+
+@asm_bp.route("/api/asm/findings/<path:finding_id>/status", methods=["OPTIONS"])
+def asm_finding_status_options(finding_id):
+    return add_cors_headers(make_response('', 204))
+
+
+@asm_bp.route("/api/asm/assets/<path:asset_id>/status", methods=["OPTIONS"])
+def asm_asset_status_options(asset_id):
+    return add_cors_headers(make_response('', 204))
+
+
+# ── GET /api/asm/statuses — bulk status map ────────────────────────────────────
+
+@asm_bp.route("/api/asm/statuses")
+def asm_get_all_statuses():
+    """Return combined status map for findings and assets."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    return jsonify({
+        "findings": _load_status_file(_ASM_STATUSES_FILE),
+        "assets":   _load_status_file(_ASSET_STATUSES_FILE),
+    })
+
+
+# ── POST /api/asm/findings/<id>/status ────────────────────────────────────────
+
+@asm_bp.route("/api/asm/findings/<path:finding_id>/status", methods=["POST"])
+def asm_finding_transition(finding_id):
+    """Transition an ASM finding status with a mandatory audit comment."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
+        return jsonify({"error": "Analyst or admin role required"}), 403
+
+    body = request.get_json(silent=True) or {}
+    to_status = (body.get("to_status") or "").strip()
+    comment   = (body.get("comment")   or "").strip()
+
+    if not to_status:
+        return jsonify({"error": "to_status is required"}), 422
+    if not comment:
+        return jsonify({"error": "Audit comment is required for status transitions."}), 422
+
+    data      = _load_status_file(_ASM_STATUSES_FILE)
+    entry     = data.get(finding_id, {"status": "open", "audit_log": []})
+    from_status = entry.get("status", "open")
+
+    allowed = _ASM_ALLOWED_TRANSITIONS.get(from_status, set())
+    if to_status not in allowed:
+        return jsonify({
+            "error": f"Transition '{from_status}' → '{to_status}' is not allowed.",
+            "allowed": sorted(allowed),
+        }), 422
+
+    from datetime import timezone as _tz
+    ts = datetime.now(_tz.utc).isoformat()
+    entry["status"] = to_status
+    entry["audit_log"] = entry.get("audit_log", []) + [{
+        "action":      "status_change",
+        "from_status": from_status,
+        "to_status":   to_status,
+        "comment":     comment,
+        "actor":       session["user_email"],
+        "created_at":  ts,
+    }]
+    data[finding_id] = entry
+    _save_status_file(_ASM_STATUSES_FILE, data)
+
+    return jsonify({
+        "finding_id":  finding_id,
+        "status":      to_status,
+        "from_status": from_status,
+        "comment":     comment,
+        "actor":       session["user_email"],
+        "created_at":  ts,
+    })
+
+
+# ── GET /api/asm/findings/<id>/audit ─────────────────────────────────────────
+
+@asm_bp.route("/api/asm/findings/<path:finding_id>/audit")
+def asm_finding_audit(finding_id):
+    """Return the audit trail for an ASM finding."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    data  = _load_status_file(_ASM_STATUSES_FILE)
+    entry = data.get(finding_id, {})
+    return jsonify(entry.get("audit_log", []))
+
+
+# ── POST /api/asm/assets/<id>/status ──────────────────────────────────────────
+
+@asm_bp.route("/api/asm/assets/<path:asset_id>/status", methods=["POST"])
+def asm_asset_transition(asset_id):
+    """Transition an asset status with a mandatory audit comment."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
+        return jsonify({"error": "Analyst or admin role required"}), 403
+
+    body = request.get_json(silent=True) or {}
+    to_status = (body.get("to_status") or "").strip()
+    comment   = (body.get("comment")   or "").strip()
+
+    if not to_status:
+        return jsonify({"error": "to_status is required"}), 422
+    if not comment:
+        return jsonify({"error": "Audit comment is required for status transitions."}), 422
+
+    data      = _load_status_file(_ASSET_STATUSES_FILE)
+    entry     = data.get(asset_id, {"status": "open", "audit_log": []})
+    from_status = entry.get("status", "open")
+
+    allowed = _ASM_ALLOWED_TRANSITIONS.get(from_status, set())
+    if to_status not in allowed:
+        return jsonify({
+            "error": f"Transition '{from_status}' → '{to_status}' is not allowed.",
+            "allowed": sorted(allowed),
+        }), 422
+
+    from datetime import timezone as _tz
+    ts = datetime.now(_tz.utc).isoformat()
+    entry["status"] = to_status
+    entry["audit_log"] = entry.get("audit_log", []) + [{
+        "action":      "status_change",
+        "from_status": from_status,
+        "to_status":   to_status,
+        "comment":     comment,
+        "actor":       session["user_email"],
+        "created_at":  ts,
+    }]
+    data[asset_id] = entry
+    _save_status_file(_ASSET_STATUSES_FILE, data)
+
+    return jsonify({
+        "asset_id":    asset_id,
+        "status":      to_status,
+        "from_status": from_status,
+        "comment":     comment,
+        "actor":       session["user_email"],
+        "created_at":  ts,
+    })
+
+
+# ── GET /api/asm/assets/<id>/audit ────────────────────────────────────────────
+
+@asm_bp.route("/api/asm/assets/<path:asset_id>/audit")
+def asm_asset_audit(asset_id):
+    """Return the audit trail for an asset."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    data  = _load_status_file(_ASSET_STATUSES_FILE)
+    entry = data.get(asset_id, {})
+    return jsonify(entry.get("audit_log", []))
+
