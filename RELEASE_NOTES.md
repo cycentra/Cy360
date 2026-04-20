@@ -1,3 +1,45 @@
+## v1.0.236 -- 2026-04-20
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.236 -- 2026-04-20
+
+### Bug Fixes
+
+- **Asset Inventory & Findings — black page on entry click**: Added a `PageErrorBoundary`
+  React error boundary in `App.jsx` that catches any render-time crash inside the page
+  content area and displays a "RENDER ERROR + Retry" fallback instead of blanking the
+  entire viewport. Previously any unhandled render exception (e.g. object rendered as a
+  React child, undefined property access) would silently crash the whole page.
+- **Asset Inventory drawer — type-safe field rendering**: Hardened `v.vulnerability`,
+  `v.description`, and `v.module` fields in `AssetDrawer`'s findings list with explicit
+  string coercion, preventing "objects are not valid as a React child" crashes when scan
+  data includes structured objects in those fields.
+- **Findings drawer — type-safe parent asset context**: Hardened `technologies`,
+  `exposed_paths`, and `api_endpoints` renders in `FindingDrawer`'s parent asset section
+  with explicit string coercion for the same class of crash.
+
+### Improvements
+
+- **Asset Inventory drawer — Status Lifecycle & auto-status**: `AssetDrawer` now includes
+  the full Status Lifecycle section with a `computeAssetConfidence` score (base risk level
+  + critical/high vuln count boost), an **AUTO-STATUS SUGGESTION** banner (`AssetAutoStatusBanner`)
+  that proposes `open → investigating` (risk=critical, critCount>0, or confidence≥75) or
+  `investigating → in_review` (critCount≥3, highCount≥5, or confidence≥90), and a
+  one-click Apply button that POSTs the new status with an auto-generated audit comment.
+- **Asset Inventory drawer — Audit Trail**: `AssetDrawer` now renders a full audit trail
+  section at the bottom of the panel, sourced from the `audit_log` array in the
+  `{status, audit_log}` object returned by `/api/asm/statuses`. Matches the audit trail
+  already present in `FindingDrawer`.
+- **Asset Inventory drawer — timestamps**: First Seen and Last Seen timestamps are now
+  shown in the core details grid of `AssetDrawer`.
+
+---
+
 ## v1.0.235 -- 2026-04-20
 
 ### Improvements

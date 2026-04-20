@@ -5,7 +5,31 @@
  * v4.4: Adds ScanHistoryDropdown in topbar for timeline selection (last 15 scans).
  */
 
-import { useState } from "react";
+import { useState, Component } from "react";
+
+// ── Error Boundary — prevents any page render crash from blanking the whole app ─
+class PageErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(e) { return { err: e }; }
+  componentDidCatch(e, info) { console.error("[PageErrorBoundary]", e, info); }
+  render() {
+    if (this.state.err) {
+      return (
+        <div style={{ padding: "40px 32px", color: "rgba(255,255,255,0.55)", fontFamily: "monospace" }}>
+          <div style={{ color: "#ff3b3b", fontSize: 11, letterSpacing: "1.5px", marginBottom: 12 }}>RENDER ERROR</div>
+          <div style={{ fontSize: 12, marginBottom: 8 }}>{String(this.state.err)}</div>
+          <button onClick={() => this.setState({ err: null })}
+            style={{ background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.25)",
+              color: "#00e5a0", padding: "6px 16px", borderRadius: 3, fontFamily: "monospace",
+              fontSize: 11, cursor: "pointer" }}>
+            Retry
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 import { AI_PROVIDERS } from './registry/aiProviders.js';
 import { CYSCAN_URL } from './core/constants.js';
 import { clearSSOToken } from './core/auth.js';
@@ -298,6 +322,7 @@ export default function App() {
         {/* Page content */}
         <div style={{ flex:1, overflowY:"auto", background:"#090b10",
           backgroundImage:"radial-gradient(ellipse at 20% 30%, rgba(0,229,160,0.025) 0%, transparent 50%), radial-gradient(ellipse at 80% 10%, rgba(0,120,255,0.03) 0%, transparent 50%)" }}>
+          <PageErrorBoundary>
           <div style={{ padding:"28px 32px", animation:"fadeIn 0.35s ease", maxWidth:1300, margin:"0 auto" }}>
 
             {activeTab==="scan"           && <ScanPage user={user} onScanComplete={handleScanComplete}/>}
@@ -313,6 +338,7 @@ export default function App() {
             {activeTab==="system-settings" && <SystemSettingsPage aiConfig={aiConfig} onSaveAIConfig={handleSaveAIConfig} />}
 
           </div>
+          </PageErrorBoundary>
         </div>
       </div>
 

@@ -171,10 +171,71 @@ function AssetStatusPanel({ asset, status, onClose, onStatusChange }) {
   );
 }
 
+// ── Asset confidence + automated status suggestion ────────────────────────────
+// open → investigating : critical risk OR any critical vuln OR (high risk + high vulns)
+// investigating → in_review : ≥3 critical vulns OR ≥5 high vulns
+
+function computeAssetConfidence(asset) {
+  const RISK_CONF = { critical: 95, high: 75, medium: 50, low: 25 };
+  const base  = RISK_CONF[asset.risk] ?? 30;
+  const vulns = asset.vulnerabilities || [];
+  const boost = Math.min(20, vulns.filter(v => v.severity === "Critical").length * 5 +
+                              vulns.filter(v => v.severity === "High").length * 2);
+  return Math.min(100, base + boost);
+}
+
+function computeAssetAutoStatus(asset, curStat) {
+  const vulns     = asset.vulnerabilities || [];
+  const critCount = vulns.filter(v => v.severity === "Critical").length;
+  const highCount = vulns.filter(v => v.severity === "High").length;
+  const conf      = computeAssetConfidence(asset);
+  if (curStat === "open") {
+    if (asset.risk === "critical" || critCount > 0 || conf >= 75)
+      return { to: "investigating", reason: `Risk ${(asset.risk || "—").toUpperCase()}  •  ${critCount} Critical  •  ${highCount} High  •  Confidence ${conf}` };
+  }
+  if (curStat === "investigating") {
+    if (critCount >= 3 || highCount >= 5 || conf >= 90)
+      return { to: "in_review", reason: `${critCount} Critical  •  ${highCount} High findings require escalation` };
+  }
+  return null;
+}
+
+function AssetAutoStatusBanner({ autoSug, onApply, busy }) {
+  if (!autoSug) return null;
+  const tc = STATUS_CONFIG[autoSug.to] || { color: "#888", label: autoSug.to };
+  return (
+    <div style={{
+      background: `${tc.color}08`, border: `1px solid ${tc.color}35`,
+      borderRadius: 4, padding: "9px 12px",
+      display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+    }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ color: tc.color, fontSize: 9, fontFamily: "monospace",
+          fontWeight: 700, letterSpacing: "1px", marginBottom: 2 }}>AUTO-STATUS SUGGESTION</div>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10 }}>{autoSug.reason}</div>
+      </div>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+        <span style={{ background: `${tc.color}18`, color: tc.color,
+          border: `1px solid ${tc.color}40`, fontSize: 10,
+          fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 2 }}>
+          → {tc.label}
+        </span>
+        <button onClick={onApply} disabled={busy} style={{
+          background: `${tc.color}15`, border: `1px solid ${tc.color}50`, color: tc.color,
+          fontSize: 10, fontFamily: "monospace", fontWeight: 700,
+          padding: "4px 10px", borderRadius: 3, cursor: busy ? "wait" : "pointer",
+        }}>{busy ? "Applying…" : "Apply"}</button>
+      </div>
+    </div>
+  );
+}
+
 // ── Asset detail slide-out panel ──────────────────────────────────────────────
 
 function AssetDrawer({ asset, status, onClose, onStatusChange }) {
   const [showStatusPanel, setShowStatusPanel] = useState(false);
+  const [autoBusy,        setAutoBusy]        = useState(false);
+  const [autoErr,         setAutoErr]         = useState("");
 
   if (!asset) return null;
 
@@ -184,10 +245,27 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
   const rawStat  = status || a.status || "open";
   const curStat  = (typeof rawStat === "object" ? rawStat?.status : rawStat) || "open";
   const statCfg  = STATUS_CONFIG[curStat] || STATUS_CONFIG.open;
+  const prevAudit = typeof rawStat === "object" ? (rawStat?.audit_log || []) : [];
 
   const vulns     = a.vulnerabilities || [];
   const critCount = vulns.filter(v => v.severity === "Critical").length;
   const highCount = vulns.filter(v => v.severity === "High").length;
+  const autoSug   = computeAssetAutoStatus(a, curStat);
+
+  const handleAutoApply = async () => {
+    if (!autoSug) return;
+    setAutoBusy(true); setAutoErr("");
+    try {
+      const r = await fetch(`/api/asm/assets/${encodeURIComponent(a.host)}/status`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to_status: autoSug.to, comment: `Auto-applied — ${autoSug.reason}` }),
+      });
+      if (!r.ok) { const b = await r.json().catch(() => ({})); setAutoErr(b.error || `HTTP ${r.status}`); }
+      else { onStatusChange(a.host, autoSug.to); }
+    } catch { setAutoErr("Network error."); }
+    setAutoBusy(false);
+  };
 
   return (
     <>
@@ -255,13 +333,30 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
         {/* Scrollable body */}
         <div style={{ flex: 1, overflowY: "auto", padding: "18px 20px", display: "flex", flexDirection: "column", gap: 18 }}>
 
+          {/* Status lifecycle — auto-suggestion + current state */}
+          <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: 5, padding: "14px 16px" }}>
+            <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace",
+              letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 10 }}>Status Lifecycle</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: autoSug ? 10 : 0 }}>
+              <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>Current:</span>
+              <span style={{ background: `${statCfg.color}18`, color: statCfg.color,
+                border: `1px solid ${statCfg.color}50`, fontSize: 11, fontWeight: 700,
+                fontFamily: "monospace", padding: "3px 10px", borderRadius: 3 }}>{statCfg.label}</span>
+            </div>
+            {autoSug && <AssetAutoStatusBanner autoSug={autoSug} onApply={handleAutoApply} busy={autoBusy} />}
+            {autoErr && <div style={{ color: "#ff6464", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>{autoErr}</div>}
+          </div>
+
           {/* Core details */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             {[
-              { label: "IP ADDRESS",   val: a.ip },
+              { label: "IP ADDRESS",   val: typeof a.ip === "string" ? a.ip : String(a.ip || "—") },
               { label: "TYPE",         val: a.type },
               { label: "PORTS",        val: (a.ports || []).map(p => `:${p}`).join("  ") || "—" },
               { label: "SUBDOMAINS",   val: a.subdomains?.length > 0 ? `${a.subdomains.length} discovered` : "—" },
+              { label: "FIRST SEEN",   val: a.first_seen ? new Date(a.first_seen).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : null },
+              { label: "LAST SEEN",    val: a.last_seen  ? new Date(a.last_seen).toLocaleDateString("en-US",  { month: "short", day: "numeric", year: "numeric" }) : null },
             ].map(({ label, val }) => val && (
               <div key={label}>
                 <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
@@ -307,17 +402,17 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ color: "white", fontSize: 12, fontWeight: 600,
                           overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {v.vulnerability}
+                          {typeof v.vulnerability === "string" ? v.vulnerability : String(v.vulnerability || "—")}
                         </div>
                         {v.description && (
                           <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginTop: 1,
                             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {v.description}
+                            {typeof v.description === "string" ? v.description : String(v.description)}
                           </div>
                         )}
                       </div>
                       <div style={{ flexShrink: 0, textAlign: "right" }}>
-                        {v.module && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>{v.module}</div>}
+                        {v.module && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>{typeof v.module === "string" ? v.module : String(v.module)}</div>}
                         {v.cvss   && <div style={{ color: "rgba(255,140,0,0.6)", fontSize: 10, fontFamily: "monospace", fontWeight: 700, marginTop: 1 }}>CVSS {v.cvss}</div>}
                       </div>
                       <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, flexShrink: 0 }}>↗</span>
@@ -470,7 +565,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
             </div>
           )}
 
-          {/* WHOIS */}}
+          {/* WHOIS */}
           {a.whois_full && Object.keys(a.whois_full).length > 0 && (
             <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, padding: "10px 12px" }}>
               <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>WHOIS</div>
@@ -531,6 +626,35 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                   </span>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* ── Audit trail ──────────────────────────────────────────────── */}
+          {prevAudit.length > 0 && (
+            <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+              borderRadius: 5, padding: "14px 16px" }}>
+              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+                letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 10 }}>
+                Audit Trail ({prevAudit.length})
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {[...prevAudit].reverse().map((e, i) => {
+                  const fc = STATUS_CONFIG[e.from_status] || { color: "#888", label: e.from_status };
+                  const tc = STATUS_CONFIG[e.to_status]   || { color: "#888", label: e.to_status };
+                  return (
+                    <div key={i} style={{ borderLeft: `2px solid ${tc.color}40`, paddingLeft: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        <span style={{ color: fc.color, fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>{fc.label}</span>
+                        <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9 }}>→</span>
+                        <span style={{ color: tc.color, fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>{tc.label}</span>
+                        {e.actor && <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace" }}>• {e.actor}</span>}
+                        {e.created_at && <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", marginLeft: "auto" }}>{new Date(e.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>}
+                      </div>
+                      {e.comment && <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, marginTop: 3, lineHeight: 1.4 }}>{e.comment}</div>}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
