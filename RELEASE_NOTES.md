@@ -1,8 +1,56 @@
-## v1.0.234 -- 2026-04-20
+## v1.0.235 -- 2026-04-20
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.234 -- 2026-04-20
+
+### Bug Fixes
+
+- **Findings — black page on row click**: `FindingDrawer` now resolves the parent
+  asset via the `assetObj` reference that is co-located on every `allVulns` entry,
+  with `assetLookup[assetId]` as a secondary fallback. This ensures the HTTP
+  analysis, API endpoints, JS secrets, and SSL context sections always have the
+  correct asset data even when `assetId` is null in a scan batch.
+- **Asset Inventory — Base Domain drawer empty sections**: Added IP Enrichment,
+  OSINT Data, Mobile/API Analysis, and PQC Readiness blocks to `AssetDrawer` so
+  the panel matches the legacy Full Detail view. Fixed a regression where
+  `dns_ips` entries were rendered as `[object Object]` — the display now correctly
+  extracts `.ip` from object-typed entries.
+- **`makeFindingId` empty-string guard**: When all of `asset`, `vulnerability`,
+  and `module` are blank the slug now falls back to `"unknown-finding"` instead
+  of `""`, preventing a silent `STATUS_CONFIG[""]` miss.
+
+### Improvements
+
+- **Findings deduplication**: The `allVulns` flatMap now filters through a `Set`
+  keyed on `asset|vulnerability|module|source`. Duplicate findings that appear
+  across overlapping scan profiles are collapsed to a single row in the
+  Vulnerability Explorer.
+- **Asset Detail Parity**: `AssetDrawer` now surfaces four additional data
+  sections that were previously only in the legacy Full Detail modal:
+  - **IP Enrichment** — ASN, Org, Country, City from the first resolved IP
+  - **OSINT Data** — collated output from `a.osint_data` (emails, leaked data, etc.)
+  - **Mobile / API** — mobile app and API data from `a.mobile_api`
+  - **PQC Readiness** — post-quantum cryptography assessment from `a.pqc_data`
+- **Unified AI Confidence logic — UEBA module**: The confidence-score engine
+  (`open → investigating → in_review`) that was previously only in the ASM
+  Findings drawer is now live in the UEBA anomaly cards.
+  - `computeUebaConfidence(a)` maps each anomaly type to a severity tier
+    (`privilege_escalation / svc_account_interactive / impossible_travel` → critical;
+    `high_auth_fail_rate / multi_host_burst` → high; `off_hours_login` → medium;
+    `new_agent_access` → low), then adjusts by `risk_contribution`.
+  - `computeUebaAutoStatus(a, curStat)` applies the same thresholds:
+    confidence ≥ 75 OR risk_contribution ≥ 3 OR critical-type → suggests
+    `investigating`; confidence ≥ 90 OR risk_contribution ≥ 6 OR critical-type →
+    suggests `in_review`.
+  - An **AUTO-STATUS SUGGESTION** banner with one-click Apply appears in the
+    Status Lifecycle section of each expanded anomaly card.
+  - A **CONFIDENCE** bar renders at the top of the Status Lifecycle section,
+    colour-coded red / amber / yellow / blue with 75 and 90 threshold ticks.
 
 ---
 

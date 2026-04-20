@@ -54,6 +54,99 @@ function makeAnomalyId(a) {
   return raw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
+// ── UEBA Confidence & Auto-Status (mirrors ASM confidence logic) ──────────────
+// Maps each anomaly type to a severity tier so the same confidence formula
+// used in VulnerabilityPage can be applied here.
+
+const ANOMALY_SEVERITY = {
+  privilege_escalation:    "critical",
+  svc_account_interactive: "critical",
+  impossible_travel:       "critical",
+  high_auth_fail_rate:     "high",
+  multi_host_burst:        "high",
+  off_hours_login:         "medium",
+  new_agent_access:        "low",
+};
+
+function computeUebaConfidence(a) {
+  const SEV_CONF = { critical: 95, high: 80, medium: 55, low: 30 };
+  const sev   = ANOMALY_SEVERITY[a.anomaly_type] || "medium";
+  const base  = SEV_CONF[sev];
+  const boost = a.risk_contribution != null ? (a.risk_contribution - 5) * 1.5 : 0;
+  return Math.min(100, Math.max(0, Math.round(base + boost)));
+}
+
+// open → investigating : confidence ≥ 75 OR risk_contribution ≥ 3 OR critical type
+// investigating → in_review : confidence ≥ 90 OR risk_contribution ≥ 6 OR critical type
+
+function computeUebaAutoStatus(a, curStat) {
+  const conf        = computeUebaConfidence(a);
+  const critTypes   = ["privilege_escalation", "svc_account_interactive", "impossible_travel"];
+  const rc          = a.risk_contribution || 0;
+  if (curStat === "open") {
+    if (conf >= 75 || rc >= 3 || critTypes.includes(a.anomaly_type))
+      return { to: "investigating", reason: `Confidence ${conf}  •  Risk +${rc}  •  ${ANOMALY_LABELS[a.anomaly_type] || a.anomaly_type}` };
+  }
+  if (curStat === "investigating") {
+    if (conf >= 90 || rc >= 6 || critTypes.includes(a.anomaly_type))
+      return { to: "in_review", reason: `High-risk anomaly  •  Confidence ${conf}  •  Risk +${rc}` };
+  }
+  return null;
+}
+
+function UebaConfidenceBar({ confidence }) {
+  const color = confidence >= 90 ? "#ff3b3b"
+              : confidence >= 75 ? "#ff8c00"
+              : confidence >= 55 ? "#f5c518"
+              : "#4d9eff";
+  return (
+    <div style={{ marginTop: 8, marginBottom: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+        <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 9,
+          fontFamily: "monospace", letterSpacing: "1px" }}>CONFIDENCE</span>
+        <span style={{ color, fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>{confidence}</span>
+      </div>
+      <div style={{ height: 3, background: "rgba(255,255,255,0.07)", borderRadius: 2 }}>
+        <div style={{ width: `${confidence}%`, height: "100%", background: color,
+          borderRadius: 2, transition: "width 0.4s ease" }} />
+      </div>
+    </div>
+  );
+}
+
+function UebaAutoStatusBanner({ autoSug, onApply, busy }) {
+  if (!autoSug) return null;
+  const tc = STATUS_CONFIG[autoSug.to] || { color: "#888", label: autoSug.to };
+  return (
+    <div style={{
+      background: `${tc.color}08`, border: `1px solid ${tc.color}35`,
+      borderRadius: 4, padding: "8px 10px",
+      display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+      marginBottom: 8,
+    }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ color: tc.color, fontSize: 9, fontFamily: "monospace",
+          fontWeight: 700, letterSpacing: "1px", marginBottom: 2 }}>
+          AUTO-STATUS SUGGESTION
+        </div>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10 }}>{autoSug.reason}</div>
+      </div>
+      <div style={{ display: "flex", gap: 5, alignItems: "center", flexShrink: 0 }}>
+        <span style={{
+          background: `${tc.color}18`, color: tc.color,
+          border: `1px solid ${tc.color}40`, fontSize: 10,
+          fontFamily: "monospace", fontWeight: 700, padding: "2px 6px", borderRadius: 2,
+        }}>→ {tc.label}</span>
+        <button onClick={onApply} disabled={busy} style={{
+          background: `${tc.color}15`, border: `1px solid ${tc.color}50`, color: tc.color,
+          fontSize: 10, fontFamily: "monospace", fontWeight: 700,
+          padding: "3px 8px", borderRadius: 3, cursor: busy ? "wait" : "pointer",
+        }}>{busy ? "Applying…" : "Apply"}</button>
+      </div>
+    </div>
+  );
+}
+
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
 function HoursGrid({ hours = [] }) {
@@ -122,12 +215,17 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
   const [txComment, setTxComment] = useState("");
   const [txErr,     setTxErr]     = useState("");
   const [txBusy,    setTxBusy]    = useState(false);
+  const [autoBusy,  setAutoBusy]  = useState(false);
 
   const color      = ANOMALY_COLORS[a.anomaly_type] || "#888";
   const anomalyId  = makeAnomalyId(a);
   const curStat    = anomalyStatus?.status || "open";
   const targets    = STATUS_TRANSITIONS[curStat] || [];
   const statCfg    = STATUS_CONFIG[curStat] || STATUS_CONFIG.open;
+
+  // Confidence score + automated status suggestion
+  const confidence = computeUebaConfidence(a);
+  const autoSug    = computeUebaAutoStatus(a, curStat);
 
   // Already has a ticket (auto-raised by engine OR raised this session)
   const hasTicket  = a.iris_case_id || (escalated?.case_id);
@@ -136,6 +234,28 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
 
   const startTx  = (t) => { setTxTarget(t); setTxComment(""); setTxErr(""); };
   const cancelTx = () => setTxTarget(null);
+
+  const handleAutoApply = async () => {
+    if (!autoSug) return;
+    setAutoBusy(true);
+    try {
+      const r = await fetch(`/api/siem/ueba/anomaly/${encodeURIComponent(anomalyId)}/status`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to_status: autoSug.to,
+          comment:   `Auto-applied — ${autoSug.reason}`,
+        }),
+      });
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        setTxErr(b.error || `Auto-apply HTTP ${r.status}`);
+      } else {
+        onStatusChange?.(anomalyId, autoSug.to);
+      }
+    } catch { setTxErr("Network error."); }
+    setAutoBusy(false);
+  };
 
   const confirmTx = async () => {
     if (!txComment.trim()) { setTxErr("A comment is required."); return; }
@@ -341,9 +461,13 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
             border: "1px solid rgba(255,255,255,0.08)", borderRadius: 4,
             padding: "12px 14px" }}>
             <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
-              letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 8 }}>
+              letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 6 }}>
               Status Lifecycle
             </div>
+
+            {/* Confidence bar */}
+            <UebaConfidenceBar confidence={confidence} />
+
             {/* Current active state */}
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: txTarget ? 10 : (targets.length > 0 ? 8 : 0) }}>
               <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>Current:</span>
@@ -353,6 +477,16 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
                 {statCfg.label}
               </span>
             </div>
+
+            {/* Auto-status suggestion banner (confidence-driven) */}
+            {!txTarget && (
+              <>
+                <UebaAutoStatusBanner autoSug={autoSug} onApply={handleAutoApply} busy={autoBusy} />
+                {txErr && !txTarget && <div style={{ color: "#ff6464", fontSize: 10,
+                  fontFamily: "monospace", marginBottom: 6 }}>{txErr}</div>}
+              </>
+            )}
+
             {/* Inline transition form */}
             {txTarget ? (
               <div>

@@ -353,7 +353,9 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
               {a.dns_ips?.length > 0 && (
                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 4 }}>
                   {a.dns_ips.slice(0, 6).map((ip, i) => (
-                    <span key={i} style={{ background: "rgba(0,229,160,0.07)", color: "rgba(0,229,160,0.7)", border: "1px solid rgba(0,229,160,0.2)", fontSize: 9, fontFamily: "monospace", padding: "1px 6px", borderRadius: 2 }}>{ip}</span>
+                    <span key={i} style={{ background: "rgba(0,229,160,0.07)", color: "rgba(0,229,160,0.7)", border: "1px solid rgba(0,229,160,0.2)", fontSize: 9, fontFamily: "monospace", padding: "1px 6px", borderRadius: 2 }}>
+                      {typeof ip === "string" ? ip : ip?.ip || String(ip)}
+                    </span>
                   ))}
                 </div>
               )}
@@ -447,7 +449,28 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
             </div>
           )}
 
-          {/* WHOIS */}
+          {/* IP Enrichment (ASN, Org, Geo) — from first DNS IP object */}
+          {a.dns_ips?.length > 0 && typeof a.dns_ips[0] === "object" &&
+           (a.dns_ips[0].org || a.dns_ips[0].asn || a.dns_ips[0].country) && (
+            <div style={{ background: "rgba(0,229,160,0.03)", border: "1px solid rgba(0,229,160,0.12)", borderRadius: 4, padding: "10px 12px" }}>
+              <div style={{ color: "#00e5a0", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>IP ENRICHMENT</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
+                {[
+                  { label: "ASN",     val: a.dns_ips[0].asn },
+                  { label: "ORG",     val: a.dns_ips[0].org },
+                  { label: "Country", val: a.dns_ips[0].country },
+                  { label: "City",    val: a.dns_ips[0].city },
+                ].filter(r => r.val).map((r, i) => (
+                  <div key={i}>
+                    <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace" }}>{r.label}</div>
+                    <div style={{ color: "rgba(0,229,160,0.7)", fontSize: 10, fontFamily: "monospace" }}>{r.val}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* WHOIS */}}
           {a.whois_full && Object.keys(a.whois_full).length > 0 && (
             <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, padding: "10px 12px" }}>
               <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>WHOIS</div>
@@ -455,6 +478,57 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                 <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
                   <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", minWidth: 100 }}>{k.replace(/_/g, " ")}</span>
                   <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>{String(v)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* OSINT Data */}
+          {a.osint_data && Object.keys(a.osint_data).length > 0 && (
+            <div style={{ background: "rgba(176,110,255,0.03)", border: "1px solid rgba(176,110,255,0.15)", borderRadius: 4, padding: "10px 12px" }}>
+              <div style={{ color: "#b06eff", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>OSINT DATA</div>
+              {Object.entries(a.osint_data)
+                .filter(([, v]) => v != null && (Array.isArray(v) ? v.length > 0 : true))
+                .slice(0, 6).map(([k, v], i) => (
+                <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
+                  <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", minWidth: 110 }}>{k.replace(/_/g, " ")}</span>
+                  <span style={{ color: "rgba(176,110,255,0.7)", fontSize: 10, fontFamily: "monospace" }}>
+                    {Array.isArray(v) ? `${v.length} items` : typeof v === "object" ? JSON.stringify(v).slice(0, 60) : String(v)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Mobile / API Analysis */}
+          {a.mobile_api && Object.keys(a.mobile_api).length > 0 && (
+            <div style={{ background: "rgba(245,197,24,0.03)", border: "1px solid rgba(245,197,24,0.15)", borderRadius: 4, padding: "10px 12px" }}>
+              <div style={{ color: "#f5c518", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>MOBILE / API</div>
+              {Object.entries(a.mobile_api)
+                .filter(([, v]) => v != null && (Array.isArray(v) ? v.length > 0 : true))
+                .slice(0, 5).map(([k, v], i) => (
+                <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
+                  <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", minWidth: 110 }}>{k.replace(/_/g, " ")}</span>
+                  <span style={{ color: "rgba(245,197,24,0.7)", fontSize: 10, fontFamily: "monospace" }}>
+                    {Array.isArray(v) ? `${v.length} entries` : typeof v === "object" ? JSON.stringify(v).slice(0, 60) : String(v)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* PQC Readiness */}
+          {a.pqc_data && Object.keys(a.pqc_data).length > 0 && (
+            <div style={{ background: "rgba(77,158,255,0.03)", border: "1px solid rgba(77,158,255,0.15)", borderRadius: 4, padding: "10px 12px" }}>
+              <div style={{ color: "#4d9eff", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>PQC READINESS</div>
+              {Object.entries(a.pqc_data)
+                .filter(([, v]) => v != null)
+                .slice(0, 5).map(([k, v], i) => (
+                <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
+                  <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", minWidth: 110 }}>{k.replace(/_/g, " ")}</span>
+                  <span style={{ color: "rgba(77,158,255,0.7)", fontSize: 10, fontFamily: "monospace" }}>
+                    {typeof v === "boolean" ? (v ? "Yes" : "No") : typeof v === "object" ? JSON.stringify(v).slice(0, 60) : String(v)}
+                  </span>
                 </div>
               ))}
             </div>
