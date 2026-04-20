@@ -58,7 +58,8 @@ export function useAppState() {
 
       if (ssoToken) setSSOToken(ssoToken);
 
-      const u = { id: uid, name, email, avatar, provider };
+      const role = decodeURIComponent(params.get("role") || "viewer");
+      const u = { id: uid, name, email, avatar, provider, role };
       saveUser(u);
       setUser(u);
       setAuthReady(true);

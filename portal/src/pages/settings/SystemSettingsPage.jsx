@@ -759,6 +759,7 @@ const TABS = [
   { id: "updates",      label: "Updates & Version" },
   { id: "ai-config",    label: "AI Config" },
   { id: "integrations", label: "Integrations" },
+  { id: "cymind",       label: "CyMind" },
   { id: "mcp",          label: "MCP" },
   { id: "env",          label: "Environment Config" },
   { id: "users",        label: "User Management" },
@@ -1496,6 +1497,204 @@ async with sse_client("${status?.public_url || status?.endpoint || "<MCP_ENDPOIN
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// CyMind Integration Settings tab
+// ════════════════════════════════════════════════════════════════════════════
+
+function CyMindIntegrationTab() {
+  const [cfg,     setCfg]     = useState({});
+  const [loading, setLoading] = useState(true);
+  const [saving,  setSaving]  = useState(false);
+  const [msg,     setMsg]     = useState(null);
+  const [url,     setUrl]     = useState("");
+  const [newKey,  setNewKey]  = useState(null);   // revealed once after generation
+
+  const fetchCfg = () => {
+    setLoading(true);
+    fetch(`${API_BASE}/api/system/cymind`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d) { setCfg(d); setUrl(d.cymindUrl || ""); }
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  };
+
+  useEffect(() => { fetchCfg(); }, []);
+
+  const handleSave = async () => {
+    setSaving(true); setMsg(null); setNewKey(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/system/cymind`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cymindUrl: url }),
+      });
+      const d = await r.json();
+      if (d.ok) { setMsg({ ok: true, text: "Saved." }); fetchCfg(); }
+      else       { setMsg({ ok: false, text: d.error || "Save failed" }); }
+    } catch (e) { setMsg({ ok: false, text: String(e) }); }
+    finally { setSaving(false); }
+  };
+
+  const handleGenKey = async () => {
+    setSaving(true); setMsg(null); setNewKey(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/system/cymind`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ generateKey: true }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        setNewKey(d.newKey || null);
+        setMsg({ ok: true, text: "New API key generated. Copy it now — it will be masked after you leave this page." });
+        fetchCfg();
+      } else { setMsg({ ok: false, text: d.error || "Key generation failed" }); }
+    } catch (e) { setMsg({ ok: false, text: String(e) }); }
+    finally { setSaving(false); }
+  };
+
+  const handleTestConn = async () => {
+    if (!url) { setMsg({ ok: false, text: "Enter a CyMind URL first." }); return; }
+    setMsg({ ok: null, text: "Testing connection…" });
+    try {
+      const target = `${url.replace(/\/$/, "")}/api/v1/health`;
+      const r = await fetch(`${API_BASE}/api/ai/test`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "cymind", fields: { baseUrl: url } }),
+      });
+      const d = await r.json();
+      setMsg(d.ok ? { ok: true, text: "CyMind is reachable." } : { ok: false, text: d.error || "Connection failed" });
+    } catch (e) { setMsg({ ok: false, text: String(e) }); }
+  };
+
+  if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>;
+
+  return (
+    <div>
+      <div style={{ ...CARD }}>
+        <div style={{ ...LABEL, marginBottom: 14 }}>CyMind RAG-Chat Integration</div>
+        <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, lineHeight: 1.7, marginBottom: 20 }}>
+          Connect CyCentra 360 to your on-prem <strong style={{ color: "rgba(255,255,255,0.6)" }}>CyMind</strong> instance.
+          Analysts will see a chat overlay powered by CyMind's RAG engine, with live access to
+          SIEM incidents and alerts via the Security MCP bridge.
+        </div>
+
+        {/* Status badge */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
+          <span style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            background: cfg.enabled ? "rgba(0,229,160,0.1)" : "rgba(255,255,255,0.05)",
+            border: `1px solid ${cfg.enabled ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.12)"}`,
+            borderRadius: 4, padding: "3px 10px",
+            color: cfg.enabled ? "#00e5a0" : "rgba(255,255,255,0.3)",
+            fontSize: 10, fontFamily: "monospace", fontWeight: 700,
+          }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "currentColor" }} />
+            {cfg.enabled ? "ENABLED" : "DISABLED"}
+          </span>
+          {cfg.hasKey && (
+            <span style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace" }}>✓ API key set</span>
+          )}
+        </div>
+
+        {/* CyMind URL */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={LABEL}>CyMind Base URL</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              type="url"
+              value={url}
+              onChange={e => setUrl(e.target.value)}
+              placeholder="https://cymind.corp.example.com"
+              style={{ ...INPUT, flex: 1 }}
+            />
+            <button onClick={handleTestConn} disabled={saving || !url}
+              style={{ ...BTN("#4d9eff"), opacity: !url ? 0.4 : 1 }}>
+              Test
+            </button>
+          </div>
+        </div>
+
+        {/* MCP endpoint info */}
+        {cfg.mcpEndpoint && (
+          <div style={{ marginBottom: 18 }}>
+            <div style={LABEL}>MCP Endpoint (read-only)</div>
+            <div style={{ ...INPUT, color: "rgba(0,229,160,0.6)", fontSize: 11, userSelect: "all", cursor: "text" }}>
+              {cfg.mcpEndpoint}
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 5 }}>
+              Configure this URL in CyMind → System Settings → MCP Connection.
+            </div>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: newKey ? 16 : 0 }}>
+          <button onClick={handleSave} disabled={saving}
+            style={{ ...BTN(), opacity: saving ? 0.5 : 1 }}>
+            {saving ? "Saving…" : "Save URL"}
+          </button>
+          <button onClick={handleGenKey} disabled={saving}
+            style={{ ...BTN("#4d9eff"), opacity: saving ? 0.5 : 1 }}>
+            {cfg.hasKey ? "Rotate API Key" : "Generate API Key"}
+          </button>
+        </div>
+
+        {/* Newly generated key — shown once */}
+        {newKey && (
+          <div style={{
+            marginTop: 16, background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.25)",
+            borderRadius: 4, padding: "12px 14px",
+          }}>
+            <div style={{ ...LABEL, marginBottom: 6, color: "#00e5a0" }}>New API Key — copy now</div>
+            <code style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace", userSelect: "all", wordBreak: "break-all" }}>
+              {newKey}
+            </code>
+            <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginTop: 8 }}>
+              Paste this into CyMind → System Settings → MCP Connection → API Key.
+              The correlation engine must be restarted for the key to take effect.
+            </div>
+          </div>
+        )}
+
+        {msg && (
+          <div style={{ color: msg.ok === true ? "#00e5a0" : msg.ok === false ? "#ff3b3b" : "#ffd93d",
+            fontSize: 12, fontFamily: "monospace", marginTop: 12 }}>
+            {msg.ok === true ? "✓" : msg.ok === false ? "✗" : "⋯"} {msg.text}
+          </div>
+        )}
+      </div>
+
+      {/* Quick-start checklist */}
+      <div style={{ ...CARD }}>
+        <div style={{ ...LABEL, marginBottom: 14 }}>Setup Checklist</div>
+        {[
+          { done: cfg.hasKey,      text: "Generate API key (above)" },
+          { done: !!cfg.cymindUrl, text: "Set CyMind base URL (above)" },
+          { done: cfg.hasKey,      text: "Copy key into CyMind → MCP Connection settings" },
+          { done: cfg.hasKey,      text: "Restart cysiemstack-engine service to activate key" },
+          { done: false,           text: "Update CyMind CORS: set CYCENTRA_ORIGIN in CyMind .env" },
+        ].map((item, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0",
+            borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+            <span style={{ color: item.done ? "#00e5a0" : "rgba(255,255,255,0.2)", fontSize: 14 }}>
+              {item.done ? "✓" : "○"}
+            </span>
+            <span style={{ color: item.done ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.35)",
+              fontSize: 12, fontFamily: "monospace",
+              textDecoration: item.done ? "line-through" : "none" }}>
+              {item.text}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // TAB 3 wrapper — Integrations (MISP + CyIRIS)
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -1544,6 +1743,7 @@ export function SystemSettingsPage({ aiConfig, onSaveAIConfig }) {
       {tab === "updates"      && <UpdatesTab />}
       {tab === "ai-config"    && <AISettingsPage aiConfig={aiConfig || {}} onSave={onSaveAIConfig || (() => {})} embedded={true} />}
       {tab === "integrations" && <IntegrationsTab />}
+      {tab === "cymind"       && <CyMindIntegrationTab />}
       {tab === "mcp"          && <McpTab />}
       {tab === "env"          && <EnvConfigTab />}
       {tab === "users"        && <UserManagementTab />}

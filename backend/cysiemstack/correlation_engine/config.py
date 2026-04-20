@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     # CySOAR (Node-RED) webhook URL — empty string means SOAR is not configured.
     soar_webhook_url: str = ""
 
+    # CyMind integration — API key that CyMind must present to access /mcp/*
+    # Generated and stored via POST /api/system/cymind in the portal.
+    # Empty string disables key enforcement (MCP is still reachable internally).
+    cymind_api_key: str = ""
+
     # TLS CA bundle path for outbound httpx calls (MISP, IRIS).
     # Set to the path of a CA certificate bundle to verify self-signed certs.
     # Leave empty to use the system default CA store.

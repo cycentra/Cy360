@@ -1,3 +1,46 @@
+## v1.0.233 -- 2026-04-20
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.233 -- 2026-04-20
+
+### New Features
+
+  - **CyMind RAG-Chat Integration**: Analyst and admin users now see a persistent chat
+    overlay (brain FAB button, bottom-right) that loads the CyMind AI assistant inside
+    CyCentra 360.  The overlay connects to CyMind via an iframe and leverages the existing
+    Security MCP bridge so CyMind can answer live questions about open incidents, entity
+    risk scores, UEBA anomalies, and Wazuh agents — all in natural language.
+
+  - **MCP Access Control**: The Security MCP bridge endpoint (`/mcp/sse`) now enforces an
+    API key (`CYMIND_API_KEY` in `cysiemstack.env`).  Unauthenticated requests receive HTTP
+    401.  The key is generated in the portal and written to the env file automatically.
+
+  - **System Settings → CyMind tab**: New integration settings page lets admins enter the
+    CyMind base URL, generate / rotate the shared API key, test connectivity, and follow a
+    step-by-step setup checklist.  Analyst users can read the config; only admins can write.
+
+  - **RBAC: user role surfaced to frontend**: The OAuth callback now passes the user's RBAC
+    role to the React app so role-gated features (CyMind overlay, future analyst-only pages)
+    can be shown or hidden without an extra round-trip.
+
+### Setup (minimum effort)
+
+  See `docs/CYMIND_INTEGRATION.md` for the full guide.  Quick version:
+
+  1. **System Settings → CyMind → Generate API Key** — copy the `cymk_…` key.
+  2. `sudo systemctl restart cysiemstack-engine` — activates the key guard.
+  3. Paste key into **CyMind → MCP Settings → API Key**, set endpoint to
+     `http://127.0.0.1:8100/mcp/sse`.
+  4. In CyMind `.env`: `CYCENTRA_ORIGIN=https://cysoc.YOUR_DOMAIN` — enables the iframe.
+  5. Restart CyMind.  Analyst users see the chat FAB immediately on next login.
+
+---
+
 ## v1.0.232 -- 2026-04-20
 
 ### Improvements

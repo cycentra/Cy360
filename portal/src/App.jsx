@@ -27,6 +27,7 @@ import { UseCasesPage }      from './pages/usecases/UseCasesPage.jsx';
 import { SystemSettingsPage } from './pages/settings/SystemSettingsPage.jsx';
 import { AssetModal }        from './pages/assets/AssetModal.jsx';
 import { ImportModal }       from './pages/assets/ImportModal.jsx';
+import { CyMindChatOverlay } from './components/CyMindChatOverlay.jsx';
 
 // ── Scan History Dropdown ─────────────────────────────────────────────────────
 
@@ -180,8 +181,12 @@ export default function App() {
     handleScanSelect,
   } = useAppState();
 
+  const [showCyMind, setShowCyMind] = useState(false);
+
   if (!authReady) return null;
   if (!user) return <LoginPage />;
+
+  const canUseCyMind = user?.role === "analyst" || user?.role === "admin";
 
   const handleLogout = () => {
     clearSSOToken();
@@ -313,6 +318,34 @@ export default function App() {
 
       {selectedAsset && <AssetModal asset={selectedAsset} onClose={()=>setSelectedAsset(null)} onStatusChange={handleStatusChange}/>}
       {showImport    && <ImportModal onClose={()=>setShowImport(false)} onImport={handleImport}/>}
+
+      {/* ── CyMind FAB — analyst / admin only ──────────────────────────── */}
+      {canUseCyMind && !showCyMind && (
+        <button
+          onClick={() => setShowCyMind(true)}
+          title="Open CyMind AI Assistant"
+          style={{
+            position: "fixed", bottom: 28, right: 28, zIndex: 800,
+            width: 52, height: 52, borderRadius: "50%", border: "none", cursor: "pointer",
+            background: "linear-gradient(135deg, rgba(0,229,160,0.9), rgba(0,180,130,0.9))",
+            boxShadow: "0 4px 20px rgba(0,229,160,0.4), 0 2px 8px rgba(0,0,0,0.5)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            transition: "transform 0.15s, box-shadow 0.15s",
+          }}
+          onMouseEnter={e => { e.currentTarget.style.transform = "scale(1.08)"; e.currentTarget.style.boxShadow = "0 6px 28px rgba(0,229,160,0.55), 0 3px 10px rgba(0,0,0,0.5)"; }}
+          onMouseLeave={e => { e.currentTarget.style.transform = "scale(1)";    e.currentTarget.style.boxShadow = "0 4px 20px rgba(0,229,160,0.4), 0 2px 8px rgba(0,0,0,0.5)"; }}
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="rgba(5,15,12,0.9)" strokeWidth="2">
+            <path d="M12 2a7 7 0 0 1 7 7c0 3.5-2.5 6.4-5.8 7.7L12 22l-1.2-5.3C7.5 15.4 5 12.5 5 9a7 7 0 0 1 7-7z"/>
+            <circle cx="12" cy="9" r="2" fill="rgba(5,15,12,0.5)" stroke="rgba(5,15,12,0.9)" strokeWidth="1.5"/>
+          </svg>
+        </button>
+      )}
+
+      {/* CyMind chat overlay */}
+      {canUseCyMind && showCyMind && (
+        <CyMindChatOverlay onClose={() => setShowCyMind(false)} />
+      )}
     </div>
   );
 }

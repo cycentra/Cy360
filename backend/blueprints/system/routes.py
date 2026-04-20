@@ -1209,6 +1209,114 @@ def mcp_post():
     })
 
 
+# ── CyMind Integration ────────────────────────────────────────────────────────
+
+def _read_cymind_config() -> dict:
+    """Read cymind config block from ai_settings.json."""
+    try:
+        if AI_SETTINGS_FILE.exists():
+            data = json.loads(AI_SETTINGS_FILE.read_text())
+            return data.get("cymind_integration", {})
+    except Exception:
+        pass
+    return {}
+
+
+def _write_cymind_config(cfg: dict) -> None:
+    """Merge cymind config into ai_settings.json and sync API key to cysiemstack.env."""
+    existing = {}
+    try:
+        if AI_SETTINGS_FILE.exists():
+            existing = json.loads(AI_SETTINGS_FILE.read_text())
+    except Exception:
+        pass
+    existing["cymind_integration"] = cfg
+    AI_SETTINGS_FILE.write_text(json.dumps(existing, indent=2))
+    # Keep CYMIND_API_KEY in sync so the correlation engine can read it on restart
+    env_path = Path(_ENV_FILE_MAP["cysiemstack"])
+    if env_path.exists():
+        lines = env_path.read_text().splitlines()
+        result, found = [], False
+        for line in lines:
+            if re.match(r'^CYMIND_API_KEY\s*=', line) and not line.strip().startswith("#"):
+                result.append(f"CYMIND_API_KEY={cfg.get('apiKey', '')}")
+                found = True
+            else:
+                result.append(line)
+        if not found:
+            result.append(f"CYMIND_API_KEY={cfg.get('apiKey', '')}")
+        try:
+            env_path.write_text("\n".join(result) + "\n")
+        except Exception:
+            pass
+
+
+@system_bp.route("/api/system/cymind", methods=["OPTIONS"])
+def cymind_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/cymind", methods=["GET"])
+def cymind_get():
+    """Return CyMind integration config. Analyst+ can read; API key is masked."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
+        return jsonify({"error": "Analyst or admin role required"}), 403
+
+    cfg = _read_cymind_config()
+    masked = dict(cfg)
+    if masked.get("apiKey"):
+        masked["apiKey"] = "••••••••"
+    base_url = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").rstrip("/")
+    base_domain = os.environ.get("BASE_DOMAIN", "")
+    public_mcp = f"https://cysoc.{base_domain}/mcp/sse" if base_domain else f"{base_url}/mcp/sse"
+    return jsonify({
+        **masked,
+        "mcpEndpoint": public_mcp,
+        "hasKey": bool(cfg.get("apiKey")),
+    })
+
+
+@system_bp.route("/api/system/cymind", methods=["POST"])
+def cymind_post():
+    """Save CyMind integration settings. Admin only.
+
+    Body (all optional):
+      cymindUrl   — base URL of CyMind instance (e.g. https://cymind.corp.example.com)
+      generateKey — true → generate and store a new random API key
+      enabled     — bool, enable/disable the integration
+    """
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+
+    import secrets as _secrets
+    data = request.get_json() or {}
+    cfg  = _read_cymind_config()
+
+    if "cymindUrl" in data:
+        cfg["cymindUrl"] = str(data["cymindUrl"]).strip().rstrip("/")
+    if "enabled" in data:
+        cfg["enabled"] = bool(data["enabled"])
+    if data.get("generateKey"):
+        cfg["apiKey"] = "cymk_" + _secrets.token_hex(24)
+
+    _write_cymind_config(cfg)
+    masked = dict(cfg)
+    if masked.get("apiKey"):
+        masked["apiKey"] = "••••••••"
+    return jsonify({
+        "ok": True,
+        "config": masked,
+        **({"newKey": cfg["apiKey"]} if data.get("generateKey") else {}),
+        "message": "CyMind integration config saved. Restart cysiemstack-engine to apply API key.",
+    })
+
+
 # ── Office 365 Wazuh Integration ──────────────────────────────────────────────
 
 _OSSEC_CONF = Path("/var/ossec/etc/ossec.conf")

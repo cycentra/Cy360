@@ -1238,3 +1238,35 @@ try:
 
 except ImportError:
     log.info("mcp_package_not_installed", hint="pip install 'mcp[cli]' to enable the Security MCP bridge")
+
+
+# ── CyMind MCP access-control (ASGI-level, streaming-safe) ───────────────────
+# Wraps the FastAPI app so that /mcp/* requests are rejected unless the caller
+# presents the shared API key.  Uses raw ASGI to avoid BaseHTTPMiddleware's
+# response-buffering, which would break SSE streaming.
+_cymind_key = str(getattr(settings, "cymind_api_key", "") or "").strip()
+if _cymind_key:
+    _inner_app = app  # keep reference before shadowing
+
+    async def app(scope, receive, send):  # noqa: F811 — intentional ASGI replacement
+        if scope.get("type") == "http" and scope.get("path", "").startswith("/mcp"):
+            raw_headers = {k.lower(): v for k, v in scope.get("headers", [])}
+            auth_header = raw_headers.get(b"authorization", b"").decode("utf-8", errors="ignore")
+            provided = auth_header.removeprefix("Bearer ").strip()
+            if not provided:
+                provided = raw_headers.get(b"x-cymind-key", b"").decode("utf-8", errors="ignore")
+            if provided != _cymind_key:
+                body = b'{"error":"Unauthorized \u2014 valid CyMind API key required"}'
+                await send({
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [
+                        [b"content-type", b"application/json"],
+                        [b"content-length", str(len(body)).encode()],
+                    ],
+                })
+                await send({"type": "http.response.body", "body": body, "more_body": False})
+                return
+        await _inner_app(scope, receive, send)
+
+    log.info("mcp_key_guard_active", hint="CyMind API key required for /mcp/* access")
