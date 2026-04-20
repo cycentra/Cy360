@@ -544,3 +544,64 @@ def asm_asset_audit(asset_id):
     entry = data.get(asset_id, {})
     return jsonify(entry.get("audit_log", []))
 
+
+# ── POST /api/asm/auto-status — bulk confidence-score suggestions ─────────────
+
+@asm_bp.route("/api/asm/auto-status", methods=["OPTIONS"])
+def asm_auto_status_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@asm_bp.route("/api/asm/auto-status", methods=["POST"])
+def asm_auto_status():
+    """Return automated status-transition suggestions based on confidence scores.
+
+    Mirrors the State Transition Matrix in the frontend computeAutoStatus():
+      open          → investigating : confidence ≥ 75  OR cvss ≥ 7.0  OR epss_pct ≥ 60
+      investigating → in_review     : cvss ≥ 9.0       OR epss_pct ≥ 75  OR risk_score ≥ 8
+
+    Read-only — does NOT write any state.
+    Accepts:
+      { findings: [ { id, severity, cvss, epss_pct, risk_score, current_status } ] }
+    Returns:
+      { suggestions: [ { id, current, suggested, reason } ], total: N }
+    """
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+
+    body     = request.get_json(silent=True) or {}
+    findings = body.get("findings") or []
+    if not isinstance(findings, list):
+        return jsonify({"error": "findings must be a list"}), 422
+
+    suggestions = []
+    for f in findings:
+        sev    = str(f.get("severity") or "low").lower()
+        base   = _ASM_CONFIDENCE.get(sev, 40.0)
+        rs     = float(f.get("risk_score") or 0)
+        conf   = min(100, max(0, round(base + (rs - 5) * 1.5)))
+        cvss   = float(f.get("cvss") or 0)
+        epss   = float(f.get("epss_pct") or 0)
+        cur    = str(f.get("current_status") or "open").strip()
+        to     = None
+        reason = None
+
+        if cur == "open":
+            if conf >= 75 or cvss >= 7.0 or epss >= 60:
+                to     = "investigating"
+                reason = f"confidence={conf}, cvss={cvss}, epss={epss}%"
+        elif cur == "investigating":
+            if cvss >= 9.0 or epss >= 75 or rs >= 8:
+                to     = "in_review"
+                reason = f"cvss={cvss}, epss={epss}%, risk_score={rs}"
+
+        if to:
+            suggestions.append({
+                "id":       f.get("id"),
+                "current":  cur,
+                "suggested": to,
+                "reason":   reason,
+            })
+
+    return jsonify({"suggestions": suggestions, "total": len(suggestions)})
+

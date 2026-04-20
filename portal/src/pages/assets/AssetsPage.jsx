@@ -149,7 +149,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
             </div>
           )}
 
-          {/* Vulnerabilities summary */}
+          {/* Vulnerabilities — DashboardPage row layout ─────────────── */}
           {vulns.length > 0 && (
             <div>
               <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
@@ -159,25 +159,166 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                 {highCount > 0 && <span style={{ background: "rgba(255,140,0,0.1)", color: "#ff8c00", border: "1px solid rgba(255,140,0,0.3)", fontSize: 10, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 2 }}>▲ {highCount} HIGH</span>}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {vulns.slice(0, 8).map((v, i) => {
+                {vulns.slice(0, 10).map((v, i) => {
                   const vc = RISK_CONFIG[v.severity?.toLowerCase()] || RISK_CONFIG.low;
                   return (
-                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8,
-                      padding: "6px 10px", background: "rgba(255,255,255,0.02)",
-                      border: `1px solid ${vc.color}18`, borderLeft: `2px solid ${vc.color}`,
-                      borderRadius: "0 3px 3px 0" }}>
-                      <span style={{ background: vc.bg, color: vc.color,
-                        fontSize: 9, fontWeight: 700, fontFamily: "monospace",
-                        padding: "1px 5px", borderRadius: 2, flexShrink: 0 }}>{vc.label}</span>
-                      <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 11,
-                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {v.vulnerability}
-                      </span>
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 10,
+                      padding: "9px 12px", background: "rgba(255,255,255,0.02)", borderRadius: 3,
+                      border: `1px solid ${vc.color}12`, borderLeft: `3px solid ${vc.color}` }}>
+                      <Badge risk={v.severity?.toLowerCase()} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ color: "white", fontSize: 12, fontWeight: 600,
+                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {v.vulnerability}
+                        </div>
+                        {v.description && (
+                          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginTop: 1,
+                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {v.description}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ flexShrink: 0, textAlign: "right" }}>
+                        {v.module && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>{v.module}</div>}
+                        {v.cvss   && <div style={{ color: "rgba(255,140,0,0.6)", fontSize: 10, fontFamily: "monospace", fontWeight: 700, marginTop: 1 }}>CVSS {v.cvss}</div>}
+                      </div>
+                      <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, flexShrink: 0 }}>↗</span>
                     </div>
                   );
                 })}
-                {vulns.length > 8 && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>+{vulns.length - 8} more findings</div>}
+                {vulns.length > 10 && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>+{vulns.length - 10} more findings</div>}
               </div>
+            </div>
+          )}
+
+          {/* ── Rich asset context sections ───────────────────────────── */}
+
+          {/* SSL / TLS */}
+          {a.ssl_detail && (
+            <div style={{ background: "rgba(176,110,255,0.04)", border: "1px solid rgba(176,110,255,0.15)", borderRadius: 4, padding: "10px 12px" }}>
+              <div style={{ color: "#b06eff", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>SSL / TLS</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
+                {[{label:"Protocol",val:a.ssl_detail.protocol},{label:"Cipher",val:a.ssl_detail.cipher},{label:"Expiry",val:a.ssl_detail.cert_expiry},{label:"Days Left",val:a.cert_days!=null?`${a.cert_days}d`:null}].filter(r=>r.val).map((r,i)=>(
+                  <div key={i}>
+                    <div style={{color:"rgba(255,255,255,0.25)",fontSize:9,fontFamily:"monospace"}}>{r.label}</div>
+                    <div style={{color:"rgba(176,110,255,0.8)",fontSize:10,fontFamily:"monospace"}}>{r.val}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* DNS */}
+          {(a.dns_ips?.length > 0 || a.dns_records?.length > 0) && (
+            <div style={{ background: "rgba(0,229,160,0.03)", border: "1px solid rgba(0,229,160,0.12)", borderRadius: 4, padding: "10px 12px" }}>
+              <div style={{ color: "#00e5a0", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>DNS RESOLUTION</div>
+              {a.dns_ips?.length > 0 && (
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 4 }}>
+                  {a.dns_ips.slice(0, 6).map((ip, i) => (
+                    <span key={i} style={{ background: "rgba(0,229,160,0.07)", color: "rgba(0,229,160,0.7)", border: "1px solid rgba(0,229,160,0.2)", fontSize: 9, fontFamily: "monospace", padding: "1px 6px", borderRadius: 2 }}>{ip}</span>
+                  ))}
+                </div>
+              )}
+              {a.dns_records?.length > 0 && a.dns_records.slice(0, 4).map((r, i) => (
+                <div key={i} style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace" }}>{typeof r === "string" ? r : `${r.type} ${r.value}`}</div>
+              ))}
+            </div>
+          )}
+
+          {/* HTTP Analysis */}
+          {(a.http_analysis || a.exposed_paths?.length > 0) && (
+            <div style={{ background: "rgba(77,158,255,0.04)", border: "1px solid rgba(77,158,255,0.15)", borderRadius: 4, padding: "10px 12px" }}>
+              <div style={{ color: "#4d9eff", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>HTTP ANALYSIS</div>
+              {a.http_analysis?.server && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 10, fontFamily: "monospace", marginBottom: 4 }}>Server: {a.http_analysis.server}</div>}
+              {a.http_analysis?.technologies?.length > 0 && (
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
+                  {a.http_analysis.technologies.slice(0, 8).map((t, i) => (
+                    <span key={i} style={{ background: "rgba(77,158,255,0.08)", color: "rgba(77,158,255,0.7)", border: "1px solid rgba(77,158,255,0.2)", fontSize: 9, fontFamily: "monospace", padding: "1px 5px", borderRadius: 2 }}>{t}</span>
+                  ))}
+                </div>
+              )}
+              {a.exposed_paths?.length > 0 && (
+                <div>
+                  <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", marginBottom: 3 }}>EXPOSED PATHS ({a.exposed_paths.length})</div>
+                  {a.exposed_paths.slice(0, 5).map((p, i) => (
+                    <div key={i} style={{ color: "rgba(255,140,0,0.7)", fontSize: 10, fontFamily: "monospace" }}>{p}</div>
+                  ))}
+                  {a.exposed_paths.length > 5 && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>+{a.exposed_paths.length - 5} more</div>}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* API Endpoints */}
+          {a.api_endpoints?.length > 0 && (
+            <div style={{ background: "rgba(0,229,160,0.03)", border: "1px solid rgba(0,229,160,0.12)", borderRadius: 4, padding: "10px 12px" }}>
+              <div style={{ color: "#00e5a0", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>API ENDPOINTS ({a.api_endpoints.length})</div>
+              {a.api_endpoints.slice(0, 6).map((ep, i) => (
+                <div key={i} style={{ color: "rgba(255,255,255,0.4)", fontSize: 10, fontFamily: "monospace", marginBottom: 2 }}>{ep}</div>
+              ))}
+              {a.api_endpoints.length > 6 && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>+{a.api_endpoints.length - 6} more</div>}
+            </div>
+          )}
+
+          {/* JS Secrets */}
+          {a.js_secrets?.length > 0 && (
+            <div style={{ background: "rgba(255,59,59,0.04)", border: "1px solid rgba(255,59,59,0.18)", borderRadius: 4, padding: "10px 12px" }}>
+              <div style={{ color: "#ff3b3b", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>JS SECRETS ({a.js_secrets.length})</div>
+              {a.js_secrets.slice(0, 5).map((s, i) => (
+                <div key={i} style={{ color: "rgba(255,100,100,0.7)", fontSize: 10, fontFamily: "monospace", marginBottom: 2 }}>{typeof s === "string" ? s : (s.type || s.key || JSON.stringify(s))}</div>
+              ))}
+            </div>
+          )}
+
+          {/* Cloud Data */}
+          {a.cloud_data && Object.keys(a.cloud_data).length > 0 && (
+            <div style={{ background: "rgba(245,197,24,0.03)", border: "1px solid rgba(245,197,24,0.15)", borderRadius: 4, padding: "10px 12px" }}>
+              <div style={{ color: "#f5c518", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>CLOUD EXPOSURE</div>
+              {Object.entries(a.cloud_data).slice(0, 4).map(([k, v], i) => (
+                <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
+                  <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", minWidth: 80 }}>{k}</span>
+                  <span style={{ color: "rgba(245,197,24,0.7)", fontSize: 10, fontFamily: "monospace" }}>{typeof v === "object" ? JSON.stringify(v) : String(v)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Supply Chain */}
+          {a.supply_chain && Object.keys(a.supply_chain).length > 0 && (
+            <div style={{ background: "rgba(255,140,0,0.03)", border: "1px solid rgba(255,140,0,0.15)", borderRadius: 4, padding: "10px 12px" }}>
+              <div style={{ color: "#ff8c00", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>SUPPLY CHAIN RISK</div>
+              {Object.entries(a.supply_chain).slice(0, 4).map(([k, v], i) => (
+                <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
+                  <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", minWidth: 90 }}>{k.replace(/_/g, " ")}</span>
+                  <span style={{ color: "rgba(255,140,0,0.7)", fontSize: 10, fontFamily: "monospace" }}>{typeof v === "object" ? JSON.stringify(v) : String(v)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Social Engineering */}
+          {a.social_eng && Object.keys(a.social_eng).length > 0 && (
+            <div style={{ background: "rgba(255,59,59,0.03)", border: "1px solid rgba(255,59,59,0.12)", borderRadius: 4, padding: "10px 12px" }}>
+              <div style={{ color: "#ff3b3b", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>SOCIAL ENGINEERING EXPOSURE</div>
+              {Object.entries(a.social_eng).slice(0, 4).map(([k, v], i) => (
+                <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
+                  <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", minWidth: 90 }}>{k.replace(/_/g, " ")}</span>
+                  <span style={{ color: "rgba(255,100,100,0.7)", fontSize: 10, fontFamily: "monospace" }}>{typeof v === "object" ? JSON.stringify(v) : String(v)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* WHOIS */}
+          {a.whois_full && Object.keys(a.whois_full).length > 0 && (
+            <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, padding: "10px 12px" }}>
+              <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>WHOIS</div>
+              {Object.entries(a.whois_full).filter(([,v]) => v).slice(0, 6).map(([k, v], i) => (
+                <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
+                  <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", minWidth: 100 }}>{k.replace(/_/g, " ")}</span>
+                  <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>{String(v)}</span>
+                </div>
+              ))}
             </div>
           )}
 

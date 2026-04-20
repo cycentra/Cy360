@@ -1,8 +1,62 @@
-## v1.0.231 -- 2026-04-20
+## v1.0.232 -- 2026-04-20
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.232 -- 2026-04-20
+
+### New Features
+
+  - **Confidence Score + Automated State Transition Logic for ASM Findings**: each finding
+    in the Findings drawer now shows a visual confidence bar (0–100) with threshold markers
+    at 75 and 90. Confidence is computed per finding as a function of severity
+    (Critical=95, High=80, Medium=55, Low=30) adjusted by risk_score (±7.5 pts). When a
+    transition is algorithmically triggered the drawer shows an "AUTO-STATUS SUGGESTION"
+    banner with a one-click Apply button. Auto-apply generates a mandatory audit-trail
+    comment automatically so the backend requirement is satisfied.
+
+  - **State Transition Matrix**:
+
+    | From          | To            | Trigger Condition                               | Method      |
+    |---------------|---------------|-------------------------------------------------|-------------|
+    | open          | investigating | confidence ≥ 75  OR  cvss ≥ 7.0  OR  epss ≥ 60% | Automated   |
+    | open          | investigating | confidence ≥ 90 (Critical severity)             | Automated   |
+    | open          | in_review     | analyst decision with audit comment             | Manual only |
+    | open          | resolved      | analyst decision with audit comment             | Manual only |
+    | open          | false_positive| analyst decision with audit comment             | Manual only |
+    | investigating | in_review     | cvss ≥ 9.0  OR  epss ≥ 75%  OR  risk_score ≥ 8 | Automated   |
+    | investigating | resolved      | analyst closure with audit comment              | Manual only |
+    | investigating | false_positive| analyst reclassification with audit comment     | Manual only |
+    | in_review     | resolved      | analyst closure with audit comment              | Manual only |
+    | in_review     | false_positive| analyst reclassification with audit comment     | Manual only |
+    | in_review     | investigating | re-open for further investigation               | Manual only |
+    | resolved      | investigating | resurfaced — re-engage investigation            | Manual only |
+    | false_positive| investigating | reclassification after context review           | Manual only |
+
+  - **findingStatuses format fix**: status store now correctly handles full `{status, audit_log}`
+    objects returned by `/api/asm/statuses`; audit trail is rendered inline in the drawer.
+
+  - **Inline Audit Trail in FindingDrawer**: the status history (who moved it, when, with
+    which comment) is now rendered inside the drawer in reverse-chronological order with
+    colour-coded from→to state labels.
+
+  - **Backend `/api/asm/auto-status` route** (POST, auth required): accepts a JSON array of
+    findings with severity/cvss/epss_pct/risk_score/current_status and returns a suggestions
+    array with the triggered transition target and reason string. Read-only — does not apply
+    transitions. Mirrors the frontend `computeAutoStatus()` logic exactly.
+
+  - **AssetDrawer high-depth schema**: vulnerability list in the Asset detail panel now uses
+    the exact same row layout as the Dashboard "Critical & High Vulnerabilities" widget
+    (severity-coloured left border, Badge | title+description | module+CVSS | ↗). Rich data
+    sections added: SSL/TLS, DNS resolution, HTTP analysis, API endpoints, JS secrets, cloud
+    buckets, supply chain risk, social engineering exposure, and WHOIS.
+
+  - **Extended Asset Context in FindingDrawer**: when a parent asset has http_analysis,
+    api_endpoints, js_secrets, or ssl_detail the FindingDrawer now surfaces that data inline
+    under an "Asset Context" block — scoped to fields relevant to the finding's module.
 
 ---
 
