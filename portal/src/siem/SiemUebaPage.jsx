@@ -7,6 +7,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { siemApi, siemFetch } from "./siemApi";
 import { SiemEngineStatus } from "./SiemEngineStatus";
+import { STATUS_CONFIG, STATUS_TRANSITIONS } from "../core/constants.js";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -44,6 +45,14 @@ const FILTER_TABS = [
   { id: "system",      label: "System",          icon: "🖥️" },
   { id: "top20",       label: "Top 20 Activity", icon: "📊"  },
 ];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Stable ID for a UEBA anomaly — used as storage key for statuses & audit log */
+function makeAnomalyId(a) {
+  const raw = `${a.username || ""}_${a.anomaly_type || ""}_${a.detected_at || ""}`;
+  return raw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
@@ -99,13 +108,54 @@ function AnomalyBadge({ active, total }) {
 }
 
 // ── Anomaly detail card with investigation context ────────────────────────────
-function AnomalyCard({ a, integrations }) {
+/**
+ * anomalyStatus: { status, audit_log } from parent-managed state
+ * onStatusChange(anomalyId, newStatus): callback to update parent
+ */
+function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
   const [expanded,     setExpanded]     = useState(false);
   const [escalating,   setEscalating]   = useState(false);
   const [escalated,    setEscalated]    = useState(null);  // { case_id, case_url }
   const [escalateErr,  setEscalateErr]  = useState(null);
+  // Status lifecycle (inline in expanded panel)
+  const [txTarget,  setTxTarget]  = useState(null);
+  const [txComment, setTxComment] = useState("");
+  const [txErr,     setTxErr]     = useState("");
+  const [txBusy,    setTxBusy]    = useState(false);
 
-  const color = ANOMALY_COLORS[a.anomaly_type] || "#888";
+  const color      = ANOMALY_COLORS[a.anomaly_type] || "#888";
+  const anomalyId  = makeAnomalyId(a);
+  const curStat    = anomalyStatus?.status || "open";
+  const targets    = STATUS_TRANSITIONS[curStat] || [];
+  const statCfg    = STATUS_CONFIG[curStat] || STATUS_CONFIG.open;
+
+  // Already has a ticket (auto-raised by engine OR raised this session)
+  const hasTicket  = a.iris_case_id || (escalated?.case_id);
+  const ticketId   = a.iris_case_id || escalated?.case_id;
+  const ticketUrl  = a.iris_case_url || escalated?.case_url;
+
+  const startTx  = (t) => { setTxTarget(t); setTxComment(""); setTxErr(""); };
+  const cancelTx = () => setTxTarget(null);
+
+  const confirmTx = async () => {
+    if (!txComment.trim()) { setTxErr("A comment is required."); return; }
+    setTxBusy(true);
+    try {
+      const r = await fetch(`/api/siem/ueba/anomaly/${encodeURIComponent(anomalyId)}/status`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to_status: txTarget, comment: txComment }),
+      });
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        setTxErr(b.error || `HTTP ${r.status}`);
+      } else {
+        onStatusChange?.(anomalyId, txTarget);
+        setTxTarget(null);
+      }
+    } catch { setTxErr("Network error."); }
+    setTxBusy(false);
+  };
 
   async function handleEscalate(e) {
     e.stopPropagation();
@@ -286,8 +336,77 @@ function AnomalyCard({ a, integrations }) {
             </div>
           )}
 
-          {/* Action buttons */}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {/* ── Status Lifecycle section ────────────────────────────── */}
+          <div style={{ background: "rgba(255,255,255,0.025)",
+            border: "1px solid rgba(255,255,255,0.08)", borderRadius: 4,
+            padding: "12px 14px" }}>
+            <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+              letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 8 }}>
+              Status Lifecycle
+            </div>
+            {/* Current active state */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: txTarget ? 10 : (targets.length > 0 ? 8 : 0) }}>
+              <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>Current:</span>
+              <span style={{ background: `${statCfg.color}18`, color: statCfg.color,
+                border: `1px solid ${statCfg.color}50`, fontSize: 11, fontWeight: 700,
+                fontFamily: "monospace", padding: "3px 10px", borderRadius: 3 }}>
+                {statCfg.label}
+              </span>
+            </div>
+            {/* Inline transition form */}
+            {txTarget ? (
+              <div>
+                <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 10,
+                  fontFamily: "monospace", marginBottom: 6 }}>
+                  Transitioning to:{" "}
+                  <span style={{ color: STATUS_CONFIG[txTarget]?.color || "#888", fontWeight: 700 }}>
+                    {STATUS_CONFIG[txTarget]?.label || txTarget}
+                  </span>
+                </div>
+                <textarea value={txComment} onChange={e => setTxComment(e.target.value)}
+                  placeholder="Reason for this status change (required)…"
+                  rows={2}
+                  style={{ width: "100%", boxSizing: "border-box",
+                    background: "rgba(255,255,255,0.03)",
+                    border: `1px solid ${txErr ? "#ff3b3b" : "rgba(255,255,255,0.1)"}`,
+                    borderRadius: 3, color: "rgba(255,255,255,0.8)", fontSize: 11,
+                    fontFamily: "monospace", padding: "6px 8px", resize: "vertical" }} />
+                {txErr && <div style={{ color: "#ff6464", fontSize: 10,
+                  fontFamily: "monospace", marginTop: 3 }}>{txErr}</div>}
+                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                  <button onClick={cancelTx} style={{ background: "none",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    color: "rgba(255,255,255,0.4)", padding: "4px 10px", borderRadius: 3,
+                    fontFamily: "monospace", fontSize: 10, cursor: "pointer" }}>Cancel</button>
+                  <button onClick={confirmTx} disabled={txBusy} style={{
+                    background: `${STATUS_CONFIG[txTarget]?.color || "#888"}20`,
+                    border: `1px solid ${STATUS_CONFIG[txTarget]?.color || "#888"}50`,
+                    color: STATUS_CONFIG[txTarget]?.color || "#888",
+                    padding: "4px 12px", borderRadius: 3, fontFamily: "monospace",
+                    fontSize: 11, fontWeight: 700, cursor: txBusy ? "wait" : "pointer",
+                  }}>{txBusy ? "Saving…" : "Confirm"}</button>
+                </div>
+              </div>
+            ) : (
+              targets.length > 0 && (
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                  {targets.map(t => {
+                    const tc = STATUS_CONFIG[t] || { color: "#888", label: t };
+                    return (
+                      <button key={t} onClick={() => startTx(t)} style={{
+                        background: `${tc.color}12`, border: `1px solid ${tc.color}40`,
+                        color: tc.color, fontSize: 9, fontFamily: "monospace", fontWeight: 700,
+                        padding: "3px 8px", borderRadius: 3, cursor: "pointer",
+                      }}>→ {tc.label}</button>
+                    );
+                  })}
+                </div>
+              )
+            )}
+          </div>
+
+          {/* ── CyIRIS Ticket indicator ────────────────────────────────── */}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             {/* Wazuh deep-link */}
             {wazuhLink && (
               <a href={wazuhLink} target="_blank" rel="noopener noreferrer"
@@ -300,11 +419,41 @@ function AnomalyCard({ a, integrations }) {
               </a>
             )}
 
-            {/* IRIS escalation */}
-            {integrations?.iris_enabled && !escalated && (
-              <button
-                onClick={handleEscalate}
-                disabled={escalating}
+            {/* SUCCESS — ticket already exists */}
+            {hasTicket && (
+              <a href={ticketUrl} target="_blank" rel="noopener noreferrer"
+                style={{ display: "inline-flex", alignItems: "center", gap: 5,
+                  background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.3)",
+                  color: "#00e5a0", fontSize: 11, fontFamily: "monospace",
+                  padding: "5px 12px", borderRadius: 3, textDecoration: "none" }}>
+                ✓ IRIS Case #{ticketId} ↗
+              </a>
+            )}
+
+            {/* FAILED — auto-raise attempt failed */}
+            {!hasTicket && escalateErr && (
+              <>
+                <span style={{ background: "rgba(255,59,59,0.1)", border: "1px solid rgba(255,59,59,0.3)",
+                  color: "#ff6b6b", fontSize: 10, fontFamily: "monospace",
+                  padding: "4px 10px", borderRadius: 3 }}>
+                  ⚠ Auto-raise failed
+                </span>
+                {integrations?.iris_enabled && (
+                  <button onClick={handleEscalate} disabled={escalating} style={{
+                    display: "inline-flex", alignItems: "center", gap: 5,
+                    background: "rgba(255,140,0,0.1)", border: "1px solid rgba(255,140,0,0.35)",
+                    color: "#ff8c00", fontSize: 11, fontFamily: "monospace",
+                    padding: "5px 12px", borderRadius: 3,
+                    cursor: escalating ? "wait" : "pointer" }}>
+                    {escalating ? "⏳ Raising…" : "🎫 Manual Ticket"}
+                  </button>
+                )}
+              </>
+            )}
+
+            {/* NONE — no ticket yet, ready to escalate */}
+            {!hasTicket && !escalateErr && integrations?.iris_enabled && (
+              <button onClick={handleEscalate} disabled={escalating}
                 style={{ display: "inline-flex", alignItems: "center", gap: 5,
                   background: escalating ? "rgba(255,255,255,0.03)" : "rgba(255,59,59,0.08)",
                   border: `1px solid ${escalating ? "rgba(255,255,255,0.1)" : "rgba(255,59,59,0.3)"}`,
@@ -314,32 +463,14 @@ function AnomalyCard({ a, integrations }) {
                 {escalating ? "⏳ Escalating…" : "🚨 Escalate to IRIS"}
               </button>
             )}
-
-            {/* Success state */}
-            {escalated && (
-              <a href={escalated.case_url} target="_blank" rel="noopener noreferrer"
-                style={{ display: "inline-flex", alignItems: "center", gap: 5,
-                  background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.3)",
-                  color: "#00e5a0", fontSize: 11, fontFamily: "monospace",
-                  padding: "5px 12px", borderRadius: 3, textDecoration: "none" }}>
-                ✓ IRIS Case #{escalated.case_id} — Open
-              </a>
-            )}
           </div>
-
-          {/* Error */}
-          {escalateErr && (
-            <div style={{ color: "#ff6b6b", fontSize: 11, fontFamily: "monospace" }}>
-              ✕ {escalateErr}
-            </div>
-          )}
         </div>
       )}
     </div>
   );
 }
 
-function UserProfile({ username, integrations }) {
+function UserProfile({ username, integrations, anomalyStatuses, onStatusChange }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -459,7 +590,9 @@ function UserProfile({ username, integrations }) {
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {anomalies.slice(0, 50).map(a => (
-              <AnomalyCard key={a.id} a={a} integrations={integrations} />
+              <AnomalyCard key={a.id} a={a} integrations={integrations}
+                anomalyStatus={anomalyStatuses?.[makeAnomalyId(a)]}
+                onStatusChange={onStatusChange} />
             ))}
           </div>
         )}
@@ -601,12 +734,13 @@ function StatBar({ users }) {
 
 // ── Main page ──────────────────────────────────────────────────────────────────
 export function SiemUebaPage() {
-  const [users,        setUsers]        = useState([]);
-  const [loading,      setLoading]      = useState(true);
-  const [search,       setSearch]       = useState("");
-  const [selected,     setSelected]     = useState(null);
-  const [activeTab,    setActiveTab]    = useState("all");
-  const [integrations, setIntegrations] = useState(null);
+  const [users,           setUsers]           = useState([]);
+  const [loading,         setLoading]         = useState(true);
+  const [search,          setSearch]          = useState("");
+  const [selected,        setSelected]        = useState(null);
+  const [activeTab,       setActiveTab]       = useState("all");
+  const [integrations,    setIntegrations]    = useState(null);
+  const [anomalyStatuses, setAnomalyStatuses] = useState({});
 
   useEffect(() => {
     siemFetch(siemApi.getUebaUsers()).then(data => {
@@ -618,7 +752,18 @@ export function SiemUebaPage() {
     siemFetch(siemApi.getUebaIntegrations()).then(data => {
       if (data && !data._offline && !data._error) setIntegrations(data);
     });
+    // Load persisted UEBA anomaly statuses
+    fetch("/api/siem/ueba/anomaly/statuses", { credentials: "include" })
+      .then(r => r.ok ? r.json() : {})
+      .then(d => setAnomalyStatuses(d))
+      .catch(() => {});
   }, []);
+
+  const handleAnomalyStatusChange = (anomalyId, newStatus) =>
+    setAnomalyStatuses(prev => ({
+      ...prev,
+      [anomalyId]: { ...(prev[anomalyId] || {}), status: newStatus },
+    }));
 
   // Apply search + tab filter, then split into groups
   const filtered = useMemo(() => {
@@ -835,7 +980,9 @@ export function SiemUebaPage() {
                     </div>
                   );
                 })()}
-                <UserProfile username={selected} integrations={integrations} />
+                <UserProfile username={selected} integrations={integrations}
+                  anomalyStatuses={anomalyStatuses}
+                  onStatusChange={handleAnomalyStatusChange} />
               </div>
             )}
           </div>

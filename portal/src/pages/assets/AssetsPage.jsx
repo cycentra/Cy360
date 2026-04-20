@@ -1,5 +1,9 @@
 /**
  * src/pages/assets/AssetsPage.jsx
+ *
+ * Asset Inventory table with right-side slide-out detail panel.
+ * - Row shows single active-state badge (no inline transition buttons)
+ * - Clicking a row opens AssetDrawer with full detail + status lifecycle
  */
 
 import { useState, useEffect } from 'react';
@@ -11,66 +15,257 @@ function Badge({ risk }) {
   return <span style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.color}40`, fontSize: "10px", fontWeight: 700, letterSpacing: "1.5px", fontFamily: "monospace", padding: "2px 8px", borderRadius: "2px" }}>{cfg.label}</span>;
 }
 
+// Single active-state indicator (dot + label, no dropdown)
 function StatusBadge({ status }) {
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.open;
   return (
-    <span style={{ color: cfg.color, fontSize: "10px", fontWeight: 700, letterSpacing: "1.5px", fontFamily: "monospace", display: "flex", alignItems: "center", gap: 5 }}>
-      <span style={{ width: 6, height: 6, borderRadius: "50%", background: cfg.color, display: "inline-block", boxShadow: `0 0 6px ${cfg.color}` }}/>
+    <span style={{ color: cfg.color, fontSize: "10px", fontWeight: 700, letterSpacing: "1.5px",
+      fontFamily: "monospace", display: "flex", alignItems: "center", gap: 5 }}>
+      <span style={{ width: 6, height: 6, borderRadius: "50%", background: cfg.color,
+        display: "inline-block", boxShadow: `0 0 6px ${cfg.color}` }}/>
       {cfg.label}
     </span>
   );
 }
 
-function AssetTransitionModal({ show, assetHost, toStatus, comment, onChange, onCancel, onConfirm, error, busy }) {
-  if (!show) return null;
-  const cfg = STATUS_CONFIG[toStatus] || { color: "#888", label: toStatus };
-  return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 4000, background: "rgba(0,0,0,0.7)",
-      display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ background: "#0d1117", border: `1px solid ${cfg.color}50`,
-        borderRadius: 6, padding: 24, width: 420, maxWidth: "95vw" }}>
-        <div style={{ color: cfg.color, fontFamily: "monospace", fontSize: 12, fontWeight: 700,
-          marginBottom: 4, letterSpacing: "1px" }}>
-          TRANSITION TO: {cfg.label}
-        </div>
-        <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginBottom: 10 }}>
-          Asset: <span style={{ color: "rgba(255,255,255,0.6)", fontFamily: "monospace" }}>{assetHost}</span>
-        </div>
-        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, marginBottom: 8 }}>
-          A comment is required for audit trail.
-        </div>
-        <textarea value={comment} onChange={e => onChange(e.target.value)}
-          placeholder="Describe the reason for this status change…"
-          rows={4}
-          style={{ width: "100%", background: "rgba(255,255,255,0.04)",
-            border: `1px solid ${error ? "#ff3b3b" : "rgba(255,255,255,0.12)"}`,
-            borderRadius: 4, color: "rgba(255,255,255,0.8)", fontSize: 12,
-            fontFamily: "monospace", padding: "8px 10px", resize: "vertical",
-            boxSizing: "border-box" }} />
-        {error && <div style={{ color: "#ff6464", fontSize: 11, fontFamily: "monospace", marginTop: 4 }}>{error}</div>}
-        <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "flex-end" }}>
-          <button onClick={onCancel} style={{ background: "none", border: "1px solid rgba(255,255,255,0.1)",
-            color: "rgba(255,255,255,0.4)", padding: "6px 14px", borderRadius: 3,
-            fontFamily: "monospace", fontSize: 11, cursor: "pointer" }}>Cancel</button>
-          <button onClick={onConfirm} disabled={busy}
-            style={{ background: `${cfg.color}20`, border: `1px solid ${cfg.color}50`,
-              color: cfg.color, padding: "6px 16px", borderRadius: 3,
-              fontFamily: "monospace", fontSize: 12, fontWeight: 700, cursor: busy ? "wait" : "pointer" }}>
-            {busy ? "Saving…" : "Confirm"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
+// ── Asset detail slide-out panel ──────────────────────────────────────────────
 
-export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
-  // Status overrides from /api/asm/statuses (keyed by asset host)
-  const [assetStatuses, setAssetStatuses] = useState({});
-  const [txModal,   setTxModal]   = useState({ show: false, assetId: null, assetHost: null, toStatus: null });
+function AssetDrawer({ asset, status, onClose, onStatusChange }) {
+  const [txTarget,  setTxTarget]  = useState(null);
   const [txComment, setTxComment] = useState("");
   const [txErr,     setTxErr]     = useState("");
   const [txBusy,    setTxBusy]    = useState(false);
+
+  if (!asset) return null;
+
+  const a        = asset;
+  const riskCfg  = RISK_CONFIG[a.risk] || RISK_CONFIG.low;
+  const curStat  = status || a.status || "open";
+  const targets  = STATUS_TRANSITIONS[curStat] || [];
+  const statCfg  = STATUS_CONFIG[curStat] || STATUS_CONFIG.open;
+  const assetId  = a.host;
+
+  const startTx  = (t) => { setTxTarget(t); setTxComment(""); setTxErr(""); };
+  const cancelTx = () => setTxTarget(null);
+
+  const confirmTx = async () => {
+    if (!txComment.trim()) { setTxErr("A comment is required."); return; }
+    setTxBusy(true);
+    try {
+      const r = await fetch(`/api/asm/assets/${encodeURIComponent(assetId)}/status`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to_status: txTarget, comment: txComment }),
+      });
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        setTxErr(b.error || `HTTP ${r.status}`);
+      } else {
+        onStatusChange(assetId, txTarget);
+        setTxTarget(null);
+      }
+    } catch { setTxErr("Network error."); }
+    setTxBusy(false);
+  };
+
+  const vulns     = a.vulnerabilities || [];
+  const critCount = vulns.filter(v => v.severity === "Critical").length;
+  const highCount = vulns.filter(v => v.severity === "High").length;
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div onClick={onClose} style={{
+        position: "fixed", inset: 0, zIndex: 3000, background: "rgba(0,0,0,0.55)",
+      }} />
+
+      {/* Panel */}
+      <div style={{
+        position: "fixed", top: 0, right: 0, bottom: 0, zIndex: 3001,
+        width: 480, background: "#0a0e1a",
+        borderLeft: `2px solid ${riskCfg.color}40`,
+        display: "flex", flexDirection: "column",
+        boxShadow: `-16px 0 40px rgba(0,0,0,0.6)`,
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: "18px 20px 14px",
+          borderBottom: `1px solid ${riskCfg.color}25`,
+          background: `${riskCfg.color}06`,
+          flexShrink: 0,
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div style={{ flex: 1, minWidth: 0, marginRight: 12 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+                <Badge risk={a.risk} />
+                <StatusBadge status={curStat} />
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.9)", fontSize: 15, fontWeight: 700, fontFamily: "monospace" }}>
+                {a.host}
+              </div>
+              {a.owner && <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginTop: 2 }}>{a.owner}</div>}
+            </div>
+            <button onClick={onClose} style={{
+              background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
+              color: "rgba(255,255,255,0.5)", width: 28, height: 28, borderRadius: 4,
+              cursor: "pointer", fontSize: 14, flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>✕</button>
+          </div>
+        </div>
+
+        {/* Scrollable body */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "18px 20px", display: "flex", flexDirection: "column", gap: 18 }}>
+
+          {/* Core details */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {[
+              { label: "IP ADDRESS",   val: a.ip },
+              { label: "TYPE",         val: a.type },
+              { label: "PORTS",        val: (a.ports || []).map(p => `:${p}`).join("  ") || "—" },
+              { label: "SUBDOMAINS",   val: a.subdomains?.length > 0 ? `${a.subdomains.length} discovered` : "—" },
+            ].map(({ label, val }) => val && (
+              <div key={label}>
+                <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+                  letterSpacing: "1px", marginBottom: 3 }}>{label}</div>
+                <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 12, fontFamily: "monospace" }}>{val}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Subdomains list */}
+          {a.subdomains?.length > 0 && (
+            <div>
+              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+                letterSpacing: "1px", marginBottom: 6 }}>SUBDOMAINS</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                {a.subdomains.slice(0, 20).map((s, i) => (
+                  <span key={i} style={{ background: "rgba(0,229,160,0.06)", color: "rgba(0,229,160,0.6)",
+                    border: "1px solid rgba(0,229,160,0.15)", fontSize: 10, fontFamily: "monospace",
+                    padding: "2px 8px", borderRadius: 2 }}>{s}</span>
+                ))}
+                {a.subdomains.length > 20 && <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>+{a.subdomains.length - 20} more</span>}
+              </div>
+            </div>
+          )}
+
+          {/* Vulnerabilities summary */}
+          {vulns.length > 0 && (
+            <div>
+              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+                letterSpacing: "1px", marginBottom: 8 }}>FINDINGS ({vulns.length})</div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                {critCount > 0 && <span style={{ background: "rgba(255,59,59,0.1)", color: "#ff3b3b", border: "1px solid rgba(255,59,59,0.3)", fontSize: 10, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 2 }}>▲ {critCount} CRITICAL</span>}
+                {highCount > 0 && <span style={{ background: "rgba(255,140,0,0.1)", color: "#ff8c00", border: "1px solid rgba(255,140,0,0.3)", fontSize: 10, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 2 }}>▲ {highCount} HIGH</span>}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {vulns.slice(0, 8).map((v, i) => {
+                  const vc = RISK_CONFIG[v.severity?.toLowerCase()] || RISK_CONFIG.low;
+                  return (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8,
+                      padding: "6px 10px", background: "rgba(255,255,255,0.02)",
+                      border: `1px solid ${vc.color}18`, borderLeft: `2px solid ${vc.color}`,
+                      borderRadius: "0 3px 3px 0" }}>
+                      <span style={{ background: vc.bg, color: vc.color,
+                        fontSize: 9, fontWeight: 700, fontFamily: "monospace",
+                        padding: "1px 5px", borderRadius: 2, flexShrink: 0 }}>{vc.label}</span>
+                      <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 11,
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {v.vulnerability}
+                      </span>
+                    </div>
+                  );
+                })}
+                {vulns.length > 8 && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>+{vulns.length - 8} more findings</div>}
+              </div>
+            </div>
+          )}
+
+          {/* ── Status lifecycle section ────────────────────────────────── */}
+          <div style={{
+            background: "rgba(255,255,255,0.025)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            borderRadius: 5, padding: "14px 16px",
+          }}>
+            <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace",
+              letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 10 }}>
+              Status Lifecycle
+            </div>
+
+            {/* Current active state */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>Current:</span>
+              <span style={{
+                background: `${statCfg.color}18`, color: statCfg.color,
+                border: `1px solid ${statCfg.color}50`, fontSize: 11, fontWeight: 700,
+                fontFamily: "monospace", padding: "3px 10px", borderRadius: 3,
+              }}>{statCfg.label}</span>
+            </div>
+
+            {/* Inline transition */}
+            {txTarget ? (
+              <div>
+                <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 10, fontFamily: "monospace", marginBottom: 6 }}>
+                  Transitioning to:{" "}
+                  <span style={{ color: STATUS_CONFIG[txTarget]?.color || "#888", fontWeight: 700 }}>
+                    {STATUS_CONFIG[txTarget]?.label || txTarget}
+                  </span>
+                </div>
+                <textarea value={txComment} onChange={e => setTxComment(e.target.value)}
+                  placeholder="Reason for this status change (required for audit trail)…"
+                  rows={3}
+                  style={{
+                    width: "100%", boxSizing: "border-box",
+                    background: "rgba(255,255,255,0.03)",
+                    border: `1px solid ${txErr ? "#ff3b3b" : "rgba(255,255,255,0.1)"}`,
+                    borderRadius: 3, color: "rgba(255,255,255,0.8)", fontSize: 12,
+                    fontFamily: "monospace", padding: "8px 10px", resize: "vertical",
+                  }} />
+                {txErr && <div style={{ color: "#ff6464", fontSize: 11, fontFamily: "monospace", marginTop: 4 }}>{txErr}</div>}
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button onClick={cancelTx} style={{ background: "none", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", padding: "5px 12px", borderRadius: 3, fontFamily: "monospace", fontSize: 11, cursor: "pointer" }}>Cancel</button>
+                  <button onClick={confirmTx} disabled={txBusy} style={{
+                    background: `${STATUS_CONFIG[txTarget]?.color || "#888"}20`,
+                    border: `1px solid ${STATUS_CONFIG[txTarget]?.color || "#888"}50`,
+                    color: STATUS_CONFIG[txTarget]?.color || "#888",
+                    padding: "5px 14px", borderRadius: 3, fontFamily: "monospace",
+                    fontSize: 12, fontWeight: 700, cursor: txBusy ? "wait" : "pointer",
+                  }}>{txBusy ? "Saving…" : "Confirm"}</button>
+                </div>
+              </div>
+            ) : (
+              targets.length > 0 && (
+                <div>
+                  <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 6 }}>TRANSITION TO</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {targets.map(t => {
+                      const tc = STATUS_CONFIG[t] || { color: "#888", label: t };
+                      return (
+                        <button key={t} onClick={() => startTx(t)} style={{
+                          background: `${tc.color}12`, border: `1px solid ${tc.color}40`,
+                          color: tc.color, fontSize: 10, fontFamily: "monospace", fontWeight: 700,
+                          padding: "4px 10px", borderRadius: 3, cursor: "pointer",
+                        }}>→ {tc.label}</button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )
+            )}
+          </div>
+
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+
+export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
+  // Status overrides from /api/asm/statuses
+  const [assetStatuses, setAssetStatuses] = useState({});
+  const [activeAsset,   setActiveAsset]   = useState(null);
 
   useEffect(() => {
     fetch("/api/asm/statuses", { credentials: "include" })
@@ -79,50 +274,23 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
       .catch(() => {});
   }, []);
 
-  const openTransition = (assetId, assetHost, toStatus, e) => {
-    e.stopPropagation();
-    setTxModal({ show: true, assetId, assetHost, toStatus });
-    setTxComment("");
-    setTxErr("");
-  };
-  const closeTransition = () => setTxModal({ show: false, assetId: null, assetHost: null, toStatus: null });
+  const handleStatusChange = (assetId, newStatus) =>
+    setAssetStatuses(prev => ({ ...prev, [assetId]: newStatus }));
 
-  const confirmTransition = async () => {
-    if (!txComment.trim()) { setTxErr("A comment is required."); return; }
-    setTxBusy(true);
-    try {
-      const r = await fetch(`/api/asm/assets/${encodeURIComponent(txModal.assetId)}/status`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to_status: txModal.toStatus, comment: txComment }),
-      });
-      if (!r.ok) {
-        const b = await r.json().catch(() => ({}));
-        setTxErr(b.error || `HTTP ${r.status}`);
-      } else {
-        setAssetStatuses(prev => ({ ...prev, [txModal.assetId]: txModal.toStatus }));
-        closeTransition();
-      }
-    } catch {
-      setTxErr("Network error.");
-    }
-    setTxBusy(false);
-  };
+  const openDrawer  = (a, e) => { e.stopPropagation(); setActiveAsset(a); if (setSelectedAsset) setSelectedAsset(a); };
+  const closeDrawer = () => setActiveAsset(null);
 
   return (
     <div>
-      <AssetTransitionModal
-        show={txModal.show}
-        assetHost={txModal.assetHost}
-        toStatus={txModal.toStatus}
-        comment={txComment}
-        onChange={setTxComment}
-        onCancel={closeTransition}
-        onConfirm={confirmTransition}
-        error={txErr}
-        busy={txBusy}
-      />
+      {/* Slide-out drawer */}
+      {activeAsset && (
+        <AssetDrawer
+          asset={activeAsset}
+          status={assetStatuses[activeAsset.host]}
+          onClose={closeDrawer}
+          onStatusChange={handleStatusChange}
+        />
+      )}
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div>
@@ -139,8 +307,9 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
       <WorldMapWidget assets={assets} />
 
       <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, overflow: "hidden" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 120px 160px 140px 90px 150px", padding: "10px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.3)", fontSize: 10, letterSpacing: "1.2px", textTransform: "uppercase", fontFamily: "monospace" }}>
-          <span>Risk</span><span>Host</span><span>IP</span><span>Type</span><span>Ports</span><span>Findings</span><span>Status</span>
+        {/* Column header — mirrors DashboardPage Critical & High layout */}
+        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 120px 160px 140px 90px 130px 28px", padding: "10px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.3)", fontSize: 10, letterSpacing: "1.2px", textTransform: "uppercase", fontFamily: "monospace" }}>
+          <span>Risk</span><span>Host</span><span>IP</span><span>Type</span><span>Ports</span><span>Findings</span><span>Status</span><span></span>
         </div>
 
         {assets.length === 0 && (
@@ -150,13 +319,20 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
         )}
 
         {assets.map((a, i) => {
-          const assetId  = a.host;
-          const curStat  = assetStatuses[assetId] || a.status || "open";
-          const targets  = STATUS_TRANSITIONS[curStat] || [];
-          const statCfg  = STATUS_CONFIG[curStat] || STATUS_CONFIG.open;
+          const curStat  = assetStatuses[a.host] || a.status || "open";
+          const isActive = activeAsset?.host === a.host;
           return (
-            <div key={a.id} className="asset-row" onClick={() => setSelectedAsset(a)}
-              style={{ display: "grid", gridTemplateColumns: "110px 1fr 120px 160px 140px 90px 150px", padding: "13px 20px", borderBottom: "1px solid rgba(255,255,255,0.04)", background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)", alignItems: "center" }}>
+            <div key={a.id}
+              onClick={(e) => openDrawer(a, e)}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "110px 1fr 120px 160px 140px 90px 130px 28px",
+                padding: "13px 20px", gap: 8,
+                borderBottom: "1px solid rgba(255,255,255,0.04)",
+                background: isActive ? "rgba(255,255,255,0.04)" : i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
+                alignItems: "center", cursor: "pointer",
+                transition: "background 0.1s",
+              }}>
               <span><Badge risk={a.risk}/></span>
               <div>
                 <div style={{ color: "white", fontFamily: "monospace", fontSize: 12 }}>{a.host}</div>
@@ -173,32 +349,10 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
               <span style={{ color: (a.vulnerabilities?.length || 0) > 0 ? "#ff3b3b" : "rgba(255,255,255,0.25)", fontFamily: "monospace", fontSize: 12, fontWeight: (a.vulnerabilities?.length || 0) > 0 ? 700 : 400 }}>
                 {(a.vulnerabilities?.length || 0) > 0 ? `▲ ${a.vulnerabilities.length}` : "—"}
               </span>
-              {/* Clickable status cell with transition buttons */}
-              <div onClick={e => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <span style={{ color: statCfg.color, fontSize: "10px", fontWeight: 700,
-                  letterSpacing: "1.5px", fontFamily: "monospace", display: "flex",
-                  alignItems: "center", gap: 5 }}>
-                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: statCfg.color,
-                    display: "inline-block", boxShadow: `0 0 6px ${statCfg.color}` }}/>
-                  {statCfg.label}
-                </span>
-                {targets.length > 0 && (
-                  <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
-                    {targets.map(t => {
-                      const tc = STATUS_CONFIG[t] || { color: "#888", label: t };
-                      return (
-                        <button key={t}
-                          onClick={e => openTransition(assetId, a.host, t, e)}
-                          style={{ background: `${tc.color}12`, border: `1px solid ${tc.color}35`,
-                            color: tc.color, fontSize: 8, fontFamily: "monospace", fontWeight: 700,
-                            padding: "1px 5px", borderRadius: 2, cursor: "pointer", whiteSpace: "nowrap" }}>
-                          → {tc.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+              {/* Single active state indicator — no inline buttons */}
+              <StatusBadge status={curStat} />
+              {/* Open-panel chevron */}
+              <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, textAlign: "center" }}>↗</span>
             </div>
           );
         })}
@@ -206,3 +360,4 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
     </div>
   );
 }
+

@@ -1,3 +1,57 @@
+## v1.0.231 -- 2026-04-20
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.231 -- 2026-04-20
+
+### New Features
+
+  - **Right-side slide-out detail panels for ASM Findings and Asset Inventory**: clicking any
+    row in Vulnerability Explorer or Asset Inventory now opens a fixed 480 px right-side
+    drawer containing the full finding/asset detail, status lifecycle controls, and (for
+    findings) the CyIRIS ticket indicator. Replaces the previous inline accordion expander
+    (Vulnerabilities) and centre-overlay transition modal (Assets).
+
+  - **Single Current Active State indicator on all list rows**: Vulnerability, Asset, and UEBA
+    Anomaly rows now show exactly one status badge — the current active state. All status
+    transition controls have been moved inside the detail panel / expanded card. No inline
+    transition button clusters remain in the table rows.
+
+  - **Three-state Ticket Status Indicator**:
+    - SUCCESS — green case link (✓ Case #N ↗) when a CyIRIS ticket exists
+    - FAILED  — red "⚠ Auto-raise failed" banner + orange "Manual Ticket" button when an
+                automated raise attempt was rejected
+    - NONE    — blue "Raise Ticket" / IRIS escalate button when no ticket exists yet
+    Applied to ASM Findings (inside `FindingDrawer`) and UEBA Anomaly cards.
+
+  - **Status lifecycle ported to UEBA Anomaly cards**: analysts can now transition anomalies
+    through `open → investigating → in_review → resolved / false_positive` directly in the
+    expanded anomaly panel, with a mandatory audit comment. Transitions are persisted in
+    `/opt/cycentra/ueba_statuses.json` via two new Flask-only routes in `siem_proxy.py`.
+
+  - **New Flask routes — UEBA Anomaly Status (siem_proxy.py)**:
+    - `GET  /api/siem/ueba/anomaly/statuses`            — bulk status map (auth required)
+    - `GET  /api/siem/ueba/anomaly/<id>/audit`          — full audit log for an anomaly
+    - `POST /api/siem/ueba/anomaly/<id>/status`         — transition with mandatory comment
+      (analyst+ role enforced; allowed transitions mirror ASM findings)
+
+### Improvements
+
+  - **Status naming synchronised across all modules**: canonical status names are `open`,
+    `investigating`, `in_review`, `held`, `resolved`, `false_positive`, `closed`. The legacy
+    alias `in-review` is retained in `STATUS_CONFIG` for backward compatibility only.
+  - **Inline transition form embedded in detail panels**: no secondary modal. Comment textarea
+    and Confirm/Cancel are inline within the slide-out drawer, reducing click depth by one
+    step and making the audit requirement immediately visible.
+  - **Manual Ticket fallback**: previously a failed auto-escalation showed only terse error
+    text. It now shows an explicit labelled "Manual Ticket" button to re-attempt the raise.
+
+---
+
 ## v1.0.230 -- 2026-04-20
 
 ### Improvements

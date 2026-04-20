@@ -14,11 +14,13 @@ RBAC:
 """
 
 import os
+import json
 import subprocess
+from datetime import datetime, timezone
 from functools import wraps
 
 import requests as _req
-from flask import Blueprint, request, Response, jsonify, session
+from flask import Blueprint, request, Response, jsonify, session, make_response
 
 SIEM_ENGINE_URL = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100")
 PROXY_TIMEOUT   = int(os.environ.get("SIEM_PROXY_TIMEOUT", "10"))
@@ -499,3 +501,96 @@ def siem_engine_restart():
         return jsonify({"status": "restarting"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── UEBA Anomaly Status — Flask-only (not proxied to engine) ──────────────────
+#
+# Anomaly IDs are constructed on the client as:
+#   slugify(username + "_" + anomaly_type + "_" + detected_at)
+# Statuses are persisted in /opt/cycentra/ueba_statuses.json
+# Schema: { "<id>": { "status": "...", "audit_log": [...] } }
+
+_UEBA_STATUSES_FILE = "/opt/cycentra/ueba_statuses.json"
+
+_UEBA_ALLOWED_TRANSITIONS = {
+    "open":           ["investigating", "in_review", "resolved", "false_positive"],
+    "investigating":  ["in_review", "resolved", "false_positive"],
+    "in_review":      ["resolved", "false_positive", "investigating"],
+    "resolved":       ["investigating"],
+    "false_positive": ["investigating"],
+}
+
+
+def _load_ueba_statuses():
+    try:
+        with open(_UEBA_STATUSES_FILE) as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def _save_ueba_statuses(data):
+    try:
+        tmp = _UEBA_STATUSES_FILE + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(data, fh)
+        os.replace(tmp, _UEBA_STATUSES_FILE)
+    except Exception:
+        pass
+
+
+@siem_bp.route("/ueba/anomaly/statuses")
+def ueba_anomaly_statuses():
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    return jsonify(_load_ueba_statuses())
+
+
+@siem_bp.route("/ueba/anomaly/<anomaly_id>/audit")
+def ueba_anomaly_audit(anomaly_id):
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    entry = _load_ueba_statuses().get(anomaly_id, {})
+    return jsonify(entry.get("audit_log", []))
+
+
+@siem_bp.route("/ueba/anomaly/<anomaly_id>/status", methods=["OPTIONS"])
+def ueba_anomaly_status_options(anomaly_id):
+    from core.helpers import add_cors_headers
+    return add_cors_headers(make_response('', 204))
+
+
+@siem_bp.route("/ueba/anomaly/<anomaly_id>/status", methods=["POST"])
+def ueba_anomaly_status_post(anomaly_id):
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
+        return jsonify({"error": "Analyst or admin role required"}), 403
+
+    body       = request.get_json() or {}
+    to_status  = body.get("to_status", "")
+    comment    = (body.get("comment") or "").strip()
+    if not comment:
+        return jsonify({"error": "Comment is required for audit trail"}), 400
+
+    data   = _load_ueba_statuses()
+    entry  = data.get(anomaly_id, {"status": "open", "audit_log": []})
+    from_status = entry.get("status", "open")
+
+    allowed = _UEBA_ALLOWED_TRANSITIONS.get(from_status, [])
+    if to_status not in allowed:
+        return jsonify({"error": f"Transition {from_status} → {to_status} not allowed"}), 400
+
+    entry["status"] = to_status
+    entry.setdefault("audit_log", []).append({
+        "action":      "status_change",
+        "from_status": from_status,
+        "to_status":   to_status,
+        "comment":     comment,
+        "actor":       session["user_email"],
+        "created_at":  datetime.now(timezone.utc).isoformat(),
+    })
+    data[anomaly_id] = entry
+    _save_ueba_statuses(data)
+    return jsonify({"status": to_status})
