@@ -475,9 +475,19 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
               {a.exposed_paths?.length > 0 && (
                 <div>
                   <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", marginBottom: 3 }}>EXPOSED PATHS ({a.exposed_paths.length})</div>
-                  {a.exposed_paths.slice(0, 5).map((p, i) => (
-                    <div key={i} style={{ color: "rgba(255,140,0,0.7)", fontSize: 10, fontFamily: "monospace" }}>{p}</div>
-                  ))}
+                  {a.exposed_paths.slice(0, 5).map((p, i) => {
+                    const pathStr = typeof p === "string" ? p : (p.path || p.url || String(p));
+                    const sev     = typeof p === "object" ? p.severity : null;
+                    const st      = typeof p === "object" ? p.status   : null;
+                    const sevCfg  = sev ? (RISK_CONFIG[sev.toLowerCase()] || null) : null;
+                    return (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                        <span style={{ color: "rgba(255,140,0,0.7)", fontSize: 10, fontFamily: "monospace", flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{pathStr}</span>
+                        {sevCfg && <span style={{ color: sevCfg.color, fontSize: 9, fontFamily: "monospace", fontWeight: 700, flexShrink: 0 }}>{sevCfg.label}</span>}
+                        {st && <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace", flexShrink: 0 }}>{st}</span>}
+                      </div>
+                    );
+                  })}
                   {a.exposed_paths.length > 5 && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>+{a.exposed_paths.length - 5} more</div>}
                 </div>
               )}
@@ -489,7 +499,9 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
             <div style={{ background: "rgba(0,229,160,0.03)", border: "1px solid rgba(0,229,160,0.12)", borderRadius: 4, padding: "10px 12px" }}>
               <div style={{ color: "#00e5a0", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>API ENDPOINTS ({a.api_endpoints.length})</div>
               {a.api_endpoints.slice(0, 6).map((ep, i) => (
-                <div key={i} style={{ color: "rgba(255,255,255,0.4)", fontSize: 10, fontFamily: "monospace", marginBottom: 2 }}>{ep}</div>
+                <div key={i} style={{ color: "rgba(255,255,255,0.4)", fontSize: 10, fontFamily: "monospace", marginBottom: 2 }}>
+                  {typeof ep === "string" ? ep : (ep.url || ep.path || ep.endpoint || String(ep))}
+                </div>
               ))}
               {a.api_endpoints.length > 6 && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>+{a.api_endpoints.length - 6} more</div>}
             </div>

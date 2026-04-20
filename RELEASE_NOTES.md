@@ -1,3 +1,37 @@
+## v1.0.237 -- 2026-04-20
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.237 -- 2026-04-20
+
+### Bug Fixes
+
+- **Asset Inventory — React error #31 on exposed paths**: `exposed_paths` entries can
+  be rich objects `{path, severity, status, url}` rather than plain strings. `AssetDrawer`
+  now extracts `p.path || p.url` for display and renders the `severity` and `status` fields
+  as inline badges alongside the path. The same type-guard fix was applied to `api_endpoints`
+  entries that may carry object forms.
+- **Findings — duplicate vulnerabilities at different severity levels**: The deduplication
+  key in `VulnerabilityPage` previously included `source`, so the same CVE/finding reported
+  by two scanners (e.g. OpenVAS Critical + Nuclei High) appeared as two rows. The key is
+  now `asset|vulnerability|module` (source dropped) and when a duplicate is encountered
+  the entry with the **higher severity** is kept.
+
+### Verification
+
+- **Automated status change logic**: Confirmed present and fully active on both pages.
+  `VulnerabilityPage` — `computeConfidence` + `computeAutoStatus` drives
+  `open → investigating` (confidence ≥ 75, CVSS ≥ 7.0, EPSS ≥ 60%) and
+  `investigating → in_review` (CVSS ≥ 9.0, EPSS ≥ 75%, risk_score ≥ 8).
+  `AssetsPage` — `computeAssetConfidence` + `computeAssetAutoStatus` mirrors the same
+  state machine keyed on risk level and critical/high vuln counts. No changes required.
+
+---
+
 ## v1.0.236 -- 2026-04-20
 
 ### Improvements
