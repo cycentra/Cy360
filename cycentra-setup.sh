@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.238 -- 2026-04-20 19:18 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.239 -- 2026-04-21 19:15 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -224,7 +224,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.238"
+_SCRIPT_VERSION="v1.0.239"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -2055,6 +2055,7 @@ server {
         proxy_set_header        X-Scheme \$scheme;
     }
     location @error401 { return 302 https://cysoc.${BASE_DOMAIN}/oauth2/sign_in?rd=https://\$host\$request_uri; }
+    # location /cymind/ is injected here by routes.py when CyMind is configured via portal
     # location /cysoar/ is injected here by routes.py when CySOAR is installed via portal
 }
 
@@ -2128,6 +2129,52 @@ server {
 # cymisp.DOMAIN server block is added by routes.py when CyMISP is installed via portal
 # cymind.DOMAIN server block is added by cymind/install.sh when CyMind is installed
 NGINXEOF
+
+    # ── CyMind nginx proxy block: inject if CYMIND_SERVER_IP is known at install time ──
+    # Set CYMIND_SERVER_IP env var before running setup.sh to wire up the /cymind/ proxy
+    # automatically.  Otherwise routes.py handles it when admin configures via portal.
+    if [[ -n "${CYMIND_SERVER_IP:-}" ]]; then
+        _cymind_upstream="http://${CYMIND_SERVER_IP}"
+        python3 - "$SSL_CONF" "$_cymind_upstream" << 'CYMIND_INJECT_PY'
+import re, sys
+conf_path, upstream = sys.argv[1], sys.argv[2].rstrip("/") + "/"
+ssl_extra = "        proxy_ssl_verify    off;\n" if upstream.startswith("https") else ""
+block = (
+    "    # CyMind chat proxy — same-origin iframe, no mixed-content\n"
+    "    location /cymind/ {\n"
+    f"        proxy_pass         {upstream};\n"
+    "        proxy_http_version 1.1;\n"
+    f"{ssl_extra}"
+    "        proxy_set_header   Host              $http_host;\n"
+    "        proxy_set_header   X-Real-IP         $remote_addr;\n"
+    "        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;\n"
+    "        proxy_set_header   X-Forwarded-Proto $scheme;\n"
+    "        proxy_set_header   Connection        \"\";\n"
+    "        proxy_read_timeout 300s;\n"
+    "        proxy_buffering    off;\n"
+    "        proxy_cache        off;\n"
+    "    }\n"
+)
+with open(conf_path) as f:
+    text = f.read()
+# Remove any stale /cymind/ block
+text = re.sub(r'[ \t]+# CyMind chat proxy[^\n]*\n[ \t]+location /cymind/ \{[^}]+\}\n',
+              '', text, flags=re.DOTALL)
+anchor = "    # location /cymind/ is injected here"
+if anchor in text:
+    ins = text.find(anchor)
+    eol = text.find("\n", ins)
+    text = text[:ins] + block + text[eol + 1:]
+    with open(conf_path, "w") as f:
+        f.write(text)
+    print(f"cymind: /cymind/ → {upstream} injected into nginx")
+else:
+    print("cymind: anchor not found — add location /cymind/ manually")
+CYMIND_INJECT_PY
+        info "CyMind nginx proxy block: pointing to ${CYMIND_SERVER_IP}"
+    else
+        info "CYMIND_SERVER_IP not set — /cymind/ proxy will be injected by routes.py when admin configures CyMind URL via portal"
+    fi
 
     cp "$SSL_CONF" "$SSL_CONF_BACKUP"
 
@@ -2528,6 +2575,35 @@ else
     info "update_wordlist.py not found — cron job skipped"
 fi
 
+# ── Step 23b: Firewall (UFW) ──────────────────────────────────────────────────
+# Strategy: all public traffic flows through nginx (80/443).  Internal services
+# (Flask 5252, SIEM engine 8100, PostgreSQL 5433, Redis 6379, Wazuh 5601,
+# oauth2-proxy 4180, CyIRIS 4433, CySOAR 1880) bind to loopback only — no UFW
+# rules needed for them.  CyMind on Server B reaches CyCentra via port 80
+# (nginx proxy), so no extra firewall holes are required.
+step_header "FIREWALL (UFW)"
+
+command -v ufw >/dev/null 2>&1 || apt-get install -y -qq ufw 2>/dev/null
+
+# Set defaults (idempotent)
+ufw default deny incoming  >/dev/null 2>&1 || true
+ufw default allow outgoing >/dev/null 2>&1 || true
+
+# Allow only the three public-facing ports
+ufw allow 22/tcp  comment "SSH"           >/dev/null 2>&1 || true
+ufw allow 80/tcp  comment "HTTP (nginx)"  >/dev/null 2>&1 || true
+ufw allow 443/tcp comment "HTTPS (nginx)" >/dev/null 2>&1 || true
+
+# Remove any legacy rules that expose internal services directly
+for _p in 5252 8100 5433 6379 5601 4180 4433 1880 11434 6333; do
+    ufw delete allow ${_p}/tcp >/dev/null 2>&1 || true
+    ufw delete allow ${_p}     >/dev/null 2>&1 || true
+done
+
+echo "y" | ufw enable >/dev/null 2>&1 || ufw --force enable >/dev/null 2>&1 || true
+success "UFW: ports 22, 80, 443 open — all other ports blocked externally"
+info    "Internal services (Flask 5252, engine 8100, Redis, PG) bind to loopback only"
+
 # ── Step 24: Health checks ────────────────────────────────────────────────────
 step_header "HEALTH CHECKS"
 
@@ -2632,6 +2708,9 @@ echo -e "  ${DIM}3. Check engine log: tail -f /opt/cycentra/engine.log${NC}"
 echo -e "  ${DIM}4. Security MCP bridge available at http://127.0.0.1:8100/mcp/sse (inside cysiemstack-engine)${NC}"
 echo -e "  ${DIM}5. Install CyIRIS / CySOAR via portal${NC}"
 echo -e "  ${DIM}6. To update: sudo bash cycentra-setup.sh --update${NC}"
+echo -e "  ${DIM}7. CyMind integration: install CyMind on Server B, then set CyMind URL in${NC}"
+echo -e "  ${DIM}   System Settings → CyMind — nginx /cymind/ proxy is injected automatically${NC}"
+echo -e "  ${DIM}   Or pass CYMIND_SERVER_IP=<ip> to this script to wire it up at install time${NC}"
 echo ""
 
 # Save summary file

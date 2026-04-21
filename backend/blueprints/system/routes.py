@@ -1210,6 +1210,103 @@ def mcp_post():
 
 
 # ── CyMind Integration ────────────────────────────────────────────────────────
+#
+# /api/cymind/context  — machine-to-machine endpoint for CyMind's RAG chat.
+# CyMind calls this instead of connecting to the MCP SSE bridge directly.
+# Auth: X-CyMind-Key header (the same cymk_... key stored in ai_settings.json).
+# Returns: live SIEM snapshot (stats, incidents, risk, ueba) as JSON.
+# Access: analyst-level data only; no write operations exposed.
+#
+# nginx proxy: /cymind/ location is injected into the cysoc server block so the
+# portal iframe loads from the same HTTPS origin (no mixed-content block).
+# _nginx_inject_cymind() is called from cymind_post() whenever the URL is saved.
+
+_NGINX_CONF = Path("/etc/nginx/sites-available/cycentra-modules")
+
+
+def _nginx_inject_cymind(cymind_url: str) -> str:
+    """
+    Inject (or replace) the location /cymind/ reverse-proxy block inside the
+    cysoc server block. Idempotent — rewrites if already present.
+
+    Returns a status string for logging.
+    """
+    if not _NGINX_CONF.exists():
+        return "cymind nginx: config not found — skipping"
+
+    upstream = cymind_url.rstrip("/") + "/"
+    ssl_extra = "        proxy_ssl_verify    off;\n" if upstream.startswith("https") else ""
+
+    block = (
+        "    # CyMind chat proxy — same-origin iframe, no mixed-content\n"
+        "    location /cymind/ {\n"
+       f"        proxy_pass         {upstream};\n"
+        "        proxy_http_version 1.1;\n"
+       f"{ssl_extra}"
+        "        proxy_set_header   Host              $http_host;\n"
+        "        proxy_set_header   X-Real-IP         $remote_addr;\n"
+        "        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;\n"
+        "        proxy_set_header   X-Forwarded-Proto $scheme;\n"
+        "        proxy_set_header   Connection        \"\";\n"
+        "        proxy_read_timeout 300s;\n"
+        "        proxy_buffering    off;\n"
+        "        proxy_cache        off;\n"
+        "    }\n"
+    )
+
+    text = _NGINX_CONF.read_text()
+
+    # Remove any existing /cymind/ block before re-injecting
+    text = re.sub(
+        r'[ \t]+# CyMind chat proxy[^\n]*\n[ \t]+location /cymind/ \{[^}]+\}\n',
+        '', text, flags=re.DOTALL
+    )
+
+    # Anchor 1: explicit comment written by setup.sh
+    anchor = "    # location /cymind/ is injected here"
+    if anchor in text:
+        ins = text.find(anchor)
+        eol = text.find("\n", ins)
+        eol = eol if eol != -1 else len(text) - 1
+        text = text[:ins] + block + text[eol + 1:]
+        _NGINX_CONF.write_text(text)
+        rc, _, err = _run_cmd("nginx -t && systemctl reload nginx", timeout=15)
+        return ("cymind: /cymind/ injected and nginx reloaded" if rc == 0
+                else f"cymind: nginx reload failed: {err}")
+
+    # Anchor 2: fall back to inserting before the /cysoar/ anchor or server closing brace
+    oidc_pos = text.find("location /oidc/")
+    if oidc_pos != -1:
+        depth, i = 0, oidc_pos
+        while i < len(text):
+            if text[i] == '{':
+                depth += 1
+            elif text[i] == '}':
+                if depth == 0:
+                    text = text[:i] + block + text[i:]
+                    _NGINX_CONF.write_text(text)
+                    rc, _, err = _run_cmd("nginx -t && systemctl reload nginx", timeout=15)
+                    return ("cymind: /cymind/ injected before server brace and nginx reloaded" if rc == 0
+                            else f"cymind: nginx reload failed: {err}")
+                depth -= 1
+            i += 1
+
+    return "cymind: WARNING — injection point not found; add location /cymind/ manually"
+
+
+def _nginx_remove_cymind() -> None:
+    """Remove the /cymind/ proxy block from nginx config and reload."""
+    if not _NGINX_CONF.exists():
+        return
+    text = _NGINX_CONF.read_text()
+    new_text = re.sub(
+        r'[ \t]+# CyMind chat proxy[^\n]*\n[ \t]+location /cymind/ \{[^}]+\}\n',
+        '', text, flags=re.DOTALL
+    )
+    if new_text != text:
+        _NGINX_CONF.write_text(new_text)
+        _run_cmd("nginx -t && systemctl reload nginx", timeout=15)
+
 
 def _read_cymind_config() -> dict:
     """Read cymind config block from ai_settings.json."""
@@ -1298,8 +1395,14 @@ def cymind_post():
     data = request.get_json() or {}
     cfg  = _read_cymind_config()
 
+    nginx_msg = None
     if "cymindUrl" in data:
         cfg["cymindUrl"] = str(data["cymindUrl"]).strip().rstrip("/")
+        if cfg["cymindUrl"]:
+            nginx_msg = _nginx_inject_cymind(cfg["cymindUrl"])
+        else:
+            _nginx_remove_cymind()
+            nginx_msg = "cymind: /cymind/ proxy block removed (URL cleared)"
     if "enabled" in data:
         cfg["enabled"] = bool(data["enabled"])
     if data.get("generateKey"):
@@ -1313,7 +1416,99 @@ def cymind_post():
         "ok": True,
         "config": masked,
         **({"newKey": cfg["apiKey"]} if data.get("generateKey") else {}),
-        "message": "CyMind integration config saved. Restart cysiemstack-engine to apply API key.",
+        "message": "CyMind integration config saved.",
+        **({"nginxStatus": nginx_msg} if nginx_msg else {}),
+    })
+
+
+@system_bp.route("/api/cymind/context", methods=["OPTIONS"])
+def cymind_context_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/cymind/context", methods=["GET"])
+def cymind_context():
+    """
+    Machine-to-machine SIEM context endpoint for CyMind RAG chat.
+
+    CyMind calls this URL instead of the MCP SSE bridge — plain HTTPS GET,
+    no protocol handshake needed.
+
+    Auth: X-CyMind-Key: <cymk_...> header (same key stored in ai_settings.json).
+
+    Query params (all optional):
+      incidents  — max open incidents to return (default 5, max 20)
+      risk       — max high-risk entities (default 5, max 20)
+      ueba       — max UEBA anomaly users (default 5, max 20)
+    """
+    # ── API key check ──────────────────────────────────────────────────────────
+    provided_key = (
+        request.headers.get("X-CyMind-Key", "")
+        or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    )
+    cfg = _read_cymind_config()
+    stored_key = cfg.get("apiKey", "")
+    if not stored_key or provided_key != stored_key:
+        return jsonify({"error": "Unauthorized — invalid or missing CyMind API key"}), 401
+
+    engine_url = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").rstrip("/")
+    timeout    = 10
+
+    limit_inc  = min(int(request.args.get("incidents", 5)), 20)
+    limit_risk = min(int(request.args.get("risk",      5)), 20)
+    limit_ueba = min(int(request.args.get("ueba",      5)), 20)
+
+    context = {}
+
+    # ── Stats ──────────────────────────────────────────────────────────────────
+    try:
+        r = http_requests.get(f"{engine_url}/stats", timeout=timeout)
+        if r.ok:
+            context["stats"] = r.json()
+    except Exception:
+        pass
+
+    # ── Open incidents ─────────────────────────────────────────────────────────
+    try:
+        r = http_requests.get(
+            f"{engine_url}/incidents",
+            params={"status": "open", "limit": limit_inc},
+            timeout=timeout,
+        )
+        if r.ok:
+            context["open_incidents"] = r.json()
+    except Exception:
+        pass
+
+    # ── High-risk entities ─────────────────────────────────────────────────────
+    try:
+        r = http_requests.get(
+            f"{engine_url}/risk-scores",
+            params={"level": "high", "limit": limit_risk},
+            timeout=timeout,
+        )
+        if r.ok:
+            context["high_risk_entities"] = r.json()
+    except Exception:
+        pass
+
+    # ── UEBA users with anomalies ──────────────────────────────────────────────
+    try:
+        r = http_requests.get(
+            f"{engine_url}/ueba/users",
+            params={"has_anomaly": "true", "limit": limit_ueba},
+            timeout=timeout,
+        )
+        if r.ok:
+            context["ueba_anomalies"] = r.json()
+    except Exception:
+        pass
+
+    return jsonify({
+        "ok":        True,
+        "source":    "cycentra360",
+        "timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+        "context":   context,
     })
 
 

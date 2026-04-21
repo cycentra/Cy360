@@ -60,7 +60,15 @@ function _enrichVulns(vulns, vsFindings, nucFindings) {
     });
   });
 
-  return enriched;
+  // Final dedup guard — deduplicate by normalized vulnerability name so any
+  // residual string-vs-rich-object duplicates are eliminated before rendering.
+  const seen = new Set();
+  return enriched.filter(v => {
+    const k = v.vulnerability?.toLowerCase() || "";
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 // ── Main adapter ──────────────────────────────────────────────────────────────

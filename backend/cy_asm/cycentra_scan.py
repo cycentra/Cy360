@@ -667,8 +667,10 @@ async def run_full_scan(
         else:
             logger.info(f"📥 [{label}] Complete.")
 
-    results    = {}
-    all_issues = []
+    results      = {}
+    all_issues    = []   # complete issue list — used for counts, NDJSON, summary log
+    portal_issues = []   # subset for portal JSON fallback: excludes vuln_scanner/nuclei
+                         # (those modules surface via rich findings, not issue strings)
 
     # ── Stage 1: DNS (always runs — baseline for all scan types) ─────────────
     _start("dns")
@@ -734,6 +736,7 @@ async def run_full_scan(
             results[key] = res
             if isinstance(res, dict) and "issues" in res:
                 all_issues.extend(res["issues"])
+                portal_issues.extend(res["issues"])  # sequential module issues feed portal fallback
 
     # ── Post-sequential enrichment ──────────────────────────────────────────
     # vuln_scanner needs web results so runs after the sequential loop
@@ -749,6 +752,10 @@ async def run_full_scan(
         _done("vuln_scanner", vuln_res)
         results["vuln_scanner"] = vuln_res
         if isinstance(vuln_res, dict) and "issues" in vuln_res:
+            # Add to all_issues for count/NDJSON/log accuracy.
+            # Do NOT add to portal_issues — these are string summaries of
+            # vuln_scanner.results.findings; the rich findings are used directly
+            # in the portal JSON fallback to avoid duplication.
             all_issues.extend(vuln_res["issues"])
 
     if profile.get("run_vuln_scanner"):
@@ -761,6 +768,7 @@ async def run_full_scan(
         results["crypto_deep"] = crypto_deep_res
         if isinstance(crypto_deep_res, dict) and "issues" in crypto_deep_res:
             all_issues.extend(crypto_deep_res["issues"])
+            portal_issues.extend(crypto_deep_res["issues"])  # no rich findings — only issue strings
 
     if profile.get("run_vuln_scanner"):
         logger.info("[Nuclei Scanner] Starting...")
@@ -771,6 +779,7 @@ async def run_full_scan(
         logger.info("📥 [Nuclei Scanner] Complete.")
         results["nuclei"] = nuclei_res
         if isinstance(nuclei_res, dict) and "issues" in nuclei_res:
+            # Same as vuln_scanner: count/NDJSON only — rich findings handle portal JSON.
             all_issues.extend(nuclei_res["issues"])
 
     # ── Summary ───────────────────────────────────────────────────────────────
@@ -807,10 +816,11 @@ async def run_full_scan(
         "live_subdomains":    live_count,
         "historical_subdomains": len(subdomains_list) - live_count,
         "new_subdomains":     new_count,
-        "total_issues":       len(all_issues),
+        "total_issues":       len(all_issues),     # full count inc. vuln_scanner/nuclei
         "tenant_id":          tenant_id,
         "results":            results,
-        "all_issues":         all_issues,
+        "all_issues":         all_issues,          # full list for NDJSON/Wazuh
+        "portal_issues":      portal_issues,       # dedup-safe subset for portal JSON fallback
     }
 
 
@@ -930,7 +940,9 @@ def main():
     logger.info("[Portal JSON] Saving...")
     logger.info("💾 Saving portal JSON...")
     try:
-        all_findings = result.get('all_issues', [])
+        # portal_issues excludes vuln_scanner/nuclei issue strings (covered by rich findings).
+        # Falls back to all_issues only when portal_issues is absent (shouldn't happen).
+        all_findings = result.get('portal_issues') or result.get('all_issues', [])
         severity_map = {"Critical": 10, "High": 8, "Medium": 5, "Low": 2, "Informational": 1}
 
         # ── Normalise raw module issues into the same shape the UI adapter expects ──
@@ -949,8 +961,30 @@ def main():
             return {"vulnerability": str(issue), "severity": "Medium", "risk_score": 5,
                     "description": str(issue), "recommendation": "", "module": "Scan"}
 
-        # Use AI findings when available; fall back to raw module issues
-        final_vulns = enriched_issues if enriched_issues else [_normalise_issue(i) for i in all_findings]
+        # Use AI findings when available; fall back to rich scanner findings +
+        # deduplicated module issue strings.
+        if enriched_issues:
+            final_vulns = enriched_issues
+        else:
+            # 1. Rich findings from vuln_scanner and nuclei are the source of truth
+            #    for those modules (proper CVSSv3 scores, compliance tags, etc.).
+            vs_rich  = results.get("vuln_scanner", {}).get("results", {}).get("findings", [])
+            nuc_rich = results.get("nuclei",       {}).get("results", {}).get("findings", [])
+
+            # 2. Deduplicate remaining module issue strings (handles e.g. the
+            #    "SAN mismatch" string emitted by both web and crypto modules).
+            seen_issue_keys: set = set()
+            deduped_module_issues: list = []
+            for issue in all_findings:
+                key = (
+                    str(issue) if not isinstance(issue, dict)
+                    else issue.get("description", str(issue))
+                ).strip().lower()
+                if key not in seen_issue_keys:
+                    seen_issue_keys.add(key)
+                    deduped_module_issues.append(_normalise_issue(issue))
+
+            final_vulns = vs_rich + nuc_rich + deduped_module_issues
 
         # Attach MISP IOC hits to findings whose description contains a known hit IP
         if misp_hit_map:

@@ -3,9 +3,13 @@
  * Slide-in iframe overlay that loads the CyMind chat interface.
  * Rendered by App.jsx for analyst/admin users only.
  *
+ * The iframe always loads /cymind/ — a reverse-proxy location injected into the
+ * CyCentra nginx server block by routes.py when the admin configures a CyMind URL.
+ * This eliminates mixed-content browser blocks (iframe serves from the same HTTPS
+ * origin as the portal) and avoids direct cross-origin access to Server B.
+ *
  * Props:
- *   cymindUrl  — base URL of the CyMind instance (from Integration Settings)
- *   onClose    — callback to hide the overlay
+ *   onClose — callback to hide the overlay
  */
 
 import { useState, useEffect } from "react";
@@ -26,29 +30,25 @@ if (!document.getElementById(_STYLE_ID)) {
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
-export function CyMindChatOverlay({ cymindUrl, onClose }) {
+export function CyMindChatOverlay({ onClose }) {
   const [exiting,   setExiting]   = useState(false);
   const [frameUrl,  setFrameUrl]  = useState(null);
   const [loadError, setLoadError] = useState(null);
 
-  // Resolve final iframe URL from the backend config (or use provided prop)
+  // Verify integration is configured, then load via local nginx proxy path
   useEffect(() => {
-    if (cymindUrl) {
-      setFrameUrl(`${cymindUrl.replace(/\/$/, "")}/`);
-      return;
-    }
-    // Fetch from /api/system/cymind when no URL is passed directly
     fetch(`${API_BASE}/api/system/cymind`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (d?.cymindUrl) {
-          setFrameUrl(`${d.cymindUrl.replace(/\/$/, "")}/`);
+          // Always proxy through nginx /cymind/ — same HTTPS origin, no mixed-content
+          setFrameUrl("/cymind/");
         } else {
           setLoadError("CyMind URL not configured. Go to System Settings → CyMind to set it up.");
         }
       })
       .catch(() => setLoadError("Could not load CyMind configuration."));
-  }, [cymindUrl]);
+  }, []);
 
   const handleClose = () => {
     setExiting(true);

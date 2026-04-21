@@ -1617,18 +1617,14 @@ function CyMindIntegrationTab() {
           </div>
         </div>
 
-        {/* MCP endpoint info */}
-        {cfg.mcpEndpoint && (
-          <div style={{ marginBottom: 18 }}>
-            <div style={LABEL}>MCP Endpoint (read-only)</div>
-            <div style={{ ...INPUT, color: "rgba(0,229,160,0.6)", fontSize: 11, userSelect: "all", cursor: "text" }}>
-              {cfg.mcpEndpoint}
-            </div>
-            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 5 }}>
-              Configure this URL in CyMind → System Settings → MCP Connection.
-            </div>
+        {/* CyCentra URL hint for CyMind config */}
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", lineHeight: 1.7 }}>
+            In CyMind <code style={{ color: "#00e5a0" }}>.env</code> set:<br/>
+            <code style={{ color: "rgba(0,229,160,0.7)" }}>CYCENTRA_URL=https://cysoc.cycentra.com</code><br/>
+            <code style={{ color: "rgba(0,229,160,0.7)" }}>CYCENTRA_API_KEY=&lt;key below&gt;</code>
           </div>
-        )}
+        </div>
 
         {/* Actions */}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: newKey ? 16 : 0 }}>
@@ -1653,8 +1649,7 @@ function CyMindIntegrationTab() {
               {newKey}
             </code>
             <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginTop: 8 }}>
-              Paste this into CyMind → System Settings → MCP Connection → API Key.
-              The correlation engine must be restarted for the key to take effect.
+              Paste this as <code style={{ color: "rgba(0,229,160,0.6)" }}>CYCENTRA_API_KEY</code> in CyMind's <code style={{ color: "rgba(0,229,160,0.6)" }}>.env</code>, then restart CyMind.
             </div>
           </div>
         )}
@@ -1673,9 +1668,9 @@ function CyMindIntegrationTab() {
         {[
           { done: cfg.hasKey,      text: "Generate API key (above)" },
           { done: !!cfg.cymindUrl, text: "Set CyMind base URL (above)" },
-          { done: cfg.hasKey,      text: "Copy key into CyMind → MCP Connection settings" },
-          { done: cfg.hasKey,      text: "Restart cysiemstack-engine service to activate key" },
-          { done: false,           text: "Update CyMind CORS: set CYCENTRA_ORIGIN in CyMind .env" },
+          { done: cfg.hasKey,      text: "Set CYCENTRA_API_KEY in CyMind .env" },
+          { done: !!cfg.cymindUrl, text: "Set CYCENTRA_URL=https://cysoc.cycentra.com in CyMind .env" },
+          { done: false,           text: "Set CYCENTRA_ORIGIN in CyMind .env, then restart CyMind" },
         ].map((item, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0",
             borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
