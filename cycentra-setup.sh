@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.239 -- 2026-04-21 19:15 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.240 -- 2026-04-21 19:27 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -224,7 +224,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.239"
+_SCRIPT_VERSION="v1.0.240"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -2018,6 +2018,44 @@ if [[ "$MODE" == "full" ]]; then
 map \$http_upgrade \$connection_upgrade {
     default upgrade;
     ''      close;
+}
+
+# ── Machine-to-machine (M2M) — LAN HTTP, default_server ──────────────────────
+# Handles direct-IP requests from CyMind (Server B) over plain HTTP.
+# Named-vhost requests (cysoc/cyasm/cysiem.DOMAIN) still reach their own blocks.
+# All paths are protected by the CyMind API key at the application layer.
+server {
+    listen 80 default_server;
+    server_name _;
+
+    # MCP SSE bridge — requires Authorization: Bearer <cymind_key>
+    location /mcp/ {
+        proxy_pass         http://127.0.0.1:8100/mcp/;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              \$host;
+        proxy_set_header   Authorization     \$http_authorization;
+        proxy_set_header   X-CyMind-Key      \$http_x_cymind_key;
+        proxy_set_header   Connection        "";
+        proxy_buffering    off;
+        proxy_cache        off;
+        proxy_read_timeout 3600s;
+        chunked_transfer_encoding on;
+    }
+
+    # REST context fallback — requires X-CyMind-Key header
+    location /api/cymind/ {
+        proxy_pass         http://127.0.0.1:5252/api/cymind/;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              \$host;
+        proxy_set_header   X-Real-IP         \$remote_addr;
+        proxy_set_header   X-Forwarded-For   \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-CyMind-Key      \$http_x_cymind_key;
+        proxy_set_header   Authorization     \$http_authorization;
+        proxy_read_timeout 60s;
+    }
+
+    # Drop all other direct-IP requests silently
+    location / { return 403; }
 }
 
 # ── Portal (cysoc) ───────────────────────────────────────────────────────────
