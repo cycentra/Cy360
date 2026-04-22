@@ -1501,12 +1501,14 @@ async with sse_client("${status?.public_url || status?.endpoint || "<MCP_ENDPOIN
 // ════════════════════════════════════════════════════════════════════════════
 
 function CyMindIntegrationTab() {
-  const [cfg,     setCfg]     = useState({});
-  const [loading, setLoading] = useState(true);
-  const [saving,  setSaving]  = useState(false);
-  const [msg,     setMsg]     = useState(null);
-  const [url,     setUrl]     = useState("");
-  const [newKey,  setNewKey]  = useState(null);   // revealed once after generation
+  const [cfg,         setCfg]         = useState({});
+  const [loading,     setLoading]     = useState(true);
+  const [saving,      setSaving]      = useState(false);
+  const [msg,         setMsg]         = useState(null);
+  const [url,         setUrl]         = useState("");
+  const [newKey,      setNewKey]      = useState(null);      // cymk_... M2M key, shown once
+  const [newChatKey,  setNewChatKey]  = useState(null);      // pak_... chat key, shown once
+  const [testResults, setTestResults] = useState(null);
 
   const fetchCfg = () => {
     setLoading(true);
@@ -1522,7 +1524,7 @@ function CyMindIntegrationTab() {
   useEffect(() => { fetchCfg(); }, []);
 
   const handleSave = async () => {
-    setSaving(true); setMsg(null); setNewKey(null);
+    setSaving(true); setMsg(null); setNewKey(null); setNewChatKey(null);
     try {
       const r = await fetch(`${API_BASE}/api/system/cymind`, {
         method: "POST", credentials: "include",
@@ -1530,14 +1532,17 @@ function CyMindIntegrationTab() {
         body: JSON.stringify({ cymindUrl: url }),
       });
       const d = await r.json();
-      if (d.ok) { setMsg({ ok: true, text: "Saved." }); fetchCfg(); }
-      else       { setMsg({ ok: false, text: d.error || "Save failed" }); }
+      if (d.ok) {
+        const extra = d.nginxStatus ? ` (${d.nginxStatus})` : "";
+        setMsg({ ok: true, text: `Saved.${extra}` });
+        fetchCfg();
+      } else { setMsg({ ok: false, text: d.error || "Save failed" }); }
     } catch (e) { setMsg({ ok: false, text: String(e) }); }
     finally { setSaving(false); }
   };
 
   const handleGenKey = async () => {
-    setSaving(true); setMsg(null); setNewKey(null);
+    setSaving(true); setMsg(null); setNewKey(null); setNewChatKey(null);
     try {
       const r = await fetch(`${API_BASE}/api/system/cymind`, {
         method: "POST", credentials: "include",
@@ -1547,7 +1552,25 @@ function CyMindIntegrationTab() {
       const d = await r.json();
       if (d.ok) {
         setNewKey(d.newKey || null);
-        setMsg({ ok: true, text: "New API key generated. Copy it now — it will be masked after you leave this page." });
+        setMsg({ ok: true, text: "New M2M key generated. Copy it now." });
+        fetchCfg();
+      } else { setMsg({ ok: false, text: d.error || "Key generation failed" }); }
+    } catch (e) { setMsg({ ok: false, text: String(e) }); }
+    finally { setSaving(false); }
+  };
+
+  const handleGenChatKey = async () => {
+    setSaving(true); setMsg(null); setNewKey(null); setNewChatKey(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/system/cymind`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ generateChatKey: true }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        setNewChatKey(d.newChatKey || null);
+        setMsg({ ok: true, text: "Chat API key generated. Register it in CyMind." });
         fetchCfg();
       } else { setMsg({ ok: false, text: d.error || "Key generation failed" }); }
     } catch (e) { setMsg({ ok: false, text: String(e) }); }
@@ -1555,17 +1578,16 @@ function CyMindIntegrationTab() {
   };
 
   const handleTestConn = async () => {
-    if (!url) { setMsg({ ok: false, text: "Enter a CyMind URL first." }); return; }
-    setMsg({ ok: null, text: "Testing connection…" });
+    setMsg({ ok: null, text: "Testing connectivity…" });
+    setTestResults(null);
     try {
-      const target = `${url.replace(/\/$/, "")}/api/v1/health`;
-      const r = await fetch(`${API_BASE}/api/ai/test`, {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: "cymind", fields: { baseUrl: url } }),
-      });
+      const r = await fetch(`${API_BASE}/api/system/cymind/test`, { credentials: "include" });
       const d = await r.json();
-      setMsg(d.ok ? { ok: true, text: "CyMind is reachable." } : { ok: false, text: d.error || "Connection failed" });
+      setTestResults(d.results || {});
+      setMsg(d.ok
+        ? { ok: true,  text: "All systems reachable." }
+        : { ok: false, text: "One or more checks failed — see details below." }
+      );
     } catch (e) { setMsg({ ok: false, text: String(e) }); }
   };
 
@@ -1577,12 +1599,11 @@ function CyMindIntegrationTab() {
         <div style={{ ...LABEL, marginBottom: 14 }}>CyMind RAG-Chat Integration</div>
         <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, lineHeight: 1.7, marginBottom: 20 }}>
           Connect CyCentra 360 to your on-prem <strong style={{ color: "rgba(255,255,255,0.6)" }}>CyMind</strong> instance.
-          Analysts will see a chat overlay powered by CyMind's RAG engine, with live access to
-          SIEM incidents and alerts via the Security MCP bridge.
+          Analysts will see a native chat overlay with live SIEM data via the MCP bridge.
         </div>
 
-        {/* Status badge */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
+        {/* Status badges */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
           <span style={{
             display: "inline-flex", alignItems: "center", gap: 5,
             background: cfg.enabled ? "rgba(0,229,160,0.1)" : "rgba(255,255,255,0.05)",
@@ -1594,9 +1615,8 @@ function CyMindIntegrationTab() {
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: "currentColor" }} />
             {cfg.enabled ? "ENABLED" : "DISABLED"}
           </span>
-          {cfg.hasKey && (
-            <span style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace" }}>✓ API key set</span>
-          )}
+          {cfg.hasKey     && <span style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace" }}>✓ M2M key set</span>}
+          {cfg.hasChatKey && <span style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace" }}>✓ Chat key set</span>}
         </div>
 
         {/* CyMind URL */}
@@ -1610,47 +1630,92 @@ function CyMindIntegrationTab() {
               placeholder="https://cymind.corp.example.com"
               style={{ ...INPUT, flex: 1 }}
             />
-            <button onClick={handleTestConn} disabled={saving || !url}
-              style={{ ...BTN("#4d9eff"), opacity: !url ? 0.4 : 1 }}>
-              Test
+            <button onClick={handleSave} disabled={saving}
+              style={{ ...BTN(), opacity: saving ? 0.5 : 1 }}>
+              {saving ? "Saving…" : "Save"}
             </button>
           </div>
         </div>
 
-        {/* CyCentra URL hint for CyMind config */}
+        {/* CyCentra URL hint */}
         <div style={{ marginBottom: 18 }}>
           <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", lineHeight: 1.7 }}>
             In CyMind <code style={{ color: "#00e5a0" }}>.env</code> set:<br/>
             <code style={{ color: "rgba(0,229,160,0.7)" }}>CYCENTRA_URL=https://cysoc.cycentra.com</code><br/>
-            <code style={{ color: "rgba(0,229,160,0.7)" }}>CYCENTRA_API_KEY=&lt;key below&gt;</code>
+            <code style={{ color: "rgba(0,229,160,0.7)" }}>CYCENTRA_API_KEY=&lt;M2M key below&gt;</code>
           </div>
         </div>
 
-        {/* Actions */}
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: newKey ? 16 : 0 }}>
-          <button onClick={handleSave} disabled={saving}
-            style={{ ...BTN(), opacity: saving ? 0.5 : 1 }}>
-            {saving ? "Saving…" : "Save URL"}
-          </button>
+        {/* M2M API key (CyMind → CyCentra MCP) */}
+        <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+          <div style={{ ...LABEL, marginBottom: 8 }}>CyCentra M2M API Key <span style={{ color: "rgba(255,255,255,0.25)", fontWeight: 400 }}>(cymk_... — CyMind reads SIEM data)</span></div>
           <button onClick={handleGenKey} disabled={saving}
             style={{ ...BTN("#4d9eff"), opacity: saving ? 0.5 : 1 }}>
-            {cfg.hasKey ? "Rotate API Key" : "Generate API Key"}
+            {cfg.hasKey ? "Rotate M2M Key" : "Generate M2M Key"}
+          </button>
+          {newKey && (
+            <div style={{
+              marginTop: 12, background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.25)",
+              borderRadius: 4, padding: "10px 12px",
+            }}>
+              <div style={{ ...LABEL, marginBottom: 4, color: "#00e5a0", fontSize: 10 }}>New M2M Key — copy now</div>
+              <code style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace", userSelect: "all", wordBreak: "break-all" }}>{newKey}</code>
+              <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginTop: 6 }}>
+                Set as <code style={{ color: "rgba(0,229,160,0.6)" }}>CYCENTRA_API_KEY</code> in CyMind's .env, then restart CyMind.
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Chat API key (CyCentra overlay → CyMind) */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ ...LABEL, marginBottom: 4 }}>Chat API Key <span style={{ color: "rgba(255,255,255,0.25)", fontWeight: 400 }}>(pak_... — portal overlay authenticates to CyMind)</span></div>
+          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", lineHeight: 1.6, marginBottom: 8 }}>
+            Generate this key, then register it in CyMind as an API key with the <code style={{ color: "rgba(0,229,160,0.6)" }}>analyst</code> role.
+          </div>
+          <button onClick={handleGenChatKey} disabled={saving}
+            style={{ ...BTN("#4d9eff"), opacity: saving ? 0.5 : 1 }}>
+            {cfg.hasChatKey ? "Rotate Chat Key" : "Generate Chat Key"}
+          </button>
+          {newChatKey && (
+            <div style={{
+              marginTop: 12, background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.25)",
+              borderRadius: 4, padding: "10px 12px",
+            }}>
+              <div style={{ ...LABEL, marginBottom: 4, color: "#00e5a0", fontSize: 10 }}>New Chat Key — copy now</div>
+              <code style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace", userSelect: "all", wordBreak: "break-all" }}>{newChatKey}</code>
+              <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginTop: 6 }}>
+                In CyMind admin: create an API key with this value and the <code style={{ color: "rgba(0,229,160,0.6)" }}>analyst</code> role.
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Test connection */}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 0 }}>
+          <button onClick={handleTestConn} disabled={saving}
+            style={{ ...BTN("#4d9eff"), opacity: saving ? 0.5 : 1 }}>
+            Test Connectivity
           </button>
         </div>
 
-        {/* Newly generated key — shown once */}
-        {newKey && (
+        {/* Test results */}
+        {testResults && (
           <div style={{
-            marginTop: 16, background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.25)",
-            borderRadius: 4, padding: "12px 14px",
+            marginTop: 12, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+            borderRadius: 4, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6,
           }}>
-            <div style={{ ...LABEL, marginBottom: 6, color: "#00e5a0" }}>New API Key — copy now</div>
-            <code style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace", userSelect: "all", wordBreak: "break-all" }}>
-              {newKey}
-            </code>
-            <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginTop: 8 }}>
-              Paste this as <code style={{ color: "rgba(0,229,160,0.6)" }}>CYCENTRA_API_KEY</code> in CyMind's <code style={{ color: "rgba(0,229,160,0.6)" }}>.env</code>, then restart CyMind.
-            </div>
+            {Object.entries(testResults).map(([key, val]) => (
+              <div key={key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ color: val.ok ? "#00e5a0" : "#ff6b6b", fontSize: 12 }}>{val.ok ? "✓" : "✗"}</span>
+                <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", minWidth: 80 }}>
+                  {key === "cymind" ? "CyMind" : key === "mcp_engine" ? "MCP Engine" : "Chat Key"}
+                </span>
+                <span style={{ color: val.ok ? "rgba(255,255,255,0.5)" : "#ff6b6b", fontSize: 11, fontFamily: "monospace" }}>
+                  {val.msg}
+                </span>
+              </div>
+            ))}
           </div>
         )}
 
@@ -1666,9 +1731,9 @@ function CyMindIntegrationTab() {
       <div style={{ ...CARD }}>
         <div style={{ ...LABEL, marginBottom: 14 }}>Setup Checklist</div>
         {[
-          { done: cfg.hasKey,      text: "Generate API key (above)" },
           { done: !!cfg.cymindUrl, text: "Set CyMind base URL (above)" },
-          { done: cfg.hasKey,      text: "Set CYCENTRA_API_KEY in CyMind .env" },
+          { done: cfg.hasKey,      text: "Generate M2M key and set CYCENTRA_API_KEY in CyMind .env" },
+          { done: cfg.hasChatKey,  text: "Generate chat key and register it in CyMind as an API key" },
           { done: !!cfg.cymindUrl, text: "Set CYCENTRA_URL=https://cysoc.cycentra.com in CyMind .env" },
           { done: false,           text: "Set CYCENTRA_ORIGIN in CyMind .env, then restart CyMind" },
         ].map((item, i) => (

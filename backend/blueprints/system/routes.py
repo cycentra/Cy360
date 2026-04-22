@@ -1248,7 +1248,7 @@ def _nginx_inject_cymind(cymind_url: str) -> str:
         "        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;\n"
         "        proxy_set_header   X-Forwarded-Proto $scheme;\n"
         "        proxy_set_header   Connection        \"\";\n"
-        "        proxy_read_timeout 300s;\n"
+        "        proxy_read_timeout 3600s;\n"
         "        proxy_buffering    off;\n"
         "        proxy_cache        off;\n"
         "    }\n"
@@ -1355,7 +1355,7 @@ def cymind_options():
 
 @system_bp.route("/api/system/cymind", methods=["GET"])
 def cymind_get():
-    """Return CyMind integration config. Analyst+ can read; API key is masked."""
+    """Return CyMind integration config. Analyst+ can read; M2M key is masked, chat key is returned."""
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
     from blueprints.rbac.manager import get_user_role
@@ -1366,13 +1366,15 @@ def cymind_get():
     masked = dict(cfg)
     if masked.get("apiKey"):
         masked["apiKey"] = "••••••••"
+    # chatApiKey (pak_...) is returned unmasked — the browser needs it to authenticate to CyMind
     base_url = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").rstrip("/")
     base_domain = os.environ.get("BASE_DOMAIN", "")
     public_mcp = f"https://cysoc.{base_domain}/mcp/sse" if base_domain else f"{base_url}/mcp/sse"
     return jsonify({
         **masked,
         "mcpEndpoint": public_mcp,
-        "hasKey": bool(cfg.get("apiKey")),
+        "hasKey":     bool(cfg.get("apiKey")),
+        "hasChatKey": bool(cfg.get("chatApiKey")),
     })
 
 
@@ -1381,9 +1383,10 @@ def cymind_post():
     """Save CyMind integration settings. Admin only.
 
     Body (all optional):
-      cymindUrl   — base URL of CyMind instance (e.g. https://cymind.corp.example.com)
-      generateKey — true → generate and store a new random API key
-      enabled     — bool, enable/disable the integration
+      cymindUrl       — base URL of CyMind instance (e.g. https://cymind.corp.example.com)
+      generateKey     — true → generate and store a new cymk_... M2M API key
+      generateChatKey — true → generate and store a new pak_... chat API key for the overlay
+      enabled         — bool, enable/disable the integration
     """
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
@@ -1407,18 +1410,81 @@ def cymind_post():
         cfg["enabled"] = bool(data["enabled"])
     if data.get("generateKey"):
         cfg["apiKey"] = "cymk_" + _secrets.token_hex(24)
+    if data.get("generateChatKey"):
+        cfg["chatApiKey"] = "pak_" + _secrets.token_hex(32)
 
     _write_cymind_config(cfg)
     masked = dict(cfg)
     if masked.get("apiKey"):
         masked["apiKey"] = "••••••••"
+    # chatApiKey stays in cfg for the response (revealed to admin on generation)
+    extra = {}
+    if data.get("generateKey"):
+        extra["newKey"] = cfg["apiKey"]
+    if data.get("generateChatKey"):
+        extra["newChatKey"] = cfg["chatApiKey"]
     return jsonify({
         "ok": True,
         "config": masked,
-        **({"newKey": cfg["apiKey"]} if data.get("generateKey") else {}),
+        **extra,
         "message": "CyMind integration config saved.",
         **({"nginxStatus": nginx_msg} if nginx_msg else {}),
     })
+
+
+@system_bp.route("/api/system/cymind/test", methods=["GET", "OPTIONS"])
+def cymind_test():
+    """Test CyMind and MCP connectivity from the server side. Analyst+ only."""
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response('', 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
+        return jsonify({"error": "Analyst or admin role required"}), 403
+
+    import time
+    cfg = _read_cymind_config()
+    results = {}
+
+    # ── 1. CyMind health (server → CyMind direct) ─────────────────────────────
+    cymind_url = cfg.get("cymindUrl", "").strip()
+    if cymind_url:
+        t0 = time.monotonic()
+        try:
+            r = http_requests.get(f"{cymind_url}/api/v1/health", timeout=8)
+            ms = int((time.monotonic() - t0) * 1000)
+            if r.ok:
+                results["cymind"] = {"ok": True,  "msg": f"CyMind healthy ({ms} ms)", "ms": ms}
+            else:
+                results["cymind"] = {"ok": False, "msg": f"CyMind returned HTTP {r.status_code}", "ms": ms}
+        except Exception as e:
+            ms = int((time.monotonic() - t0) * 1000)
+            results["cymind"] = {"ok": False, "msg": f"Unreachable: {e}", "ms": ms}
+    else:
+        results["cymind"] = {"ok": False, "msg": "CyMind URL not configured"}
+
+    # ── 2. MCP engine (local correlation engine at port 8100) ─────────────────
+    t0 = time.monotonic()
+    try:
+        r = http_requests.get("http://127.0.0.1:8100/health", timeout=5)
+        ms = int((time.monotonic() - t0) * 1000)
+        if r.ok:
+            results["mcp_engine"] = {"ok": True,  "msg": f"Correlation engine healthy ({ms} ms)", "ms": ms}
+        else:
+            results["mcp_engine"] = {"ok": False, "msg": f"Engine returned HTTP {r.status_code}", "ms": ms}
+    except Exception as e:
+        ms = int((time.monotonic() - t0) * 1000)
+        results["mcp_engine"] = {"ok": False, "msg": f"Engine unreachable: {e}", "ms": ms}
+
+    # ── 3. Chat API key presence ───────────────────────────────────────────────
+    results["chat_key"] = {
+        "ok":  bool(cfg.get("chatApiKey")),
+        "msg": "Chat API key set" if cfg.get("chatApiKey") else "Chat API key not set — generate one in settings",
+    }
+
+    overall = all(v["ok"] for v in results.values())
+    return jsonify({"ok": overall, "results": results})
 
 
 @system_bp.route("/api/cymind/context", methods=["OPTIONS"])
