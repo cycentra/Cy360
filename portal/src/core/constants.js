@@ -14,13 +14,13 @@
 // into index.html. Falls back to hostname derivation for dev.
 export const _BASE_DOMAIN = (
   window.__CYCENTRA_DOMAIN__ ||
-  window.location.hostname.replace(/^cysoc\./, "")
+  window.location.hostname.replace(/^cy360\./, "")
 );
 
-// ── Service URLs ─────────────────────────────────────────────────────
+// ── Service URLs ─────────────────────────────────────────────────────────
 export const CYSCAN_URL    = `https://cyasm.${_BASE_DOMAIN}`;
-export const PORTAL_URL    = `https://cysoc.${_BASE_DOMAIN}`;
-export const PORTAL_ISSUER = `https://cysoc.${_BASE_DOMAIN}`;
+export const PORTAL_URL    = `https://cy360.${_BASE_DOMAIN}`;
+export const PORTAL_ISSUER = `https://cy360.${_BASE_DOMAIN}`;
 export const SIEM_BASE_URL = `https://cysiem.${_BASE_DOMAIN}`;
 export const IRIS_BASE_URL = `https://cyiris.${_BASE_DOMAIN}`;
 export const MISP_BASE_URL = `https://cymisp.${_BASE_DOMAIN}`;

@@ -51,7 +51,7 @@ def get_user_apps(email: str) -> list:
     entry = _load_rbac().get(email, {})
     if "apps" in entry:
         return entry["apps"]
-    return ROLE_APPS.get(entry.get("role", "viewer"), ["cysoc"])
+    return ROLE_APPS.get(entry.get("role", "viewer"), ["cy360"])
 
 
 def user_can_access_client(email: str, client_id: str) -> bool:

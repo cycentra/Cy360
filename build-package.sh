@@ -111,7 +111,7 @@ Optional environment variables:
    OAUTH_PROVIDER   google | microsoft | skip  (default: google)
 
 After install:
-   - Portal:      https://cysoc.YOUR_DOMAIN
+   - Portal:      https://cy360.YOUR_DOMAIN
    - Backend API: https://cyasm.YOUR_DOMAIN
    - Edit /opt/cycentra/.env to change any config
    - systemctl restart cycentra-backend to apply changes

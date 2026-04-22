@@ -38,7 +38,13 @@ function InstallForm({ mod, onInstall, onCancel }) {
   const [stage,    setStage]    = useState("config"); // config | installing | done | error
   const [log,      setLog]      = useState([]);
   const [progress, setProgress] = useState(0);
-  const logRef = useRef(null);
+  const logRef  = useRef(null);
+  const pollRef = useRef(null);
+
+  // Cleanup any running poll when the form unmounts (e.g. modal closed mid-install)
+  useEffect(() => {
+    return () => { clearInterval(pollRef.current); };
+  }, []);
 
   const update = (k, v) => setConfig(prev => ({ ...prev, [k]: v }));
 
@@ -62,7 +68,7 @@ function InstallForm({ mod, onInstall, onCancel }) {
       }
 
       // Poll logs + status every 3 s
-      const poll = setInterval(async () => {
+      pollRef.current = setInterval(async () => {
         try {
           const lr = await fetch(`${API_BASE}/api/platform/logs/${mod.id}`, { credentials: "include" });
           if (lr.ok) {
@@ -84,12 +90,12 @@ function InstallForm({ mod, onInstall, onCancel }) {
           const s   = all[mod.id];
           if (!s) return;
           if (s.status === "running") {
-            clearInterval(poll);
+            clearInterval(pollRef.current);
             setStage("done");
             setProgress(100);
             onInstall(mod.id, config);
           } else if (s.status === "failed") {
-            clearInterval(poll);
+            clearInterval(pollRef.current);
             setStage("error");
           }
         } catch {}

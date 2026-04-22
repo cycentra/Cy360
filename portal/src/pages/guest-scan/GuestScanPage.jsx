@@ -249,6 +249,14 @@ export function GuestScanPage() {
   const timerRef = useRef(null);
   const pollRef  = useRef(null);
 
+  // Cleanup intervals on unmount (e.g. user navigates away mid-scan)
+  useEffect(() => {
+    return () => {
+      clearInterval(pollRef.current);
+      clearInterval(timerRef.current);
+    };
+  }, []);
+
   const fmt           = s => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
   const circumference = 2 * Math.PI * 54;
   const strokeDash    = circumference - (progress / 100) * circumference;

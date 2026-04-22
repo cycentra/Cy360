@@ -11,7 +11,7 @@
  */
 
 import { useState, useEffect } from "react";
-import { getSavedUser, saveUser, clearSSOToken, setSSOToken } from '../core/auth.js';
+import { getSavedUser, saveUser, clearSSOToken, setSSOToken, validateStorage } from '../core/auth.js';
 import { adaptCyCentraJSON } from '../core/adapter.js';
 import { DEFAULT_PROMPTS } from '../registry/aiProviders.js';
 import { API_BASE, CYSCAN_URL } from '../core/constants.js';
@@ -80,14 +80,22 @@ export function useAppState() {
 
   // ── Restore persisted config on mount ───────────────────────────────────────
   useEffect(() => {
+    // Validate + repair all localStorage keys before restoring state.
+    // If corrupt data is found it is cleared automatically.
+    validateStorage();
+
     try {
       const saved = localStorage.getItem("cycentra_ai_config");
       if (saved) setAiConfig(JSON.parse(saved));
-    } catch {}
+    } catch {
+      try { localStorage.removeItem("cycentra_ai_config"); } catch {}
+    }
     try {
       const mods = localStorage.getItem("cycentra_modules");
       if (mods) setInstalledModules(JSON.parse(mods));
-    } catch {}
+    } catch {
+      try { localStorage.removeItem("cycentra_modules"); } catch {}
+    }
   }, []);
 
   // ── Auto-load latest scan + history on login ─────────────────────────────────
@@ -136,7 +144,12 @@ export function useAppState() {
       updatedAssets.forEach(a => {
         if (a.host && a.status && a.status !== "open") map[a.host] = a.status;
       });
-      localStorage.setItem(_STATUS_KEY, JSON.stringify(map));
+      // Cap at 500 entries to prevent unbounded localStorage growth
+      const entries = Object.entries(map);
+      const capped  = entries.length > 500
+        ? Object.fromEntries(entries.slice(entries.length - 500))
+        : map;
+      localStorage.setItem(_STATUS_KEY, JSON.stringify(capped));
     } catch {}
   }
 

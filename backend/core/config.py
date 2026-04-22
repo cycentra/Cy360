@@ -33,7 +33,7 @@ except Exception:
 
 # ── Domain & URL ───────────────────────────────────────────────────────────────
 BASE_DOMAIN  = os.environ.get("BASE_DOMAIN",  "cycentra.com")
-FRONTEND_URL = os.environ.get("FRONTEND_URL", f"https://cysoc.{BASE_DOMAIN}")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", f"https://cy360.{BASE_DOMAIN}")
 BASE_URL     = os.environ.get("BASE_URL",      f"https://cyasm.{BASE_DOMAIN}")
 
 # ── Secrets ────────────────────────────────────────────────────────────────────
@@ -66,7 +66,7 @@ OIDC_CLIENTS = {
     "oauth2proxy": {
         "client_secret": os.environ.get("OAUTH2PROXY_SECRET", ""),
         "redirect_uris": [
-            f"https://cysoc.{BASE_DOMAIN}/oauth2/callback",
+            f"https://cy360.{BASE_DOMAIN}/oauth2/callback",
         ],
         "allowed_scopes": ["openid", "email", "profile"],
         "allowed_roles":  ["admin", "analyst", "viewer", "cyiris", "cysoar"],
@@ -88,11 +88,11 @@ OIDC_CLIENTS = {
 
 # ── RBAC ───────────────────────────────────────────────────────────────────────
 ROLE_APPS = {
-    "admin":   ["cysoc", "cysiem", "cyiris", "cysoar", "cyasm"],
-    "analyst": ["cysoc", "cysiem", "cyiris", "cysoar", "cyasm"],
-    "viewer":  ["cysoc", "cysiem"],
-    "cyiris":  ["cysoc", "cyiris"],
-    "cysoar":  ["cysoc", "cysoar"],
+    "admin":   ["cy360", "cysiem", "cyiris", "cysoar", "cyasm"],
+    "analyst": ["cy360", "cysiem", "cyiris", "cysoar", "cyasm"],
+    "viewer":  ["cy360", "cysiem"],
+    "cyiris":  ["cy360", "cyiris"],
+    "cysoar":  ["cy360", "cysoar"],
 }
 VALID_ROLES = set(ROLE_APPS.keys())
 
@@ -129,7 +129,7 @@ WAZUH_URL    = os.environ.get("WAZUH_URL", "")
 CORS_ALLOWED_ORIGINS = {
     FRONTEND_URL,
     BASE_URL,
-    f"https://cysoc.{BASE_DOMAIN}",
+    f"https://cy360.{BASE_DOMAIN}",
     f"https://cyasm.{BASE_DOMAIN}",
     f"https://cyiris.{BASE_DOMAIN}",
     f"https://cysoar.{BASE_DOMAIN}",

@@ -335,13 +335,13 @@ def _nginx_add_cyiris(base_domain: str, log_fn):
         "    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;\n"
         "    add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;\n"
         "    add_header X-Frame-Options \"\" always;\n"
-        "    add_header Content-Security-Policy \"frame-ancestors 'self' https://cysoc." + base_domain + "\" always;\n"
+        "    add_header Content-Security-Policy \"frame-ancestors 'self' https://cy360." + base_domain + "\" always;\n"
         "    # IAP gate — oauth2-proxy validates the wildcard ." + base_domain + " session cookie\n"
         "    auth_request        /oauth2/auth;\n"
         "    error_page 401    = @error401;\n"
         "    auth_request_set    $proxy_email $upstream_http_x_auth_request_email;\n"
         "    location @error401 {\n"
-        "        return 302 https://cysoc." + base_domain + "/oauth2/sign_in?rd=https://$host$request_uri;\n"
+        "        return 302 https://cy360." + base_domain + "/oauth2/sign_in?rd=https://$host$request_uri;\n"
         "    }\n"
         "    location = /oauth2/auth {\n"
         "        internal;\n"
@@ -352,7 +352,7 @@ def _nginx_add_cyiris(base_domain: str, log_fn):
         "        proxy_set_header        X-Scheme $scheme;\n"
         "    }\n"
         "    location = /logout {\n"
-        "        return 302 https://cysoc." + base_domain + "/oauth2/sign_out?rd=https://cysoc." + base_domain + "/;\n"
+        "        return 302 https://cy360." + base_domain + "/oauth2/sign_out?rd=https://cy360." + base_domain + "/;\n"
         "    }\n"
         "    if ($request_method = OPTIONS) { return 204; }\n"
         "    location / {\n"
@@ -395,8 +395,8 @@ def _nginx_add_cymisp(base_domain: str, log_fn):
         "}\n"
         "server {\n"
         "    listen 443 ssl http2; server_name cymisp." + base_domain + ";\n"
-        "    ssl_certificate     /etc/letsencrypt/live/cysoc." + base_domain + "/fullchain.pem;\n"
-        "    ssl_certificate_key /etc/letsencrypt/live/cysoc." + base_domain + "/privkey.pem;\n"
+        "    ssl_certificate     /etc/letsencrypt/live/cy360." + base_domain + "/fullchain.pem;\n"
+        "    ssl_certificate_key /etc/letsencrypt/live/cy360." + base_domain + "/privkey.pem;\n"
         "    include             /etc/letsencrypt/options-ssl-nginx.conf;\n"
         "    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;\n"
         "    add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;\n"
@@ -424,7 +424,7 @@ def _nginx_add_cymisp(base_domain: str, log_fn):
 def _expand_ssl(module_id: str, base_domain: str, log_fn):
     """Expand the Let's Encrypt cert to cover a new module subdomain."""
     existing = NGINX_CONF.read_text() if NGINX_CONF.exists() else ""
-    domains  = [f"cysoc.{base_domain}", f"cyasm.{base_domain}", f"cysiem.{base_domain}"]
+    domains  = [f"cy360.{base_domain}", f"cyasm.{base_domain}", f"cysiem.{base_domain}"]
     for mod in ("cyiris", "cymisp"):
         if f"{mod}.{base_domain}" in existing:
             domains.append(f"{mod}.{base_domain}")

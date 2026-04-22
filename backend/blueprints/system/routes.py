@@ -1169,7 +1169,7 @@ def mcp_get():
     # the engine under https://siem.<domain>/ so that is what 3rd-party clients use.
     # Without BASE_DOMAIN (dev / isolated installs) we fall back to the loopback URL.
     base_domain = os.environ.get("BASE_DOMAIN", "")
-    public_url  = f"https://cysoc.{base_domain}/mcp/sse" if base_domain else f"{base_url}/mcp/sse"
+    public_url  = f"https://cy360.{base_domain}/mcp/sse" if base_domain else f"{base_url}/mcp/sse"
 
     return jsonify({
         "enabled":     enabled,
@@ -1217,7 +1217,7 @@ def mcp_post():
 # Returns: live SIEM snapshot (stats, incidents, risk, ueba) as JSON.
 # Access: analyst-level data only; no write operations exposed.
 #
-# nginx proxy: /cymind/ location is injected into the cysoc server block so the
+# nginx proxy: /cymind/ location is injected into the cy360 server block so the
 # portal iframe loads from the same HTTPS origin (no mixed-content block).
 # _nginx_inject_cymind() is called from cymind_post() whenever the URL is saved.
 
@@ -1227,7 +1227,7 @@ _NGINX_CONF = Path("/etc/nginx/sites-available/cycentra-modules")
 def _nginx_inject_cymind(cymind_url: str) -> str:
     """
     Inject (or replace) the location /cymind/ reverse-proxy block inside the
-    cysoc server block. Idempotent — rewrites if already present.
+    cy360 server block. Idempotent — rewrites if already present.
 
     Returns a status string for logging.
     """
@@ -1369,7 +1369,7 @@ def cymind_get():
     # chatApiKey returned so test endpoint and admin UI can report hasChatKey status.
     base_url = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").rstrip("/")
     base_domain = os.environ.get("BASE_DOMAIN", "")
-    public_mcp = f"https://cysoc.{base_domain}/mcp/sse" if base_domain else f"{base_url}/mcp/sse"
+    public_mcp = f"https://cy360.{base_domain}/mcp/sse" if base_domain else f"{base_url}/mcp/sse"
     return jsonify({
         **masked,
         "mcpEndpoint": public_mcp,
@@ -1517,7 +1517,7 @@ def cymind_enable():
 
     # ── Step 3: Call CyMind activate endpoint ────────────────────────────────
     base_domain = os.environ.get("BASE_DOMAIN", "")
-    cycentra_url = f"https://cysoc.{base_domain}" if base_domain else os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").replace(":8100", "")
+    cycentra_url = f"https://cy360.{base_domain}" if base_domain else os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").replace(":8100", "")
 
     try:
         act_r = http_requests.post(

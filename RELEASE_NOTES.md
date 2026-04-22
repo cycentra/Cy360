@@ -1,3 +1,44 @@
+## v1.0.247 -- 2026-04-22
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.247 -- 2026-04-22
+
+### Portal URL — cysoc → cy360
+
+  - Portal subdomain renamed from `cysoc.<domain>` to `cy360.<domain>` across all layers (nginx config, OAuth2-proxy redirect URIs, OIDC clients, CORS allowed origins, backend config defaults, RBAC app IDs, `constants.js` base-domain derivation). DNS registration updated on the server side.
+  - `constants.js`: `_BASE_DOMAIN` derivation regex updated to strip `cy360.` instead of `cysoc.`; `PORTAL_URL` and `PORTAL_ISSUER` updated accordingly.
+  - `SiemIncidentsPage.jsx`: Wazuh deep-link derivation updated from `cysoc.` to `cy360.` prefix.
+  - `backend/core/config.py`: `FRONTEND_URL` default, OAuth2-proxy `redirect_uris`, `ROLE_APPS`, `CORS_ALLOWED_ORIGINS`.
+  - `backend/blueprints/system/routes.py`: MCP public URL, CyMind nginx comment, activate-cycentra URL.
+  - `backend/blueprints/platform/routes.py`: nginx block CSP, error401 redirects, SSL cert paths, certbot domain list.
+  - `backend/blueprints/rbac/manager.py`: default fallback app list.
+  - `cycentra-setup.sh`, `build-package.sh`: all 39 `cysoc` occurrences replaced.
+
+### Stability: Storage bloat prevention
+
+  - `core/auth.js`: Added `validateStorage()` — checks schema version, validates structure of all persisted keys (`cy_user`, `cycentra_ai_config`, `cycentra_modules`, `cycentra_asset_statuses`), clears any corrupt or version-mismatched entry automatically on app init.
+  - `core/auth.js`: Added `clearNonEssentialCache()` — clears non-auth cache keys and sessionStorage, called by the Error Boundary.
+  - `useAppState.js`: `validateStorage()` called once on mount before restoring config. Per-key `try/catch` blocks now also delete corrupt keys rather than silently skipping them.
+  - `useAppState.js`: `_saveStatuses()` now caps `cycentra_asset_statuses` at 500 entries (trims oldest) to prevent unbounded localStorage growth across many rescans.
+  - Storage schema version key (`cy_storage_ver`) added; future schema-breaking changes auto-wipe stale data on first load.
+
+### Stability: React Error Boundary — Clear Cache & Reload
+
+  - `App.jsx`: `PageErrorBoundary` enhanced with a second "Clear Cache & Reload" action button that calls `clearNonEssentialCache()` then `window.location.reload()`. Non-destructive: account session and scan results are preserved.
+
+### Bug fix: Memory leaks in interval/timer management
+
+  - `PlatformPage.jsx` (`InstallForm`): module install poll interval now stored in `pollRef` and cleaned up via `useEffect` return, preventing state updates on unmounted components if the user closes the install modal mid-progress.
+  - `GuestScanPage.jsx`: Added `useEffect` unmount cleanup that calls `clearInterval` on both `pollRef.current` and `timerRef.current`, preventing orphaned scan-status pollers after navigation.
+  - `SystemSettingsPage.jsx` (`UpdatesTab`): the version-fetch `useEffect` now returns a cleanup that clears `pollRef.current`, preventing the update-log poller from firing after the settings tab is closed.
+
+---
+
 ## v1.0.246 -- 2026-04-22
 
 ### Improvements

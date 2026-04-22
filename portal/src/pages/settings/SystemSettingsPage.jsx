@@ -161,6 +161,8 @@ function UpdatesTab() {
       .then(r => r.ok ? r.json() : null)
       .then(d => d && setVersionData(d))
       .catch(() => {});
+    // Cleanup update-log poll on unmount (e.g. user switches tabs mid-update)
+    return () => { clearInterval(pollRef.current); };
   }, []);
 
   useEffect(() => {
