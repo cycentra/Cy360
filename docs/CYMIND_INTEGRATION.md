@@ -1,222 +1,215 @@
 # CyMind × CyCentra 360 Integration Guide
 
-Connects CyMind's on-prem RAG-chat platform to the CyCentra 360 Security MCP bridge so that analysts can query live SIEM data (incidents, alerts, UEBA, risk scores) directly from the CyMind chat interface, embedded as an overlay inside the CyCentra 360 portal.
+Connects CyMind's on-prem RAG-chat platform to CyCentra 360 so analysts can query live SIEM data (incidents, alerts, UEBA, risk scores, endpoints) directly from a chat overlay embedded inside the CyCentra 360 portal.
+
+Default network addresses used throughout this guide:
+
+| Host | Default IP | Port |
+|---|---|---|
+| CyCentra 360 | 172.16.0.3 | 443 / 5252 |
+| CyMind | 172.16.0.2 | 8080 |
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Browser (analyst)                                              │
-│                                                                 │
-│  ┌─────────────────────────────────┐                            │
-│  │   CyCentra 360 Portal (React)   │                            │
-│  │   + CyMind Chat Overlay         │                            │
-│  └──────────────┬──────────────────┘                            │
-└─────────────────┼───────────────────────────────────────────────┘
-                  │ HTTPS
-      ┌───────────▼──────────────┐
-      │  CyCentra 360 Backend    │     ┌──────────────────────────┐
-      │  Flask :5252             │     │  CyMind Backend          │
-      │  • /api/system/cymind    │     │  FastAPI :8000           │
-      │    (config + key mgmt)   │     │  • /api/v1/chat/stream   │
-      │                          │     │  • /api/v1/apikeys       │
-      │  FastAPI Correlation     │     │  • /api/v1/users         │
-      │  Engine :8100            ◄─────┤  mcp_client.py           │
-      │  • /mcp/sse  (MCP SSE)   │ SSE │    (SSE connection)      │
-      │    + CYMIND_API_KEY guard│     └──────────────────────────┘
-      └──────────────────────────┘
+Browser (analyst)
+    │  HTTPS
+    ▼
+CyCentra 360  (172.16.0.3)
+  Flask :5252
+  • /api/cymind/chat/stream  ←── overlay sends chat here (same-origin proxy)
+  • /api/system/cymind       ←── admin configure / enable
+  • /mcp/sse                 ←── CyMind reads live SIEM data (cymk_... key)
+    │                                              ▲
+    │  HTTP  (server-to-server)                    │ SSE  (cymk_... key)
+    ▼                                              │
+CyMind  (172.16.0.2:8080)
+  FastAPI :8000
+  • /api/v1/chat/stream      ←── Flask proxy forwards analyst questions
+  • /api/v1/admin/activate-cycentra  ←── auto-provision during Enable
 ```
 
-**Two separate keys are used — do not confuse them:**
+**Two keys (auto-managed by the Enable flow):**
 
-| Key prefix | Direction | Purpose |
+| Key | Direction | Purpose |
 |---|---|---|
-| `cymk_…` | CyMind → CyCentra | M2M key: CyMind calls CyCentra's MCP bridge to fetch live SIEM data |
-| `pak_…`  | CyCentra overlay → CyMind | Chat key: the browser overlay authenticates to CyMind's chat API |
-
-**Data flow for a live SIEM query:**
-
-1. Analyst types a security question in the CyMind chat overlay embedded in CyCentra.
-2. The overlay POSTs to CyMind `/api/v1/chat/stream` using the `pak_…` chat key.
-3. CyMind chat router detects SIEM keywords and calls `mcp_client.fetch_context()`.
-4. CyMind opens an MCP SSE session to CyCentra's `/mcp/sse` using the `cymk_…` M2M key.
-5. CyCentra correlation engine executes tools (e.g. `list_incidents`) and returns JSON.
-6. CyMind injects the JSON as context into the system prompt → LLM answers with live data.
+| `cymk_…` | CyMind → CyCentra `/mcp/sse` | M2M: CyMind fetches live SIEM data |
+| `pak_…`  | CyCentra proxy → CyMind | Chat auth: proxy authenticates the overlay |
 
 ---
 
-## Prerequisites
+## Setup — One-Click Enable (Recommended)
 
-| Requirement | Details |
+This is the recommended path. No manual steps in CyMind are needed.
+
+### Prerequisites
+
+| Requirement | Notes |
 |---|---|
-| CyCentra 360 | v1.0.233+ |
-| CyMind | Commit `cymind-mcp-integration` or later |
-| Network | CyMind host must reach CyCentra 360 on port 8100 (or via nginx reverse-proxy) |
-| `mcp[cli]` | Must be installed in CyCentra's correlation engine venv: `pip install 'mcp[cli]'` |
+| CyCentra 360 v1.0.241+ | This integration ships with that release |
+| CyMind running at 172.16.0.2:8080 | Check with `curl http://172.16.0.2:8080/health` |
+| `mcp[cli]` in CyCentra correlation engine | `pip install 'mcp[cli]'` in the engine venv |
+| CyMind admin credentials | You need the email + password of a CyMind admin user |
+
+### Steps
+
+**1.** Log in to **CyCentra 360** as admin.
+
+**2.** Go to **System Settings → CyMind** tab.
+
+**3.** Fill in the enable form:
+- **CyMind URL**: `http://172.16.0.2:8080`
+- **CyMind Admin Email**: your CyMind admin email (e.g. `admin@cymind.local`)
+- **CyMind Admin Password**: your CyMind admin password
+
+**4.** Click **Enable Integration**.
+
+CyCentra will automatically:
+- Generate the `cymk_…` M2M key and save it
+- Log in to CyMind using the provided credentials
+- Create a `cycentra-portal@internal` analyst service account in CyMind (idempotent)
+- Generate a `pak_…` API key for that account and save it
+- Configure CyMind's CYCENTRA_URL and CYCENTRA_API_KEY at runtime (no restart needed)
+- Inject the nginx reverse-proxy block for `/cymind/`
+
+**5.** Click **Test Connection** to verify all three checks pass (CyMind reachable, MCP engine, chat key set).
+
+**6.** Log in as an **analyst** or **admin** — the green brain FAB button appears at the bottom-right.
+
+**7.** Click the FAB and try one of the [suggested test questions](#suggested-test-questions) below.
 
 ---
 
-## Step-by-Step Setup
+## Manual Setup (Fallback)
 
-### Step 1 — Enter the CyMind URL in CyCentra
+Use this if the one-click enable fails (e.g. network restrictions between CyCentra and CyMind admin API).
 
-1. Log in to **CyCentra 360** as **admin**.
-2. Go to **System Settings → CyMind** tab.
-3. Enter the CyMind base URL (e.g. `https://cymind.corp.example.com`) and click **Save**.
-   - This injects the nginx reverse-proxy block so the overlay can reach CyMind.
+### Step 1 — CyCentra: generate the M2M key
 
----
+1. Log in to **CyCentra 360** as admin → System Settings → CyMind.
+2. Enter CyMind URL: `http://172.16.0.2:8080`
+3. Expand **Advanced / Manual Key Management**.
+4. Click **Generate M2M Key** → copy the `cymk_…` key (shown once).
 
-### Step 2 — Generate the M2M key and configure CyMind's environment
+### Step 2 — CyMind: configure CYCENTRA connection
 
-This key lets CyMind read live SIEM data from CyCentra's MCP bridge.
-
-**In CyCentra 360 (System Settings → CyMind):**
-
-1. Click **Generate M2M Key**.
-2. **Copy the displayed key** (`cymk_…`) — it is shown only once.
-
-**In CyMind's `.env` file:**
-
+In CyMind's `.env`:
 ```dotenv
-CYCENTRA_URL=https://cysoc.YOUR_DOMAIN    # CyCentra 360 base URL
-CYCENTRA_API_KEY=cymk_YOUR_KEY_HERE        # M2M key from step above
+CYCENTRA_URL=http://172.16.0.3
+CYCENTRA_API_KEY=cymk_YOUR_KEY_HERE
 ```
 
-Restart CyMind after saving:
-
+Restart CyMind:
 ```bash
 docker compose restart cymind
-# or: sudo systemctl restart cymind
 ```
 
-**Verify the MCP bridge (optional):**
-
+Verify MCP bridge:
 ```bash
-# No key → should return 401
-curl -s http://127.0.0.1:8100/mcp/sse
+# Should return 401 (key guard active, not open)
+curl -s http://172.16.0.2:8080/mcp/sse
 
-# With key → should open an SSE stream (Ctrl-C to close)
-curl -s -H "Authorization: Bearer cymk_YOUR_KEY" http://127.0.0.1:8100/mcp/sse
+# Should open an SSE stream
+curl -s -H "Authorization: Bearer cymk_YOUR_KEY" http://172.16.0.2:8080/mcp/sse
 ```
 
----
+### Step 3 — CyMind: create portal service account and get chat key
 
-### Step 3 — Create a CyMind service account and get the Chat API key
-
-The browser overlay authenticates to CyMind using a `pak_…` API key. This key **must be generated inside CyMind** and then pasted into CyCentra — CyCentra cannot generate a key that CyMind will recognise.
-
-**3a — Create a dedicated service account in CyMind:**
-
-1. Log in to **CyMind** as **admin**.
-2. Go to **Users → Create User** (or call `POST /api/v1/users`).
-3. Fill in:
-   - **Name**: `cycentra-portal` (or any descriptive name)
-   - **Email**: `cycentra-portal@internal` (does not need to be a real address)
-   - **Password**: a strong random password (stored but never used interactively)
+1. Log in to CyMind as admin.
+2. Create a user:
+   - **Email**: `cycentra-portal@internal`
    - **Role**: `analyst`
-4. Save the user.
+3. Log in as that user → **API Keys → Generate API Key** → copy the `pak_…` key.
 
-> **Why analyst role?**  
-> CyMind's chat router only injects live MCP/SIEM context for requests from users with the `analyst` or `admin` role. A `viewer` account can chat but will not receive live SIEM data even if `use_mcp: true` is sent.
+### Step 4 — CyCentra: paste the chat key
 
-**3b — Generate an API key for that service account:**
-
-You need to be logged in as the service account user (or use the admin user-management API).
-
-_Option A — Via the CyMind UI (log in as the service account):_
-
-1. Log in to CyMind as `cycentra-portal@internal`.
-2. Go to **API Keys → Generate API Key**.
-3. Give it a descriptive name (e.g. `CyCentra overlay`).
-4. **Copy the displayed key** (`pak_…`) — it is shown only once.
-
-_Option B — Via the CyMind admin API (stay logged in as admin):_
-
-```bash
-# 1. Get the service account's user ID
-curl -s -H "Authorization: Bearer <ADMIN_JWT>" \
-     https://cymind.corp.example.com/api/v1/users \
-  | jq '.users[] | select(.email=="cycentra-portal@internal") | .id'
-
-# 2. Generate the key (admin generates for another user is not directly supported in
-#    the current API — log in as the service account and use the UI, or use Option A).
-```
-
-**3c — Paste the key into CyCentra:**
-
-1. Go back to **CyCentra 360 → System Settings → CyMind**.
-2. In the **Chat API Key** section, paste the `pak_…` key into the input field.
-3. Click **Save Chat Key**.
-
-The overlay will now use this key when analysts open the chat.
+1. System Settings → CyMind → Advanced / Manual Key Management.
+2. Paste the `pak_…` key into the Manual Chat Key field → **Save**.
 
 ---
 
-### Step 4 — Allow CyCentra 360 to embed CyMind in an iframe
+## Key Rotation
 
-In CyMind's `.env`, add the CyCentra origin so that CORS headers allow the iframe:
+### Rotate the chat key (`pak_…`)
 
-```dotenv
-CYCENTRA_ORIGIN=https://cysoc.YOUR_DOMAIN
-```
-
-Restart CyMind after saving:
-
-```bash
-docker compose restart cymind
-```
-
----
-
-### Step 5 — Verify the overlay
-
-1. Log in to CyCentra 360 as an **analyst** or **admin**.
-2. A green brain-shaped FAB button appears at the bottom-right of the portal.
-3. Click it — the CyMind chat slides up.
-4. Ask: *"What open incidents do we have right now?"*
-5. CyMind should respond with live incident data pulled from CyCentra.
-
----
-
-## Rotating the Chat API Key
-
-When you need to rotate the chat key (e.g. security rotation):
-
-1. In CyMind: go to the `cycentra-portal` user's API Keys, revoke the old key, generate a new one.
+1. In CyMind: go to the `cycentra-portal@internal` user → API Keys → revoke old key → generate new.
 2. Copy the new `pak_…` key.
-3. In CyCentra 360 → System Settings → CyMind → Chat API Key: paste the new key and click **Save Chat Key**.
+3. In CyCentra: System Settings → CyMind → Advanced → Manual Chat Key → paste → Save.
 
-No restart is required — the overlay picks up the new key immediately on next load.
+OR: re-run **Enable Integration** — it revokes the old key and issues a fresh one automatically.
 
----
+### Rotate the M2M key (`cymk_…`)
 
-## Rotating the M2M Key (`cymk_…`)
+1. In CyCentra: System Settings → CyMind → Advanced → Rotate M2M Key → copy the new `cymk_…`.
+2. Update `CYCENTRA_API_KEY` in CyMind `.env` → `docker compose restart cymind`.
 
-1. In CyCentra 360 → System Settings → CyMind: click **Rotate M2M Key**.
-2. Copy the new `cymk_…` key.
-3. In CyMind `.env`: update `CYCENTRA_API_KEY` to the new key.
-4. Restart CyMind: `docker compose restart cymind`.
+OR: re-run **Enable Integration** — it generates a new M2M key and calls CyMind to update it.
 
 ---
 
-## Access Control Summary
+## Suggested Test Questions
 
-| Role | Chat overlay visible | Live SIEM data via MCP |
+Use these in the CyMind chat overlay after enabling the integration to verify each data source:
+
+**General SIEM health**
+```
+How many open incidents do we have? Give me a quick summary.
+```
+
+**Incident investigation**
+```
+Show me the most critical open incidents with their MITRE ATT&CK tactics.
+```
+```
+What happened with incident INC-0042? Give me the full timeline.
+```
+
+**Alert analysis**
+```
+List the latest alerts from the last hour and group them by severity.
+```
+
+**Risk scoring**
+```
+Which entities have the highest risk scores right now? Why are they high risk?
+```
+
+**UEBA / insider threat**
+```
+Are there any users with anomalous behaviour this week? What did they do?
+```
+
+**Endpoint / Wazuh**
+```
+Which Wazuh agents are currently disconnected or unhealthy?
+```
+```
+What are the top vulnerabilities on host LAPTOP-JOHN? Include CVE numbers and CVSS scores.
+```
+
+**Containment (analyst-requested only)**
+```
+I want to isolate host LAPTOP-JOHN from the network. Walk me through the steps.
+```
+
+---
+
+## Access Control
+
+| Role | Chat FAB visible | Live SIEM data |
 |---|---|---|
 | admin | ✓ | ✓ |
 | analyst | ✓ | ✓ |
 | developer | ✗ | ✗ |
-| viewer | ✗ | ✗ (chat only, no SIEM) |
+| viewer | ✗ | ✗ |
 
-Enforcement is layered:
-
-- **Frontend** (`App.jsx`): FAB only rendered for `role === "analyst" || "admin"`.
-- **CyCentra backend** (`/api/system/cymind`): GET requires analyst+; POST requires admin.
-- **MCP endpoint** (correlation engine): Rejects requests without valid `CYMIND_API_KEY` (`cymk_…`).
-- **CyMind backend** (`routers/chat.py`): `use_mcp` context injection only for analyst/admin roles.
+Enforcement layers:
+- **Frontend**: FAB only rendered for `role === "analyst" || "admin"`.
+- **CyCentra proxy** (`/api/cymind/chat/stream`): requires analyst+ CyCentra session.
+- **MCP bridge** (correlation engine): rejects requests without valid `cymk_…` key.
+- **CyMind chat router**: `use_mcp` only honoured for analyst/admin roles.
 
 ---
 
@@ -224,14 +217,14 @@ Enforcement is layered:
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| FAB not visible | User role is `viewer` or `developer` | Log in with an analyst/admin account |
-| Overlay shows "CyMind URL not configured" | CyMind URL not saved in CyCentra | System Settings → CyMind → enter URL → Save |
-| Overlay shows blank / connection error | CORS blocked or CyMind unreachable | Set `CYCENTRA_ORIGIN` in CyMind `.env`, restart CyMind |
-| CyMind chat returns generic answers, no SIEM data | MCP not connected or chat key missing | Check `CYCENTRA_API_KEY` in CyMind `.env`; verify chat key is set in CyCentra |
-| `401 Unauthorized` on CyMind chat | Chat API key not registered / wrong key | Re-generate key in CyMind (Step 3), paste new key in CyCentra |
-| `401 Unauthorized` on `/mcp/sse` | M2M key wrong or missing | Rotate M2M key (CyCentra), update `CYCENTRA_API_KEY` in CyMind `.env`, restart |
-| MCP connect times out | Firewall between CyMind and CyCentra | Ensure CyMind host can reach CyCentra port 8100 (or nginx proxy port) |
-| "Chat API key must start with pak_" error | Wrong key pasted | Generate the key from **CyMind** API Keys, not from CyCentra |
+| "Enable Integration" → "Cannot reach CyMind" | Wrong URL or port | Check `http://172.16.0.2:8080/health` from CyCentra server |
+| "Enable Integration" → CyMind login failed | Wrong admin credentials | Verify CyMind admin email/password |
+| FAB not visible after enable | User role is viewer/developer | Log in with an analyst or admin account |
+| Chat opens but returns "not fully set up" | Chat key missing | Re-run Enable Integration or paste manually in Advanced |
+| Chat replies but no live SIEM data | MCP not connected | Click Test Connection — check MCP Engine row; verify cymk_… key in CyMind |
+| Test Connection: MCP Engine ✗ | Correlation engine not running | `sudo systemctl status cysiemstack-engine` |
+| "CyMind returned HTTP 401" in proxy logs | Chat key invalid or expired | Re-run Enable Integration to refresh keys |
+| Chat works but containment tools fail | Wazuh active-response not configured | Check Wazuh manager AR settings |
 
 ---
 
@@ -241,55 +234,31 @@ Enforcement is layered:
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/api/system/cymind` | analyst+ | Read integration config; `chatApiKey` returned raw (used by overlay) |
-| `POST` | `/api/system/cymind` | admin | Save URL, generate M2M key, save/clear chat key, toggle enabled |
-
-`POST` body fields (all optional):
-
-```json
-{
-  "cymindUrl":   "https://cymind.corp.example.com",
-  "generateKey": true,
-  "chatApiKey":  "pak_…key from CyMind…",
-  "clearChatKey": false,
-  "enabled":     true
-}
-```
+| `POST` | `/api/system/cymind/enable` | admin | One-click enable: logs into CyMind, provisions portal user, saves keys |
+| `GET` | `/api/system/cymind` | analyst+ | Read config; `hasChatKey` / `hasKey` flags |
+| `POST` | `/api/system/cymind` | admin | Save URL, generate M2M key, paste/clear chat key |
+| `GET` | `/api/system/cymind/test` | analyst+ | Test CyMind + MCP engine + chat key |
+| `POST` | `/api/cymind/chat/stream` | analyst+ | SSE proxy to CyMind chat endpoint |
 
 ### CyMind
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/api/v1/users` | admin | Create a user (set role: "analyst") |
-| `GET` | `/api/v1/users` | admin | List users (find service account ID) |
-| `POST` | `/api/v1/apikeys` | current user | Generate API key for the authenticated user |
-| `GET` | `/api/v1/apikeys` | current user | List API keys |
-| `DELETE` | `/api/v1/apikeys/{id}` | current user | Revoke API key |
+| `POST` | `/api/v1/admin/activate-cycentra` | admin JWT | Auto-provision portal user, configure CYCENTRA connection, return pak_… |
+| `GET` | `/api/v1/admin/activate-cycentra/status` | admin JWT | Check activation status |
+| `POST` | `/api/v1/chat/stream` | pak_… or JWT | SSE streaming chat (called via CyCentra proxy) |
 
-Chat request with MCP context:
+### Available MCP Tools
 
-```json
-POST /api/v1/chat/stream
-Authorization: Bearer pak_…
-
-{
-  "messages": [{ "role": "user", "content": "Show me today's open incidents" }],
-  "use_mcp": true,
-  "use_rag": true
-}
-```
-
-### Available MCP Tools (from CyCentra 360 `/mcp/sse`)
-
-| Tool | Description |
+| Tool | Keywords that trigger it |
 |---|---|
-| `get_stats` | High-level SIEM statistics |
-| `list_incidents` | Filter incidents by status / severity |
-| `get_incident` | Full incident detail by ID |
-| `list_alerts` | Raw alerts, optionally by incident |
-| `list_risk_scores` | Entity risk leaderboard |
-| `list_ueba_users` | UEBA profiles with anomaly counts |
-| `get_ueba_anomalies` | Detailed anomaly history for a user |
-| `wazuh_list_agents` | Enumerate Wazuh-monitored endpoints |
-| `wazuh_active_response` | Trigger containment action on endpoint |
-| `wazuh_get_agent_vulnerabilities` | CVEs on a monitored endpoint |
+| `get_stats` | always included |
+| `list_incidents` | incident, breach, attack, mitre, kill chain, malware, ransomware |
+| `get_incident` | specific incident ID |
+| `list_alerts` | alert, event, log |
+| `list_risk_scores` | risk, score, entity, high-risk |
+| `list_ueba_users` | ueba, user, anomaly, insider, behaviour |
+| `get_ueba_anomalies` | specific user anomaly detail |
+| `wazuh_list_agents` | agent, endpoint, host, wazuh, sensor |
+| `wazuh_active_response` | containment, isolate, block, respond |
+| `wazuh_get_agent_vulnerabilities` | vulnerability, cve, cvss, patch, exploit |

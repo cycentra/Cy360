@@ -77,7 +77,7 @@ function MsgText({ text }) {
 export function CyMindChatOverlay({ onClose }) {
   const [exiting,    setExiting]    = useState(false);
   const [configErr,  setConfigErr]  = useState(null);
-  const [chatApiKey, setChatApiKey] = useState(null);
+  const [ready,      setReady]      = useState(false);
   const [messages,   setMessages]   = useState([
     { role: "assistant", content: "Hello! I'm CyMind, your AI security assistant. I have live access to your SIEM data. How can I help?", done: true },
   ]);
@@ -87,17 +87,17 @@ export function CyMindChatOverlay({ onClose }) {
   const abortRef   = useRef(null);
   const inputRef   = useRef(null);
 
-  // Fetch config: chatApiKey (pak_...) is returned unmasked to analyst+ users
+  // Verify integration is configured — proxy handles auth server-side
   useEffect(() => {
     fetch(`${API_BASE}/api/system/cymind`, { credentials: "include" })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(d => {
         if (!d?.cymindUrl) {
-          setConfigErr("CyMind URL not configured. Ask your admin to set it up in System Settings → CyMind.");
-        } else if (!d?.chatApiKey) {
-          setConfigErr("CyMind chat API key not set. Ask your admin to generate one in System Settings → CyMind.");
+          setConfigErr("CyMind URL not configured. Ask your admin to enable it in System Settings → CyMind.");
+        } else if (!d?.hasChatKey) {
+          setConfigErr("CyMind integration not fully set up. Ask your admin to run Enable Integration in System Settings → CyMind.");
         } else {
-          setChatApiKey(d.chatApiKey);
+          setReady(true);
         }
       })
       .catch(() => setConfigErr("Could not load CyMind configuration."));
@@ -116,7 +116,7 @@ export function CyMindChatOverlay({ onClose }) {
 
   const sendMessage = useCallback(async () => {
     const text = input.trim();
-    if (!text || streaming || !chatApiKey) return;
+    if (!text || streaming || !ready) return;
 
     setInput("");
     const userMsg = { role: "user", content: text, done: true };
@@ -135,17 +135,17 @@ export function CyMindChatOverlay({ onClose }) {
     }));
 
     try {
-      const resp = await fetch("/cymind/api/v1/chat/stream", {
+      // Route via CyCentra's Flask proxy so no nginx injection is needed and
+      // the chat key stays server-side (never exposed in browser requests).
+      const resp = await fetch(`${API_BASE}/api/cymind/chat/stream`, {
         method: "POST",
         signal: controller.signal,
-        headers: {
-          "Content-Type":  "application/json",
-          "Authorization": `Bearer ${chatApiKey}`,
-        },
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
-          messages:    history,
-          use_mcp:     true,
-          use_rag:     true,
+          messages:     history,
+          use_mcp:      true,
+          use_rag:      true,
           use_external: false,
         }),
       });
@@ -213,7 +213,7 @@ export function CyMindChatOverlay({ onClose }) {
       abortRef.current = null;
       inputRef.current?.focus();
     }
-  }, [input, streaming, chatApiKey, messages]);
+  }, [input, streaming, ready, messages]);
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -304,7 +304,7 @@ export function CyMindChatOverlay({ onClose }) {
               {configErr}
             </div>
           </div>
-        ) : !chatApiKey ? (
+        ) : !ready ? (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <div style={{ color: "rgba(0,229,160,0.6)", fontFamily: "monospace", fontSize: 11 }}>Loading…</div>
           </div>

@@ -34,7 +34,7 @@ import threading
 from pathlib import Path
 
 import requests as http_requests
-from flask import Blueprint, request, jsonify, make_response, session
+from flask import Blueprint, request, jsonify, make_response, session, current_app
 
 from core.helpers import add_cors_headers, get_misp_config, run as _run_cmd
 from core.config import AI_SETTINGS_FILE
@@ -1366,7 +1366,7 @@ def cymind_get():
     masked = dict(cfg)
     if masked.get("apiKey"):
         masked["apiKey"] = "••••••••"
-    # chatApiKey (pak_...) is returned unmasked — the overlay uses it as Bearer token.
+    # chatApiKey returned so test endpoint and admin UI can report hasChatKey status.
     base_url = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").rstrip("/")
     base_domain = os.environ.get("BASE_DOMAIN", "")
     public_mcp = f"https://cysoc.{base_domain}/mcp/sse" if base_domain else f"{base_url}/mcp/sse"
@@ -1439,6 +1439,101 @@ def cymind_post():
     })
 
 
+@system_bp.route("/api/system/cymind/enable", methods=["POST", "OPTIONS"])
+def cymind_enable():
+    """
+    One-click enable: CyCentra logs in to CyMind as admin, calls the
+    /api/v1/admin/activate-cycentra endpoint which auto-provisions the portal
+    service account and returns a pak_... chat key.  All keys are saved
+    server-side — no manual copy-paste needed.
+
+    Body:
+      cymindUrl      — CyMind base URL (e.g. http://172.16.0.2:8080)
+      cymindAdminEmail    — CyMind admin email
+      cymindAdminPassword — CyMind admin password
+    """
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response('', 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+
+    import secrets as _secrets
+    data        = request.get_json() or {}
+    cymind_url  = str(data.get("cymindUrl", "")).strip().rstrip("/")
+    admin_email = str(data.get("cymindAdminEmail", "")).strip()
+    admin_pw    = str(data.get("cymindAdminPassword", "")).strip()
+
+    if not cymind_url:
+        return jsonify({"error": "CyMind URL is required."}), 400
+    if not admin_email or not admin_pw:
+        return jsonify({"error": "CyMind admin email and password are required."}), 400
+
+    # ── Step 1: Save URL and generate M2M key ────────────────────────────────
+    cfg = _read_cymind_config()
+    cfg["cymindUrl"] = cymind_url
+    cfg["enabled"]   = True
+    m2m_key = "cymk_" + _secrets.token_hex(24)
+    cfg["apiKey"] = m2m_key
+    nginx_msg = _nginx_inject_cymind(cymind_url)
+    _write_cymind_config(cfg)
+
+    # ── Step 2: Log in to CyMind to get admin JWT ────────────────────────────
+    try:
+        login_r = http_requests.post(
+            f"{cymind_url}/api/v1/auth/login",
+            json={"email": admin_email, "password": admin_pw},
+            timeout=15,
+        )
+    except Exception as e:
+        return jsonify({"error": f"Cannot reach CyMind at {cymind_url}: {e}"}), 502
+
+    if not login_r.ok:
+        return jsonify({
+            "error": f"CyMind login failed (HTTP {login_r.status_code}). Check the admin email/password.",
+        }), 401
+
+    cymind_jwt = login_r.json().get("access_token") or login_r.json().get("token")
+    if not cymind_jwt:
+        return jsonify({"error": "CyMind login response did not include an access token."}), 502
+
+    # ── Step 3: Call CyMind activate endpoint ────────────────────────────────
+    base_domain = os.environ.get("BASE_DOMAIN", "")
+    cycentra_url = f"https://cysoc.{base_domain}" if base_domain else os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").replace(":8100", "")
+
+    try:
+        act_r = http_requests.post(
+            f"{cymind_url}/api/v1/admin/activate-cycentra",
+            json={"cycentra_url": cycentra_url, "cycentra_api_key": m2m_key},
+            headers={"Authorization": f"Bearer {cymind_jwt}"},
+            timeout=30,
+        )
+    except Exception as e:
+        return jsonify({"error": f"CyMind activation call failed: {e}"}), 502
+
+    if not act_r.ok:
+        return jsonify({
+            "error": f"CyMind activation returned HTTP {act_r.status_code}: {act_r.text[:200]}",
+        }), 502
+
+    chat_key = act_r.json().get("chat_key", "")
+    if not chat_key:
+        return jsonify({"error": "CyMind activation did not return a chat key."}), 502
+
+    # ── Step 4: Save the chat key ─────────────────────────────────────────────
+    cfg = _read_cymind_config()
+    cfg["chatApiKey"] = chat_key
+    _write_cymind_config(cfg)
+
+    return jsonify({
+        "ok": True,
+        "message": "Integration enabled. CyMind is connected and the portal service account is provisioned.",
+        "nginxStatus": nginx_msg,
+    })
+
+
 @system_bp.route("/api/system/cymind/test", methods=["GET", "OPTIONS"])
 def cymind_test():
     """Test CyMind and MCP connectivity from the server side. Analyst+ only."""
@@ -1492,6 +1587,78 @@ def cymind_test():
 
     overall = all(v["ok"] for v in results.values())
     return jsonify({"ok": overall, "results": results})
+
+
+@system_bp.route("/api/cymind/chat/stream", methods=["OPTIONS"])
+def cymind_chat_proxy_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/cymind/chat/stream", methods=["POST"])
+def cymind_chat_proxy():
+    """
+    SSE proxy: forwards the browser's chat request to CyMind and streams the
+    response back.  Replaces the nginx /cymind/ injection path — this route is
+    always available regardless of nginx config state.
+
+    Auth: uses the stored chatApiKey (pak_...) automatically so the browser
+    never needs to handle raw credentials beyond what CyCentra already fetches.
+    """
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
+        return jsonify({"error": "Analyst or admin role required"}), 403
+
+    cfg        = _read_cymind_config()
+    cymind_url = cfg.get("cymindUrl", "").strip().rstrip("/")
+    chat_key   = cfg.get("chatApiKey", "").strip()
+
+    if not cymind_url:
+        return jsonify({"error": "CyMind URL not configured — set it in System Settings → CyMind."}), 503
+    if not chat_key:
+        return jsonify({"error": "Chat API key not set — see System Settings → CyMind."}), 503
+
+    target = f"{cymind_url}/api/v1/chat/stream"
+    body   = request.get_data()
+
+    try:
+        upstream = http_requests.post(
+            target,
+            data=body,
+            headers={
+                "Content-Type":  "application/json",
+                "Authorization": f"Bearer {chat_key}",
+            },
+            stream=True,
+            timeout=(10, 300),
+        )
+    except http_requests.exceptions.ConnectionError as e:
+        return jsonify({"error": f"Cannot reach CyMind at {cymind_url}: {e}"}), 502
+    except http_requests.exceptions.Timeout:
+        return jsonify({"error": "CyMind did not respond in time"}), 504
+
+    if not upstream.ok:
+        return jsonify({"error": f"CyMind returned HTTP {upstream.status_code}"}), upstream.status_code
+
+    def _generate():
+        try:
+            for chunk in upstream.iter_content(chunk_size=None):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    return current_app.response_class(
+        _generate(),
+        status=200,
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control":    "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection":        "keep-alive",
+        },
+    )
 
 
 @system_bp.route("/api/cymind/context", methods=["OPTIONS"])
