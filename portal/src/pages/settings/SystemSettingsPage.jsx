@@ -10,7 +10,6 @@
 
 import { useState, useEffect, useRef } from "react";
 import { API_BASE } from "../../core/constants.js";
-import { AISettingsPage } from "../ai/AISettingsPage.jsx";
 
 // ── Shared style constants ────────────────────────────────────────────────────
 const CARD  = { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "20px 24px", marginBottom: 20 };
@@ -757,10 +756,8 @@ function UserManagementTab() {
 
 const TABS = [
   { id: "updates",      label: "Updates & Version" },
-  { id: "ai-config",    label: "AI Config" },
   { id: "integrations", label: "Integrations" },
   { id: "cymind",       label: "CyMind" },
-  { id: "mcp",          label: "MCP" },
   { id: "env",          label: "Environment Config" },
   { id: "users",        label: "User Management" },
 ];
@@ -1500,15 +1497,18 @@ async with sse_client("${status?.public_url || status?.endpoint || "<MCP_ENDPOIN
 // CyMind Integration Settings tab
 // ════════════════════════════════════════════════════════════════════════════
 
+// CyMind IP is fixed — not user-configurable
+const CYMIND_URL = "http://172.16.0.2:8080";
+
 function CyMindIntegrationTab() {
   const [cfg,         setCfg]         = useState({});
   const [loading,     setLoading]     = useState(true);
   const [saving,      setSaving]      = useState(false);
   const [msg,         setMsg]         = useState(null);
   const [testResults, setTestResults] = useState(null);
+  const [mcpStatus,   setMcpStatus]   = useState(null);
 
   // Enable form
-  const [cymindUrl,   setCymindUrl]   = useState("");
   const [adminEmail,  setAdminEmail]  = useState("");
   const [adminPw,     setAdminPw]     = useState("");
   const [showAdvanced,setShowAdvanced]= useState(false);
@@ -1521,18 +1521,20 @@ function CyMindIntegrationTab() {
     setLoading(true);
     fetch(`${API_BASE}/api/system/cymind`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
-      .then(d => {
-        if (d) { setCfg(d); if (!cymindUrl) setCymindUrl(d.cymindUrl || ""); }
-        setLoading(false);
-      })
+      .then(d => { if (d) setCfg(d); setLoading(false); })
       .catch(() => setLoading(false));
   };
 
-  useEffect(() => { fetchCfg(); }, []);
+  useEffect(() => {
+    fetchCfg();
+    fetch(`${API_BASE}/api/system/mcp`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setMcpStatus(d); })
+      .catch(() => {});
+  }, []);
 
   // ── One-click enable ───────────────────────────────────────────────────────
   const handleEnable = async () => {
-    if (!cymindUrl.trim()) { setMsg({ ok: false, text: "Enter the CyMind IP/URL first." }); return; }
     if (!adminEmail.trim() || !adminPw.trim()) { setMsg({ ok: false, text: "Enter CyMind admin email and password." }); return; }
     setSaving(true); setMsg({ ok: null, text: "Connecting to CyMind and provisioning service account…" });
     try {
@@ -1540,7 +1542,6 @@ function CyMindIntegrationTab() {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          cymindUrl:          cymindUrl.trim().replace(/\/$/, ""),
           cymindAdminEmail:    adminEmail.trim(),
           cymindAdminPassword: adminPw,
         }),
@@ -1637,13 +1638,36 @@ function CyMindIntegrationTab() {
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: "currentColor" }} />
             {isEnabled ? "CONNECTED" : "NOT CONFIGURED"}
           </span>
-          {cfg.cymindUrl && (
-            <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
-              {cfg.cymindUrl}
-            </span>
-          )}
+          <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, fontFamily: "monospace" }}>{CYMIND_URL}</span>
           {cfg.hasKey     && <span style={{ color: "rgba(0,229,160,0.6)", fontSize: 10, fontFamily: "monospace" }}>✓ M2M key</span>}
           {cfg.hasChatKey && <span style={{ color: "rgba(0,229,160,0.6)", fontSize: 10, fontFamily: "monospace" }}>✓ Chat key</span>}
+        </div>
+
+        {/* MCP status inline */}
+        <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>MCP Bridge:</span>
+          {mcpStatus === null ? (
+            <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>checking…</span>
+          ) : (
+            <>
+              <span style={{
+                display: "inline-flex", alignItems: "center", gap: 5,
+                background: mcpStatus.enabled ? "rgba(0,229,160,0.08)" : "rgba(255,255,255,0.03)",
+                border: `1px solid ${mcpStatus.enabled ? "rgba(0,229,160,0.25)" : "rgba(255,255,255,0.08)"}`,
+                borderRadius: 3, padding: "2px 8px",
+                color: mcpStatus.enabled ? "#00e5a0" : "rgba(255,255,255,0.25)",
+                fontSize: 10, fontFamily: "monospace", fontWeight: 700,
+              }}>
+                <span style={{ width: 5, height: 5, borderRadius: "50%", background: "currentColor" }} />
+                {mcpStatus.enabled ? "ENABLED" : "DISABLED"}
+              </span>
+              {mcpStatus.enabled && Array.isArray(mcpStatus.tools) && mcpStatus.tools.length > 0 && (
+                <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+                  {mcpStatus.tools.length} tool{mcpStatus.tools.length !== 1 ? "s" : ""} active
+                </span>
+              )}
+            </>
+          )}
         </div>
       </div>
 
@@ -1653,21 +1677,11 @@ function CyMindIntegrationTab() {
           {isEnabled ? "Reconfigure Integration" : "Enable CyMind Integration"}
         </div>
         <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.7, marginBottom: 16 }}>
-          Enter your CyMind IP/URL and CyMind <strong style={{ color: "rgba(255,255,255,0.5)" }}>admin</strong> credentials.
+          Enter your CyMind <strong style={{ color: "rgba(255,255,255,0.5)" }}>admin</strong> credentials.
           CyCentra will automatically configure both sides — no manual steps in CyMind needed.
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
-          <div>
-            <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyMind URL</div>
-            <input
-              type="url"
-              value={cymindUrl}
-              onChange={e => setCymindUrl(e.target.value)}
-              placeholder="http://172.16.0.2:8080"
-              style={{ ...INPUT, width: "100%", boxSizing: "border-box" }}
-            />
-          </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 180 }}>
               <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyMind Admin Email</div>
@@ -1822,7 +1836,7 @@ function IntegrationsTab() {
   );
 }
 
-export function SystemSettingsPage({ aiConfig, onSaveAIConfig }) {
+export function SystemSettingsPage() {
   const [tab, setTab] = useState("updates");
 
   return (
@@ -1848,10 +1862,8 @@ export function SystemSettingsPage({ aiConfig, onSaveAIConfig }) {
       </div>
 
       {tab === "updates"      && <UpdatesTab />}
-      {tab === "ai-config"    && <AISettingsPage aiConfig={aiConfig || {}} onSave={onSaveAIConfig || (() => {})} embedded={true} />}
       {tab === "integrations" && <IntegrationsTab />}
       {tab === "cymind"       && <CyMindIntegrationTab />}
-      {tab === "mcp"          && <McpTab />}
       {tab === "env"          && <EnvConfigTab />}
       {tab === "users"        && <UserManagementTab />}
     </div>

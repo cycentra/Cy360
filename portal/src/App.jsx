@@ -30,7 +30,6 @@ class PageErrorBoundary extends Component {
     return this.props.children;
   }
 }
-import { AI_PROVIDERS } from './registry/aiProviders.js';
 import { CYSCAN_URL } from './core/constants.js';
 import { clearSSOToken } from './core/auth.js';
 import { useAppState } from './hooks/useAppState.js';
@@ -46,7 +45,6 @@ import { DashboardPage }     from './pages/dashboard/DashboardPage.jsx';
 import { AssetsPage }        from './pages/assets/AssetsPage.jsx';
 import { VulnerabilityPage } from './pages/vulnerabilities/VulnerabilityPage.jsx';
 import { PlatformPage }      from './pages/platform/PlatformPage.jsx';
-import { AISettingsPage }    from './pages/ai/AISettingsPage.jsx';
 import { UseCasesPage }      from './pages/usecases/UseCasesPage.jsx';
 import { SystemSettingsPage } from './pages/settings/SystemSettingsPage.jsx';
 import { AssetModal }        from './pages/assets/AssetModal.jsx';
@@ -197,11 +195,11 @@ function ScanHistoryDropdown({ scanHistory, selectedScanId, onSelect, historyLoa
 export default function App() {
   const {
     user, authReady, data, assets, activeTab, selectedAsset, showImport,
-    installedModules, aiConfig, stats, scanTime,
+    installedModules, stats, scanTime,
     scanHistory, selectedScanId, historyLoading,
     setActiveTab, setSelectedAsset, setShowImport,
     handleImport, handleStatusChange, handleInstallModule,
-    handleUninstallModule, handleSaveAIConfig, handleScanComplete,
+    handleUninstallModule, handleScanComplete,
     handleScanSelect,
   } = useAppState();
 
@@ -242,15 +240,6 @@ export default function App() {
 
         {/* Right side */}
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-          {/* Active AI provider chip */}
-          <div style={{ display:"flex", alignItems:"center", gap:5, padding:"3px 9px",
-            background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:20 }}>
-            <span style={{ fontSize:11 }}>{AI_PROVIDERS[aiConfig.provider]?.icon}</span>
-            <span style={{ color:AI_PROVIDERS[aiConfig.provider]?.color, fontSize:10, fontFamily:"monospace", fontWeight:700 }}>
-              {AI_PROVIDERS[aiConfig.provider]?.name}
-            </span>
-          </div>
-
           {/* Scan History Dropdown — shows when scan data is loaded */}
           {data && (
             <ScanHistoryDropdown
@@ -334,8 +323,7 @@ export default function App() {
             {activeTab==="siem-ueba"      && <SiemUebaPage/>}
             {activeTab==="usecases"       && <UseCasesPage/>}
             {activeTab==="platform"       && <PlatformPage installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
-            {activeTab==="ai-settings"    && setActiveTab("system-settings")}
-            {activeTab==="system-settings" && <SystemSettingsPage aiConfig={aiConfig} onSaveAIConfig={handleSaveAIConfig} />}
+            {activeTab==="system-settings" && <SystemSettingsPage />}
 
           </div>
           </PageErrorBoundary>

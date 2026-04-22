@@ -1422,6 +1422,20 @@ def cymind_post():
         cfg["chatApiKey"] = ""
 
     _write_cymind_config(cfg)
+
+    # When disabling the integration, revert AI provider to local so enrichment
+    # falls back to the on-prem Ollama engine automatically
+    if not cfg.get("enabled") and data.get("clearChatKey"):
+        try:
+            _ai = {}
+            if AI_SETTINGS_FILE.exists():
+                _ai = json.loads(AI_SETTINGS_FILE.read_text())
+            _ai["provider"] = "local"
+            _ai.setdefault("fields", {})["apiKey"] = ""
+            AI_SETTINGS_FILE.write_text(json.dumps(_ai, indent=2))
+        except Exception:
+            pass
+
     masked = dict(cfg)
     if masked.get("apiKey"):
         masked["apiKey"] = "••••••••"
@@ -1462,12 +1476,11 @@ def cymind_enable():
 
     import secrets as _secrets
     data        = request.get_json() or {}
-    cymind_url  = str(data.get("cymindUrl", "")).strip().rstrip("/")
+    # CyMind is always at 172.16.0.2:8080 — URL is fixed, not user-configurable
+    cymind_url  = "http://172.16.0.2:8080"
     admin_email = str(data.get("cymindAdminEmail", "")).strip()
     admin_pw    = str(data.get("cymindAdminPassword", "")).strip()
 
-    if not cymind_url:
-        return jsonify({"error": "CyMind URL is required."}), 400
     if not admin_email or not admin_pw:
         return jsonify({"error": "CyMind admin email and password are required."}), 400
 
@@ -1526,6 +1539,22 @@ def cymind_enable():
     cfg = _read_cymind_config()
     cfg["chatApiKey"] = chat_key
     _write_cymind_config(cfg)
+
+    # ── Step 5: Auto-configure AI provider to use CyMind ─────────────────────
+    # All AI/LLM config is handled automatically — no manual input needed in UI
+    try:
+        _ai = {}
+        if AI_SETTINGS_FILE.exists():
+            _ai = json.loads(AI_SETTINGS_FILE.read_text())
+        _ai["provider"] = "cymind"
+        _ai.setdefault("fields", {})["baseUrl"] = cymind_url
+        _ai.setdefault("fields", {})["apiKey"]  = chat_key
+        _ai.setdefault("cymind_memory", {})["baseUrl"] = cymind_url
+        _ai.setdefault("cymind_memory", {})["apiKey"]  = chat_key
+        AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        AI_SETTINGS_FILE.write_text(json.dumps(_ai, indent=2))
+    except Exception as _e:
+        logger.warning("cymind_enable: failed to auto-configure AI provider: %s", _e)
 
     return jsonify({
         "ok": True,
