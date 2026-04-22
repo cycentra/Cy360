@@ -1366,7 +1366,7 @@ def cymind_get():
     masked = dict(cfg)
     if masked.get("apiKey"):
         masked["apiKey"] = "••••••••"
-    # chatApiKey (pak_...) is returned unmasked — the browser needs it to authenticate to CyMind
+    # chatApiKey (pak_...) is returned unmasked — the overlay uses it as Bearer token.
     base_url = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").rstrip("/")
     base_domain = os.environ.get("BASE_DOMAIN", "")
     public_mcp = f"https://cysoc.{base_domain}/mcp/sse" if base_domain else f"{base_url}/mcp/sse"
@@ -1383,10 +1383,13 @@ def cymind_post():
     """Save CyMind integration settings. Admin only.
 
     Body (all optional):
-      cymindUrl       — base URL of CyMind instance (e.g. https://cymind.corp.example.com)
-      generateKey     — true → generate and store a new cymk_... M2M API key
-      generateChatKey — true → generate and store a new pak_... chat API key for the overlay
-      enabled         — bool, enable/disable the integration
+      cymindUrl   — base URL of CyMind instance (e.g. https://cymind.corp.example.com)
+      generateKey — true → generate and store a new cymk_... M2M API key
+      chatApiKey  — pak_... API key generated in CyMind for the portal service account;
+                    must be created in CyMind (Users → service account with analyst role →
+                    API Keys → Generate) and pasted here.  Pass "" to clear.
+      clearChatKey — true → remove the stored chat API key
+      enabled     — bool, enable/disable the integration
     """
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
@@ -1410,19 +1413,23 @@ def cymind_post():
         cfg["enabled"] = bool(data["enabled"])
     if data.get("generateKey"):
         cfg["apiKey"] = "cymk_" + _secrets.token_hex(24)
-    if data.get("generateChatKey"):
-        cfg["chatApiKey"] = "pak_" + _secrets.token_hex(32)
+    if "chatApiKey" in data:
+        raw = str(data["chatApiKey"]).strip()
+        if raw and not raw.startswith("pak_"):
+            return jsonify({"error": "Chat API key must start with 'pak_' — generate it in CyMind's API Keys section."}), 400
+        cfg["chatApiKey"] = raw  # empty string = clear
+    if data.get("clearChatKey"):
+        cfg["chatApiKey"] = ""
 
     _write_cymind_config(cfg)
     masked = dict(cfg)
     if masked.get("apiKey"):
         masked["apiKey"] = "••••••••"
-    # chatApiKey stays in cfg for the response (revealed to admin on generation)
+    if masked.get("chatApiKey"):
+        masked["chatApiKey"] = masked["chatApiKey"][:12] + "••••••••"
     extra = {}
     if data.get("generateKey"):
         extra["newKey"] = cfg["apiKey"]
-    if data.get("generateChatKey"):
-        extra["newChatKey"] = cfg["chatApiKey"]
     return jsonify({
         "ok": True,
         "config": masked,
@@ -1480,7 +1487,7 @@ def cymind_test():
     # ── 3. Chat API key presence ───────────────────────────────────────────────
     results["chat_key"] = {
         "ok":  bool(cfg.get("chatApiKey")),
-        "msg": "Chat API key set" if cfg.get("chatApiKey") else "Chat API key not set — generate one in settings",
+        "msg": "Chat API key set" if cfg.get("chatApiKey") else "Chat API key not set — create an analyst user in CyMind, generate an API key there, and paste it in System Settings → CyMind.",
     }
 
     overall = all(v["ok"] for v in results.values())
