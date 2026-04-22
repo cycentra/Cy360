@@ -1424,14 +1424,17 @@ def cymind_post():
     _write_cymind_config(cfg)
 
     # When disabling the integration, revert AI provider to local so enrichment
-    # falls back to the on-prem Ollama engine automatically
+    # falls back to the on-prem Ollama engine automatically.
+    # Also clear cymind_memory credentials to prevent stale key usage after disable.
     if not cfg.get("enabled") and data.get("clearChatKey"):
         try:
             _ai = {}
             if AI_SETTINGS_FILE.exists():
                 _ai = json.loads(AI_SETTINGS_FILE.read_text())
             _ai["provider"] = "local"
-            _ai.setdefault("fields", {})["apiKey"] = ""
+            _ai.setdefault("fields", {})["apiKey"]  = ""
+            _ai.setdefault("cymind_memory", {})["apiKey"]  = ""
+            _ai.setdefault("cymind_memory", {})["baseUrl"] = ""
             AI_SETTINGS_FILE.write_text(json.dumps(_ai, indent=2))
         except Exception:
             pass

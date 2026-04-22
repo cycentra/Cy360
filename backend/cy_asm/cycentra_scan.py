@@ -463,7 +463,16 @@ async def store_to_cymind_memory(findings: list, domain: str, provider: str) -> 
                         json=payload,
                     )
                     if resp.status_code in (200, 201):
-                        logger.info(f"🧠 [CyMind Memory] Stored: {incident_id}")
+                        body = resp.json()
+                        if body.get("stored", True):
+                            logger.info(f"🧠 [CyMind Memory] Stored: {incident_id}")
+                        else:
+                            # Embedding service unavailable on CyMind — run: ollama pull nomic-embed-text
+                            logger.warning(
+                                f"⚠️ [CyMind Memory] {incident_id} — embedding unavailable "
+                                f"({body.get('reason','unknown')}). "
+                                f"Fix: ollama pull nomic-embed-text on the CyMind server."
+                            )
                     else:
                         logger.warning(f"⚠️ [CyMind Memory] {incident_id} → HTTP {resp.status_code}")
                 except Exception as e:
