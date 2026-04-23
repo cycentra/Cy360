@@ -423,7 +423,7 @@ def iris_test():
     """Test connectivity to a DFIR IRIS instance using its REST API."""
     data    = request.get_json() or {}
     url     = data.get("url", "").rstrip("/")
-    api_key = data.get("apiKey", "")
+    api_key = data.get("apiKey", "").strip()    # strip whitespace/newlines before comparison
 
     # If the UI sent an empty key with useStored=True (cloud mode, masked placeholder),
     # fall back to the key stored in ai_settings.json, then to the env var (same
@@ -458,7 +458,27 @@ def iris_test():
             verify=False,   # IRIS commonly runs with self-signed certs on-premise
         )
         if resp.status_code == 401:
-            return jsonify({"ok": False, "error": "Invalid API key (401 Unauthorized)"}), 400
+            # Distinguish a genuine IRIS 401 (JSON body) from an oauth2-proxy / nginx
+            # authentication-gateway 401 (HTML body).  If the Bearer token was blocked
+            # by a reverse-proxy the fix is the URL, not the key.
+            try:
+                body401 = resp.json()
+                if body401.get("status") == "error":
+                    # Real IRIS 401 — key does not match any active IRIS user
+                    return jsonify({"ok": False, "error": (
+                        f"Invalid API key (401) — verify with: "
+                        f"curl {url}/api/ping -H 'Authorization: Bearer YOUR_KEY' "
+                        "— get key from IRIS: avatar \u2192 My Settings \u2192 API Key"
+                    )}), 400
+            except Exception:
+                pass
+            # Non-JSON 401 — likely from an nginx oauth2-proxy gate in front of IRIS.
+            # Bearer tokens are not forwarded by oauth2-proxy; browser session cookie required.
+            return jsonify({"ok": False, "error": (
+                f"401 from an auth proxy — '{url}' is behind a login gateway that blocks "
+                "API key access. Use the internal address (e.g. http://127.0.0.1:4433) "
+                "to bypass it"
+            )}), 400
         if resp.status_code == 403:
             # Distinguish a real IRIS 403 from a non-IRIS server (e.g. CyCentra's own
             # nginx at port 80 returning 403 when the user entered the wrong URL/port).

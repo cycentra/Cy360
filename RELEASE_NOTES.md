@@ -1,3 +1,32 @@
+## v1.0.252 -- 2026-04-23
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.252 -- 2026-04-23
+
+### Bug Fixes
+
+  - **CyIRIS Test Connection — whitespace in API key causes silent 401**:
+    `iris_test()` read the API key from the request body without `.strip()`.
+    A key copied from a terminal with a trailing newline/space failed the exact
+    DB match in IRIS, producing 401 even though the key was correct.
+    Fix: `api_key = data.get("apiKey", "").strip()` before any auth check.
+
+  - **CyIRIS Test Connection — undifferentiated 401 message**:
+    Both a genuine IRIS 401 (wrong key — JSON body `{"status":"error"}`) and a
+    reverse-proxy 401 (oauth2-proxy / nginx IAP blocking Bearer tokens — HTML
+    body) returned the same "Invalid API key (401 Unauthorized)" message.
+    Fix: parse the response body; if JSON IRIS 401, show "Invalid API key" with
+    a diagnostic `curl /api/ping` command; if HTML 401, surface "auth proxy /
+    login gateway" hint and advise using the internal address
+    (`http://127.0.0.1:4433`) to bypass the IAP gate.
+
+---
+
 ## v1.0.251 -- 2026-04-23
 
 ### Improvements

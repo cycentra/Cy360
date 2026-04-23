@@ -563,3 +563,113 @@ class TestLocalIrisJsonError:
         data = resp.get_json()
         assert data["ok"] is False
         assert "Expecting value" not in data.get("error", "")
+
+
+# ── Bug 3: Local CyIRIS — whitespace in API key causes silent 401 ─────────────
+
+class TestLocalIrisApiKeyStrip:
+    """
+    A Bearer token that is correct but has a trailing newline/space (common when
+    copied from a terminal) causes an exact-match failure in the IRIS DB, which
+    returns 401.  The backend must strip the key before sending it.
+
+    FAILS before fix: IRIS receives "mykey\n" → 401 if DB stores "mykey".
+    PASSES after fix: stripped to "mykey" → 200 pong.
+    """
+
+    def test_api_key_with_trailing_newline_is_stripped(self, client):
+        ping_ok = _json_resp({"status": "success", "message": "pong", "data": []})
+        ver_ok  = _json_resp({"status": "success", "message": "", "data": {"iris_current": "2.4.0"}})
+        captured = {}
+
+        def fake_get(url, headers=None, **kwargs):
+            captured["auth"] = (headers or {}).get("Authorization", "")
+            if "/api/ping" in url:
+                return ping_ok
+            return ver_ok
+
+        with patch("blueprints.system.routes.http_requests") as mock_http:
+            mock_http.get.side_effect = fake_get
+            with patch("blueprints.system.routes.add_cors_headers", side_effect=lambda r: r):
+                resp = client.post(
+                    "/api/system/iris/test",
+                    json={"url": "http://127.0.0.1:4433", "apiKey": "mykey\n", "useStored": False},
+                    content_type="application/json",
+                )
+
+        assert captured.get("auth") == "Bearer mykey", (
+            f"Expected stripped Bearer token 'Bearer mykey', got {captured.get('auth')!r}\n"
+            "Bug 3: api_key not stripped before sending to IRIS."
+        )
+        data = resp.get_json()
+        assert data["ok"] is True
+
+
+# ── Bug 4: Local / Cloud CyIRIS — undifferentiated 401 message ───────────────
+
+class TestIris401SmartMessage:
+    """
+    A 401 can come from two sources:
+    (a) Real IRIS auth failure — JSON body {"status": "error"} — key is wrong.
+    (b) nginx oauth2-proxy gate — HTML body — URL is wrong (Bearer tokens blocked
+        by the proxy).
+
+    Before fix: both cases returned "Invalid API key (401 Unauthorized)".
+    After fix:
+    (a) returns a message mentioning "Invalid API key" + curl diagnostic command.
+    (b) returns a message mentioning "auth proxy" / "login gateway" + internal URL.
+    """
+
+    def test_real_iris_401_json_body_gives_key_hint(self, client):
+        """
+        IRIS returns 401 with JSON body {"status": "error"} — key is wrong.
+        Error must mention "Invalid API key" and include diagnostic curl command.
+        FAILS before fix (generic message without curl hint), PASSES after.
+        """
+        iris_401 = _json_resp({"status": "error", "message": "Access denied"}, 401)
+        iris_401.ok = False
+
+        with patch("blueprints.system.routes.http_requests") as mock_http:
+            mock_http.get.return_value = iris_401
+            with patch("blueprints.system.routes.add_cors_headers", side_effect=lambda r: r):
+                resp = client.post(
+                    "/api/system/iris/test",
+                    json={"url": "http://127.0.0.1:4433", "apiKey": "wrongkey", "useStored": False},
+                    content_type="application/json",
+                )
+
+        data = resp.get_json()
+        assert data["ok"] is False
+        error = data.get("error", "")
+        assert "Invalid API key" in error or "invalid api key" in error.lower(), (
+            f"Expected 'Invalid API key' hint for genuine IRIS 401, got: {error!r}"
+        )
+        assert "curl" in error.lower() or "api/ping" in error.lower(), (
+            f"Expected diagnostic curl command in error, got: {error!r}"
+        )
+
+    def test_proxy_401_html_body_gives_url_hint(self, client):
+        """
+        oauth2-proxy / nginx gate returns 401 with HTML body (not IRIS JSON).
+        Error must mention the proxy / gateway — NOT "Invalid API key".
+        FAILS before fix (was "Invalid API key (401 Unauthorized)"), PASSES after.
+        """
+        proxy_401 = _html_resp(401)
+        proxy_401.ok = False
+
+        with patch("blueprints.system.routes.http_requests") as mock_http:
+            mock_http.get.return_value = proxy_401
+            with patch("blueprints.system.routes.add_cors_headers", side_effect=lambda r: r):
+                resp = client.post(
+                    "/api/system/iris/test",
+                    json={"url": "https://cyiris.example.com", "apiKey": "anykey", "useStored": False},
+                    content_type="application/json",
+                )
+
+        data = resp.get_json()
+        assert data["ok"] is False
+        error = data.get("error", "")
+        assert "proxy" in error.lower() or "gateway" in error.lower() or "internal" in error.lower(), (
+            f"Expected proxy/gateway hint for HTML 401, got: {error!r}\n"
+            "Bug 4: non-JSON 401 still reports 'Invalid API key' instead of URL hint."
+        )
