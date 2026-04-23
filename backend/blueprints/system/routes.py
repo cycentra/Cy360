@@ -437,6 +437,12 @@ def iris_test():
         # Fallback to env var if still missing (cloud mode: key lives in .env, not in UI)
         if not api_key:
             api_key = os.environ.get("CLOUD_IRIS_API_KEY", "").strip()
+        # Override the URL with CLOUD_IRIS_URL from env — the stored internal address
+        # (e.g. http://127.0.0.1:4433) bypasses the nginx IAP (oauth2-proxy) gate that
+        # sits in front of https://cyiris.DOMAIN and would block Bearer-token requests
+        # with an HTML redirect.  Same resolution as iris_connector.py and
+        # _sync_iris_to_siem_env().
+        url = os.environ.get("CLOUD_IRIS_URL", url).rstrip("/")
 
     if not url:
         return jsonify({"ok": False, "error": "CyIRIS URL is required"}), 400
@@ -454,7 +460,16 @@ def iris_test():
         if resp.status_code == 401:
             return jsonify({"ok": False, "error": "Invalid API key (401 Unauthorized)"}), 400
         if resp.status_code == 403:
-            return jsonify({"ok": False, "error": "Access denied (403 Forbidden)"}), 400
+            # Distinguish a real IRIS 403 from a non-IRIS server (e.g. CyCentra's own
+            # nginx at port 80 returning 403 when the user entered the wrong URL/port).
+            try:
+                err_body = resp.json()
+                # IRIS error responses always carry {"status": "error", "message": ...}
+                if err_body.get("status") == "error":
+                    return jsonify({"ok": False, "error": f"Access denied — IRIS rejected the API key (403). Verify the key in IRIS → My Profile → API Key"}), 400
+            except Exception:
+                pass
+            return jsonify({"ok": False, "error": "403 received — the URL may be wrong (e.g. pointing to the wrong port). Local CyIRIS listens on port 4433 by default"}), 400
         if resp.ok:
             # Validate the ping response is actually from a DFIR IRIS instance.
             # A plain nginx default page or proxy can return HTTP 200 with HTML/empty

@@ -1,4 +1,4 @@
-## v1.0.250 -- 2026-04-23
+## v1.0.251 -- 2026-04-23
 
 ### Improvements
 
@@ -6,9 +6,24 @@
 
 ---
 
-## v1.0.250 -- 2026-04-23
+## v1.0.251 -- 2026-04-23
 
 ### Bug Fixes
+
+  - **UI Update button — `_PIP_BSP: unbound variable` / exit code 1**:
+    `_PIP_BSP` (the `--break-system-packages` flag detector for pip3) was
+    initialised inside the `INFRASTRUCTURE BLOCK`, which is skipped entirely in
+    `--update` mode. The `APP BLOCK` (runs in all modes) references `${_PIP_BSP}`
+    in two places — the CySIEM→Redis bridge pip install and the backend wheel
+    install (Step 12). With `set -euo pipefail` active, bash aborts on the first
+    expansion of an unbound variable, producing the `_PIP_BSP: unbound variable`
+    error and exit code 1. Manual `--update` runs succeeded because the server's
+    on-disk copy pre-dated the Step 12 `${_PIP_BSP}` reference; the UI button
+    always downloads the latest release script and ran into it. Fix: added a
+    `_PIP_BSP` re-detection block immediately after `fi  # end INFRA block` so
+    the variable is always set before any APP BLOCK code executes.
+    File: `cycentra-setup.sh` — between INFRA block `fi` and APP BLOCK header.
+    Regression tests: `tests/unit/test_pip_bsp_update_mode.py` (3 cases).
 
   - **Cloud CyIRIS test connection — "CyIRIS API Key is required" even when key is provisioned**:
     `iris_test()` read from `ai_settings.json` when `useStored=True` but had no env-var
@@ -16,6 +31,18 @@
     in `ai_settings.json` (it lives in `.env` as `CLOUD_IRIS_API_KEY`). Added
     `os.environ.get("CLOUD_IRIS_API_KEY")` fallback after the settings-file lookup —
     matching the pattern already used by MISP (`CLOUD_MISP_API_KEY`).
+    File: `backend/blueprints/system/routes.py` — `iris_test()`.
+
+  - **Cloud CyIRIS test connection — "Server returned a non-JSON response" (nginx IAP blocks Bearer token)**:
+    Even after the API key was resolved, `iris_test()` used the URL the UI sends
+    (`https://cyiris.cycentra.com`) which routes through the nginx IAP gate (oauth2-proxy).
+    The proxy intercepts all requests without a browser session cookie — including
+    Bearer-token API calls — and returns an HTML redirect to login. `iris_connector.py`
+    (the correlation engine) works because it reads `CLOUD_IRIS_URL` from `.env`, which
+    is set to the internal Docker address (e.g. `http://127.0.0.1:4433`) that bypasses
+    nginx entirely. Fix: `iris_test()` now resolves the URL from `CLOUD_IRIS_URL` env var
+    when `useStored=True`, using the same fallback logic as `iris_connector.py` and
+    `_sync_iris_to_siem_env()`.
     File: `backend/blueprints/system/routes.py` — `iris_test()`.
 
   - **Local CyIRIS test connection — "Expecting value: line 1 column 1 (char 0)"**:
@@ -28,7 +55,17 @@
     (2) wrapped `ver_resp.json()` in its own `try/except` so a missing/invalid version
     endpoint never hides a successful ping.
     File: `backend/blueprints/system/routes.py` — `iris_test()` ping success path.
-    Regression tests: `tests/unit/test_iris_test_route.py` (6 cases).
+
+  - **Local CyIRIS test connection — misleading "Access denied (403 Forbidden)" on wrong URL**:
+    Testing with `http://127.0.0.1` (port 80) on a CyCentra server hits CyCentra's own
+    nginx/Flask — not CyIRIS. CyCentra's auth middleware returns 403 before routing, which
+    the test handler reported as "Access denied (403 Forbidden)", implying an API key problem.
+    Local CyIRIS listens on port 4433 by default. Fix: the 403 handler now inspects the
+    response body — a real IRIS 403 carries `{"status": "error", ...}` JSON and gets a
+    "check your API key" message; a non-IRIS server (HTML body) gets a "check URL/port"
+    message.
+    File: `backend/blueprints/system/routes.py` — `iris_test()`.
+    Regression tests: `tests/unit/test_iris_test_route.py` (10 cases).
 
 ---
 
