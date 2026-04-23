@@ -1242,9 +1242,33 @@ except ImportError:
 
 # ── CyMind MCP access-control (ASGI-level, streaming-safe) ───────────────────
 # Wraps the FastAPI app so that /mcp/* requests are rejected unless the caller
-# presents the shared API key.  Uses raw ASGI to avoid BaseHTTPMiddleware's
+# presents a valid API key.  Uses raw ASGI to avoid BaseHTTPMiddleware's
 # response-buffering, which would break SSE streaming.
+#
+# Valid keys: the CyMind M2M master key (CYMIND_API_KEY from env) PLUS any
+# 3rd-party cymk_... keys stored in ai_settings.json → cymind_integration.mcp_api_keys.
+# Keys are loaded at request time so new keys take effect without a restart.
 _cymind_key = str(getattr(settings, "cymind_api_key", "") or "").strip()
+
+
+def _load_valid_mcp_keys() -> set:
+    """Return the set of all currently valid MCP bearer tokens."""
+    keys = set()
+    if _cymind_key:
+        keys.add(_cymind_key)
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        data = _json.loads(_Path("/opt/cycentra/ai_settings.json").read_text())
+        for entry in data.get("cymind_integration", {}).get("mcp_api_keys", []):
+            k = str(entry.get("key", "")).strip()
+            if k:
+                keys.add(k)
+    except Exception:
+        pass
+    return keys
+
+
 if _cymind_key:
     _inner_app = app  # keep reference before shadowing
 
@@ -1255,8 +1279,8 @@ if _cymind_key:
             provided = auth_header.removeprefix("Bearer ").strip()
             if not provided:
                 provided = raw_headers.get(b"x-cymind-key", b"").decode("utf-8", errors="ignore")
-            if provided != _cymind_key:
-                body = b'{"error":"Unauthorized \u2014 valid CyMind API key required"}'
+            if provided not in _load_valid_mcp_keys():
+                body = b'{"error":"Unauthorized \u2014 valid MCP API key required"}'
                 await send({
                     "type": "http.response.start",
                     "status": 401,
@@ -1269,4 +1293,4 @@ if _cymind_key:
                 return
         await _inner_app(scope, receive, send)
 
-    log.info("mcp_key_guard_active", hint="CyMind API key required for /mcp/* access")
+    log.info("mcp_key_guard_active", hint="Master CyMind key + 3rd-party keys accepted for /mcp/* access")

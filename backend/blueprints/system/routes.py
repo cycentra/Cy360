@@ -1621,6 +1621,118 @@ def cymind_test():
     return jsonify({"ok": overall, "results": results})
 
 
+def _fetch_siem_context_block() -> str:
+    """
+    Fetch a live SIEM snapshot from the local correlation engine and format it
+    as a '--- LIVE SIEM DATA ---' block for injection into the CyMind system
+    prompt.  Returns empty string when the engine is unreachable.
+    """
+    import datetime as _dt
+    engine_url = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").rstrip("/")
+    _t = 3  # short per-call timeout
+
+    ctx = {}
+    try:
+        r = http_requests.get(f"{engine_url}/stats", timeout=_t)
+        if r.ok:
+            ctx["stats"] = r.json()
+    except Exception:
+        pass
+    try:
+        r = http_requests.get(f"{engine_url}/incidents",
+                              params={"status": "open", "limit": 10}, timeout=_t)
+        if r.ok:
+            ctx["open_incidents"] = r.json()
+    except Exception:
+        pass
+    try:
+        r = http_requests.get(f"{engine_url}/risk-scores",
+                              params={"level": "high", "limit": 10}, timeout=_t)
+        if r.ok:
+            ctx["high_risk_entities"] = r.json()
+    except Exception:
+        pass
+    try:
+        r = http_requests.get(f"{engine_url}/ueba/users",
+                              params={"has_anomaly": "true", "limit": 10}, timeout=_t)
+        if r.ok:
+            ctx["ueba_anomalies"] = r.json()
+    except Exception:
+        pass
+
+    if not ctx:
+        return ""
+
+    now = _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    lines = [
+        "\n--- LIVE SIEM DATA ---",
+        f"Source: CyCentra 360 (direct) | Timestamp: {now}\n",
+    ]
+
+    if "stats" in ctx:
+        s = ctx["stats"]
+        lines += [
+            "## Overview",
+            f"- Total alerts (24h): {s.get('total_alerts_24h', 'N/A')}",
+            f"- Open incidents: {s.get('open_incidents', 'N/A')}",
+            f"- Active agents: {s.get('active_agents', 'N/A')}",
+            f"- Critical alerts: {s.get('critical_alerts', 'N/A')}",
+            "",
+        ]
+
+    if ctx.get("open_incidents"):
+        raw  = ctx["open_incidents"]
+        rows = raw if isinstance(raw, list) else raw.get("incidents", raw.get("data", []))
+        if rows:
+            lines += ["## Open Incidents",
+                      "| ID | Title | Severity | Risk Score | Created |",
+                      "|---|---|---|---|---|"]
+            for inc in rows[:10]:
+                lines.append(
+                    f"| {inc.get('id', inc.get('incident_id', '?'))} "
+                    f"| {inc.get('title', '?')} "
+                    f"| {inc.get('severity', '?')} "
+                    f"| {inc.get('risk_score', '?')} "
+                    f"| {inc.get('created_at', '?')} |"
+                )
+            lines.append("")
+
+    if ctx.get("high_risk_entities"):
+        raw  = ctx["high_risk_entities"]
+        rows = raw if isinstance(raw, list) else raw.get("entities", raw.get("data", []))
+        if rows:
+            lines += ["## High-Risk Entities",
+                      "| Entity | Type | Risk Score | Last Seen |",
+                      "|---|---|---|---|"]
+            for ent in rows[:10]:
+                lines.append(
+                    f"| {ent.get('entity', ent.get('name', '?'))} "
+                    f"| {ent.get('type', '?')} "
+                    f"| {ent.get('risk_score', '?')} "
+                    f"| {ent.get('last_seen', '?')} |"
+                )
+            lines.append("")
+
+    if ctx.get("ueba_anomalies"):
+        raw  = ctx["ueba_anomalies"]
+        rows = raw if isinstance(raw, list) else raw.get("users", raw.get("data", []))
+        if rows:
+            lines += ["## UEBA Anomalies",
+                      "| User | Anomaly Type | Score | Last Activity |",
+                      "|---|---|---|---|"]
+            for u in rows[:10]:
+                lines.append(
+                    f"| {u.get('username', u.get('user', '?'))} "
+                    f"| {u.get('anomaly_type', u.get('type', '?'))} "
+                    f"| {u.get('score', u.get('risk_score', '?'))} "
+                    f"| {u.get('last_activity', u.get('last_seen', '?'))} |"
+                )
+            lines.append("")
+
+    lines.append("--- END LIVE SIEM DATA ---\n")
+    return "\n".join(lines)
+
+
 @system_bp.route("/api/cymind/chat/stream", methods=["OPTIONS"])
 def cymind_chat_proxy_options():
     return add_cors_headers(make_response('', 204))
@@ -1630,11 +1742,9 @@ def cymind_chat_proxy_options():
 def cymind_chat_proxy():
     """
     SSE proxy: forwards the browser's chat request to CyMind and streams the
-    response back.  Replaces the nginx /cymind/ injection path — this route is
-    always available regardless of nginx config state.
-
-    Auth: uses the stored chatApiKey (pak_...) automatically so the browser
-    never needs to handle raw credentials beyond what CyCentra already fetches.
+    response back.  Injects live SIEM context from the local correlation engine
+    directly into the system prompt so CyMind always has current data — no MCP
+    callback from CyMind to CyCentra required.
     """
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
@@ -1651,13 +1761,29 @@ def cymind_chat_proxy():
     if not chat_key:
         return jsonify({"error": "Chat API key not set — see System Settings → CyMind."}), 503
 
+    # ── Parse body and inject live SIEM context ────────────────────────────────
+    raw_body = request.get_data()
+    try:
+        body_json = json.loads(raw_body)
+    except Exception:
+        body_json = None
+
+    if body_json is not None:
+        siem_block = _fetch_siem_context_block()
+        if siem_block:
+            existing_system = body_json.get("system", "")
+            body_json["system"] = (existing_system + siem_block).strip()
+        body_json["use_mcp"] = False  # context already injected; skip CyMind→CyCentra MCP call
+        forward_body = json.dumps(body_json).encode()
+    else:
+        forward_body = raw_body  # fallback: forward as-is
+
     target = f"{cymind_url}/api/v1/chat/stream"
-    body   = request.get_data()
 
     try:
         upstream = http_requests.post(
             target,
-            data=body,
+            data=forward_body,
             headers={
                 "Content-Type":  "application/json",
                 "Authorization": f"Bearer {chat_key}",
@@ -1782,6 +1908,119 @@ def cymind_context():
         "timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z",
         "context":   context,
     })
+
+
+# ── MCP API Keys — 3rd-party integrations ─────────────────────────────────────
+#
+# Generates cymk_... keys that authorise 3rd-party MCP clients (SIEM integrations,
+# AI agents, etc.) to access the correlation-engine /mcp/sse SSE bridge.
+# CyMind's own key is managed OOB via cymind_enable() — no change there.
+# Keys are stored inside ai_settings.json → cymind_integration.mcp_api_keys.
+
+def _read_mcp_api_keys() -> list:
+    cfg = _read_cymind_config()
+    return cfg.get("mcp_api_keys", [])
+
+
+def _write_mcp_api_keys(keys: list) -> None:
+    existing = {}
+    try:
+        if AI_SETTINGS_FILE.exists():
+            existing = json.loads(AI_SETTINGS_FILE.read_text())
+    except Exception:
+        pass
+    cfg = existing.get("cymind_integration", {})
+    cfg["mcp_api_keys"] = keys
+    existing["cymind_integration"] = cfg
+    AI_SETTINGS_FILE.write_text(json.dumps(existing, indent=2))
+
+
+@system_bp.route("/api/system/mcp/keys", methods=["OPTIONS"])
+def mcp_keys_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/mcp/keys", methods=["GET"])
+def mcp_keys_get():
+    """List 3rd-party MCP API keys. Admin only. Actual key values are masked."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+
+    keys = _read_mcp_api_keys()
+    masked = []
+    for entry in keys:
+        k = entry.get("key", "")
+        masked.append({
+            **entry,
+            "key": (k[:12] + "••••••••") if len(k) > 12 else "••••••••",
+        })
+    base_url    = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").rstrip("/")
+    base_domain = os.environ.get("BASE_DOMAIN", "")
+    public_mcp  = f"https://cy360.{base_domain}/mcp/sse" if base_domain else f"{base_url}/mcp/sse"
+    return jsonify({"ok": True, "keys": masked, "endpoint": public_mcp})
+
+
+@system_bp.route("/api/system/mcp/keys", methods=["POST"])
+def mcp_keys_post():
+    """Generate a new 3rd-party MCP API key. Admin only.
+    Body: { name: str, description?: str }
+    Response includes the full key value (shown once — not stored in plaintext in the UI).
+    """
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+
+    import secrets as _secrets
+    import datetime as _dt
+    data        = request.get_json() or {}
+    name        = str(data.get("name", "")).strip()
+    description = str(data.get("description", "")).strip()
+    if not name:
+        return jsonify({"error": "Key name is required"}), 400
+    if len(name) > 80:
+        return jsonify({"error": "Name must be ≤ 80 characters"}), 400
+
+    keys    = _read_mcp_api_keys()
+    new_key = "cymk_" + _secrets.token_hex(24)
+    entry   = {
+        "id":          "key_" + _secrets.token_hex(8),
+        "name":        name,
+        "description": description,
+        "key":         new_key,
+        "created_at":  _dt.datetime.utcnow().isoformat() + "Z",
+    }
+    keys.append(entry)
+    _write_mcp_api_keys(keys)
+    logger.info("mcp_api_key_generated name=%s by=%s", name, session["user_email"])
+    return jsonify({"ok": True, "key": new_key, "id": entry["id"], "name": name})
+
+
+@system_bp.route("/api/system/mcp/keys/<key_id>", methods=["OPTIONS"])
+def mcp_key_revoke_options(key_id):
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/mcp/keys/<key_id>", methods=["DELETE"])
+def mcp_key_revoke(key_id):
+    """Revoke a 3rd-party MCP API key by ID. Admin only."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+
+    keys    = _read_mcp_api_keys()
+    updated = [k for k in keys if k.get("id") != key_id]
+    if len(updated) == len(keys):
+        return jsonify({"error": "Key not found"}), 404
+    _write_mcp_api_keys(updated)
+    logger.info("mcp_api_key_revoked id=%s by=%s", key_id, session["user_email"])
+    return jsonify({"ok": True})
 
 
 # ── Office 365 Wazuh Integration ──────────────────────────────────────────────

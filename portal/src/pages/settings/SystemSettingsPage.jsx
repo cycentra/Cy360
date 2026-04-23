@@ -1519,6 +1519,15 @@ function CyMindIntegrationTab() {
   const [newKey,      setNewKey]      = useState(null);
   const [chatKeyInput,setChatKeyInput]= useState("");
 
+  // MCP API Keys (3rd-party)
+  const [mcpKeys,       setMcpKeys]       = useState([]);
+  const [mcpKeysEp,     setMcpKeysEp]     = useState("");
+  const [mcpKeysLoading,setMcpKeysLoading]= useState(false);
+  const [newKeyName,    setNewKeyName]    = useState("");
+  const [newKeyDesc,    setNewKeyDesc]    = useState("");
+  const [genKeyResult,  setGenKeyResult]  = useState(null);   // {key, name} shown once
+  const [mcpKeyMsg,     setMcpKeyMsg]     = useState(null);
+
   const fetchCfg = () => {
     setLoading(true);
     fetch(`${API_BASE}/api/system/cymind`, { credentials: "include" })
@@ -1527,8 +1536,17 @@ function CyMindIntegrationTab() {
       .catch(() => setLoading(false));
   };
 
+  const fetchMcpKeys = () => {
+    setMcpKeysLoading(true);
+    fetch(`${API_BASE}/api/system/mcp/keys`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) { setMcpKeys(d.keys || []); setMcpKeysEp(d.endpoint || ""); } setMcpKeysLoading(false); })
+      .catch(() => setMcpKeysLoading(false));
+  };
+
   useEffect(() => {
     fetchCfg();
+    fetchMcpKeys();
     fetch(`${API_BASE}/api/system/mcp`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setMcpStatus(d); })
@@ -1606,6 +1624,40 @@ function CyMindIntegrationTab() {
       else { setMsg({ ok: false, text: d.error || "Save failed" }); }
     } catch (e) { setMsg({ ok: false, text: String(e) }); }
     finally { setSaving(false); }
+  };
+
+  // ── MCP API key generation ─────────────────────────────────────────────────
+  const handleGenMcpKey = async () => {
+    const name = newKeyName.trim();
+    if (!name) { setMcpKeyMsg({ ok: false, text: "Enter a name for the key." }); return; }
+    setMcpKeyMsg({ ok: null, text: "Generating…" }); setGenKeyResult(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/system/mcp/keys`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description: newKeyDesc.trim() }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        setGenKeyResult({ key: d.key, name: d.name });
+        setNewKeyName(""); setNewKeyDesc("");
+        setMcpKeyMsg({ ok: true, text: "Key generated. Copy it now — it will not be shown again." });
+        fetchMcpKeys();
+      } else { setMcpKeyMsg({ ok: false, text: d.error || "Generation failed" }); }
+    } catch (e) { setMcpKeyMsg({ ok: false, text: String(e) }); }
+  };
+
+  const handleRevokeMcpKey = async (keyId, keyName) => {
+    if (!window.confirm(`Revoke key "${keyName}"? This cannot be undone.`)) return;
+    setMcpKeyMsg(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/system/mcp/keys/${keyId}`, {
+        method: "DELETE", credentials: "include",
+      });
+      const d = await r.json();
+      if (d.ok) { setMcpKeyMsg({ ok: true, text: `Key "${keyName}" revoked.` }); fetchMcpKeys(); }
+      else { setMcpKeyMsg({ ok: false, text: d.error || "Revoke failed" }); }
+    } catch (e) { setMcpKeyMsg({ ok: false, text: String(e) }); }
   };
 
   // ── Connectivity test ──────────────────────────────────────────────────────
@@ -1810,6 +1862,105 @@ function CyMindIntegrationTab() {
                 </button>
               </div>
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── MCP API Keys — 3rd-party integrations ─────────────────────────── */}
+      <div style={{ ...CARD, marginTop: 12 }}>
+        <div style={{ ...LABEL, marginBottom: 4 }}>MCP API Keys — 3rd Party Integrations</div>
+        <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.7, marginBottom: 14 }}>
+          Generate <code style={{ color: "rgba(0,229,160,0.5)" }}>cymk_…</code> keys for external AI agents or SIEM tools that need access to the Security MCP bridge.
+          CyMind uses its own built-in key above — this section is for additional integrations only.
+        </div>
+
+        {mcpKeysEp && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14,
+            background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)",
+            borderRadius: 4, padding: "8px 12px" }}>
+            <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", whiteSpace: "nowrap" }}>MCP Endpoint:</span>
+            <code style={{ color: "rgba(0,229,160,0.7)", fontSize: 11, fontFamily: "monospace", wordBreak: "break-all" }}>{mcpKeysEp}</code>
+          </div>
+        )}
+
+        {/* Generate form */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+          <input
+            value={newKeyName}
+            onChange={e => setNewKeyName(e.target.value)}
+            placeholder="Key name (e.g. splunk-integration)"
+            style={{ ...INPUT, flex: 2, minWidth: 160, fontFamily: "monospace" }}
+            onKeyDown={e => e.key === "Enter" && handleGenMcpKey()}
+          />
+          <input
+            value={newKeyDesc}
+            onChange={e => setNewKeyDesc(e.target.value)}
+            placeholder="Description (optional)"
+            style={{ ...INPUT, flex: 3, minWidth: 160 }}
+          />
+          <button onClick={handleGenMcpKey} disabled={!newKeyName.trim()}
+            style={{ ...BTN("#00e5a0"), opacity: newKeyName.trim() ? 1 : 0.4 }}>
+            Generate Key
+          </button>
+        </div>
+
+        {/* One-time key reveal */}
+        {genKeyResult && (
+          <div style={{ marginBottom: 14, background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.2)",
+            borderRadius: 4, padding: "10px 14px" }}>
+            <div style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace", marginBottom: 6 }}>
+              {genKeyResult.name} — copy now, this key will not be shown again
+            </div>
+            <code style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace", userSelect: "all", wordBreak: "break-all" }}>
+              {genKeyResult.key}
+            </code>
+          </div>
+        )}
+
+        {mcpKeyMsg && (
+          <div style={{ color: mcpKeyMsg.ok === true ? "#00e5a0" : mcpKeyMsg.ok === false ? "#ff3b3b" : "#ffd93d",
+            fontSize: 11, fontFamily: "monospace", marginBottom: 12 }}>
+            {mcpKeyMsg.ok === true ? "✓" : mcpKeyMsg.ok === false ? "✗" : "⋯"} {mcpKeyMsg.text}
+          </div>
+        )}
+
+        {/* Keys table */}
+        {mcpKeysLoading ? (
+          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>Loading…</div>
+        ) : mcpKeys.length === 0 ? (
+          <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 11, fontFamily: "monospace" }}>No 3rd-party keys yet.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {/* Header row */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr 80px", gap: 8,
+              color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace",
+              letterSpacing: "0.5px", textTransform: "uppercase", paddingBottom: 4,
+              borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+              <span>Name</span><span>Created</span><span>Key (masked)</span><span></span>
+            </div>
+            {mcpKeys.map(k => (
+              <div key={k.id} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr 80px", gap: 8,
+                alignItems: "center", padding: "6px 0",
+                borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+                <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 11, fontFamily: "monospace",
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {k.name}
+                </span>
+                <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+                  {k.created_at ? new Date(k.created_at).toLocaleDateString() : "—"}
+                </span>
+                <code style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace",
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {k.key}
+                </code>
+                <button onClick={() => handleRevokeMcpKey(k.id, k.name)}
+                  style={{ background: "rgba(255,59,48,0.08)", border: "1px solid rgba(255,59,48,0.2)",
+                    borderRadius: 3, color: "#ff6b6b", fontSize: 10, fontFamily: "monospace",
+                    padding: "3px 8px", cursor: "pointer" }}>
+                  Revoke
+                </button>
+              </div>
+            ))}
           </div>
         )}
       </div>
