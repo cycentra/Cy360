@@ -426,13 +426,17 @@ def iris_test():
     api_key = data.get("apiKey", "")
 
     # If the UI sent an empty key with useStored=True (cloud mode, masked placeholder),
-    # fall back to the key stored in ai_settings.json
+    # fall back to the key stored in ai_settings.json, then to the env var (same
+    # pattern as the MISP handler — CLOUD_MISP_API_KEY).
     if (not api_key or api_key == "\u2022" * 8) and data.get("useStored"):
         try:
             stored = json.loads(AI_SETTINGS_FILE.read_text()) if AI_SETTINGS_FILE.exists() else {}
             api_key = stored.get("iris", {}).get("apiKey", "")
         except Exception:
             pass
+        # Fallback to env var if still missing (cloud mode: key lives in .env, not in UI)
+        if not api_key:
+            api_key = os.environ.get("CLOUD_IRIS_API_KEY", "").strip()
 
     if not url:
         return jsonify({"ok": False, "error": "CyIRIS URL is required"}), 400
@@ -452,6 +456,16 @@ def iris_test():
         if resp.status_code == 403:
             return jsonify({"ok": False, "error": "Access denied (403 Forbidden)"}), 400
         if resp.ok:
+            # Validate the ping response is actually from a DFIR IRIS instance.
+            # A plain nginx default page or proxy can return HTTP 200 with HTML/empty
+            # body; without this check ver_resp.json() raises a cryptic JSONDecodeError.
+            try:
+                ping_data = resp.json()
+                if ping_data.get("status") != "success":
+                    return jsonify({"ok": False, "error": "Server responded but is not a DFIR IRIS instance — check the URL"}), 400
+            except Exception:
+                return jsonify({"ok": False, "error": "Server returned a non-JSON response — is the URL pointing to DFIR IRIS?"}), 400
+
             # Also fetch version info for a richer confirmation message
             ver_resp = http_requests.get(
                 f"{url}/api/versions",
@@ -460,8 +474,11 @@ def iris_test():
             )
             version = "unknown"
             if ver_resp.ok:
-                ver_data = ver_resp.json()
-                version = ver_data.get("data", {}).get("iris_current", "unknown")
+                try:
+                    ver_data = ver_resp.json()
+                    version = ver_data.get("data", {}).get("iris_current", "unknown")
+                except Exception:
+                    pass    # version info is cosmetic — don't fail the whole test
             return jsonify({"ok": True, "message": f"DFIR IRIS v{version} — connected"})
         return jsonify({"ok": False, "error": f"IRIS returned HTTP {resp.status_code}"}), 400
     except http_requests.exceptions.SSLError as e:
@@ -1768,11 +1785,25 @@ def cymind_chat_proxy():
     except Exception:
         body_json = None
 
+    _SIEM_UNAVAILABLE_NOTE = (
+        "\n\n[SYSTEM NOTE: Live SIEM data is temporarily unavailable "
+        "(the CyCentra 360 correlation engine did not respond). "
+        "IMPORTANT: Do NOT tell the user to enable any 'Live SIEM toggle' — "
+        "there is no such toggle in this interface; live SIEM context is always on. "
+        "Do NOT fabricate any incident IDs, alert counts, risk scores, usernames, CVEs, "
+        "or IP addresses. For general SOC questions answer from your training knowledge. "
+        "For live data questions, say that live SIEM data is temporarily unavailable "
+        "and recommend checking the correlation engine status or contacting the administrator.]\n"
+    )
+
     if body_json is not None:
         siem_block = _fetch_siem_context_block()
+        existing_system = body_json.get("system", "")
         if siem_block:
-            existing_system = body_json.get("system", "")
             body_json["system"] = (existing_system + siem_block).strip()
+        else:
+            # No live data — inject an explicit note so CyMind never says "enable the toggle"
+            body_json["system"] = (existing_system + _SIEM_UNAVAILABLE_NOTE).strip()
         body_json["use_mcp"] = False  # context already injected; skip CyMind→CyCentra MCP call
         forward_body = json.dumps(body_json).encode()
     else:

@@ -1,3 +1,37 @@
+## v1.0.250 -- 2026-04-23
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.250 -- 2026-04-23
+
+### Bug Fixes
+
+  - **Cloud CyIRIS test connection — "CyIRIS API Key is required" even when key is provisioned**:
+    `iris_test()` read from `ai_settings.json` when `useStored=True` but had no env-var
+    fallback, unlike the equivalent MISP handler. In cloud mode the UI never stores the key
+    in `ai_settings.json` (it lives in `.env` as `CLOUD_IRIS_API_KEY`). Added
+    `os.environ.get("CLOUD_IRIS_API_KEY")` fallback after the settings-file lookup —
+    matching the pattern already used by MISP (`CLOUD_MISP_API_KEY`).
+    File: `backend/blueprints/system/routes.py` — `iris_test()`.
+
+  - **Local CyIRIS test connection — "Expecting value: line 1 column 1 (char 0)"**:
+    When the configured URL pointed to a server returning HTTP 200 with an HTML/empty
+    body (wrong host, default nginx page, proxy), `resp.ok` was `True` and the code
+    entered the success branch. `ver_resp.json()` then raised `json.JSONDecodeError`
+    which propagated to the outer `except Exception as e` → `str(e)` = the cryptic
+    message. Two-part fix: (1) validate the `/api/ping` response is JSON with
+    `status == "success"` before proceeding — gives a clear URL-mismatch message;
+    (2) wrapped `ver_resp.json()` in its own `try/except` so a missing/invalid version
+    endpoint never hides a successful ping.
+    File: `backend/blueprints/system/routes.py` — `iris_test()` ping success path.
+    Regression tests: `tests/unit/test_iris_test_route.py` (6 cases).
+
+---
+
 ## v1.0.249 -- 2026-04-23
 
 ### Improvements
