@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.254 -- 2026-04-24 11:00 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.255 -- 2026-04-24 11:26 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -224,7 +224,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.254"
+_SCRIPT_VERSION="v1.0.255"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -2478,11 +2478,19 @@ if [[ -d "/var/ossec" ]]; then
 
     # ── Agent configuration (shared/default/agent.conf) ──────────────────────
     if [[ -f "$CONFIG_SRC/agent_config/agent.conf" ]]; then
+        _AGENT_DEST="/var/ossec/etc/shared/default/agent.conf"
+        # Back up any existing agent.conf before overwriting
+        if [[ -f "$_AGENT_DEST" ]]; then
+            cp "$_AGENT_DEST" "${_AGENT_DEST}.backup-$(date +%Y%m%d-%H%M%S)"
+            info "Existing agent.conf backed up"
+        fi
         mkdir -p /var/ossec/etc/shared/default
-        cp "$CONFIG_SRC/agent_config/agent.conf" /var/ossec/etc/shared/default/agent.conf
-        chmod 660 /var/ossec/etc/shared/default/agent.conf
-        chown root:wazuh /var/ossec/etc/shared/default/agent.conf
-        success "agent.conf deployed to shared/default"
+        cp "$CONFIG_SRC/agent_config/agent.conf" "$_AGENT_DEST"
+        chmod 660 "$_AGENT_DEST"
+        chown root:wazuh "$_AGENT_DEST"
+        success "agent.conf deployed to shared/default (pushed to enrolled agents via remoted)"
+    else
+        warn "agent_config/agent.conf not in CYSIEM-Config bundle — skipping"
     fi
 
     # ── 19.1 geoip2 Python library ────────────────────────────────────────────
@@ -2534,7 +2542,8 @@ if [[ -d "/var/ossec" ]]; then
     info "     Free signup: https://www.maxmind.com/en/geolite2/signup"
     info "  3. Sysmon: copy /opt/cycentra/sysmon/ to Windows endpoints + run deploy_sysmon.ps1"
     info "  4. Audit policy: run apply_audit_policy.ps1 on Domain Controllers"
-    info "  5. Agent config: to update agent.conf post-install run scripts/deploy_agent_config.sh"
+    info "  5. Agent config: agent.conf is deployed automatically above (pushed to agents via remoted)"
+    info "     To update agent.conf post-install: sudo bash scripts/deploy_agent_config.sh"
 
 fi  # end Wazuh block
 
@@ -2639,8 +2648,10 @@ command -v ufw >/dev/null 2>&1 || apt-get install -y -qq ufw 2>/dev/null
 ufw default deny incoming  >/dev/null 2>&1 || true
 ufw default allow outgoing >/dev/null 2>&1 || true
 
-# Allow only the three public-facing ports
-ufw allow 22/tcp  comment "SSH"           >/dev/null 2>&1 || true
+# Allow public-facing ports
+# NOTE: port 22 is opened temporarily here; Step 26 (SSH hardening) moves SSH
+# to port 2026 and removes this rule at the very end of setup.
+ufw allow 22/tcp  comment "SSH (temp — moved to 2026 by Step 26)" >/dev/null 2>&1 || true
 ufw allow 80/tcp  comment "HTTP (nginx)"  >/dev/null 2>&1 || true
 ufw allow 443/tcp comment "HTTPS (nginx)" >/dev/null 2>&1 || true
 
@@ -2651,8 +2662,9 @@ for _p in 5252 8100 5433 6379 5601 4180 4433 1880 11434 6333; do
 done
 
 echo "y" | ufw enable >/dev/null 2>&1 || ufw --force enable >/dev/null 2>&1 || true
-success "UFW: ports 22, 80, 443 open — all other ports blocked externally"
+success "UFW: ports 22 (temp), 80, 443 open — all other ports blocked externally"
 info    "Internal services (Flask 5252, engine 8100, Redis, PG) bind to loopback only"
+info    "SSH will be moved from port 22 → 2026 in Step 26 (last step)"
 
 # ── Step 24: Health checks ────────────────────────────────────────────────────
 step_header "HEALTH CHECKS"
@@ -2761,6 +2773,8 @@ echo -e "  ${DIM}6. To update: sudo bash cycentra-setup.sh --update${NC}"
 echo -e "  ${DIM}7. CyMind integration: install CyMind on Server B, then set CyMind URL in${NC}"
 echo -e "  ${DIM}   System Settings → CyMind — nginx /cymind/ proxy is injected automatically${NC}"
 echo -e "  ${DIM}   Or pass CYMIND_SERVER_IP=<ip> to this script to wire it up at install time${NC}"
+echo -e "  ${DIM}8. SSH is now on port ${_SSH_PORT:-2026} — reconnect: ssh -p ${_SSH_PORT:-2026} user@<server>${NC}"
+echo -e "  ${DIM}   Open port ${_SSH_PORT:-2026} in your Cloud Provider firewall/security group${NC}"
 echo ""
 
 # Save summary file
@@ -2808,6 +2822,8 @@ Next steps:
   4. Security MCP bridge: http://127.0.0.1:8100/mcp/sse (inside cysiemstack-engine)
   5. Install CyIRIS/CySOAR via portal
   6. Update: sudo bash cycentra-setup.sh --update
+  7. SSH is on port ${_SSH_PORT:-2026} — reconnect: ssh -p ${_SSH_PORT:-2026} user@<server>
+     Open port ${_SSH_PORT:-2026} in your Cloud Provider firewall before disconnecting.
 SUMEOF
 
 success "Summary saved → /root/cycentra-setup-summary.txt"
@@ -2822,3 +2838,71 @@ echo ""; divider
 echo -e "  ${DIM}Re-run anytime: sudo bash cycentra-setup.sh${NC}"
 echo -e "  ${DIM}Update only:    sudo bash cycentra-setup.sh --update${NC}"
 echo ""
+
+# ── Step 26: SSH Hardening — runs last to avoid dropping current session ──────
+step_header "SSH HARDENING"
+
+_SSH_PORT="${SSH_PORT:-2026}"
+
+# Check if already on the target port — skip if so
+_current_ssh_port=$(ss -tlnp 2>/dev/null | grep -oP '(?<=:)\d+(?=\s)' | grep -E "^(22|${_SSH_PORT})$" | head -1 || echo "22")
+if [[ "$_current_ssh_port" == "$_SSH_PORT" ]]; then
+    success "SSH already on port ${_SSH_PORT} — skipping hardening"
+else
+    echo ""
+    warn "Moving SSH from port 22 → ${_SSH_PORT}."
+    warn "Your CURRENT session will remain active through the transition."
+    warn "After this completes, reconnect on port ${_SSH_PORT}."
+    warn "IMPORTANT: Also open port ${_SSH_PORT} in your Cloud Provider firewall/security group."
+    echo ""
+
+    # 1. Open new port in UFW BEFORE touching SSH (avoids any lockout window)
+    ufw allow ${_SSH_PORT}/tcp comment "SSH (hardened)" >/dev/null 2>&1 || true
+    ufw --force reload >/dev/null 2>&1 || true
+    success "UFW: port ${_SSH_PORT} opened"
+
+    # 2. Update /etc/ssh/sshd_config (handles commented, uncommented, and missing Port lines)
+    if grep -qE "^#?Port 22$" /etc/ssh/sshd_config 2>/dev/null; then
+        sed -i "s/^#*Port 22$/Port ${_SSH_PORT}/" /etc/ssh/sshd_config
+    elif grep -q "^Port " /etc/ssh/sshd_config 2>/dev/null; then
+        sed -i "s/^Port .*/Port ${_SSH_PORT}/" /etc/ssh/sshd_config
+    else
+        echo "Port ${_SSH_PORT}" >> /etc/ssh/sshd_config
+    fi
+    success "sshd_config updated → Port ${_SSH_PORT}"
+
+    # 3. Ubuntu 24.04+ systemd socket activation override
+    mkdir -p /etc/systemd/system/ssh.socket.d/
+    cat > /etc/systemd/system/ssh.socket.d/listen.conf << SSHDEOF
+[Socket]
+ListenStream=
+ListenStream=0.0.0.0:${_SSH_PORT}
+ListenStream=[::]:${_SSH_PORT}
+SSHDEOF
+    success "ssh.socket.d/listen.conf written"
+
+    # 4. Apply — daemon-reload first, then restart socket + service
+    systemctl daemon-reload
+    systemctl restart ssh.socket 2>/dev/null || true
+    systemctl restart ssh        2>/dev/null || true
+    sleep 2
+
+    # 5. Verify SSH is now up on the new port before removing old rule
+    if ss -tlnp 2>/dev/null | grep -q ":${_SSH_PORT} "; then
+        # Remove old port 22 UFW rule now that SSH is confirmed on new port
+        ufw delete allow 22/tcp >/dev/null 2>&1 || true
+        ufw delete allow 22     >/dev/null 2>&1 || true
+        ufw --force reload      >/dev/null 2>&1 || true
+        success "SSH hardened — listening on port ${_SSH_PORT}, port 22 closed"
+    else
+        warn "SSH did not come up on port ${_SSH_PORT} — port 22 rule kept as fallback"
+        warn "Check: systemctl status ssh && journalctl -u ssh -n 20"
+        ERRORS+=("SSH hardening: port ${_SSH_PORT} not confirmed — manual check required")
+    fi
+
+    echo ""
+    echo -e "  ${BOLD}${YELLOW}⚠  SSH CONNECTION NOTICE  ⚠${NC}"
+    echo -e "  ${YELLOW}Reconnect using: ssh -p ${_SSH_PORT} user@<server>${NC}"
+    echo -e "  ${YELLOW}Open port ${_SSH_PORT} in your Cloud Provider firewall/security group NOW.${NC}"
+    echo ""
+fi
