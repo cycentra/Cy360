@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.260 -- 2026-04-24 21:03 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.261 -- 2026-04-24 21:24 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -930,7 +930,7 @@ fi
 if crontab -l 2>/dev/null | grep -q "docker-maintenance.sh"; then
     success "Docker maintenance cron already scheduled — skipping"
 else
-    (crontab -l 2>/dev/null; echo "0 2 */15 * * ${_MAINT_DEST} >> /opt/cycentra/docker-maintenance.log 2>&1") | crontab -
+    { crontab -l 2>/dev/null || true; echo "0 2 */15 * * ${_MAINT_DEST} >> /opt/cycentra/docker-maintenance.log 2>&1"; } | crontab -
     success "Cron scheduled: docker-maintenance.sh runs every 15 days at 02:00"
 fi
 
