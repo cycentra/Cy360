@@ -122,7 +122,7 @@ jobs:
           # Ship the compiled binary — not the raw .sh source
           cp cycentra-setup-bin cycentra-release/cycentra-setup
           chmod +x cycentra-release/cycentra-setup
-          cp docs/RELEASE_NOTES.md cycentra-release/
+          cp RELEASE_NOTES.md cycentra-release/
           echo "${TAG}" > cycentra-release/VERSION
 
           # Include wheel in bundle so local installs don't need a separate download

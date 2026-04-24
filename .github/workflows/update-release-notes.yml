@@ -122,9 +122,9 @@ jobs:
             echo ""
             echo "$SUMMARY"
             echo ""
-            cat docs/RELEASE_NOTES.md 2>/dev/null || true;
+            cat RELEASE_NOTES.md 2>/dev/null || true;
           } > RELEASE_NOTES.tmp
-          mv RELEASE_NOTES.tmp docs/RELEASE_NOTES.md
+          mv RELEASE_NOTES.tmp RELEASE_NOTES.md
 
       # Commit, tag, and push changes
       - name: Configure git
@@ -134,7 +134,7 @@ jobs:
 
       - name: Commit and push release notes and tag
         run: |
-          git add docs/RELEASE_NOTES.md
+          git add RELEASE_NOTES.md
           git commit -m "docs: update release notes for ${{ steps.bumpver.outputs.new_version }}" || echo "No changes to commit"
           git tag ${{ steps.bumpver.outputs.new_version }}
           git push origin main --tags
