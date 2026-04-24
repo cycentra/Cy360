@@ -1,3 +1,11 @@
+## v1.0.265 -- 2026-04-24
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
 ## v1.0.264 -- 2026-04-24
 
 ### New Features
