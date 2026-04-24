@@ -1,3 +1,11 @@
+## v1.0.260 -- 2026-04-24
+
+### Bug Fixes
+
+  - guard WAZUH_API_PASSWORD grep against set -e on fresh install
+
+---
+
 ## v1.0.259 -- 2026-04-24
 
 ### Bug Fixes
