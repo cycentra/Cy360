@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.261 -- 2026-04-24 21:24 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.256 -- 2026-04-24 15:55 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -930,7 +930,7 @@ fi
 if crontab -l 2>/dev/null | grep -q "docker-maintenance.sh"; then
     success "Docker maintenance cron already scheduled — skipping"
 else
-    { crontab -l 2>/dev/null || true; echo "0 2 */15 * * ${_MAINT_DEST} >> /opt/cycentra/docker-maintenance.log 2>&1"; } | crontab -
+    (crontab -l 2>/dev/null; echo "0 2 */15 * * ${_MAINT_DEST} >> /opt/cycentra/docker-maintenance.log 2>&1") | crontab -
     success "Cron scheduled: docker-maintenance.sh runs every 15 days at 02:00"
 fi
 
@@ -1196,8 +1196,7 @@ ENVEOF
     [[ "${AI_PROVIDER:-none}" != "none" ]] && _LLM_FLAG="true"
 
     # Use auto-detected password if available, otherwise preserve existing, or placeholder
-    # grep returns exit code 1 on no-match (fresh install); || true prevents set -e abort
-    _WAZUH_PASS="${_CYSIEM_WUI_PASS:-$(grep "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null | cut -d= -f2 || true)}"
+    _WAZUH_PASS="${_CYSIEM_WUI_PASS:-$(grep "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null | cut -d= -f2)}"
     _WAZUH_PASS="${_WAZUH_PASS:-CHANGE_ME_after_cysiem_install}"
 
     cat > /opt/cycentra/cysiemstack.env << SIEMEOF
@@ -2692,7 +2691,8 @@ step_header "HEALTH CHECKS"
 
 chk() {
     local label=$1 url=$2
-    local code; code=$(curl -sk --max-time 6 -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)
+    # || true prevents set -e from triggering when curl can't connect (exit 7 = refused)
+    local code; code=$(curl -sk --max-time 6 -o /dev/null -w "%{http_code}" "$url" 2>/dev/null) || true
     [[ "$code" =~ ^(200|301|302|401|403)$ ]] \
         && success "${label}: HTTP ${code}" \
         || warn    "${label}: HTTP ${code} — ${url}"
