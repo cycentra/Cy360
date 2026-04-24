@@ -102,66 +102,6 @@ services:
 volumes:
   cysoar_data:
 """,
-
-    # ── CyMISP — Threat Intelligence Platform ───────────────────────────────
-    "cymisp": """
-services:
-  cymisp:
-    image: ghcr.io/misp/misp-docker/misp-core:latest
-    container_name: cymisp
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8200:80"
-      - "127.0.0.1:8243:443"
-    environment:
-      - MISP_BASEURL=https://cymisp.${BASE_DOMAIN}
-      - MISP_EXTERNAL_BASEURL=https://cymisp.${BASE_DOMAIN}
-      - MISP_ADMIN_EMAIL=${MISP_ADMIN_EMAIL:-admin@cycentra.local}
-      - MISP_ADMIN_PASSPHRASE=${MISP_ADMIN_PASSPHRASE:-MISPadmin1234!}
-      - MYSQL_HOST=cymisp-db
-      - MYSQL_DATABASE=misp
-      - MYSQL_USER=misp
-      - MYSQL_PASSWORD=${MISP_MYSQL_PASSWORD:-misp_db_pass}
-      - REDIS_HOST=cymisp-redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - PHP_SESSIONS_IN_REDIS=true
-    depends_on:
-      cymisp-db:
-        condition: service_healthy
-      cymisp-redis:
-        condition: service_started
-    volumes:
-      - cymisp_data:/var/www/MISP
-  
-  cymisp-db:
-    image: mysql:8.0
-    container_name: cymisp-db
-    restart: unless-stopped
-    environment:
-      - MYSQL_DATABASE=misp
-      - MYSQL_USER=misp
-      - MYSQL_PASSWORD=${MISP_MYSQL_PASSWORD:-misp_db_pass}
-      - MYSQL_ROOT_PASSWORD=${MISP_MYSQL_ROOT_PASSWORD:-misp_root_pass}
-    volumes:
-      - cymisp_db_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-  cymisp-redis:
-    image: redis:7-alpine
-    container_name: cymisp-redis
-    restart: unless-stopped
-    command: redis-server --requirepass ${REDIS_PASSWORD}
-
-volumes:
-  cymisp_db_data:
-  cymisp_data:
-""",
 }
 
 # Derived from template keys — used for validation in routes.py

@@ -181,6 +181,104 @@ def platform_logs(module_id):
         return jsonify({"error": str(e)}), 500
 
 
+# ── Module update (pull latest image + restart) ───────────────────────────────
+
+@platform_bp.route("/api/platform/update/<module_id>", methods=["OPTIONS"])
+def platform_update_options(module_id):
+    return add_cors_headers(make_response('', 204))
+
+
+_update_in_progress: dict = {}
+_update_lock = threading.Lock()
+
+
+def _module_setup_script(module_id: str) -> str | None:
+    """Return the path to the module's setup script on this server, if present."""
+    candidates = {
+        "cyiris": "/opt/cyiris/cyiris-setup.sh",
+        "cysoar": "/opt/cysoar/cysoar-setup.sh",
+    }
+    path = candidates.get(module_id)
+    if path and os.path.exists(path):
+        return path
+    return None
+
+
+def _run_module_update(module_id: str, setup_script: str):
+    """Background thread: run setup.sh --update for the given module."""
+    log_dir  = MODULES_DIR / module_id
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "update.log"
+    try:
+        import subprocess as _sp
+        with open(str(log_file), "w") as lf:
+            lf.write(f"[update] Starting update for {module_id}\n")
+            lf.flush()
+            proc = _sp.Popen(
+                ["bash", setup_script, "--update"],
+                stdout=_sp.PIPE, stderr=_sp.STDOUT,
+            )
+            for line in iter(proc.stdout.readline, b""):
+                text = line.decode(errors="replace")
+                lf.write(text)
+                lf.flush()
+            proc.wait()
+            lf.write(f"[update] Exit code: {proc.returncode}\n")
+    except Exception as e:
+        with open(str(log_file), "a") as lf:
+            lf.write(f"[update] ERROR: {e}\n")
+    finally:
+        with _update_lock:
+            _update_in_progress.pop(module_id, None)
+
+
+@platform_bp.route("/api/platform/update/<module_id>", methods=["POST"])
+def platform_update_module(module_id):
+    from flask import session
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
+        return jsonify({"error": "Analyst or admin role required"}), 403
+
+    if module_id not in {"cyiris", "cysoar"}:
+        return jsonify({"error": f"Module '{module_id}' does not support self-update via this endpoint"}), 400
+
+    with _update_lock:
+        if _update_in_progress.get(module_id):
+            return jsonify({"ok": False, "message": f"{module_id} update already in progress"}), 409
+
+    setup_script = _module_setup_script(module_id)
+    if not setup_script:
+        return jsonify({"ok": False, "message": f"Setup script not found on this server for {module_id}. Ensure {module_id}-setup.sh was run at least once."}), 404
+
+    with _update_lock:
+        _update_in_progress[module_id] = True
+
+    threading.Thread(
+        target=_run_module_update,
+        args=(module_id, setup_script),
+        daemon=True,
+    ).start()
+    return jsonify({"ok": True, "message": f"Update started for {module_id}. The module will restart in ~30 seconds."})
+
+
+@platform_bp.route("/api/platform/update-log/<module_id>")
+def platform_update_log(module_id):
+    if module_id not in {"cyiris", "cysoar"}:
+        return jsonify({"error": "Unknown module"}), 400
+    log_file = MODULES_DIR / module_id / "update.log"
+    if not log_file.exists():
+        return jsonify({"lines": [], "in_progress": _update_in_progress.get(module_id, False)})
+    try:
+        return jsonify({
+            "lines": log_file.read_text().splitlines()[-100:],
+            "in_progress": _update_in_progress.get(module_id, False),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── Debug ─────────────────────────────────────────────────────────────────────
 
 @platform_bp.route("/api/debug/images")

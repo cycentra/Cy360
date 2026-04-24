@@ -251,6 +251,59 @@ export function PlatformPage({ installedModules, onInstall, onUninstall }) {
   const [installing,    setInstalling]    = useState(null);
   const [confirmUnins,  setConfirmUnins]  = useState(null);
   const [activeSection, setActiveSection] = useState("modules");
+  const [moduleVersions,  setModuleVersions]  = useState({});
+  const [moduleUpdating,  setModuleUpdating]  = useState({});
+  const [verChecking,     setVerChecking]     = useState({});
+
+  const checkModuleVersion = async (moduleId) => {
+    setVerChecking(prev => ({ ...prev, [moduleId]: true }));
+    try {
+      const r = await fetch(`${API_BASE}/api/platform/update-log/${moduleId}`, { credentials: "include" });
+      // update-log doesn't return version — call update endpoint with GET is not available.
+      // Use a lightweight approach: check GitHub for latest, running version from status.
+      // We'll poll status (which reflects running container).
+      const sr = await fetch(`${API_BASE}/api/platform/status`, { credentials: "include" });
+      if (sr.ok) {
+        const all = await sr.json();
+        const mod = all[moduleId];
+        const running = mod?.image_version || mod?.version || null;
+        // Fetch latest from GitHub
+        const repoMap = { cyiris: "cycentra/CyIRIS", cysoar: "cycentra/CySOAR" };
+        let latest = null;
+        try {
+          const gr = await fetch(`https://api.github.com/repos/${repoMap[moduleId]}/releases/latest`);
+          if (gr.ok) { const gd = await gr.json(); latest = gd.tag_name?.replace(/^v/, ""); }
+        } catch {}
+        const update_available = !!(running && latest && running !== latest);
+        setModuleVersions(prev => ({ ...prev, [moduleId]: { running, latest, update_available } }));
+      }
+    } catch {}
+    setVerChecking(prev => ({ ...prev, [moduleId]: false }));
+  };
+
+  const updateModule = async (moduleId) => {
+    if (!confirm(`Pull the latest ${moduleId.toUpperCase()} image and restart the service?\nThe module will be unavailable for ~30 seconds.`)) return;
+    setModuleUpdating(prev => ({ ...prev, [moduleId]: true }));
+    try {
+      const r = await fetch(`${API_BASE}/api/platform/update/${moduleId}`, {
+        method: "POST", credentials: "include",
+      });
+      const d = await r.json();
+      alert(d.message || (r.ok ? "Update started." : `Error: ${d.error}`));
+      if (r.ok) {
+        // clear version cache so user sees fresh info after ~30s
+        setTimeout(() => {
+          setModuleUpdating(prev => ({ ...prev, [moduleId]: false }));
+          setModuleVersions(prev => { const n = { ...prev }; delete n[moduleId]; return n; });
+        }, 32000);
+      } else {
+        setModuleUpdating(prev => ({ ...prev, [moduleId]: false }));
+      }
+    } catch (e) {
+      alert("Update request failed: " + e.message);
+      setModuleUpdating(prev => ({ ...prev, [moduleId]: false }));
+    }
+  };
 
   const baseModules  = Object.values(PLATFORM_MODULES).filter(m => m.tier === "base");
   const addonModules = Object.values(PLATFORM_MODULES).filter(m => m.tier === "addon");
@@ -376,23 +429,69 @@ export function PlatformPage({ installedModules, onInstall, onUninstall }) {
                     )}
 
                     {installed && !isInstalling && (
-                      <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-                        {confirmUnins === mod.id ? (
-                          <div style={{ display:"flex", gap:6 }}>
-                            <button onClick={() => { onUninstall(mod.id); setConfirmUnins(null); }}
-                              style={{ background:"rgba(255,59,59,0.15)", color:"#ff3b3b", border:"1px solid rgba(255,59,59,0.3)", borderRadius:4, padding:"9px 16px", fontFamily:"monospace", fontSize:11, cursor:"pointer" }}>
-                              Confirm Remove
+                      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                          {confirmUnins === mod.id ? (
+                            <div style={{ display:"flex", gap:6 }}>
+                              <button onClick={() => { onUninstall(mod.id); setConfirmUnins(null); }}
+                                style={{ background:"rgba(255,59,59,0.15)", color:"#ff3b3b", border:"1px solid rgba(255,59,59,0.3)", borderRadius:4, padding:"9px 16px", fontFamily:"monospace", fontSize:11, cursor:"pointer" }}>
+                                Confirm Remove
+                              </button>
+                              <button onClick={() => setConfirmUnins(null)}
+                                style={{ background:"transparent", color:"rgba(255,255,255,0.35)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:4, padding:"9px 12px", fontFamily:"monospace", fontSize:11, cursor:"pointer" }}>
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button onClick={() => setConfirmUnins(mod.id)}
+                              style={{ background:"transparent", color:"rgba(255,59,59,0.5)", border:"1px solid rgba(255,59,59,0.2)", borderRadius:4, padding:"9px 16px", fontFamily:"monospace", fontSize:11, cursor:"pointer" }}>
+                              Uninstall
                             </button>
-                            <button onClick={() => setConfirmUnins(null)}
-                              style={{ background:"transparent", color:"rgba(255,255,255,0.35)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:4, padding:"9px 12px", fontFamily:"monospace", fontSize:11, cursor:"pointer" }}>
-                              Cancel
-                            </button>
+                          )}
+                        </div>
+
+                        {/* Version & Update row — only for updateable modules */}
+                        {(mod.id === "cyiris" || mod.id === "cysoar") && installed.status === "running" && (
+                          <div style={{ borderTop:"1px solid rgba(255,255,255,0.06)", paddingTop:10 }}>
+                            {moduleVersions[mod.id] && (
+                              <div style={{ display:"flex", gap:16, marginBottom:8 }}>
+                                <div>
+                                  <div style={{ fontSize:9, color:"rgba(255,255,255,0.3)", fontFamily:"monospace", letterSpacing:"1px", textTransform:"uppercase", marginBottom:2 }}>Running</div>
+                                  <div style={{ fontSize:12, fontWeight:700, color:"#00e5a0", fontFamily:"monospace" }}>{moduleVersions[mod.id].running || "—"}</div>
+                                </div>
+                                <div>
+                                  <div style={{ fontSize:9, color:"rgba(255,255,255,0.3)", fontFamily:"monospace", letterSpacing:"1px", textTransform:"uppercase", marginBottom:2 }}>Latest</div>
+                                  <div style={{ fontSize:12, fontWeight:700, color: moduleVersions[mod.id].update_available ? "#f5c518" : "#00e5a0", fontFamily:"monospace" }}>{moduleVersions[mod.id].latest || "—"}</div>
+                                </div>
+                              </div>
+                            )}
+                            {moduleVersions[mod.id]?.update_available && (
+                              <div style={{ background:"rgba(245,197,24,0.07)", border:"1px solid rgba(245,197,24,0.2)", borderRadius:3, padding:"6px 10px", marginBottom:8, fontSize:11, color:"rgba(245,197,24,0.85)" }}>
+                                ⚠ Update available: {moduleVersions[mod.id].running} → {moduleVersions[mod.id].latest}
+                              </div>
+                            )}
+                            {moduleVersions[mod.id] && !moduleVersions[mod.id].update_available && (
+                              <div style={{ background:"rgba(0,229,160,0.05)", border:"1px solid rgba(0,229,160,0.18)", borderRadius:3, padding:"6px 10px", marginBottom:8, fontSize:11, color:"rgba(0,229,160,0.75)" }}>
+                                ✓ Up to date
+                              </div>
+                            )}
+                            <div style={{ display:"flex", gap:6 }}>
+                              <button
+                                onClick={() => checkModuleVersion(mod.id)}
+                                disabled={verChecking[mod.id] || moduleUpdating[mod.id]}
+                                style={{ background:"rgba(255,255,255,0.05)", color:"rgba(255,255,255,0.55)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:3, padding:"7px 12px", fontFamily:"monospace", fontSize:10, cursor:"pointer", display:"flex", alignItems:"center", gap:5 }}>
+                                {verChecking[mod.id] ? "⟳" : "🔍"} Check for Update
+                              </button>
+                              {moduleVersions[mod.id]?.update_available && (
+                                <button
+                                  onClick={() => updateModule(mod.id)}
+                                  disabled={moduleUpdating[mod.id]}
+                                  style={{ background:`${mod.color}18`, color:mod.color, border:`1px solid ${mod.color}40`, borderRadius:3, padding:"7px 12px", fontFamily:"monospace", fontSize:10, cursor:"pointer", fontWeight:700, display:"flex", alignItems:"center", gap:5 }}>
+                                  {moduleUpdating[mod.id] ? "⟳ Updating…" : "⬆ Update Now"}
+                                </button>
+                              )}
+                            </div>
                           </div>
-                        ) : (
-                          <button onClick={() => setConfirmUnins(mod.id)}
-                            style={{ background:"transparent", color:"rgba(255,59,59,0.5)", border:"1px solid rgba(255,59,59,0.2)", borderRadius:4, padding:"9px 16px", fontFamily:"monospace", fontSize:11, cursor:"pointer" }}>
-                            Uninstall
-                          </button>
                         )}
                       </div>
                     )}
