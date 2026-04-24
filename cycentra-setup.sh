@@ -1196,7 +1196,8 @@ ENVEOF
     [[ "${AI_PROVIDER:-none}" != "none" ]] && _LLM_FLAG="true"
 
     # Use auto-detected password if available, otherwise preserve existing, or placeholder
-    _WAZUH_PASS="${_CYSIEM_WUI_PASS:-$(grep "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null | cut -d= -f2)}"
+    # grep returns exit code 1 on no-match (fresh install); || true prevents set -e abort
+    _WAZUH_PASS="${_CYSIEM_WUI_PASS:-$(grep "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null | cut -d= -f2 || true)}"
     _WAZUH_PASS="${_WAZUH_PASS:-CHANGE_ME_after_cysiem_install}"
 
     cat > /opt/cycentra/cysiemstack.env << SIEMEOF
