@@ -710,6 +710,38 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
             _nginx_add_cyiris(base_domain, log)
             _expand_ssl("cyiris", base_domain, log)
 
+            # Capture the admin API key from the IRIS DB and write it to
+            # CLOUD_IRIS_API_KEY in the master .env so iris_test() and
+            # iris_connector.py can use it without manual configuration.
+            # IRIS auto-generates the key via secrets.token_urlsafe(64) in
+            # post_init.py — it is never logged, so we query the DB directly.
+            log("CyIRIS: waiting for DB to be ready...")
+            _iris_key_captured = False
+            for _attempt in range(24):   # up to 2 min
+                time.sleep(5)
+                rc_k, key_out, _ = run(
+                    "docker exec cyiris-cyiris-db-1 psql -U iris -d iris_db -t "
+                    "-c \"SELECT api_key FROM \\\"user\\\" WHERE name='administrator' LIMIT 1;\"",
+                    timeout=10,
+                )
+                _key = (key_out or "").strip()
+                if rc_k == 0 and _key:
+                    _master_env = Path("/opt/cycentra/.env")
+                    if _master_env.exists():
+                        _env_text = _master_env.read_text()
+                        _env_text = re.sub(
+                            r"^CLOUD_IRIS_API_KEY=.*$", f"CLOUD_IRIS_API_KEY={_key}",
+                            _env_text, flags=re.MULTILINE,
+                        )
+                        _master_env.write_text(_env_text)
+                        os.environ["CLOUD_IRIS_API_KEY"] = _key
+                        log(f"CyIRIS: CLOUD_IRIS_API_KEY captured and written to master .env")
+                        _iris_key_captured = True
+                    break
+                log(f"CyIRIS: DB not ready yet ({_attempt + 1}/24)")
+            if not _iris_key_captured:
+                log("CyIRIS: WARNING — could not capture admin API key from DB; set CLOUD_IRIS_API_KEY manually")
+
         # ── CySOAR: inject /cysoar/ location into portal server ───────────────
 
         if module_id == "cysoar":

@@ -1,4 +1,4 @@
-## v1.0.252 -- 2026-04-23
+## v1.0.253 -- 2026-04-24
 
 ### Improvements
 
@@ -24,6 +24,23 @@
     a diagnostic `curl /api/ping` command; if HTML 401, surface "auth proxy /
     login gateway" hint and advise using the internal address
     (`http://127.0.0.1:4433`) to bypass the IAP gate.
+
+  - **CyIRIS Test Connection — 401 on internal URL when running in oidc_proxy mode**:
+    CyIRIS deployed in `oidc_proxy + lazy` mode only accepts `X-Email` header
+    authentication (set by nginx/oauth2-proxy). Direct programmatic calls to
+    `http://127.0.0.1:4433` with a Bearer API key bypassed the IAP gate but
+    `_oidc_proxy_authentication_process()` in CyIRIS returned `None` when no
+    `X-Email` header was present — blocking ALL API key access regardless of
+    key correctness. Flask-Login's `request_loader` was resolving the Bearer
+    token correctly but `is_user_authenticated()` ignored `current_user` in
+    `oidc_proxy` mode. Fix (in CyIRIS `access_controls.py`): fall back to
+    `current_user.is_authenticated` when `X-Email` is absent so programmatic
+    REST access (correlation engine, System Settings test) is not locked out.
+    Also fixed: stale `CLOUD_IRIS_API_KEY` in `/opt/cycentra/.env` — the key
+    was set on initial install but never refreshed when the IRIS container was
+    recreated, causing all API calls to fail with 401. Platform installer now
+    captures the admin API key from the IRIS DB after first boot and writes it
+    to `CLOUD_IRIS_API_KEY` in the master `.env` automatically.
 
 ---
 
