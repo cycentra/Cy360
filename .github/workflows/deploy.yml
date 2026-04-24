@@ -128,6 +128,9 @@ jobs:
           # Include wheel in bundle so local installs don't need a separate download
           cp dist/*.whl cycentra-release/ 2>/dev/null || true
 
+          # Include Wazuh config assets (rules, decoders, ossec.conf, agent.conf, integrations)
+          [[ -d CYSIEM-Config ]] && cp -r CYSIEM-Config cycentra-release/CYSIEM-Config || true
+
           # Stamp the wheel filename into manifest so setup.sh can find it by name
           _whl_name=$(ls dist/*.whl 2>/dev/null | head -1 | xargs basename 2>/dev/null || echo "")
           printf '{\n  "version": "%s",\n  "ver_number": "%s",\n  "wheel": "%s",\n  "provider": "github-releases"\n}\n' \

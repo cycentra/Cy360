@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.253 -- 2026-04-24 07:46 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.254 -- 2026-04-24 11:00 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -224,7 +224,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.253"
+_SCRIPT_VERSION="v1.0.254"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -2452,7 +2452,7 @@ SSLOPTEOF
 
 fi  # end SSL block
 
-# ── Step 18: Wazuh rules, decoders, ossec.conf ────────────────────────────────
+# ── Step 18: Wazuh rules, decoders, ossec.conf, agent config ─────────────────
 if [[ -d "/var/ossec" ]]; then
 
     step_header "WAZUH RULES & CONFIG"
@@ -2473,54 +2473,58 @@ if [[ -d "/var/ossec" ]]; then
     if [[ -f "$CONFIG_SRC/conf/ossec.conf" ]]; then
         cp "$CONFIG_SRC/conf/ossec.conf" /var/ossec/etc/ossec.conf
         chmod 660 /var/ossec/etc/ossec.conf
-            success "SaaS auth decoders patched — removed invalid <type>json</type> lines"
-        else
-            success "SaaS auth decoders already present"
-        fi
+        success "ossec.conf deployed"
     fi
-        step_header "INFRASTRUCTURE PREREQUISITES"
 
-        # ── 19.1 geoip2 Python library ────────────────────────────────────────────
-        if ! python3 -c "import geoip2" 2>/dev/null; then
-                info "Installing geoip2 Python library..."
-                PIP_ROOT_USER_ACTION=ignore pip3 install geoip2 ${_PIP_BSP} -q \
-                        && success "geoip2 installed" \
-                        || warn "geoip2 install failed — GeoIP enrichment will be disabled"
+    # ── Agent configuration (shared/default/agent.conf) ──────────────────────
+    if [[ -f "$CONFIG_SRC/agent_config/agent.conf" ]]; then
+        mkdir -p /var/ossec/etc/shared/default
+        cp "$CONFIG_SRC/agent_config/agent.conf" /var/ossec/etc/shared/default/agent.conf
+        chmod 660 /var/ossec/etc/shared/default/agent.conf
+        chown root:wazuh /var/ossec/etc/shared/default/agent.conf
+        success "agent.conf deployed to shared/default"
+    fi
+
+    # ── 19.1 geoip2 Python library ────────────────────────────────────────────
+    if ! python3 -c "import geoip2" 2>/dev/null; then
+        info "Installing geoip2 Python library..."
+        PIP_ROOT_USER_ACTION=ignore pip3 install geoip2 ${_PIP_BSP} -q \
+            && success "geoip2 installed" \
+            || warn "geoip2 install failed — GeoIP enrichment will be disabled"
+    else
+        success "geoip2 already installed"
+    fi
+
+    # ── 19.2 GeoLite2-City.mmdb download (requires MAXMIND_KEY in .env) ──────
+    GEOIP_DIR="/opt/cycentra/geoip"
+    mkdir -p "$GEOIP_DIR"
+    GEOLITE_DB="$GEOIP_DIR/GeoLite2-City.mmdb"
+    if [[ ! -f "$GEOLITE_DB" ]]; then
+        MAXMIND_KEY="$(grep "^MAXMIND_KEY=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2)"
+        if [[ -n "$MAXMIND_KEY" ]]; then
+            info "Downloading GeoLite2-City.mmdb..."
+            GEOURL="https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${MAXMIND_KEY}&suffix=tar.gz"
+            TMP_GEO=$(mktemp /tmp/geolite2_XXXXXX.tar.gz)
+            curl -sL "$GEOURL" -o "$TMP_GEO" \
+                && tar -xzf "$TMP_GEO" -C "$GEOIP_DIR" --strip-components=1 --wildcards "*.mmdb" 2>/dev/null || true
+            find "$GEOIP_DIR" -name "*.mmdb" ! -name "GeoLite2-City.mmdb" -exec mv {} "$GEOLITE_DB" \; 2>/dev/null || true
+            rm -f "$TMP_GEO"
+            [[ -f "$GEOLITE_DB" ]] \
+                && success "GeoLite2-City.mmdb downloaded" \
+                || warn "GeoLite2 download failed — check MAXMIND_KEY in /opt/cycentra/.env"
         else
-                success "geoip2 already installed"
+            warn "MAXMIND_KEY not in /opt/cycentra/.env — GeoLite2 DB skipped"
+            warn "Add MAXMIND_KEY=<your_key> to .env and re-run to enable GeoIP enrichment"
+            warn "Free signup: https://www.maxmind.com/en/geolite2/signup"
         fi
+    else
+        success "GeoLite2-City.mmdb already present"
+    fi
 
-        # ── 19.2 GeoLite2-City.mmdb download (requires MAXMIND_KEY in .env) ──────
-        GEOIP_DIR="/opt/cycentra/geoip"
-        mkdir -p "$GEOIP_DIR"
-        GEOLITE_DB="$GEOIP_DIR/GeoLite2-City.mmdb"
-        if [[ ! -f "$GEOLITE_DB" ]]; then
-                MAXMIND_KEY="$(grep "^MAXMIND_KEY=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2)"
-                if [[ -n "$MAXMIND_KEY" ]]; then
-                        info "Downloading GeoLite2-City.mmdb..."
-                        GEOURL="https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${MAXMIND_KEY}&suffix=tar.gz"
-                        TMP_GEO=$(mktemp /tmp/geolite2_XXXXXX.tar.gz)
-                        curl -sL "$GEOURL" -o "$TMP_GEO" \
-                            && tar -xzf "$TMP_GEO" -C "$GEOIP_DIR" --strip-components=1 --wildcards "*.mmdb" 2>/dev/null || true
-                        find "$GEOIP_DIR" -name "*.mmdb" ! -name "GeoLite2-City.mmdb" -exec mv {} "$GEOLITE_DB" \; 2>/dev/null || true
-                        rm -f "$TMP_GEO"
-                        [[ -f "$GEOLITE_DB" ]] \
-                                && success "GeoLite2-City.mmdb downloaded" \
-                                || warn "GeoLite2 download failed — check MAXMIND_KEY in /opt/cycentra/.env"
-                else
-                        warn "MAXMIND_KEY not in /opt/cycentra/.env — GeoLite2 DB skipped"
-                        warn "Add MAXMIND_KEY=<your_key> to .env and re-run to enable GeoIP enrichment"
-                        warn "Free signup: https://www.maxmind.com/en/geolite2/signup"
-                fi
-        else
-                success "GeoLite2-City.mmdb already present"
-        fi
-
-    # end infra prerequisites block
-    # ── 19.8 Reload Wazuh after config/decoder changes ────────────────────────
+    # ── Reload Wazuh after config/decoder/agent changes ───────────────────────
     /var/ossec/bin/wazuh-analysisd -t 2>/dev/null \
         && { systemctl reload wazuh-manager 2>/dev/null || systemctl restart wazuh-manager 2>/dev/null; \
-             success "wazuh-manager reloaded with new decoders/rules"; } \
+             success "wazuh-manager reloaded with new rules/decoders/agent config"; } \
         || warn "Wazuh config validation failed — fix errors before reloading"
 
     info "Post-install manual steps for cloud telemetry:"
@@ -2530,8 +2534,9 @@ if [[ -d "/var/ossec" ]]; then
     info "     Free signup: https://www.maxmind.com/en/geolite2/signup"
     info "  3. Sysmon: copy /opt/cycentra/sysmon/ to Windows endpoints + run deploy_sysmon.ps1"
     info "  4. Audit policy: run apply_audit_policy.ps1 on Domain Controllers"
+    info "  5. Agent config: to update agent.conf post-install run scripts/deploy_agent_config.sh"
 
-    # end infra prerequisites block
+fi  # end Wazuh block
 
 # ── Step 20: Platform branding (cylogo) ──────────────────────────────────────
 step_header "PLATFORM BRANDING (CYLOGO)"

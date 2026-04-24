@@ -1,0 +1,14 @@
+<decoder name="cycentra-asm">
+  <program_name>^python3</program_name>
+</decoder>
+
+<decoder name="cycentra_asm_report">
+  <parent>cycentra-asm</parent>
+  <prematch>NDJSON Report saved</prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="cycentra-auth">
+  <prematch>{"timestamp"</prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>

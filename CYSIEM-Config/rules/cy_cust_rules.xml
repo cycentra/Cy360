@@ -1,0 +1,9 @@
+<group name="cycentra_rules,">
+ <rule id="100050" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="llm_model">^CyAI$</field>
+    <field name="ai_action">^block$</field>
+    <description>IP $(srcip) Blocked on Agent $(agent_id). $(ai_outcome)</description>
+    <options>no_log</options>
+  </rule>
+</group>
