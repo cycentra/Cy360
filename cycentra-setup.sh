@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.265 -- 2026-04-24 22:44 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.266 -- 2026-04-24 23:32 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -782,7 +782,9 @@ fi
 
 systemctl daemon-reload
 systemctl enable cysiem-to-redis
-systemctl restart cysiem-to-redis
+systemctl restart cysiem-to-redis 2>/dev/null \
+    || { warn "cysiem-to-redis failed to start — check: journalctl -u cysiem-to-redis -n 20"; \
+         ERRORS+=("cysiem-to-redis restart failed"); }
 sleep 2
 systemctl is-active cysiem-to-redis >/dev/null 2>&1 \
     && success "cysiem-to-redis running — tailing CySIEM alerts → Redis :6379" \
@@ -2000,7 +2002,9 @@ rm -f /opt/cycentra/.license_expired
 # Start Flask backend
 pkill -f "python3.*app.py" 2>/dev/null || true
 sleep 1
-systemctl restart cycentra-backend
+systemctl restart cycentra-backend \
+    || { warn "Flask backend failed to start — check: journalctl -u cycentra-backend -n 30"; \
+         ERRORS+=("Flask backend restart failed"); }
 sleep 4
 curl -s --max-time 5 http://127.0.0.1:5252/health 2>/dev/null | grep -q "ok" \
     && success "Flask backend healthy :5252" \
@@ -2008,7 +2012,9 @@ curl -s --max-time 5 http://127.0.0.1:5252/health 2>/dev/null | grep -q "ok" \
          ERRORS+=("Flask unhealthy"); }
 
 # Start correlation engine (MCP bridge runs inside this same process at /mcp/sse)
-systemctl restart cysiemstack-engine
+systemctl restart cysiemstack-engine \
+    || { warn "SIEM engine failed to start — check: journalctl -u cysiemstack-engine -n 30"; \
+         ERRORS+=("SIEM engine restart failed"); }
 ENGINE_UP=false
 for i in $(seq 1 12); do
     curl -sf http://127.0.0.1:8100/health >/dev/null 2>&1 \
@@ -2584,7 +2590,7 @@ for script in apply-favicons apply-logos enable-multitenancy apply-custom-brandi
     fi
 done
 
-systemctl restart wazuh-dashboard.service 
+systemctl restart wazuh-dashboard.service 2>/dev/null || true
 
 # ── Step 21: Inject domain into portal index.html ────────────────────────────
 step_header "PORTAL DOMAIN INJECTION"
@@ -2691,7 +2697,8 @@ step_header "HEALTH CHECKS"
 
 chk() {
     local label=$1 url=$2
-    local code; code=$(curl -sk --max-time 6 -o /dev/null -w "%{http_code}" "$url" 2>/dev/null)
+    local code
+    code=$(curl -sk --max-time 6 -o /dev/null -w "%{http_code}" "$url" 2>/dev/null) || code="000"
     [[ "$code" =~ ^(200|301|302|401|403)$ ]] \
         && success "${label}: HTTP ${code}" \
         || warn    "${label}: HTTP ${code} — ${url}"
