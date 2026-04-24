@@ -1,3 +1,11 @@
+## v1.0.263 -- 2026-04-24
+
+### New Features
+
+  - health check curl exit 7 kills script under set -e — add || true
+
+---
+
 ## v1.0.262 -- 2026-04-24
 
 ### New Features
