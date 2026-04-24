@@ -1,3 +1,15 @@
+## v1.0.264 -- 2026-04-24
+
+### New Features
+
+  - health check curl exit 7 kills script under set -e — add || true
+
+### Bug Fixes
+
+  - RELEASE_NOTES.md path moved to docs/ — update CI workflows
+
+---
+
 ## v1.0.263 -- 2026-04-24
 
 ### New Features
