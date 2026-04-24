@@ -1,3 +1,11 @@
+## v1.0.259 -- 2026-04-24
+
+### Bug Fixes
+
+  - update workflow paths for docs/RELEASE_NOTES.md move
+
+---
+
 ## v1.0.258 -- 2026-04-24
 
 ### Improvements
