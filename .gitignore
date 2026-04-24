@@ -30,5 +30,8 @@ git-push.sh
 
 # License private key — NEVER commit
 tools/cycentra_license_private.pem
+tools/cycentra_signing.pem
+tools/*.lic
+tools/*.json
 dist/
 tests/unit/__pycache__/

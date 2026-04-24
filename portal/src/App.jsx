@@ -322,6 +322,7 @@ export default function App() {
           installedModules={installedModules}
           data={data}
           scanTime={scanTime}
+          user={user}
         />
 
         {/* Page content */}

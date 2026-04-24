@@ -9,6 +9,7 @@ import { buildNavSections } from './navConfig.jsx';
 export function Sidebar({ activeTab, setActiveTab, installedModules, data, scanTime }) {
   const sections = buildNavSections({ installedModules, data });
 
+
   return (
     <div style={{
       width: 220, background: "rgba(10,12,18,0.95)",

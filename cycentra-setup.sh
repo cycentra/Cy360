@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.256 -- 2026-04-24 15:55 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.257 -- 2026-04-24 18:28 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -896,7 +896,10 @@ success "Version file written: /opt/cycentra/version → ${BUNDLE_VERSION}"
 _RN_DEST="/opt/cycentra/RELEASE_NOTES.md"
 mkdir -p /opt/cycentra
 
-if [[ -f "$BUNDLE_DIR/RELEASE_NOTES.md" ]]; then
+if [[ -f "$BUNDLE_DIR/docs/RELEASE_NOTES.md" ]]; then
+    cp "$BUNDLE_DIR/docs/RELEASE_NOTES.md" "$_RN_DEST"
+    success "RELEASE_NOTES.md deployed to ${_RN_DEST}"
+elif [[ -f "$BUNDLE_DIR/RELEASE_NOTES.md" ]]; then
     cp "$BUNDLE_DIR/RELEASE_NOTES.md" "$_RN_DEST"
     success "RELEASE_NOTES.md deployed to ${_RN_DEST}"
 else
@@ -912,6 +915,23 @@ if [[ "$_SELF" != "$_SETUP_DEST" ]]; then
     success "Setup script deployed to $_SETUP_DEST"
 else
     success "Setup script already at $_SETUP_DEST — no copy needed"
+fi
+
+# Deploy docker-maintenance.sh alongside setup script
+_MAINT_SRC="${_SCRIPT_DIR}/docker-maintenance.sh"
+_MAINT_DEST="/opt/cycentra/docker-maintenance.sh"
+if [[ -f "$_MAINT_SRC" ]]; then
+    cp "$_MAINT_SRC" "$_MAINT_DEST"
+    chmod 750 "$_MAINT_DEST"
+    success "docker-maintenance.sh deployed to ${_MAINT_DEST}"
+fi
+
+# Schedule Docker maintenance cron (every 15 days at 02:00) — idempotent
+if crontab -l 2>/dev/null | grep -q "docker-maintenance.sh"; then
+    success "Docker maintenance cron already scheduled — skipping"
+else
+    (crontab -l 2>/dev/null; echo "0 2 */15 * * ${_MAINT_DEST} >> /opt/cycentra/docker-maintenance.log 2>&1") | crontab -
+    success "Cron scheduled: docker-maintenance.sh runs every 15 days at 02:00"
 fi
 
 # Deploy license validator + watchdog scripts

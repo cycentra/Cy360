@@ -589,10 +589,10 @@ def system_version():
     rn_path = None
     for _candidate in (
         "/opt/cycentra/RELEASE_NOTES.md",
-        os.path.join(_this_dir, "..", "..", "..", "RELEASE_NOTES.md"),   # dev: blueprints/system/ → repo root
-        os.path.join(_cwd, "RELEASE_NOTES.md"),                          # cwd = repo root
-        os.path.join(_cwd, "..", "RELEASE_NOTES.md"),                     # cwd = backend/
-        os.path.join(_cwd, "..", "..", "RELEASE_NOTES.md"),               # cwd = backend/blueprints/
+        os.path.join(_this_dir, "..", "..", "..", "docs", "RELEASE_NOTES.md"),   # dev: blueprints/system/ → repo root/docs/
+        os.path.join(_cwd, "docs", "RELEASE_NOTES.md"),                          # cwd = repo root
+        os.path.join(_cwd, "..", "docs", "RELEASE_NOTES.md"),                    # cwd = backend/
+        os.path.join(_cwd, "..", "..", "docs", "RELEASE_NOTES.md"),              # cwd = backend/blueprints/
     ):
         _abs = os.path.abspath(_candidate)
         if os.path.exists(_abs):
