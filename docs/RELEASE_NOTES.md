@@ -1,3 +1,42 @@
+## v1.0.271 -- 2026-04-25
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.271 -- 2026-04-25
+
+### New Features
+
+  - **Active Incidents — Graphical Summary Section**: A visual analytics panel now
+    appears at the top of the Active Incidents page, providing an at-a-glance
+    overview before the incident list. Includes:
+    · **Stat tiles** — Total, Open, Investigating, In Review, Resolved, Critical,
+      and High counts updated in real-time.
+    · **Severity Donut Chart** — interactive SVG pie; clicking a segment
+      instantly applies the severity filter to the incident table below.
+    · **Status Donut Chart** — same interactive filter binding for status.
+    · **Category Distribution Bar** — horizontal bar chart of top-7 incident
+      categories (colour-coded by category type).
+    · **14-Day Trend Line** — smooth cubic-bezier line chart showing daily
+      incident volume with hover tooltips. Driven by a separate unfiltered
+      fetch (limit 500) so charts always reflect the full picture regardless
+      of active table filters.
+
+  - **Entity Risk — Graphical Summary Section**: A compact visualisation panel
+    added above the entity leaderboard on the Entity Risk page. Includes:
+    · **Stat tiles** — Total Entities, Critical (≥75), High (50–74),
+      Medium (25–49), Low (0–24) counts.
+    · **Score Distribution Histogram** — 10-bucket bar chart (0–9 … 90–100)
+      with colour gradient (green → yellow → orange → red) and hover labels.
+    · **Entity Type Split** — stacked bar and counters showing host vs. user
+      breakdown with percentages.
+    Charts refresh every 60 s independently of the filter tab selection.
+
+---
+
 ## v1.0.270 -- 2026-04-25
 
 ### Improvements

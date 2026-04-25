@@ -723,6 +723,260 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
   );
 }
 
+// ── Summary chart helpers ──────────────────────────────────────────────────────
+
+function svgArc(cx, cy, r, startDeg, endDeg) {
+  if (endDeg - startDeg >= 360) endDeg = startDeg + 359.99;
+  const toRad = d => (d - 90) * Math.PI / 180;
+  const sx = cx + r * Math.cos(toRad(endDeg));
+  const sy = cy + r * Math.sin(toRad(endDeg));
+  const ex = cx + r * Math.cos(toRad(startDeg));
+  const ey = cy + r * Math.sin(toRad(startDeg));
+  const large = endDeg - startDeg > 180 ? 1 : 0;
+  return `M ${cx} ${cy} L ${sx} ${sy} A ${r} ${r} 0 ${large} 0 ${ex} ${ey} Z`;
+}
+
+function IncidentDonut({ data, title, activeId, onSegmentClick }) {
+  const [hovered, setHovered] = useState(null);
+  const total = data.reduce((s, d) => s + d.count, 0);
+
+  if (total === 0) return (
+    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+      borderRadius: 6, padding: "14px 16px" }}>
+      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+        letterSpacing: "1.5px", marginBottom: 8 }}>{title}</div>
+      <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, padding: "30px 0",
+        textAlign: "center" }}>No data</div>
+    </div>
+  );
+
+  const CX = 70, CY = 70, R = 57, RI = 32;
+  let ang = 0;
+  const arcs = data.filter(d => d.count > 0).map(seg => {
+    const sweep = (seg.count / total) * 360;
+    const path  = svgArc(CX, CY, R, ang, ang + sweep);
+    ang += sweep;
+    return { ...seg, path, pct: Math.round((seg.count / total) * 100) };
+  });
+  const hov = hovered != null ? arcs[hovered] : null;
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+      borderRadius: 6, padding: "14px 16px" }}>
+      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+        letterSpacing: "1.5px", marginBottom: 10 }}>{title}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <svg width="140" height="140" viewBox="0 0 140 140" style={{ flexShrink: 0 }}>
+          <circle cx={CX} cy={CY} r={RI} fill="#090b10"/>
+          {arcs.map((arc, i) => (
+            <path key={arc.id} d={arc.path}
+              fill={arc.color}
+              opacity={hovered === null && !activeId ? 0.85 : (hovered === i || activeId === arc.id) ? 1 : 0.28}
+              style={{ cursor: "pointer", transition: "opacity 0.15s" }}
+              onMouseEnter={() => setHovered(i)}
+              onMouseLeave={() => setHovered(null)}
+              onClick={() => onSegmentClick?.(activeId === arc.id ? "" : arc.id)}
+            />
+          ))}
+          <circle cx={CX} cy={CY} r={RI} fill="#090b10"/>
+          {hov ? (
+            <>
+              <text x={CX} y={CY - 6} textAnchor="middle" fill={hov.color} fontSize="17"
+                fontFamily="monospace" fontWeight="700">{hov.count}</text>
+              <text x={CX} y={CY + 11} textAnchor="middle" fill={hov.color} fontSize="8"
+                fontFamily="monospace">{hov.label.toUpperCase()}</text>
+            </>
+          ) : (
+            <>
+              <text x={CX} y={CY - 6} textAnchor="middle" fill="white" fontSize="17"
+                fontFamily="monospace" fontWeight="700">{total}</text>
+              <text x={CX} y={CY + 11} textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize="8"
+                fontFamily="monospace">TOTAL</text>
+            </>
+          )}
+        </svg>
+        <div style={{ display: "flex", flexDirection: "column", gap: 7, flex: 1, minWidth: 0 }}>
+          {arcs.map((arc, i) => (
+            <div key={arc.id}
+              onMouseEnter={() => setHovered(i)}
+              onMouseLeave={() => setHovered(null)}
+              onClick={() => onSegmentClick?.(activeId === arc.id ? "" : arc.id)}
+              style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer",
+                opacity: hovered === null && !activeId ? 1 : (hovered === i || activeId === arc.id) ? 1 : 0.35,
+                transition: "opacity 0.15s" }}>
+              <div style={{ width: 8, height: 8, borderRadius: 2, background: arc.color, flexShrink: 0 }}/>
+              <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 10, fontFamily: "monospace",
+                flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {arc.label}
+              </span>
+              <span style={{ color: arc.color, fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>
+                {arc.count}
+              </span>
+              <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace",
+                minWidth: 28, textAlign: "right" }}>{arc.pct}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      {activeId && (
+        <div style={{ marginTop: 8, textAlign: "right" }}>
+          <button onClick={() => onSegmentClick?.("")}
+            style={{ background: "none", border: "none", color: "#4d9eff", fontSize: 9,
+              fontFamily: "monospace", cursor: "pointer", padding: 0 }}>
+            ✕ clear filter
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IncidentCategoryBar({ incidents }) {
+  const [hovered, setHovered] = useState(null);
+  const catCounts = {};
+  incidents.forEach(inc => {
+    (inc.categories || []).forEach(cat => { catCounts[cat] = (catCounts[cat] || 0) + 1; });
+  });
+  const entries = Object.entries(catCounts).sort((a, b) => b[1] - a[1]).slice(0, 7);
+  if (entries.length === 0) return (
+    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+      borderRadius: 6, padding: "14px 16px" }}>
+      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+        letterSpacing: "1.5px", marginBottom: 8 }}>CATEGORY DISTRIBUTION</div>
+      <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, padding: "30px 0", textAlign: "center" }}>
+        No categories
+      </div>
+    </div>
+  );
+  const maxVal = entries[0][1];
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+      borderRadius: 6, padding: "14px 16px" }}>
+      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+        letterSpacing: "1.5px", marginBottom: 12 }}>CATEGORY DISTRIBUTION</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+        {entries.map(([cat, count], i) => {
+          const color = CAT_COLORS[cat] || "rgba(255,255,255,0.4)";
+          return (
+            <div key={cat}
+              onMouseEnter={() => setHovered(i)}
+              onMouseLeave={() => setHovered(null)}
+              style={{ opacity: hovered === null ? 1 : hovered === i ? 1 : 0.4, transition: "opacity 0.15s" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ color, fontSize: 10, fontFamily: "monospace", textTransform: "uppercase" }}>
+                  {cat.replace(/_/g, " ")}
+                </span>
+                <span style={{ color, fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{count}</span>
+              </div>
+              <div style={{ height: 5, background: "rgba(255,255,255,0.06)", borderRadius: 2, overflow: "hidden" }}>
+                <div style={{ width: `${(count / maxVal) * 100}%`, height: "100%", background: color,
+                  borderRadius: 2, transition: "width 0.4s ease" }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function IncidentTrendLine({ incidents }) {
+  const [tooltip, setTooltip] = useState(null);
+  const now  = new Date();
+  const days = Array.from({ length: 14 }, (_, i) => {
+    const d = new Date(now);
+    d.setDate(d.getDate() - (13 - i));
+    return d;
+  });
+  const dayKey = d => d.toISOString().slice(0, 10);
+  const counts = {};
+  incidents.forEach(inc => {
+    if (inc.first_seen) {
+      const k = inc.first_seen.slice(0, 10);
+      counts[k] = (counts[k] || 0) + 1;
+    }
+  });
+  const pts = days.map(d => ({ d, k: dayKey(d), n: counts[dayKey(d)] || 0 }));
+  const hasData = pts.some(p => p.n > 0);
+
+  const W = 520, H = 110;
+  const P = { t: 12, r: 10, b: 26, l: 30 };
+  const iW = W - P.l - P.r, iH = H - P.t - P.b;
+  const n  = pts.length;
+  const mx = Math.max(...pts.map(p => p.n), 1);
+  const xOf = i => P.l + (i / (n - 1)) * iW;
+  const yOf = v => P.t + iH - Math.min((v / mx) * iH, iH);
+
+  const linePath = pts.map((p, i) => {
+    const x = xOf(i), y = yOf(p.n);
+    if (i === 0) return `M ${x} ${y}`;
+    const px = xOf(i - 1), py = yOf(pts[i - 1].n);
+    const cx = (px + x) / 2;
+    return `C ${cx} ${py} ${cx} ${y} ${x} ${y}`;
+  }).join(" ");
+  const areaPath = linePath + ` L ${xOf(n - 1)} ${P.t + iH} L ${P.l} ${P.t + iH} Z`;
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+      borderRadius: 6, padding: "14px 16px" }}>
+      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+        letterSpacing: "1.5px", marginBottom: 8 }}>INCIDENT TREND — LAST 14 DAYS</div>
+      {!hasData ? (
+        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, padding: "20px 0", textAlign: "center" }}>
+          No incidents recorded in this period
+        </div>
+      ) : (
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block", overflow: "visible" }}>
+          {[0, 0.5, 1].map(f => {
+            const y = yOf(mx * f), lbl = Math.round(mx * f);
+            return (
+              <g key={f}>
+                <line x1={P.l} y1={y} x2={W - P.r} y2={y} stroke="rgba(255,255,255,0.05)"
+                  strokeWidth="1" strokeDasharray="3 4"/>
+                <text x={P.l - 4} y={y + 4} textAnchor="end" fill="rgba(255,255,255,0.2)"
+                  fontSize="9" fontFamily="monospace">{lbl}</text>
+              </g>
+            );
+          })}
+          <path d={areaPath} fill="rgba(255,59,59,0.07)"/>
+          <path d={linePath} fill="none" stroke="#ff6b6b" strokeWidth="1.5"/>
+          {pts.map((p, i) => (
+            <g key={i}>
+              {p.n > 0 && (
+                <circle cx={xOf(i)} cy={yOf(p.n)} r={3.5}
+                  fill="#ff6b6b" stroke="#0d1117" strokeWidth="1.5"/>
+              )}
+              <rect x={xOf(i) - 14} y={P.t} width={28} height={iH} fill="transparent"
+                onMouseEnter={e => p.n > 0 && setTooltip({ sx: e.clientX, sy: e.clientY, p })}
+                onMouseMove={e  => setTooltip(t => t ? { ...t, sx: e.clientX, sy: e.clientY } : null)}
+                onMouseLeave={() => setTooltip(null)}/>
+              {i % 2 === 0 && (
+                <text x={xOf(i)} y={H - 3} textAnchor="middle"
+                  fill="rgba(255,255,255,0.18)" fontSize="8" fontFamily="monospace">
+                  {p.d.toLocaleDateString("en-US", { month: "numeric", day: "numeric" })}
+                </text>
+              )}
+            </g>
+          ))}
+        </svg>
+      )}
+      {tooltip && (
+        <div style={{ position: "fixed", left: tooltip.sx + 12, top: tooltip.sy - 10, zIndex: 9999,
+          background: "#0d1117", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 5,
+          padding: "8px 12px", pointerEvents: "none", boxShadow: "0 4px 16px rgba(0,0,0,0.5)" }}>
+          <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 10, fontFamily: "monospace", marginBottom: 3 }}>
+            {tooltip.p.d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+          </div>
+          <div style={{ color: "#ff6b6b", fontSize: 14, fontFamily: "monospace", fontWeight: 700 }}>
+            {tooltip.p.n} incident{tooltip.p.n !== 1 ? "s" : ""}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────────
 export function SiemIncidentsPage() {
   const [incidents, setIncidents]   = useState([]);
@@ -733,8 +987,21 @@ export function SiemIncidentsPage() {
   const [wsConnected, setWsConnected] = useState(false);
   const [purgeConfirm, setPurgeConfirm] = useState(false); // show confirm bar
   const [purging, setPurging]       = useState(false);
+  const [allIncidents, setAllIncidents] = useState([]); // unfiltered — drives summary charts
   const wsRef       = useRef(null);
   const wsDebounce  = useRef(null); // timer ref for WS-triggered refetch debounce
+
+  // Fetch all incidents (no filter) once, refresh every 60s — used only by summary charts
+  const fetchAllIncidents = useCallback(async () => {
+    const data = await siemFetch(siemApi.getIncidents({ limit: 500 }));
+    if (!data._offline && !data._error) setAllIncidents(data.incidents || []);
+  }, []);
+
+  useEffect(() => {
+    fetchAllIncidents();
+    const t = setInterval(fetchAllIncidents, 60_000);
+    return () => clearInterval(t);
+  }, [fetchAllIncidents]);
 
   const fetchIncidents = useCallback(async () => {
     const data = await siemFetch(siemApi.getIncidents({ ...filters, limit: 100 }));
@@ -799,6 +1066,30 @@ export function SiemIncidentsPage() {
     new Date(b.last_seen) - new Date(a.last_seen)
   );
 
+  // ── Chart data (derived from all unfiltered incidents) ─────────────────────
+  const severityData = [
+    { id: "critical", label: "Critical",       color: "#ff3b3b", count: allIncidents.filter(i => i.severity === "critical").length },
+    { id: "high",     label: "High",           color: "#ff8c00", count: allIncidents.filter(i => i.severity === "high").length },
+    { id: "medium",   label: "Medium",         color: "#f5c518", count: allIncidents.filter(i => i.severity === "medium").length },
+    { id: "low",      label: "Low",            color: "#00e5a0", count: allIncidents.filter(i => i.severity === "low").length },
+  ];
+  const statusData = [
+    { id: "open",          label: "Open",           color: "#ff3b3b", count: allIncidents.filter(i => i.status === "open").length },
+    { id: "investigating", label: "Investigating",  color: "#ff8c00", count: allIncidents.filter(i => i.status === "investigating").length },
+    { id: "in-review",     label: "In Review",      color: "#f5c518", count: allIncidents.filter(i => i.status === "in-review" || i.status === "in_review").length },
+    { id: "resolved",      label: "Resolved",       color: "#00e5a0", count: allIncidents.filter(i => i.status === "resolved").length },
+    { id: "false_positive",label: "False Positive", color: "#888888", count: allIncidents.filter(i => i.status === "false_positive").length },
+  ];
+  const summaryTiles = [
+    { label: "Total",         value: allIncidents.length,                                                                    color: "rgba(255,255,255,0.85)" },
+    { label: "Open",          value: allIncidents.filter(i => i.status === "open").length,                                  color: "#ff3b3b"                 },
+    { label: "Investigating", value: allIncidents.filter(i => i.status === "investigating").length,                         color: "#ff8c00"                 },
+    { label: "In Review",     value: allIncidents.filter(i => i.status === "in-review" || i.status === "in_review").length, color: "#f5c518"                 },
+    { label: "Resolved",      value: allIncidents.filter(i => i.status === "resolved").length,                              color: "#00e5a0"                 },
+    { label: "Critical",      value: allIncidents.filter(i => i.severity === "critical").length,                            color: "#ff3b3b"                 },
+    { label: "High",          value: allIncidents.filter(i => i.severity === "high").length,                                color: "#ff8c00"                 },
+  ];
+
   return (
     <SiemEngineStatus>
       <div style={{ position: "relative" }}>
@@ -815,6 +1106,46 @@ export function SiemIncidentsPage() {
             {total} incident{total !== 1 ? "s" : ""} — grouped by temporal + entity correlation across Wazuh alerts.
           </p>
         </div>
+
+        {/* ── Summary visualizations ───────────────────────────────────────── */}
+        {allIncidents.length > 0 && (
+          <div style={{ marginBottom: 24 }}>
+            {/* Stat tiles */}
+            <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+              {summaryTiles.map(t => (
+                <div key={t.label} style={{ background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.07)", borderRadius: 5, padding: "10px 16px",
+                  minWidth: 70 }}>
+                  <div style={{ color: t.color, fontSize: 22, fontWeight: 700, fontFamily: "monospace" }}>
+                    {t.value}
+                  </div>
+                  <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10,
+                    fontFamily: "monospace", marginTop: 2 }}>{t.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Charts row — 3 equal columns */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <IncidentDonut
+                title="SEVERITY BREAKDOWN"
+                data={severityData}
+                activeId={filters.severity}
+                onSegmentClick={id => setFilters(prev => ({ ...prev, severity: id }))}
+              />
+              <IncidentDonut
+                title="STATUS BREAKDOWN"
+                data={statusData}
+                activeId={filters.status}
+                onSegmentClick={id => setFilters(prev => ({ ...prev, status: id }))}
+              />
+              <IncidentCategoryBar incidents={allIncidents}/>
+            </div>
+
+            {/* Trend line — full width */}
+            <IncidentTrendLine incidents={allIncidents}/>
+          </div>
+        )}
 
         {/* Filters */}
         <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>

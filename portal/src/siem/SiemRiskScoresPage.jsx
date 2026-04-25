@@ -65,13 +65,116 @@ const ENTITY_FILTERS = [
   { id: "users",    label: "Users",    entityType: "user",    minScore: 0  },
 ];
 
+// ── Entity Risk Summary Charts ─────────────────────────────────────────────────
+
+function RiskDistHistogram({ scores }) {
+  const [hovered, setHovered] = useState(null);
+  const buckets = Array.from({ length: 10 }, (_, i) => ({
+    label: `${i * 10}–${i * 10 + 9}`,
+    min: i * 10,
+    count: 0,
+    color: i >= 7 ? "#ff3b3b" : i >= 5 ? "#ff8c00" : i >= 2 ? "#f5c518" : "#00e5a0",
+  }));
+  scores.forEach(e => {
+    const idx = Math.min(9, Math.floor(e.score / 10));
+    buckets[idx].count++;
+  });
+  const maxCount = Math.max(...buckets.map(b => b.count), 1);
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+      borderRadius: 6, padding: "14px 16px" }}>
+      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+        letterSpacing: "1.5px", marginBottom: 14 }}>SCORE DISTRIBUTION (0–100)</div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 72 }}>
+        {buckets.map((b, i) => (
+          <div key={b.label}
+            onMouseEnter={() => setHovered(i)}
+            onMouseLeave={() => setHovered(null)}
+            title={`Score ${b.label}: ${b.count} entit${b.count !== 1 ? "ies" : "y"}`}
+            style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
+              gap: 2, cursor: b.count > 0 ? "default" : "default" }}>
+            <div style={{ color: b.count > 0 ? b.color : "transparent", fontSize: 8,
+              fontFamily: "monospace", fontWeight: 700 }}>
+              {hovered === i && b.count > 0 ? b.count : ""}
+            </div>
+            <div style={{
+              width: "100%",
+              height: `${Math.max(3, (b.count / maxCount) * 56)}px`,
+              background: b.count > 0 ? b.color : "rgba(255,255,255,0.06)",
+              borderRadius: "2px 2px 0 0",
+              opacity: b.count > 0 ? (hovered === null ? 0.8 : hovered === i ? 1 : 0.35) : 0.4,
+              transition: "opacity 0.15s, height 0.4s ease",
+            }} />
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+        {[0, 25, 50, 75, 100].map(v => (
+          <span key={v} style={{ color: "rgba(255,255,255,0.2)", fontSize: 8, fontFamily: "monospace" }}>{v}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EntityTypeSplit({ scores }) {
+  const hosts = scores.filter(e => e.entity_type === "host").length;
+  const users = scores.filter(e => e.entity_type === "user").length;
+  const total = scores.length;
+  if (total === 0) return null;
+  const hostPct = Math.round((hosts / total) * 100);
+  const userPct = 100 - hostPct;
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+      borderRadius: 6, padding: "14px 16px" }}>
+      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+        letterSpacing: "1.5px", marginBottom: 14 }}>ENTITY TYPE SPLIT</div>
+      <div style={{ display: "flex", borderRadius: 3, overflow: "hidden", height: 14, marginBottom: 14 }}>
+        {hosts > 0 && <div style={{ width: `${hostPct}%`, background: "#4d9eff",
+          transition: "width 0.4s ease" }} title={`Hosts: ${hosts}`}/>}
+        {users > 0 && <div style={{ width: `${userPct}%`, background: "#b36bff",
+          transition: "width 0.4s ease" }} title={`Users: ${users}`}/>}
+      </div>
+      <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+        {[
+          { label: "Hosts", count: hosts, pct: hostPct, color: "#4d9eff", icon: "🖥️" },
+          { label: "Users", count: users, pct: userPct, color: "#b36bff", icon: "👤" },
+        ].map(r => (
+          <div key={r.label} style={{ display: "flex", alignItems: "center", gap: 7 }}>
+            <span style={{ fontSize: 14 }}>{r.icon}</span>
+            <div>
+              <span style={{ color: r.color, fontSize: 18, fontFamily: "monospace",
+                fontWeight: 700 }}>{r.count}</span>
+              <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11,
+                fontFamily: "monospace", marginLeft: 6 }}>{r.label}</span>
+              <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9,
+                fontFamily: "monospace", marginLeft: 4 }}>{r.pct}%</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function SiemRiskScoresPage() {
-  const [scores, setScores]       = useState([]);
-  const [loading, setLoading]     = useState(true);
-  const [activeFilter, setFilter] = useState("all");
-  const [expanded, setExpanded]   = useState(null);
+  const [scores, setScores]           = useState([]);
+  const [loading, setLoading]         = useState(true);
+  const [activeFilter, setFilter]     = useState("all");
+  const [expanded, setExpanded]       = useState(null);
+  const [summaryScores, setSummaryScores] = useState([]); // unfiltered — drives charts
 
   const filter = ENTITY_FILTERS.find(f => f.id === activeFilter) || ENTITY_FILTERS[0];
+
+  // Fetch all entities once for the summary charts (no filter, high limit)
+  useEffect(() => {
+    (async () => {
+      const data = await siemFetch(siemApi.getRiskScores({ limit: 200 }));
+      if (!data._offline && !data._error) setSummaryScores(Array.isArray(data) ? data : []);
+    })();
+  }, []);
 
   const fetchScores = async () => {
     const data = await siemFetch(
@@ -105,6 +208,37 @@ export function SiemRiskScoresPage() {
             Composite 0–100 risk scores per host and user. Updated every 5 minutes by the correlation engine.
           </p>
         </div>
+
+        {/* ── Entity Risk Summary ─────────────────────────────────────────── */}
+        {summaryScores.length > 0 && (
+          <div style={{ marginBottom: 24 }}>
+            {/* Stat tiles */}
+            <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+              {[
+                { label: "Total Entities", value: summaryScores.length,                                           color: "rgba(255,255,255,0.85)" },
+                { label: "Critical (≥75)", value: summaryScores.filter(e => e.score >= 75).length,                color: "#ff3b3b"                },
+                { label: "High (50–74)",   value: summaryScores.filter(e => e.score >= 50 && e.score < 75).length,color: "#ff8c00"                },
+                { label: "Medium (25–49)", value: summaryScores.filter(e => e.score >= 25 && e.score < 50).length,color: "#f5c518"                },
+                { label: "Low (0–24)",     value: summaryScores.filter(e => e.score < 25).length,                 color: "#00e5a0"                },
+              ].map(t => (
+                <div key={t.label} style={{ background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.07)", borderRadius: 5,
+                  padding: "10px 16px", minWidth: 80 }}>
+                  <div style={{ color: t.color, fontSize: 22, fontWeight: 700,
+                    fontFamily: "monospace" }}>{t.value}</div>
+                  <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10,
+                    fontFamily: "monospace", marginTop: 2 }}>{t.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Charts row — 2 equal columns */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <RiskDistHistogram scores={summaryScores}/>
+              <EntityTypeSplit scores={summaryScores}/>
+            </div>
+          </div>
+        )}
 
         {/* Filter tabs */}
         <div style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
