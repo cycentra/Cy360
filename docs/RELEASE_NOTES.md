@@ -1,3 +1,46 @@
+## v1.0.267 -- 2026-04-25
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.267 -- 2026-04-25
+
+### New Features
+
+  - **Platform Modules — Version Check fixed**: "Check for Update" for CyIRIS and CySOAR
+    now shows the actual running version extracted from the container's OCI image label
+    (`org.opencontainers.image.version`) via a new backend endpoint
+    `GET /api/platform/version/<module_id>`. The GitHub Releases API is called
+    server-side (using `GH_TOKEN` from `/opt/cycentra/.env`) — no CORS issues.
+    Running and Latest version numbers now appear correctly instead of "—".
+
+  - **System Settings → Scheduler tab**: New tab for managing cron schedules from
+    the portal UI. Supports three schedulable tasks:
+    · Docker Maintenance (`docker-maintenance.sh`)
+    · ASM Wordlist Update (`update_wordlist.py`)
+    · ASM Scheduled Scan (configurable domain, scan type)
+    Frequency options: every minute, hourly, daily, weekly, monthly, quarterly, yearly.
+    Schedules persisted to `/opt/cycentra/schedules.json`; crontab applied immediately
+    on save via `PUT /api/system/schedules` (admin only).
+
+  - **System Settings → Environment Config**: Removed CyMISP entry — CyMISP is no
+    longer managed through this portal. MISP integration settings remain in
+    the Integrations tab (CySIEM Stack env).
+
+### Bug Fixes / Improvements
+
+  - `cycentra-setup.sh` Step 23 (Cron Jobs): removed auto-provisioning of
+    docker-maintenance and ASM wordlist cron entries. Setup.sh now delegates all
+    schedule management to the Scheduler tab. The `docker-maintenance.sh` script
+    is still deployed to `/opt/cycentra/docker-maintenance.sh` as before.
+    Existing schedules set up by older versions are preserved and remain active;
+    they can be managed and overridden via the Scheduler tab.
+
+---
+
 ## v1.0.266 -- 2026-04-24
 
 ### Improvements

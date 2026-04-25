@@ -258,24 +258,10 @@ export function PlatformPage({ installedModules, onInstall, onUninstall }) {
   const checkModuleVersion = async (moduleId) => {
     setVerChecking(prev => ({ ...prev, [moduleId]: true }));
     try {
-      const r = await fetch(`${API_BASE}/api/platform/update-log/${moduleId}`, { credentials: "include" });
-      // update-log doesn't return version — call update endpoint with GET is not available.
-      // Use a lightweight approach: check GitHub for latest, running version from status.
-      // We'll poll status (which reflects running container).
-      const sr = await fetch(`${API_BASE}/api/platform/status`, { credentials: "include" });
-      if (sr.ok) {
-        const all = await sr.json();
-        const mod = all[moduleId];
-        const running = mod?.image_version || mod?.version || null;
-        // Fetch latest from GitHub
-        const repoMap = { cyiris: "cycentra/CyIRIS", cysoar: "cycentra/CySOAR" };
-        let latest = null;
-        try {
-          const gr = await fetch(`https://api.github.com/repos/${repoMap[moduleId]}/releases/latest`);
-          if (gr.ok) { const gd = await gr.json(); latest = gd.tag_name?.replace(/^v/, ""); }
-        } catch {}
-        const update_available = !!(running && latest && running !== latest);
-        setModuleVersions(prev => ({ ...prev, [moduleId]: { running, latest, update_available } }));
+      const r = await fetch(`${API_BASE}/api/platform/version/${moduleId}`, { credentials: "include" });
+      if (r.ok) {
+        const d = await r.json();
+        setModuleVersions(prev => ({ ...prev, [moduleId]: d }));
       }
     } catch {}
     setVerChecking(prev => ({ ...prev, [moduleId]: false }));

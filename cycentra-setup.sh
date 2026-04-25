@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.266 -- 2026-04-24 23:32 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.267 -- 2026-04-25 11:50 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -928,13 +928,9 @@ if [[ -f "$_MAINT_SRC" ]]; then
     success "docker-maintenance.sh deployed to ${_MAINT_DEST}"
 fi
 
-# Schedule Docker maintenance cron (every 15 days at 02:00) — idempotent
-if crontab -l 2>/dev/null | grep -q "docker-maintenance.sh"; then
-    success "Docker maintenance cron already scheduled — skipping"
-else
-    (crontab -l 2>/dev/null || true; echo "0 2 */15 * * ${_MAINT_DEST} >> /opt/cycentra/docker-maintenance.log 2>&1") | crontab -
-    success "Cron scheduled: docker-maintenance.sh runs every 15 days at 02:00"
-fi
+# NOTE: Docker maintenance schedule is managed by the CyCentra 360 Scheduler
+# (System Settings → Scheduler tab). The script is deployed above and
+# cron entries are written by the portal's /api/system/schedules endpoint.
 
 # Deploy license validator + watchdog scripts
 _SCRIPT_BASE="$(dirname "$(realpath "${BASH_SOURCE[0]:-$0}")")"
@@ -2645,20 +2641,11 @@ chmod 644 /var/log/cycentra/auth.log
 # ── Step 23: Cron jobs ────────────────────────────────────────────────────────
 step_header "CRON JOBS"
 
-WORDLIST=$(find "$SITE_PKG" -name "update_wordlist.py" 2>/dev/null | head -1 || true)
-if [[ -n "$WORDLIST" ]]; then
-    # Use a tempfile to avoid bash pipeline operator-precedence pitfalls with
-    # set -euo pipefail (|| has lower precedence than |, causing grep to exit 1
-    # on empty input and aborting the script).
-    _tmpcron=$(mktemp)
-    { crontab -l 2>/dev/null || true; } | grep -v "update_wordlist" > "$_tmpcron" || true
-    echo "0 0 * * * ${PYTHON_BIN} ${WORDLIST} >> /opt/cycentra/cron.log 2>&1" >> "$_tmpcron"
-    crontab "$_tmpcron"
-    rm -f "$_tmpcron"
-    success "Cron: ASM wordlist update registered (daily midnight)"
-else
-    info "update_wordlist.py not found — cron job skipped"
-fi
+# NOTE: All cron schedules (docker-maintenance, ASM wordlist, ASM scan) are
+# now managed by the CyCentra 360 Scheduler tab in System Settings.
+# The portal's /api/system/schedules endpoint writes cron entries directly.
+# No cron jobs are auto-provisioned during setup any longer.
+info "Cron schedule management delegated to System Settings → Scheduler tab"
 
 # ── Step 23b: Firewall (UFW) ──────────────────────────────────────────────────
 # Strategy: all public traffic flows through nginx (80/443).  Internal services

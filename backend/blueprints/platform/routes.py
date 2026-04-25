@@ -21,7 +21,8 @@ import threading
 import time
 from pathlib import Path
 
-from flask import Blueprint, request, jsonify, make_response
+import requests as _http_requests
+from flask import Blueprint, request, jsonify, make_response, session
 
 from core.config import MODULES_DIR
 from core.helpers import run, add_cors_headers
@@ -277,6 +278,101 @@ def platform_update_log(module_id):
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── Module version check ──────────────────────────────────────────────────────
+
+_CONTAINER_MAP = {
+    "cyiris": ["cyiris-cyiris-1", "cyiris"],
+    "cysoar": ["cysoar"],
+}
+_GITHUB_REPO_MAP = {
+    "cyiris": "cycentra/CyIRIS",
+    "cysoar": "cycentra/CySOAR",
+}
+
+
+def _get_running_version(module_id: str) -> str | None:
+    """Return the running container's OCI version label, or tag, or None."""
+    for container in _CONTAINER_MAP.get(module_id, []):
+        # Try OCI standard label first (set by GitHub Actions builds)
+        rc, out, _ = run(
+            f'docker inspect --format '
+            f'"{{{{index .Config.Labels \\"org.opencontainers.image.version\\"}}}}"'
+            f' {container}'
+        )
+        if rc == 0 and out.strip() and out.strip() not in ("", "<no value>"):
+            return out.strip().lstrip("v")
+        # Fallback: image:tag format
+        rc2, img, _ = run(
+            f'docker inspect --format "{{{{.Config.Image}}}}" {container}'
+        )
+        if rc2 == 0 and img.strip():
+            parts = img.strip().rsplit(":", 1)
+            tag = parts[-1] if len(parts) == 2 else ""
+            if tag and tag not in ("latest", ""):
+                return tag.lstrip("v")
+    return None
+
+
+def _get_latest_version(module_id: str) -> str | None:
+    """Query GitHub Releases API for the latest published tag of a module."""
+    repo = _GITHUB_REPO_MAP.get(module_id)
+    if not repo:
+        return None
+    gh_token = (
+        os.environ.get("GITHUB_TOKEN")
+        or os.environ.get("GH_TOKEN", "")
+    )
+    if not gh_token:
+        # Try reading from /opt/cycentra/.env directly
+        try:
+            for line in Path("/opt/cycentra/.env").read_text().splitlines():
+                if line.startswith("GH_TOKEN=") or line.startswith("GITHUB_TOKEN="):
+                    gh_token = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if gh_token:
+                        break
+        except Exception:
+            pass
+    headers = {"Accept": "application/vnd.github+json"}
+    if gh_token:
+        headers["Authorization"] = f"Bearer {gh_token}"
+    try:
+        resp = _http_requests.get(
+            f"https://api.github.com/repos/{repo}/releases/latest",
+            headers=headers,
+            timeout=8,
+        )
+        if resp.status_code == 200:
+            tag_name = resp.json().get("tag_name", "")
+            return tag_name.lstrip("v") if tag_name else None
+    except Exception:
+        pass
+    return None
+
+
+@platform_bp.route("/api/platform/version/<module_id>")
+def platform_module_version(module_id):
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    if module_id not in {"cyiris", "cysoar"}:
+        return jsonify({"error": "Unknown module"}), 400
+
+    running = _get_running_version(module_id)
+    latest  = _get_latest_version(module_id)
+
+    update_available = bool(
+        running and latest
+        and running != latest
+        and latest not in ("latest",)
+    )
+
+    return jsonify({
+        "module":           module_id,
+        "running":          running,
+        "latest":           latest,
+        "update_available": update_available,
+    })
 
 
 # ── Debug ─────────────────────────────────────────────────────────────────────

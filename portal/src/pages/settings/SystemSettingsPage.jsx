@@ -23,7 +23,6 @@ const ENV_TARGETS = [
   { id: "cysiemstack", label: "CySIEM Stack",          desc: "Wazuh, Redis, PostgreSQL, MISP settings" },
   { id: "cyiris",      label: "CyIRIS",                desc: "Incident response platform config" },
   { id: "cysoar",      label: "CySOAR",                desc: "SOAR / Node-RED automation settings" },
-  { id: "cymisp",      label: "CyMISP",                desc: "MISP threat intelligence platform" },
 ];
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -761,6 +760,7 @@ const TABS = [
   { id: "integrations", label: "Integrations" },
   { id: "cymind",       label: "CyMind" },
   { id: "env",          label: "Environment Config" },
+  { id: "scheduler",    label: "Scheduler" },
   { id: "users",        label: "User Management" },
 ];
 
@@ -1969,6 +1969,205 @@ function CyMindIntegrationTab() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// TAB 6 — Scheduler
+// Manage cron schedules for docker-maintenance, ASM wordlist, ASM scan
+// ════════════════════════════════════════════════════════════════════════════
+
+const FREQ_OPTIONS = [
+  { value: "minute",    label: "Every Minute"  },
+  { value: "hourly",    label: "Hourly"        },
+  { value: "daily",     label: "Daily"         },
+  { value: "weekly",    label: "Weekly (Mon)"  },
+  { value: "monthly",   label: "Monthly (1st)" },
+  { value: "quarterly", label: "Quarterly"     },
+  { value: "yearly",    label: "Yearly (Jan 1)"},
+];
+
+const SCAN_TYPES = [
+  { value: "passive",  label: "Passive — DNS & certificate recon only, no active probing" },
+  { value: "standard", label: "Standard — Full surface mapping with active checks"        },
+  { value: "deep",     label: "Deep — Exhaustive scan including dark web & supply chain"  },
+];
+
+function SchedulerTask({ taskId, task, onChange }) {
+  const accent = task.enabled ? "#00e5a0" : "rgba(255,255,255,0.25)";
+  const showTime = task.frequency !== "minute";
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.025)", border: `1px solid ${accent}25`, borderLeft: `3px solid ${accent}`, borderRadius: 5, padding: "18px 20px", marginBottom: 14 }}>
+      {/* Header row */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+        <div>
+          <div style={{ color: "white", fontWeight: 700, fontSize: 14 }}>{task.label}</div>
+          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginTop: 3 }}>{task.desc}</div>
+          {taskId === "asm_wordlist" && task._available === false && (
+            <div style={{ color: "#ffd93d", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
+              ⚠ update_wordlist.py not found on server — install cy-asm package first
+            </div>
+          )}
+        </div>
+        {/* Enable toggle */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
+            {task.enabled ? "ENABLED" : "DISABLED"}
+          </span>
+          <div
+            onClick={() => onChange(taskId, "enabled", !task.enabled)}
+            style={{ width: 36, height: 20, borderRadius: 10, background: task.enabled ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.1)", border: `1px solid ${task.enabled ? "rgba(0,229,160,0.5)" : "rgba(255,255,255,0.15)"}`, cursor: "pointer", position: "relative", transition: "background 0.2s" }}>
+            <div style={{ position: "absolute", top: 2, left: task.enabled ? 17 : 2, width: 14, height: 14, borderRadius: "50%", background: task.enabled ? "#00e5a0" : "rgba(255,255,255,0.35)", transition: "left 0.2s" }}/>
+          </div>
+        </div>
+      </div>
+
+      {/* Config row */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+        {/* Frequency */}
+        <div>
+          <div style={{ ...LABEL, marginBottom: 4 }}>Frequency</div>
+          <select
+            value={task.frequency || "daily"}
+            onChange={e => onChange(taskId, "frequency", e.target.value)}
+            style={{ ...INPUT, width: 180, padding: "6px 10px" }}>
+            {FREQ_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+
+        {/* Time (hour:minute) — hidden for "minute" frequency */}
+        {showTime && (
+          <>
+            <div>
+              <div style={{ ...LABEL, marginBottom: 4 }}>Hour (0–23)</div>
+              <input
+                type="number" min={0} max={23}
+                value={task.hour ?? 0}
+                onChange={e => onChange(taskId, "hour", Math.max(0, Math.min(23, parseInt(e.target.value) || 0)))}
+                style={{ ...INPUT, width: 80, padding: "6px 10px" }}/>
+            </div>
+            <div>
+              <div style={{ ...LABEL, marginBottom: 4 }}>Minute (0–59)</div>
+              <input
+                type="number" min={0} max={59}
+                value={task.minute ?? 0}
+                onChange={e => onChange(taskId, "minute", Math.max(0, Math.min(59, parseInt(e.target.value) || 0)))}
+                style={{ ...INPUT, width: 80, padding: "6px 10px" }}/>
+            </div>
+          </>
+        )}
+
+        {/* ASM scan: domain + scan type */}
+        {taskId === "asm_scan" && (
+          <>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <div style={{ ...LABEL, marginBottom: 4 }}>Target Domain</div>
+              <input
+                type="text"
+                placeholder="e.g. example.com"
+                value={task.domain || ""}
+                onChange={e => onChange(taskId, "domain", e.target.value)}
+                style={{ ...INPUT, padding: "6px 10px" }}/>
+            </div>
+            <div>
+              <div style={{ ...LABEL, marginBottom: 4 }}>Scan Type</div>
+              <select
+                value={task.scan_type || "passive"}
+                onChange={e => onChange(taskId, "scan_type", e.target.value)}
+                style={{ ...INPUT, width: 130, padding: "6px 10px" }}>
+                {SCAN_TYPES.map(o => <option key={o.value} value={o.value}>{o.label.split(" — ")[0]}</option>)}
+              </select>
+              {task.scan_type && (
+                <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, marginTop: 4, maxWidth: 260 }}>
+                  {SCAN_TYPES.find(o => o.value === task.scan_type)?.label.split(" — ")[1] || ""}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Cron preview */}
+      {task.enabled && (
+        <div style={{ marginTop: 12, background: "rgba(0,0,0,0.3)", borderRadius: 3, padding: "6px 10px", fontFamily: "monospace", fontSize: 10, color: "rgba(0,229,160,0.6)" }}>
+          {task.log && <>Log → <code style={{ color: "rgba(255,255,255,0.35)" }}>{task.log}</code></>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SchedulerTab() {
+  const [schedules, setSchedules] = useState(null);
+  const [loading,   setLoading]   = useState(true);
+  const [saving,    setSaving]    = useState(false);
+  const [msg,       setMsg]       = useState(null);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/system/schedules`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.schedules) setSchedules(d.schedules); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  const handleChange = (taskId, field, value) => {
+    setSchedules(prev => ({ ...prev, [taskId]: { ...prev[taskId], [field]: value } }));
+  };
+
+  const handleSave = async () => {
+    setSaving(true); setMsg(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/system/schedules`, {
+        method: "PUT", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ schedules }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        setMsg({ ok: true, text: `Schedules saved. ${d.applied} cron job(s) active.` });
+      } else {
+        setMsg({ ok: false, text: d.error || "Save failed" });
+      }
+    } catch (e) {
+      setMsg({ ok: false, text: String(e) });
+    } finally { setSaving(false); }
+  };
+
+  if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
+  if (!schedules) return <div style={{ color: "#ff3b3b", fontFamily: "monospace", fontSize: 12 }}>Failed to load schedules.</div>;
+
+  const taskOrder = ["docker_maintenance", "asm_wordlist", "asm_scan"];
+
+  return (
+    <div style={{ maxWidth: 860 }}>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, lineHeight: 1.7 }}>
+          Configure automated cron schedules for maintenance and scanning tasks.
+          Changes are applied to the server crontab immediately on save.
+        </div>
+      </div>
+
+      {taskOrder.map(id => schedules[id] && (
+        <SchedulerTask key={id} taskId={id} task={schedules[id]} onChange={handleChange} />
+      ))}
+
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 8 }}>
+        <button onClick={handleSave} disabled={saving}
+          style={{ ...BTN(), opacity: saving ? 0.5 : 1 }}>
+          {saving ? "Saving…" : "Save Schedules"}
+        </button>
+        <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>
+          Writes to /opt/cycentra/schedules.json · applies to server crontab
+        </span>
+      </div>
+
+      {msg && (
+        <div style={{ color: msg.ok ? "#00e5a0" : "#ff3b3b", fontSize: 12, fontFamily: "monospace", marginTop: 12 }}>
+          {msg.ok ? "✓" : "✗"} {msg.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // TAB 3 wrapper — Integrations (MISP + CyIRIS)
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -2018,6 +2217,7 @@ export function SystemSettingsPage() {
       {tab === "integrations" && <IntegrationsTab />}
       {tab === "cymind"       && <CyMindIntegrationTab />}
       {tab === "env"          && <EnvConfigTab />}
+      {tab === "scheduler"    && <SchedulerTab />}
       {tab === "users"        && <UserManagementTab />}
     </div>
   );

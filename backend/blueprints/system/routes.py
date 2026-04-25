@@ -2525,3 +2525,219 @@ def gcloudconfig_post():
         "rules_deployed": rules_deployed,
         "message":        "Google Cloud integration configured and wazuh-manager restarted successfully",
     }))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Scheduled Tasks — GET /api/system/schedules  PUT /api/system/schedules
+# Manages cron entries for: docker-maintenance, asm-wordlist, asm-scan
+# Schedule file: /opt/cycentra/schedules.json
+# ══════════════════════════════════════════════════════════════════════════════
+
+_SCHEDULES_FILE = Path("/opt/cycentra/schedules.json")
+
+# Default schedule configuration (tasks off by default)
+_DEFAULT_SCHEDULES = {
+    "docker_maintenance": {
+        "enabled": False,
+        "frequency": "monthly",
+        "hour": 2,
+        "minute": 0,
+        "label": "Docker Maintenance",
+        "command": "/opt/cycentra/docker-maintenance.sh",
+        "log": "/opt/cycentra/docker-maintenance.log",
+        "desc": "Prune unused images, volumes and stopped containers",
+    },
+    "asm_wordlist": {
+        "enabled": False,
+        "frequency": "daily",
+        "hour": 0,
+        "minute": 0,
+        "label": "ASM Wordlist Update",
+        "command": None,   # resolved at runtime from installed path
+        "log": "/opt/cycentra/cron.log",
+        "desc": "Update ASM subdomain wordlist from threat-intel feeds",
+    },
+    "asm_scan": {
+        "enabled": False,
+        "frequency": "weekly",
+        "hour": 3,
+        "minute": 0,
+        "domain": "",
+        "scan_type": "passive",
+        "label": "ASM Scheduled Scan",
+        "log": "/opt/cycentra/asm-scheduled.log",
+        "desc": "Run automated ASM scan against a target domain",
+    },
+}
+
+# Maps user-friendly frequency name → cron expression template
+# {H} and {M} are replaced with the configured hour/minute
+_FREQ_CRON_MAP = {
+    "minute":    "*/{M} * * * *",   # every N minutes (M used as interval)
+    "hourly":    "{M} * * * *",
+    "daily":     "{M} {H} * * *",
+    "weekly":    "{M} {H} * * 1",
+    "monthly":   "{M} {H} 1 * *",
+    "quarterly": "{M} {H} 1 1,4,7,10 *",
+    "yearly":    "{M} {H} 1 1 *",
+}
+
+
+def _build_cron_expr(frequency: str, hour: int, minute: int) -> str:
+    template = _FREQ_CRON_MAP.get(frequency, "{M} {H} * * *")
+    return template.replace("{H}", str(hour)).replace("{M}", str(minute))
+
+
+def _resolve_wordlist_path() -> str | None:
+    """Find update_wordlist.py in site-packages (mirrors cycentra-setup.sh logic)."""
+    import glob as _glob
+    for pattern in [
+        "/usr/local/lib/python3.*/dist-packages/cy_asm/modules/update_wordlist.py",
+        "/usr/lib/python3/dist-packages/cy_asm/modules/update_wordlist.py",
+        "/usr/local/lib/python3.*/site-packages/cy_asm/modules/update_wordlist.py",
+    ]:
+        hits = _glob.glob(pattern)
+        if hits:
+            return hits[0]
+    return None
+
+
+def _build_asm_scan_cron_cmd(domain: str, scan_type: str, log: str) -> str:
+    """Build the curl command that triggers the ASM scan endpoint from cron."""
+    # Read BASE_URL from env so we hit the local Flask process
+    base_url = os.environ.get("BASE_URL", "https://cyasm.cycentra.com")
+    return (
+        f'curl -s -X POST {base_url}/api/scan/trigger '
+        f'-H "Content-Type: application/json" '
+        f'-b /opt/cycentra/cron_session.cookie '
+        f'-d \'{{"domain":"{domain}","scan_type":"{scan_type}","uid":"scheduler"}}\' '
+        f'>> {log} 2>&1'
+    )
+
+
+def _load_schedules() -> dict:
+    if _SCHEDULES_FILE.exists():
+        try:
+            stored = json.loads(_SCHEDULES_FILE.read_text())
+            # Merge with defaults to fill in any new tasks added in later versions
+            merged = {}
+            for k, default in _DEFAULT_SCHEDULES.items():
+                merged[k] = {**default, **stored.get(k, {})}
+            return merged
+        except Exception:
+            pass
+    return dict(_DEFAULT_SCHEDULES)
+
+
+def _apply_schedules(schedules: dict) -> list[str]:
+    """Re-write cron entries for all managed tasks. Returns list of applied entries."""
+    import tempfile as _tempfile
+    # Read current crontab, strip all cycentra-managed lines
+    rc, crontab_out, _ = _run_cmd("crontab -l")
+    lines = [] if rc != 0 else crontab_out.splitlines()
+    managed_markers = [
+        "docker-maintenance.sh",
+        "update_wordlist",
+        "asm-scan-cron",
+    ]
+    filtered = [
+        ln for ln in lines
+        if not any(m in ln for m in managed_markers)
+    ]
+
+    applied = []
+
+    # docker_maintenance
+    dm = schedules.get("docker_maintenance", {})
+    if dm.get("enabled"):
+        expr = _build_cron_expr(dm.get("frequency", "monthly"), dm.get("hour", 2), dm.get("minute", 0))
+        cmd  = dm.get("command") or "/opt/cycentra/docker-maintenance.sh"
+        log  = dm.get("log") or "/opt/cycentra/docker-maintenance.log"
+        entry = f"{expr} {cmd} >> {log} 2>&1  # cycentra docker-maintenance.sh"
+        filtered.append(entry)
+        applied.append(entry)
+
+    # asm_wordlist
+    wl = schedules.get("asm_wordlist", {})
+    if wl.get("enabled"):
+        wl_path = _resolve_wordlist_path()
+        if wl_path:
+            expr = _build_cron_expr(wl.get("frequency", "daily"), wl.get("hour", 0), wl.get("minute", 0))
+            python_bin = os.environ.get("PYTHON_BIN", "python3")
+            log  = wl.get("log") or "/opt/cycentra/cron.log"
+            entry = f"{expr} {python_bin} {wl_path} >> {log} 2>&1  # cycentra update_wordlist"
+            filtered.append(entry)
+            applied.append(entry)
+
+    # asm_scan
+    sc = schedules.get("asm_scan", {})
+    if sc.get("enabled") and sc.get("domain", "").strip():
+        expr   = _build_cron_expr(sc.get("frequency", "weekly"), sc.get("hour", 3), sc.get("minute", 0))
+        domain = sc["domain"].strip()
+        scan_t = sc.get("scan_type", "passive")
+        log    = sc.get("log") or "/opt/cycentra/asm-scheduled.log"
+        cmd    = _build_asm_scan_cron_cmd(domain, scan_t, log)
+        entry  = f"{expr} {cmd}  # cycentra asm-scan-cron"
+        filtered.append(entry)
+        applied.append(entry)
+
+    # Write new crontab
+    new_crontab = "\n".join(filtered) + ("\n" if filtered else "")
+    try:
+        with _tempfile.NamedTemporaryFile(mode="w", suffix=".cron", delete=False) as tf:
+            tf.write(new_crontab)
+            tmp_path = tf.name
+        _run_cmd(f"crontab {tmp_path}")
+        import os as _os
+        _os.unlink(tmp_path)
+    except Exception:
+        pass
+
+    return applied
+
+
+@system_bp.route("/api/system/schedules", methods=["OPTIONS"])
+def schedules_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/schedules", methods=["GET"])
+def get_schedules():
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    schedules = _load_schedules()
+    # Resolve wordlist path availability for the UI
+    schedules["asm_wordlist"]["_available"] = bool(_resolve_wordlist_path())
+    return jsonify({"schedules": schedules})
+
+
+@system_bp.route("/api/system/schedules", methods=["PUT"])
+def put_schedules():
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+
+    incoming = (request.get_json() or {}).get("schedules", {})
+    if not isinstance(incoming, dict):
+        return jsonify({"error": "Invalid payload"}), 400
+
+    # Validate and merge
+    current = _load_schedules()
+    allowed_frequencies = set(_FREQ_CRON_MAP.keys())
+    for task_id, patch in incoming.items():
+        if task_id not in current:
+            continue
+        if "frequency" in patch and patch["frequency"] not in allowed_frequencies:
+            return jsonify({"error": f"Invalid frequency '{patch['frequency']}'"}), 400
+        current[task_id].update({k: v for k, v in patch.items() if not k.startswith("_")})
+
+    # Save
+    try:
+        _SCHEDULES_FILE.write_text(json.dumps(current, indent=2))
+    except Exception as e:
+        return jsonify({"error": f"Could not save schedules: {e}"}), 500
+
+    applied = _apply_schedules(current)
+    return jsonify({"ok": True, "applied": len(applied), "entries": applied})
