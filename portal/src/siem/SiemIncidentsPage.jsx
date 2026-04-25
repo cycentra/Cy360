@@ -917,16 +917,27 @@ function IncidentTrendLine({ incidents }) {
   }).join(" ");
   const areaPath = linePath + ` L ${xOf(n - 1)} ${P.t + iH} L ${P.l} ${P.t + iH} Z`;
 
+  const [open, setOpen] = useState(true);
+
   return (
     <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
       borderRadius: 6, padding: "14px 16px" }}>
-      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
-        letterSpacing: "1.5px", marginBottom: 8 }}>INCIDENT TREND — LAST 14 DAYS</div>
-      {!hasData ? (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+        marginBottom: open ? 8 : 0 }}>
+        <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+          letterSpacing: "1.5px" }}>INCIDENT TREND — LAST 14 DAYS</div>
+        <button onClick={() => setOpen(v => !v)}
+          style={{ background: "none", border: "none", color: "rgba(255,255,255,0.3)",
+            cursor: "pointer", fontSize: 11, fontFamily: "monospace", padding: "0 2px",
+            lineHeight: 1 }}>
+          {open ? "▲ hide" : "▼ show"}
+        </button>
+      </div>
+      {open && !hasData ? (
         <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, padding: "20px 0", textAlign: "center" }}>
           No incidents recorded in this period
         </div>
-      ) : (
+      ) : open ? (
         <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block", overflow: "visible" }}>
           {[0, 0.5, 1].map(f => {
             const y = yOf(mx * f), lbl = Math.round(mx * f);
@@ -960,8 +971,8 @@ function IncidentTrendLine({ incidents }) {
             </g>
           ))}
         </svg>
-      )}
-      {tooltip && (
+      ) : null}
+      {open && tooltip && (
         <div style={{ position: "fixed", left: tooltip.sx + 12, top: tooltip.sy - 10, zIndex: 9999,
           background: "#0d1117", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 5,
           padding: "8px 12px", pointerEvents: "none", boxShadow: "0 4px 16px rgba(0,0,0,0.5)" }}>
