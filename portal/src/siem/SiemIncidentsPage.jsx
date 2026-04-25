@@ -987,21 +987,8 @@ export function SiemIncidentsPage() {
   const [wsConnected, setWsConnected] = useState(false);
   const [purgeConfirm, setPurgeConfirm] = useState(false); // show confirm bar
   const [purging, setPurging]       = useState(false);
-  const [allIncidents, setAllIncidents] = useState([]); // unfiltered — drives summary charts
   const wsRef       = useRef(null);
   const wsDebounce  = useRef(null); // timer ref for WS-triggered refetch debounce
-
-  // Fetch all incidents (no filter) once, refresh every 60s — used only by summary charts
-  const fetchAllIncidents = useCallback(async () => {
-    const data = await siemFetch(siemApi.getIncidents({ limit: 500 }));
-    if (!data._offline && !data._error) setAllIncidents(data.incidents || []);
-  }, []);
-
-  useEffect(() => {
-    fetchAllIncidents();
-    const t = setInterval(fetchAllIncidents, 60_000);
-    return () => clearInterval(t);
-  }, [fetchAllIncidents]);
 
   const fetchIncidents = useCallback(async () => {
     const data = await siemFetch(siemApi.getIncidents({ ...filters, limit: 100 }));
@@ -1066,28 +1053,28 @@ export function SiemIncidentsPage() {
     new Date(b.last_seen) - new Date(a.last_seen)
   );
 
-  // ── Chart data (derived from all unfiltered incidents) ─────────────────────
+  // ── Chart data (derived from the main incidents list) ─────────────────────
   const severityData = [
-    { id: "critical", label: "Critical",       color: "#ff3b3b", count: allIncidents.filter(i => i.severity === "critical").length },
-    { id: "high",     label: "High",           color: "#ff8c00", count: allIncidents.filter(i => i.severity === "high").length },
-    { id: "medium",   label: "Medium",         color: "#f5c518", count: allIncidents.filter(i => i.severity === "medium").length },
-    { id: "low",      label: "Low",            color: "#00e5a0", count: allIncidents.filter(i => i.severity === "low").length },
+    { id: "critical", label: "Critical",       color: "#ff3b3b", count: incidents.filter(i => i.severity === "critical").length },
+    { id: "high",     label: "High",           color: "#ff8c00", count: incidents.filter(i => i.severity === "high").length },
+    { id: "medium",   label: "Medium",         color: "#f5c518", count: incidents.filter(i => i.severity === "medium").length },
+    { id: "low",      label: "Low",            color: "#00e5a0", count: incidents.filter(i => i.severity === "low").length },
   ];
   const statusData = [
-    { id: "open",          label: "Open",           color: "#ff3b3b", count: allIncidents.filter(i => i.status === "open").length },
-    { id: "investigating", label: "Investigating",  color: "#ff8c00", count: allIncidents.filter(i => i.status === "investigating").length },
-    { id: "in-review",     label: "In Review",      color: "#f5c518", count: allIncidents.filter(i => i.status === "in-review" || i.status === "in_review").length },
-    { id: "resolved",      label: "Resolved",       color: "#00e5a0", count: allIncidents.filter(i => i.status === "resolved").length },
-    { id: "false_positive",label: "False Positive", color: "#888888", count: allIncidents.filter(i => i.status === "false_positive").length },
+    { id: "open",          label: "Open",           color: "#ff3b3b", count: incidents.filter(i => i.status === "open").length },
+    { id: "investigating", label: "Investigating",  color: "#ff8c00", count: incidents.filter(i => i.status === "investigating").length },
+    { id: "in-review",     label: "In Review",      color: "#f5c518", count: incidents.filter(i => i.status === "in-review" || i.status === "in_review").length },
+    { id: "resolved",      label: "Resolved",       color: "#00e5a0", count: incidents.filter(i => i.status === "resolved").length },
+    { id: "false_positive",label: "False Positive", color: "#888888", count: incidents.filter(i => i.status === "false_positive").length },
   ];
   const summaryTiles = [
-    { label: "Total",         value: allIncidents.length,                                                                    color: "rgba(255,255,255,0.85)" },
-    { label: "Open",          value: allIncidents.filter(i => i.status === "open").length,                                  color: "#ff3b3b"                 },
-    { label: "Investigating", value: allIncidents.filter(i => i.status === "investigating").length,                         color: "#ff8c00"                 },
-    { label: "In Review",     value: allIncidents.filter(i => i.status === "in-review" || i.status === "in_review").length, color: "#f5c518"                 },
-    { label: "Resolved",      value: allIncidents.filter(i => i.status === "resolved").length,                              color: "#00e5a0"                 },
-    { label: "Critical",      value: allIncidents.filter(i => i.severity === "critical").length,                            color: "#ff3b3b"                 },
-    { label: "High",          value: allIncidents.filter(i => i.severity === "high").length,                                color: "#ff8c00"                 },
+    { label: "Total",         value: total,                                                                                color: "rgba(255,255,255,0.85)" },
+    { label: "Open",          value: incidents.filter(i => i.status === "open").length,                                  color: "#ff3b3b"                 },
+    { label: "Investigating", value: incidents.filter(i => i.status === "investigating").length,                         color: "#ff8c00"                 },
+    { label: "In Review",     value: incidents.filter(i => i.status === "in-review" || i.status === "in_review").length, color: "#f5c518"                 },
+    { label: "Resolved",      value: incidents.filter(i => i.status === "resolved").length,                              color: "#00e5a0"                 },
+    { label: "Critical",      value: incidents.filter(i => i.severity === "critical").length,                            color: "#ff3b3b"                 },
+    { label: "High",          value: incidents.filter(i => i.severity === "high").length,                                color: "#ff8c00"                 },
   ];
 
   return (
@@ -1108,7 +1095,7 @@ export function SiemIncidentsPage() {
         </div>
 
         {/* ── Summary visualizations ───────────────────────────────────────── */}
-        {allIncidents.length > 0 && (
+        {!loading && (
           <div style={{ marginBottom: 24 }}>
             {/* Stat tiles */}
             <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
@@ -1139,11 +1126,11 @@ export function SiemIncidentsPage() {
                 activeId={filters.status}
                 onSegmentClick={id => setFilters(prev => ({ ...prev, status: id }))}
               />
-              <IncidentCategoryBar incidents={allIncidents}/>
+              <IncidentCategoryBar incidents={incidents}/>
             </div>
 
             {/* Trend line — full width */}
-            <IncidentTrendLine incidents={allIncidents}/>
+            <IncidentTrendLine incidents={incidents}/>
           </div>
         )}
 
