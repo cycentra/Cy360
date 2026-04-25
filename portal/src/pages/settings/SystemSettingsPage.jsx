@@ -1989,7 +1989,7 @@ const SCAN_TYPES = [
   { value: "deep",     label: "Deep — Exhaustive scan including dark web & supply chain"  },
 ];
 
-function SchedulerTask({ taskId, task, onChange }) {
+function SchedulerTask({ taskId, task, onChange, baseDomain }) {
   const accent = task.enabled ? "#00e5a0" : "rgba(255,255,255,0.25)";
   const showTime = task.frequency !== "minute";
 
@@ -2054,17 +2054,17 @@ function SchedulerTask({ taskId, task, onChange }) {
           </>
         )}
 
-        {/* ASM scan: domain + scan type */}
+        {/* ASM scan: domain (read-only from BASE_DOMAIN) + scan type */}
         {taskId === "asm_scan" && (
           <>
-            <div style={{ flex: 1, minWidth: 200 }}>
+            <div>
               <div style={{ ...LABEL, marginBottom: 4 }}>Target Domain</div>
-              <input
-                type="text"
-                placeholder="e.g. example.com"
-                value={task.domain || ""}
-                onChange={e => onChange(taskId, "domain", e.target.value)}
-                style={{ ...INPUT, padding: "6px 10px" }}/>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.25)", borderRadius: 4, color: "#00e5a0", fontFamily: "monospace", fontSize: 12, padding: "6px 12px", letterSpacing: "0.5px" }}>
+                  {baseDomain || "BASE_DOMAIN not set"}
+                </span>
+                <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>from /opt/cycentra/.env</span>
+              </div>
             </div>
             <div>
               <div style={{ ...LABEL, marginBottom: 4 }}>Scan Type</div>
@@ -2095,15 +2095,20 @@ function SchedulerTask({ taskId, task, onChange }) {
 }
 
 function SchedulerTab() {
-  const [schedules, setSchedules] = useState(null);
-  const [loading,   setLoading]   = useState(true);
-  const [saving,    setSaving]    = useState(false);
-  const [msg,       setMsg]       = useState(null);
+  const [schedules,   setSchedules]   = useState(null);
+  const [baseDomain,  setBaseDomain]  = useState("");
+  const [loading,     setLoading]     = useState(true);
+  const [saving,      setSaving]      = useState(false);
+  const [msg,         setMsg]         = useState(null);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/system/schedules`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d?.schedules) setSchedules(d.schedules); setLoading(false); })
+      .then(d => {
+        if (d?.schedules) setSchedules(d.schedules);
+        if (d?.base_domain) setBaseDomain(d.base_domain);
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
   }, []);
 
@@ -2145,7 +2150,7 @@ function SchedulerTab() {
       </div>
 
       {taskOrder.map(id => schedules[id] && (
-        <SchedulerTask key={id} taskId={id} task={schedules[id]} onChange={handleChange} />
+        <SchedulerTask key={id} taskId={id} task={schedules[id]} onChange={handleChange} baseDomain={baseDomain} />
       ))}
 
       <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 8 }}>

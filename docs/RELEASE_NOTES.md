@@ -1,8 +1,28 @@
-## v1.0.267 -- 2026-04-25
+## v1.0.268 -- 2026-04-25
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.268 -- 2026-04-25
+
+### Bug Fixes
+
+  - **Scheduler — docker-maintenance.sh not deployed to customers**: `build-package.sh`
+    now includes `docker-maintenance.sh` in the release tarball. Previously the file
+    was absent from the bundle, causing `cycentra-setup.sh` to silently skip
+    deployment, leaving the Scheduler unable to run maintenance jobs.
+
+  - **Scheduler — ASM wordlist path corrected**: `_resolve_wordlist_path()` now
+    searches `cy_asm/modules/Utils/update_wordlist.py` (correct `Utils/`
+    subdirectory). Old flat-layout path retained as legacy fallback.
+
+  - **Scheduler — ASM scan domain hardcoded to BASE_DOMAIN**: The target domain
+    for scheduled scans is no longer a free-text input. Backend always reads
+    `BASE_DOMAIN` from `/opt/cycentra/.env`; UI shows a read-only badge. Any
+    client-supplied domain is stripped server-side on `PUT /api/system/schedules`.
 
 ---
 

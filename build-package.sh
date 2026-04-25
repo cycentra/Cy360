@@ -85,6 +85,18 @@ cp "$BUILD_DIR/cycentra-setup"    "$PKG_DIR/cycentra-setup"
 cp "$VALIDATOR_PY"               "$PKG_DIR/license_validator.py"
 success "Runtime validator included: license_validator.py"
 
+# docker-maintenance.sh must be bundled so cycentra-setup.sh can deploy it to
+# /opt/cycentra/docker-maintenance.sh.  Without this file the Scheduler tab
+# cannot run Docker maintenance jobs (setup.sh silently skips missing files).
+DOCKER_MAINT="$REPO_ROOT/docker-maintenance.sh"
+if [[ -f "$DOCKER_MAINT" ]]; then
+    cp "$DOCKER_MAINT" "$PKG_DIR/docker-maintenance.sh"
+    chmod 750 "$PKG_DIR/docker-maintenance.sh"
+    success "Docker maintenance script included: docker-maintenance.sh"
+else
+    warn "docker-maintenance.sh not found at $DOCKER_MAINT — Scheduler tab may not work"
+fi
+
 if [[ -n "$LICENSE_FILE" && -f "$LICENSE_FILE" ]]; then
     cp "$LICENSE_FILE" "$PKG_DIR/cycentra.lic"
     success "License file included: $LICENSE_FILE"

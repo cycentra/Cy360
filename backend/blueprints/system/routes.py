@@ -2589,16 +2589,21 @@ def _build_cron_expr(frequency: str, hour: int, minute: int) -> str:
 
 
 def _resolve_wordlist_path() -> str | None:
-    """Find update_wordlist.py in site-packages (mirrors cycentra-setup.sh logic)."""
+    """Find update_wordlist.py — located under cy_asm/modules/Utils/."""
     import glob as _glob
     for pattern in [
+        # Primary location (confirmed path structure)
+        "/usr/local/lib/python3.*/dist-packages/cy_asm/modules/Utils/update_wordlist.py",
+        # Fallback variations
+        "/usr/local/lib/python3.*/dist-packages/cy_asm/modules/Utils/update_wordlist/update_wordlist.py",
+        "/usr/lib/python3/dist-packages/cy_asm/modules/Utils/update_wordlist.py",
+        "/usr/local/lib/python3.*/site-packages/cy_asm/modules/Utils/update_wordlist.py",
+        # Legacy flat-layout fallback (pre-Utils restructure)
         "/usr/local/lib/python3.*/dist-packages/cy_asm/modules/update_wordlist.py",
-        "/usr/lib/python3/dist-packages/cy_asm/modules/update_wordlist.py",
-        "/usr/local/lib/python3.*/site-packages/cy_asm/modules/update_wordlist.py",
     ]:
-        hits = _glob.glob(pattern)
+        hits = sorted(_glob.glob(pattern))
         if hits:
-            return hits[0]
+            return hits[-1]  # take highest python version match
     return None
 
 
@@ -2671,15 +2676,25 @@ def _apply_schedules(schedules: dict) -> list[str]:
 
     # asm_scan
     sc = schedules.get("asm_scan", {})
-    if sc.get("enabled") and sc.get("domain", "").strip():
-        expr   = _build_cron_expr(sc.get("frequency", "weekly"), sc.get("hour", 3), sc.get("minute", 0))
-        domain = sc["domain"].strip()
-        scan_t = sc.get("scan_type", "passive")
-        log    = sc.get("log") or "/opt/cycentra/asm-scheduled.log"
-        cmd    = _build_asm_scan_cron_cmd(domain, scan_t, log)
-        entry  = f"{expr} {cmd}  # cycentra asm-scan-cron"
-        filtered.append(entry)
-        applied.append(entry)
+    if sc.get("enabled"):
+        # Domain is always BASE_DOMAIN — read from env (not from stored config)
+        domain = os.environ.get("BASE_DOMAIN", "").strip()
+        if not domain:
+            try:
+                for line in Path("/opt/cycentra/.env").read_text().splitlines():
+                    if line.startswith("BASE_DOMAIN="):
+                        domain = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+            except Exception:
+                pass
+        if domain:
+            expr   = _build_cron_expr(sc.get("frequency", "weekly"), sc.get("hour", 3), sc.get("minute", 0))
+            scan_t = sc.get("scan_type", "passive")
+            log    = sc.get("log") or "/opt/cycentra/asm-scheduled.log"
+            cmd    = _build_asm_scan_cron_cmd(domain, scan_t, log)
+            entry  = f"{expr} {cmd}  # cycentra asm-scan-cron"
+            filtered.append(entry)
+            applied.append(entry)
 
     # Write new crontab
     new_crontab = "\n".join(filtered) + ("\n" if filtered else "")
@@ -2708,7 +2723,20 @@ def get_schedules():
     schedules = _load_schedules()
     # Resolve wordlist path availability for the UI
     schedules["asm_wordlist"]["_available"] = bool(_resolve_wordlist_path())
-    return jsonify({"schedules": schedules})
+    # Expose BASE_DOMAIN so the frontend can show the hardcoded scan target
+    base_domain = os.environ.get("BASE_DOMAIN", "")
+    if not base_domain:
+        # Try reading from .env directly (dev / no-systemd environments)
+        try:
+            for line in Path("/opt/cycentra/.env").read_text().splitlines():
+                if line.startswith("BASE_DOMAIN="):
+                    base_domain = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    break
+        except Exception:
+            pass
+    # Always set ASM scan domain to BASE_DOMAIN — not user-configurable
+    schedules["asm_scan"]["domain"] = base_domain
+    return jsonify({"schedules": schedules, "base_domain": base_domain})
 
 
 @system_bp.route("/api/system/schedules", methods=["PUT"])
@@ -2731,6 +2759,9 @@ def put_schedules():
             continue
         if "frequency" in patch and patch["frequency"] not in allowed_frequencies:
             return jsonify({"error": f"Invalid frequency '{patch['frequency']}'"}), 400
+        # Domain for asm_scan is always sourced from BASE_DOMAIN — never from client
+        if task_id == "asm_scan":
+            patch.pop("domain", None)
         current[task_id].update({k: v for k, v in patch.items() if not k.startswith("_")})
 
     # Save
