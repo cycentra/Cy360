@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.276 -- 2026-04-26 20:10 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.277 -- 2026-04-26 22:12 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -919,12 +919,17 @@ else
 fi
 
 # Deploy docker-maintenance.sh alongside setup script
-_MAINT_SRC="${_SCRIPT_DIR}/docker-maintenance.sh"
+# Use BUNDLE_DIR so this works in both fresh-install (BUNDLE_DIR==_SCRIPT_DIR) and
+# portal --update paths (script runs from /opt/cycentra but bundle is at /tmp/cycentra-release).
+_MAINT_SRC="${BUNDLE_DIR}/docker-maintenance.sh"
+[[ ! -f "$_MAINT_SRC" ]] && _MAINT_SRC="${_SCRIPT_DIR}/docker-maintenance.sh"   # fallback for dev
 _MAINT_DEST="/opt/cycentra/docker-maintenance.sh"
 if [[ -f "$_MAINT_SRC" ]]; then
     cp "$_MAINT_SRC" "$_MAINT_DEST"
     chmod 750 "$_MAINT_DEST"
     success "docker-maintenance.sh deployed to ${_MAINT_DEST}"
+else
+    warn "docker-maintenance.sh not found in bundle — skipping deployment"
 fi
 
 # NOTE: Docker maintenance schedule is managed by the CyCentra 360 Scheduler

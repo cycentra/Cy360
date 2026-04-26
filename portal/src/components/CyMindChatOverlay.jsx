@@ -9,6 +9,11 @@
  *      with Authorization: Bearer <chatApiKey> and use_mcp: true
  *   3. Parse SSE chunks: data: {"token":"...", "done":false} ... data: [DONE]
  *
+ * Agentic actions:
+ *   When the Flask proxy detects an action intent it emits:
+ *     data: {"action_pending": {type, params, label, risk, summary, reversible}}
+ *   The overlay renders a confirm card.  On confirm, POST /api/cymind/action/execute.
+ *
  * Props:
  *   onClose — callback to hide the overlay
  */
@@ -73,16 +78,130 @@ function MsgText({ text }) {
   );
 }
 
+// ── Action confirm card ───────────────────────────────────────────────────────
+const _RISK_COLOR = { low: "#00e5a0", medium: "#f0c040", high: "#ff6b6b" };
+const _RISK_BG    = { low: "rgba(0,229,160,0.1)", medium: "rgba(240,192,64,0.1)", high: "rgba(255,107,107,0.1)" };
+
+function ActionConfirmCard({ action, status, result, onConfirm, onCancel }) {
+  const { label, risk, summary, reversible } = action;
+  const riskColor = _RISK_COLOR[risk] || "#aaa";
+  const riskBg    = _RISK_BG[risk]    || "rgba(255,255,255,0.05)";
+  const executing = status === "executing";
+  const done      = status === "confirmed" || status === "cancelled";
+
+  return (
+    <div style={{
+      border:        `1px solid ${riskColor}`,
+      borderRadius:  8,
+      background:    riskBg,
+      padding:       "12px 14px",
+      fontSize:      12,
+      lineHeight:    1.65,
+      fontFamily:    "system-ui, sans-serif",
+    }}>
+      {/* Header row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <span style={{
+          background: riskColor, color: "#000", fontWeight: 700,
+          fontSize: 9, padding: "2px 7px", borderRadius: 20, letterSpacing: "0.8px",
+          textTransform: "uppercase",
+        }}>
+          {risk} risk
+        </span>
+        {!reversible && (
+          <span style={{
+            background: "rgba(255,107,107,0.2)", color: "#ff6b6b", fontWeight: 600,
+            fontSize: 9, padding: "2px 7px", borderRadius: 20, letterSpacing: "0.8px",
+            textTransform: "uppercase", border: "1px solid rgba(255,107,107,0.3)",
+          }}>
+            irreversible
+          </span>
+        )}
+        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10 }}>
+          Action pending confirmation
+        </span>
+      </div>
+
+      {/* Label */}
+      <div style={{ fontWeight: 700, color: "white", marginBottom: 6, fontSize: 13 }}>
+        {label}
+      </div>
+
+      {/* Summary */}
+      <div style={{ color: "rgba(255,255,255,0.6)", marginBottom: 12 }}>
+        <MsgText text={summary} />
+      </div>
+
+      {/* Result (after execution) */}
+      {result && (
+        <div style={{
+          background: result.success ? "rgba(0,229,160,0.08)" : "rgba(255,107,107,0.08)",
+          border: `1px solid ${result.success ? "rgba(0,229,160,0.2)" : "rgba(255,107,107,0.2)"}`,
+          borderRadius: 6, padding: "8px 10px", marginBottom: 10,
+          color: result.success ? "#00e5a0" : "#ff6b6b", fontSize: 11,
+        }}>
+          {result.success ? "✓ " : "✗ "}<MsgText text={result.message || (result.success ? "Done" : "Failed")} />
+        </div>
+      )}
+
+      {/* Buttons */}
+      {!done && (
+        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+          <button
+            onClick={onConfirm}
+            disabled={executing}
+            style={{
+              flex: 1,
+              background: executing ? "rgba(0,229,160,0.05)" : "rgba(0,229,160,0.15)",
+              border: "1px solid rgba(0,229,160,0.4)",
+              borderRadius: 6, padding: "6px 14px",
+              color: executing ? "rgba(0,229,160,0.4)" : "#00e5a0",
+              fontWeight: 700, fontSize: 11, cursor: executing ? "default" : "pointer",
+              fontFamily: "monospace", letterSpacing: "0.8px",
+              transition: "background 0.15s",
+            }}
+          >
+            {executing ? "Executing…" : "⚡ EXECUTE"}
+          </button>
+          <button
+            onClick={onCancel}
+            disabled={executing}
+            style={{
+              flex: 1,
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: 6, padding: "6px 14px",
+              color: "rgba(255,255,255,0.4)",
+              fontWeight: 600, fontSize: 11, cursor: executing ? "default" : "pointer",
+              fontFamily: "monospace",
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {status === "cancelled" && (
+        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, marginTop: 4 }}>
+          Action cancelled.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 export function CyMindChatOverlay({ onClose }) {
   const [exiting,    setExiting]    = useState(false);
   const [configErr,  setConfigErr]  = useState(null);
   const [ready,      setReady]      = useState(false);
   const [messages,   setMessages]   = useState([
-    { role: "assistant", content: "Hello! I'm CyMind, your AI security assistant. I have live access to your SIEM data. How can I help?", done: true },
+    { role: "assistant", content: "Hello! I'm CyMind, your AI security assistant. I have live access to your SIEM data. I can also execute response actions — just ask me to block an IP, close an incident, run a scan, or set up a schedule.", done: true },
   ]);
   const [input,      setInput]      = useState("");
   const [streaming,  setStreaming]  = useState(false);
+  // actionCards: maps message index → {status, result}
+  const [actionCards, setActionCards] = useState({});
   const bottomRef  = useRef(null);
   const abortRef   = useRef(null);
   const inputRef   = useRef(null);
@@ -106,7 +225,7 @@ export function CyMindChatOverlay({ onClose }) {
   // Auto-scroll on new content
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, actionCards]);
 
   const handleClose = () => {
     abortRef.current?.abort();
@@ -114,12 +233,60 @@ export function CyMindChatOverlay({ onClose }) {
     setTimeout(onClose, 240);
   };
 
+  // ── Action card handlers ────────────────────────────────────────────────────
+
+  const handleActionConfirm = useCallback(async (msgIdx) => {
+    const msg = messages[msgIdx];
+    if (!msg?.actionPending) return;
+
+    // Set card to executing
+    setActionCards(prev => ({ ...prev, [msgIdx]: { status: "executing", result: null } }));
+
+    try {
+      const resp = await fetch(`${API_BASE}/api/cymind/action/execute`, {
+        method:      "POST",
+        credentials: "include",
+        headers:     { "Content-Type": "application/json" },
+        body:        JSON.stringify({
+          type:   msg.actionPending.type,
+          params: msg.actionPending.params,
+        }),
+      });
+      const data = await resp.json();
+      setActionCards(prev => ({
+        ...prev,
+        [msgIdx]: { status: "confirmed", result: data },
+      }));
+      // Append result as a separate assistant message
+      setMessages(prev => [
+        ...prev,
+        {
+          role:    "assistant",
+          content: data.message || (data.success ? "Action completed successfully." : "Action failed."),
+          done:    true,
+          error:   !data.success,
+        },
+      ]);
+    } catch (err) {
+      setActionCards(prev => ({
+        ...prev,
+        [msgIdx]: { status: "confirmed", result: { success: false, message: err.message } },
+      }));
+    }
+  }, [messages]);
+
+  const handleActionCancel = useCallback((msgIdx) => {
+    setActionCards(prev => ({ ...prev, [msgIdx]: { status: "cancelled", result: null } }));
+  }, []);
+
+  // ── Chat send ───────────────────────────────────────────────────────────────
+
   const sendMessage = useCallback(async () => {
     const text = input.trim();
     if (!text || streaming || !ready) return;
 
     setInput("");
-    const userMsg = { role: "user", content: text, done: true };
+    const userMsg      = { role: "user", content: text, done: true };
     const assistantMsg = { role: "assistant", content: "", done: false };
 
     setMessages(prev => [...prev, userMsg, assistantMsg]);
@@ -130,8 +297,8 @@ export function CyMindChatOverlay({ onClose }) {
 
     // Build message history for the API (exclude the empty placeholder we just added)
     const history = [...messages, userMsg].map(m => ({
-      role: m.role,
-      content: m.content,
+      role:    m.role === "action_card" ? "assistant" : m.role,
+      content: m.content || "",
     }));
 
     try {
@@ -157,6 +324,7 @@ export function CyMindChatOverlay({ onClose }) {
       const reader  = resp.body.getReader();
       const decoder = new TextDecoder();
       let   buf     = "";
+      let   actionPending = null;  // holds action_pending payload when detected
 
       while (true) {
         const { done, value } = await reader.read();
@@ -172,6 +340,25 @@ export function CyMindChatOverlay({ onClose }) {
           try {
             const chunk = JSON.parse(raw);
             if (chunk.error) throw new Error(chunk.error);
+
+            // ── Agentic action event ────────────────────────────────────────
+            if (chunk.action_pending) {
+              actionPending = chunk.action_pending;
+              // Replace the placeholder assistant message with an action card
+              setMessages(prev => {
+                const msgs = [...prev];
+                msgs[msgs.length - 1] = {
+                  ...msgs[msgs.length - 1],
+                  role:          "action_card",
+                  actionPending: chunk.action_pending,
+                  done:          true,
+                };
+                return msgs;
+              });
+              continue;
+            }
+
+            // ── Regular text token ──────────────────────────────────────────
             if (chunk.token) {
               setMessages(prev => {
                 const msgs = [...prev];
@@ -189,6 +376,19 @@ export function CyMindChatOverlay({ onClose }) {
           }
         }
       }
+
+      // If an action card was received, set its initial state in actionCards
+      if (actionPending) {
+        setMessages(prev => {
+          const idx = prev.length - 1;
+          setActionCards(cards => ({
+            ...cards,
+            [idx]: { status: "pending", result: null },
+          }));
+          return prev;
+        });
+      }
+
     } catch (err) {
       if (err.name !== "AbortError") {
         setMessages(prev => {
@@ -326,31 +526,58 @@ export function CyMindChatOverlay({ onClose }) {
                     justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
                   }}
                 >
-                  <div style={{
-                    maxWidth: "85%",
-                    background: msg.role === "user"
-                      ? "rgba(0,229,160,0.12)"
-                      : msg.error
-                        ? "rgba(255,59,59,0.08)"
-                        : "rgba(255,255,255,0.04)",
-                    border: `1px solid ${msg.role === "user" ? "rgba(0,229,160,0.2)" : msg.error ? "rgba(255,59,59,0.2)" : "rgba(255,255,255,0.07)"}`,
-                    borderRadius: msg.role === "user" ? "10px 10px 2px 10px" : "10px 10px 10px 2px",
-                    padding: "8px 12px",
-                    fontSize: 12,
-                    lineHeight: 1.65,
-                    color: msg.role === "user"
-                      ? "rgba(255,255,255,0.8)"
-                      : msg.error
-                        ? "#ff6b6b"
-                        : "rgba(255,255,255,0.7)",
-                    fontFamily: "system-ui, sans-serif",
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                  }}>
-                    <span className={(!msg.done && msg.role === "assistant") ? "cymind-msg-blink" : ""}>
-                      <MsgText text={msg.content} />
-                    </span>
-                  </div>
+                  {/* ── Action confirm card ── */}
+                  {msg.role === "action_card" && msg.actionPending ? (
+                    <div style={{ maxWidth: "95%", width: "100%" }}>
+                      {/* Show any text tokens that appeared before the action card */}
+                      {msg.content && (
+                        <div style={{
+                          background: "rgba(255,255,255,0.04)",
+                          border: "1px solid rgba(255,255,255,0.07)",
+                          borderRadius: "10px 10px 0 2px",
+                          padding: "8px 12px", fontSize: 12, lineHeight: 1.65,
+                          color: "rgba(255,255,255,0.7)", marginBottom: 6,
+                          fontFamily: "system-ui, sans-serif", whiteSpace: "pre-wrap",
+                        }}>
+                          <MsgText text={msg.content} />
+                        </div>
+                      )}
+                      <ActionConfirmCard
+                        action={msg.actionPending}
+                        status={actionCards[i]?.status || "pending"}
+                        result={actionCards[i]?.result || null}
+                        onConfirm={() => handleActionConfirm(i)}
+                        onCancel={() => handleActionCancel(i)}
+                      />
+                    </div>
+                  ) : (
+                    /* ── Regular message bubble ── */
+                    <div style={{
+                      maxWidth: "85%",
+                      background: msg.role === "user"
+                        ? "rgba(0,229,160,0.12)"
+                        : msg.error
+                          ? "rgba(255,59,59,0.08)"
+                          : "rgba(255,255,255,0.04)",
+                      border: `1px solid ${msg.role === "user" ? "rgba(0,229,160,0.2)" : msg.error ? "rgba(255,59,59,0.2)" : "rgba(255,255,255,0.07)"}`,
+                      borderRadius: msg.role === "user" ? "10px 10px 2px 10px" : "10px 10px 10px 2px",
+                      padding: "8px 12px",
+                      fontSize: 12,
+                      lineHeight: 1.65,
+                      color: msg.role === "user"
+                        ? "rgba(255,255,255,0.8)"
+                        : msg.error
+                          ? "#ff6b6b"
+                          : "rgba(255,255,255,0.7)",
+                      fontFamily: "system-ui, sans-serif",
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                    }}>
+                      <span className={(!msg.done && msg.role === "assistant") ? "cymind-msg-blink" : ""}>
+                        <MsgText text={msg.content} />
+                      </span>
+                    </div>
+                  )}
                 </div>
               ))}
               <div ref={bottomRef} />

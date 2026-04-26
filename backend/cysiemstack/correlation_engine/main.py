@@ -965,6 +965,102 @@ async def websocket_endpoint(ws: WebSocket):
         manager.disconnect(ws)
 
 
+# ── Agentic action endpoints ───────────────────────────────────────────────────
+# These are called by the CyCentra Flask layer when an analyst confirms a chat action.
+# The Flask proxy enforces analyst+ RBAC before forwarding here.
+
+class ActiveResponseReq(BaseModel):
+    agent_id:  str
+    command:   str
+    arguments: Optional[list[str]] = []
+
+@app.post("/active-response")
+async def engine_active_response(req: ActiveResponseReq):
+    """Execute a Wazuh active-response command on a specific agent.
+    Requires Wazuh API credentials to be configured in cysiemstack.env.
+    Called by the CyCentra agentic chat layer — never exposed publicly.
+    """
+    if not settings.wazuh_api_user or not settings.wazuh_api_password:
+        raise HTTPException(status_code=503,
+                            detail="Wazuh API credentials not configured in cysiemstack.env")
+    try:
+        creds = base64.b64encode(
+            f"{settings.wazuh_api_user}:{settings.wazuh_api_password}".encode()
+        ).decode()
+        async with httpx.AsyncClient(verify=False, timeout=10) as c:
+            tr = await c.get(
+                f"{settings.wazuh_api_url}/security/user/authenticate",
+                headers={"Authorization": f"Basic {creds}"},
+            )
+            tr.raise_for_status()
+            token = tr.json()["data"]["token"]
+
+        async with httpx.AsyncClient(verify=False, timeout=15) as c:
+            r = await c.put(
+                f"{settings.wazuh_api_url}/active-response",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"command": req.command, "arguments": req.arguments or []},
+                params={"agents_list": req.agent_id},
+            )
+            r.raise_for_status()
+            log.info("active_response_triggered",
+                     agent_id=req.agent_id, command=req.command, arguments=req.arguments)
+            return {"status": "triggered", "agent_id": req.agent_id,
+                    "command": req.command, "wazuh": r.json()}
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code,
+                            detail=f"Wazuh API error: {e.response.text}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Wazuh unreachable: {e}")
+
+
+class BulkFPReq(BaseModel):
+    incident_ids: list[str]
+    comment:      str
+    actor:        Optional[str] = "analyst"
+
+@app.post("/incidents/bulk-false-positive")
+async def bulk_false_positive(req: BulkFPReq, db: AsyncSession = Depends(get_db)):
+    """Mark multiple incidents as false_positive in one call.
+    Used by the agentic chat 'close all false positives' action.
+    """
+    from iris_connector import write_audit
+    results = []
+    for iid in req.incident_ids:
+        inc = (await db.execute(
+            select(Incident).where(Incident.id == iid)
+        )).scalar_one_or_none()
+        if not inc:
+            results.append({"id": iid, "success": False, "error": "not_found"})
+            continue
+        from_status = inc.status or "open"
+        # Only transition if the incident is not already closed/archived
+        if from_status in ("resolved", "false_positive", "closed"):
+            results.append({"id": iid, "success": False, "error": "already_closed"})
+            continue
+        inc.status               = "false_positive"
+        inc.updated_at           = datetime.now(timezone.utc)
+        inc.closed_at            = datetime.now(timezone.utc)
+        inc.false_positive_reason = req.comment.strip()
+        await db.flush()
+        try:
+            await write_audit(
+                db, "incident", iid,
+                action="status_change",
+                actor=req.actor or "analyst",
+                from_status=from_status,
+                to_status="false_positive",
+                comment=req.comment.strip(),
+            )
+        except Exception:
+            pass  # audit write failure must not block the bulk operation
+        results.append({"id": iid, "success": True})
+    await db.commit()
+    success_count = sum(1 for r in results if r["success"])
+    log.info("bulk_false_positive_complete", success=success_count, total=len(req.incident_ids))
+    return {"results": results, "success_count": success_count, "total": len(req.incident_ids)}
+
+
 # ── Security MCP bridge (mounted at /mcp) ─────────────────────────────────────
 # Enabled when the mcp package is installed (installed alongside the engine).
 # AI clients connect to: http://127.0.0.1:8100/mcp/sse

@@ -1779,6 +1779,466 @@ def _fetch_siem_context_block() -> str:
     return "\n".join(lines)
 
 
+# ── Agentic chat: intent detection + action execution ─────────────────────────
+#
+# When CyMind chat detects an action intent in the user's message, the Flask
+# proxy intercepts the request and emits a synthetic SSE stream with:
+#   1. A text explanation of what will happen
+#   2. A structured `action_pending` event for the UI to render a confirm card
+#
+# The user must click Execute in the confirm card.  The browser then POSTs to
+# /api/cymind/action/execute.  That endpoint runs the action and returns JSON.
+# Normal conversational messages pass through to CyMind unchanged.
+
+import re as _re
+
+# ── Regex patterns for action intent detection ────────────────────────────────
+
+_IP_RE      = _re.compile(r'\b(\d{1,3}(?:\.\d{1,3}){3})\b')
+_INC_RE     = _re.compile(r'\b(INC-\d+)\b', _re.IGNORECASE)
+_AGENT_RE   = _re.compile(r'\bagent[_\s]?(?:id[_\s]?)?([0-9a-zA-Z]+)\b', _re.IGNORECASE)
+_DOMAIN_RE  = _re.compile(r'\b((?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,})\b')
+_USER_RE    = _re.compile(r"""(?:user|account|username)[s]?\s+["\']?([a-zA-Z0-9._@+-]+)["\']?""", _re.IGNORECASE)
+_CRON_RE    = _re.compile(r'every\s+(\w+)', _re.IGNORECASE)
+
+# Exclusion list — domains that are not scan targets when they appear in chat
+_DOMAIN_EXCLUSIONS = frozenset({"example.com", "localhost", "cymind", "cycentra"})
+
+
+def _detect_action_intent(message: str) -> dict | None:
+    """
+    Analyse a user message for a concrete action intent.
+    Returns a dict with {type, params, label, risk, summary, reversible} or None.
+    Requires explicit action verbs — casual mentions of IPs/IDs never trigger.
+    """
+    msg = message.strip()
+    lm  = msg.lower()
+
+    # ── 1. Block IP ──────────────────────────────────────────────────────────
+    if _re.search(r'\bblock\b.*\bip\b|\bdrop\b.*\bip\b|\bfirewall.drop\b', lm):
+        ips     = _IP_RE.findall(msg)
+        agents  = _AGENT_RE.findall(msg)
+        if ips:
+            ip        = ips[0]
+            agent_id  = agents[0] if agents else "000"
+            return {
+                "type":       "block_ip",
+                "params":     {"agent_id": agent_id, "ip": ip},
+                "label":      f"Block IP {ip} on agent {agent_id}",
+                "risk":       "high",
+                "summary":    f"This will execute a **firewall-drop** active-response on Wazuh agent **{agent_id}**, permanently blocking outbound/inbound traffic from **{ip}**. The rule persists until manually removed from the firewall.",
+                "reversible": False,
+            }
+
+    # ── 2. Disable user account ──────────────────────────────────────────────
+    if _re.search(r'\bdisable\b.*(?:user|account)\b|\bblock\b.*(?:user|account)\b', lm):
+        users   = _USER_RE.findall(msg)
+        agents  = _AGENT_RE.findall(msg)
+        if users:
+            username = users[0]
+            agent_id = agents[0] if agents else "000"
+            return {
+                "type":       "disable_user",
+                "params":     {"agent_id": agent_id, "username": username},
+                "label":      f"Disable account '{username}' on agent {agent_id}",
+                "risk":       "high",
+                "summary":    f"This will execute a **disable-account** active-response on Wazuh agent **{agent_id}**, locking the OS account **{username}**. The account must be re-enabled manually.",
+                "reversible": False,
+            }
+
+    # ── 3. Restart Wazuh agent ───────────────────────────────────────────────
+    if _re.search(r'\brestart\b.*(?:agent|wazuh)\b|\breboot\b.*(?:agent|wazuh)\b', lm):
+        agents = _AGENT_RE.findall(msg)
+        if agents:
+            agent_id = agents[0]
+            return {
+                "type":       "restart_agent",
+                "params":     {"agent_id": agent_id},
+                "label":      f"Restart Wazuh agent {agent_id}",
+                "risk":       "medium",
+                "summary":    f"This will send a **restart-wazuh** active-response command to agent **{agent_id}**. The agent will briefly disconnect and reconnect. No data loss.",
+                "reversible": True,
+            }
+
+    # ── 4. Close / resolve specific incident ────────────────────────────────
+    if _re.search(r'\b(?:close|resolve|close\s+out)\b', lm) and not _re.search(r'\bfals', lm):
+        incs = _INC_RE.findall(msg)
+        if incs:
+            inc_id = incs[0].upper()
+            return {
+                "type":       "close_incident",
+                "params":     {"incident_id": inc_id,
+                               "comment":     f"Closed via CyMind agentic chat"},
+                "label":      f"Close incident {inc_id}",
+                "risk":       "medium",
+                "summary":    f"This will transition incident **{inc_id}** to **resolved** status with an audit comment. The incident will be archived after {30} days.",
+                "reversible": True,
+            }
+
+    # ── 5. Mark specific incident as false positive ──────────────────────────
+    if _re.search(r'\b(?:false.positive|mark.*fp|mark.*false)\b', lm):
+        incs = _INC_RE.findall(msg)
+        if incs:
+            inc_id = incs[0].upper()
+            return {
+                "type":       "mark_false_positive",
+                "params":     {"incident_id": inc_id,
+                               "comment":     "Marked as false positive via CyMind agentic chat"},
+                "label":      f"Mark {inc_id} as false positive",
+                "risk":       "medium",
+                "summary":    f"This will transition incident **{inc_id}** to **false_positive** status. The reason will be logged in the audit trail.",
+                "reversible": True,
+            }
+
+    # ── 6. Bulk close all false positives ────────────────────────────────────
+    if _re.search(r'\b(?:close|mark|clear)\s+all\b.{0,30}(?:false.positive|fp)\b'
+                  r'|\b(?:false.positive|fp)\b.{0,30}\b(?:close|mark|clear)\s+all\b',
+                  lm, _re.IGNORECASE):
+        # Fetch current open incident IDs to show in the confirm card
+        engine_url = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").rstrip("/")
+        inc_ids: list[str] = []
+        try:
+            r = http_requests.get(f"{engine_url}/incidents",
+                                  params={"limit": 200}, timeout=4)
+            if r.ok:
+                data = r.json()
+                rows = data if isinstance(data, list) else data.get("incidents", [])
+                inc_ids = [
+                    row.get("id", "?")
+                    for row in rows
+                    if row.get("status") not in ("resolved", "false_positive", "closed")
+                ]
+        except Exception:
+            pass
+        count = len(inc_ids)
+        return {
+            "type":       "bulk_mark_false_positive",
+            "params":     {"incident_ids": inc_ids,
+                           "comment":      "Bulk false positive via CyMind agentic chat"},
+            "label":      f"Mark {count} open incident{'s' if count != 1 else ''} as false positive",
+            "risk":       "high",
+            "summary":    f"This will transition **{count} open incident{'s' if count != 1 else ''}** to **false_positive** status in one operation. Each transition is audit-logged. Incidents will be archived after 30 days. **This cannot be undone in bulk.**",
+            "reversible": False,
+        }
+
+    # ── 7. Trigger ASM scan ───────────────────────────────────────────────────
+    if _re.search(r'\b(?:run|start|trigger|launch|kick\s+off)\b.{0,20}(?:scan|asm)\b'
+                  r'|\bscan\b.{0,10}(?:for|on|the\s+domain)\b', lm):
+        domains = [d for d in _DOMAIN_RE.findall(msg) if d.lower() not in _DOMAIN_EXCLUSIONS]
+        if domains:
+            domain    = domains[0].lower()
+            scan_type = "standard"
+            if "deep" in lm:
+                scan_type = "deep"
+            elif "passive" in lm:
+                scan_type = "passive"
+            return {
+                "type":       "trigger_scan",
+                "params":     {"domain": domain, "scan_type": scan_type,
+                               "include_subdomains": "subdomain" not in lm or "no subdomain" not in lm},
+                "label":      f"Run {scan_type} ASM scan on {domain}",
+                "risk":       "low",
+                "summary":    f"This will start a **{scan_type}** attack surface scan against **{domain}**. The scan runs in the background and results appear in the Asset Inventory tab when complete.",
+                "reversible": True,
+            }
+
+    # ── 8. Add scan schedule ─────────────────────────────────────────────────
+    if _re.search(r'\b(?:schedule|add.+schedule|set.+up.+schedule|recurring)\b.{0,30}(?:scan|asm)\b'
+                  r'|\b(?:scan|asm)\b.{0,30}\b(?:daily|weekly|hourly|every\s+\w+)\b', lm):
+        domains = [d for d in _DOMAIN_RE.findall(msg) if d.lower() not in _DOMAIN_EXCLUSIONS]
+        if domains:
+            domain    = domains[0].lower()
+            # Parse cron hint from message
+            schedule  = {"type": "cron", "hour": "2", "minute": "0"}
+            if "hourly" in lm:
+                schedule = {"type": "interval", "seconds": 3600}
+            elif "weekly" in lm:
+                schedule = {"type": "cron", "hour": "2", "minute": "0", "day_of_week": "mon"}
+            elif _re.search(r'every\s+(\d+)\s+hour', lm):
+                m = _re.search(r'every\s+(\d+)\s+hour', lm)
+                schedule = {"type": "interval", "seconds": int(m.group(1)) * 3600}
+            elif _re.search(r'at\s+(\d{1,2})(?::(\d{2}))?', lm):
+                m = _re.search(r'at\s+(\d{1,2})(?::(\d{2}))?', lm)
+                schedule = {"type": "cron", "hour": m.group(1), "minute": m.group(2) or "0"}
+            scan_type = "standard"
+            if "deep" in lm:
+                scan_type = "deep"
+            elif "passive" in lm:
+                scan_type = "passive"
+            from blueprints.scheduler.routes import _describe_schedule as _ds
+            desc = _ds(schedule)
+            return {
+                "type":       "add_schedule",
+                "params":     {"domain": domain, "scan_type": scan_type, "schedule": schedule,
+                               "name":   f"Scheduled {scan_type} scan — {domain}",
+                               "include_subdomains": True},
+                "label":      f"Schedule {scan_type} scan of {domain} — {desc}",
+                "risk":       "low",
+                "summary":    f"This will create a recurring scheduled job to run a **{scan_type}** ASM scan of **{domain}** **{desc}**. You can view and manage all scheduled jobs in the System Settings → Scheduler tab.",
+                "reversible": True,
+            }
+
+    return None
+
+
+def _stream_action_confirmation(action: dict):
+    """
+    Return a Flask streaming response that emits:
+      - Text tokens explaining the action
+      - An `action_pending` SSE event for the confirm card
+      - [DONE]
+    """
+    label    = action.get("label", "Execute action")
+    summary  = action.get("summary", "")
+    risk     = action.get("risk", "medium")
+    rev      = action.get("reversible", True)
+    rev_str  = "reversible" if rev else "**irreversible**"
+
+    _RISK_EMOJI = {"low": "🟢", "medium": "🟡", "high": "🔴"}
+    risk_badge  = _RISK_EMOJI.get(risk, "⚪")
+
+    intro_tokens = [
+        f"I can execute that action for you.\n\n",
+        f"**{label}**\n\n",
+        f"{summary}\n\n",
+        f"Risk level: {risk_badge} **{risk.upper()}** · {rev_str.capitalize()}\n\n",
+        "Confirm or cancel below to proceed.",
+    ]
+
+    def _gen():
+        import json as _j
+        for tok in intro_tokens:
+            yield f"data: {_j.dumps({'token': tok, 'done': False})}\n\n"
+        yield f"data: {_j.dumps({'action_pending': action})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    from flask import current_app
+    return current_app.response_class(
+        _gen(),
+        status=200,
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control":     "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection":        "keep-alive",
+        },
+    )
+
+
+def _execute_agentic_action(action_type: str, params: dict, actor_email: str) -> dict:
+    """
+    Execute a confirmed agentic action.
+    Returns {success: bool, message: str, data: dict|None}.
+    Runs inside Flask request context — can import blueprint helpers.
+    """
+    engine = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").rstrip("/")
+    _t = 15  # timeout
+
+    # ── Block IP (Wazuh firewall-drop) ────────────────────────────────────────
+    if action_type == "block_ip":
+        agent_id = params.get("agent_id", "")
+        ip       = params.get("ip", "")
+        if not agent_id or not ip:
+            return {"success": False, "message": "Missing agent_id or ip in action params"}
+        try:
+            r = http_requests.post(
+                f"{engine}/active-response",
+                json={"agent_id": agent_id, "command": "firewall-drop",
+                      "arguments": [ip]},
+                timeout=_t,
+            )
+            if r.ok:
+                return {"success": True, "message": f"IP **{ip}** blocked on agent **{agent_id}**.",
+                        "data": r.json()}
+            return {"success": False,
+                    "message": f"Engine returned HTTP {r.status_code}: {r.text[:200]}"}
+        except Exception as e:
+            return {"success": False, "message": f"Could not reach engine: {e}"}
+
+    # ── Disable user account (Wazuh disable-account) ─────────────────────────
+    elif action_type == "disable_user":
+        agent_id = params.get("agent_id", "")
+        username = params.get("username", "")
+        if not agent_id or not username:
+            return {"success": False, "message": "Missing agent_id or username"}
+        try:
+            r = http_requests.post(
+                f"{engine}/active-response",
+                json={"agent_id": agent_id, "command": "disable-account",
+                      "arguments": [username]},
+                timeout=_t,
+            )
+            if r.ok:
+                return {"success": True,
+                        "message": f"Account **{username}** disabled on agent **{agent_id}**.",
+                        "data": r.json()}
+            return {"success": False,
+                    "message": f"Engine returned HTTP {r.status_code}: {r.text[:200]}"}
+        except Exception as e:
+            return {"success": False, "message": f"Could not reach engine: {e}"}
+
+    # ── Restart Wazuh agent ───────────────────────────────────────────────────
+    elif action_type == "restart_agent":
+        agent_id = params.get("agent_id", "")
+        if not agent_id:
+            return {"success": False, "message": "Missing agent_id"}
+        try:
+            r = http_requests.post(
+                f"{engine}/active-response",
+                json={"agent_id": agent_id, "command": "restart-wazuh", "arguments": []},
+                timeout=_t,
+            )
+            if r.ok:
+                return {"success": True,
+                        "message": f"Restart command sent to Wazuh agent **{agent_id}**.",
+                        "data": r.json()}
+            return {"success": False,
+                    "message": f"Engine returned HTTP {r.status_code}: {r.text[:200]}"}
+        except Exception as e:
+            return {"success": False, "message": f"Could not reach engine: {e}"}
+
+    # ── Close / resolve a specific incident ──────────────────────────────────
+    elif action_type == "close_incident":
+        inc_id  = params.get("incident_id", "")
+        comment = params.get("comment") or f"Closed via CyMind agentic chat by {actor_email}"
+        if not inc_id:
+            return {"success": False, "message": "Missing incident_id"}
+        try:
+            r = http_requests.post(
+                f"{engine}/incidents/{inc_id}/transition",
+                json={"to_status": "resolved", "comment": comment, "actor": actor_email},
+                timeout=_t,
+            )
+            if r.ok:
+                return {"success": True,
+                        "message": f"Incident **{inc_id}** resolved.",
+                        "data": r.json()}
+            return {"success": False,
+                    "message": f"Engine returned HTTP {r.status_code}: {r.text[:200]}"}
+        except Exception as e:
+            return {"success": False, "message": f"Could not reach engine: {e}"}
+
+    # ── Mark single incident as false positive ────────────────────────────────
+    elif action_type == "mark_false_positive":
+        inc_id  = params.get("incident_id", "")
+        comment = params.get("comment") or f"False positive — via CyMind agentic chat by {actor_email}"
+        if not inc_id:
+            return {"success": False, "message": "Missing incident_id"}
+        try:
+            r = http_requests.post(
+                f"{engine}/incidents/{inc_id}/transition",
+                json={"to_status": "false_positive", "comment": comment, "actor": actor_email},
+                timeout=_t,
+            )
+            if r.ok:
+                return {"success": True,
+                        "message": f"Incident **{inc_id}** marked as false positive.",
+                        "data": r.json()}
+            return {"success": False,
+                    "message": f"Engine returned HTTP {r.status_code}: {r.text[:200]}"}
+        except Exception as e:
+            return {"success": False, "message": f"Could not reach engine: {e}"}
+
+    # ── Bulk mark false positives ─────────────────────────────────────────────
+    elif action_type == "bulk_mark_false_positive":
+        inc_ids = params.get("incident_ids", [])
+        comment = params.get("comment") or f"Bulk false positive — CyMind agentic chat by {actor_email}"
+        if not inc_ids:
+            return {"success": False, "message": "No open incidents to mark — all may already be closed."}
+        try:
+            r = http_requests.post(
+                f"{engine}/incidents/bulk-false-positive",
+                json={"incident_ids": inc_ids, "comment": comment, "actor": actor_email},
+                timeout=30,
+            )
+            if r.ok:
+                d = r.json()
+                ok = d.get("success_count", 0)
+                return {"success": ok > 0,
+                        "message": f"Marked **{ok}/{len(inc_ids)}** incidents as false positive.",
+                        "data": d}
+            return {"success": False,
+                    "message": f"Engine returned HTTP {r.status_code}: {r.text[:200]}"}
+        except Exception as e:
+            return {"success": False, "message": f"Could not reach engine: {e}"}
+
+    # ── Trigger ASM scan ──────────────────────────────────────────────────────
+    elif action_type == "trigger_scan":
+        import subprocess, sys
+        from pathlib import Path as _Path
+        from core.config import SCANS_DIR, ASM_LOGS, ASM_DIR
+
+        domain    = params.get("domain", "").strip()
+        scan_type = params.get("scan_type", "standard").lower()
+        include_subdomains = bool(params.get("include_subdomains", True))
+
+        if not domain or "." not in domain:
+            return {"success": False, "message": "Invalid domain"}
+
+        uid      = actor_email.replace("@", "_").replace(".", "_")
+        user_dir = SCANS_DIR / uid
+        user_dir.mkdir(parents=True, exist_ok=True)
+        ASM_LOGS.mkdir(parents=True, exist_ok=True)
+        scan_script = ASM_DIR / "cycentra_scan.py"
+        if not scan_script.exists():
+            return {"success": False, "message": f"Scan engine not found at {scan_script}"}
+
+        env = os.environ.copy()
+        env["CYCENTRA_OUTPUT_DIR"]         = str(user_dir)
+        env["CYCENTRA_USER_ID"]            = uid
+        env["CYCENTRA_INCLUDE_SUBDOMAINS"] = "true" if include_subdomains else "false"
+        try:
+            subprocess.Popen(
+                [str(_Path(sys.executable)), str(scan_script), domain, uid, scan_type],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return {"success": True,
+                    "message": f"**{scan_type.title()} scan** started for **{domain}**. Results will appear in Asset Inventory when complete."}
+        except Exception as e:
+            return {"success": False, "message": f"Failed to launch scan: {e}"}
+
+    # ── Add scheduled scan ────────────────────────────────────────────────────
+    elif action_type == "add_schedule":
+        from blueprints.scheduler.routes import add_job_internal
+        return add_job_internal(params, actor_email)
+
+    return {"success": False, "message": f"Unknown action type: {action_type}"}
+
+
+@system_bp.route("/api/cymind/action/execute", methods=["OPTIONS"])
+def cymind_action_execute_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/cymind/action/execute", methods=["POST"])
+def cymind_action_execute():
+    """
+    Execute a confirmed agentic action from the CyMind chat overlay.
+    Requires analyst+ role.  The action type and params are sent by the browser
+    after the user clicks 'Execute' on the confirm card.
+    """
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
+        return jsonify({"error": "Analyst or admin role required"}), 403
+
+    data        = request.get_json() or {}
+    action_type = data.get("type", "")
+    params      = data.get("params", {})
+    actor       = session["user_email"]
+
+    if not action_type:
+        return jsonify({"error": "Missing action type"}), 400
+
+    result = _execute_agentic_action(action_type, params, actor)
+    status = 200 if result.get("success") else 500
+    return jsonify(result), status
+
+
 @system_bp.route("/api/cymind/chat/stream", methods=["OPTIONS"])
 def cymind_chat_proxy_options():
     return add_cors_headers(make_response('', 204))
@@ -1791,6 +2251,11 @@ def cymind_chat_proxy():
     response back.  Injects live SIEM context from the local correlation engine
     directly into the system prompt so CyMind always has current data — no MCP
     callback from CyMind to CyCentra required.
+
+    Agentic interception: if the user's last message matches a known action
+    intent (block IP, close incident, trigger scan, etc.), the proxy intercepts
+    the request and returns a synthetic SSE stream with an `action_pending`
+    confirmation event instead of forwarding to CyMind.
     """
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
@@ -1807,12 +2272,23 @@ def cymind_chat_proxy():
     if not chat_key:
         return jsonify({"error": "Chat API key not set — see System Settings → CyMind."}), 503
 
-    # ── Parse body and inject live SIEM context ────────────────────────────────
+    # ── Parse body ─────────────────────────────────────────────────────────────
     raw_body = request.get_data()
     try:
         body_json = json.loads(raw_body)
     except Exception:
         body_json = None
+
+    # ── Agentic intent detection ───────────────────────────────────────────────
+    # Check if the user's last message contains a confirmed action intent.
+    # Only analyst/admin reach here; no role re-check needed.
+    if body_json is not None:
+        messages = body_json.get("messages", [])
+        last_msg = messages[-1].get("content", "") if messages else ""
+        if last_msg:
+            action = _detect_action_intent(last_msg)
+            if action is not None:
+                return _stream_action_confirmation(action)
 
     _SIEM_UNAVAILABLE_NOTE = (
         "\n\n[SYSTEM NOTE: Live SIEM data is temporarily unavailable "
@@ -2718,7 +3194,7 @@ def _apply_schedules(schedules: dict) -> list[str]:
         expr  = _build_cron_expr(bk.get("frequency", "daily"), bk.get("hour", 2), bk.get("minute", 0))
         cmd   = bk.get("command") or "/opt/cycentra/run_backup.sh"
         log   = bk.get("log") or "/var/log/cycentra/backup.log"
-        entry = f"{expr} root {cmd} >> {log} 2>&1  # cycentra-backup-cron"
+        entry = f"{expr} {cmd} >> {log} 2>&1  # cycentra-backup-cron"
         filtered.append(entry)
         applied.append(entry)
 
