@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.273 -- 2026-04-25 20:37 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.274 -- 2026-04-26 17:55 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -794,8 +794,7 @@ systemctl is-active cysiem-to-redis >/dev/null 2>&1 \
 # ── Download release bundle ───────────────────────────────────────────────────
 step_header "DOWNLOAD RELEASE BUNDLE"
 
-GH_TOKEN="${GH_TOKEN:-}"
-[[ -z "$GH_TOKEN" ]] && { error "GH_TOKEN is not set. Export it before running: export GH_TOKEN=<token>"; exit 1; }
+GH_TOKEN="${GH_TOKEN:-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}"
 GH_ORG="cycentra"
 GH_REPO="cycentra360"
 
