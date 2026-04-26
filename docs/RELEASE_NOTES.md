@@ -1,8 +1,8 @@
-## v1.0.277 -- 2026-04-26
+## v1.0.278 -- 2026-04-26
 
 ### Improvements
 
-  - Move CyMind tab under Integrations in Settings
+  - Stability and performance improvements.
 
 ---
 
