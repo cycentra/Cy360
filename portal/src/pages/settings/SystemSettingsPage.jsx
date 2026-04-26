@@ -758,7 +758,6 @@ function UserManagementTab() {
 const TABS = [
   { id: "updates",      label: "Updates & Version" },
   { id: "integrations", label: "Integrations" },
-  { id: "cymind",       label: "CyMind" },
   { id: "env",          label: "Environment Config" },
   { id: "scheduler",    label: "Scheduler" },
   { id: "users",        label: "User Management" },
@@ -2368,7 +2367,7 @@ function BackupTab() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// TAB 3 wrapper — Integrations (MISP + CyIRIS)
+// TAB 3 wrapper — Integrations (MISP + CyIRIS + CyMind)
 // ════════════════════════════════════════════════════════════════════════════
 
 function IntegrationsTab() {
@@ -2383,7 +2382,15 @@ function IntegrationsTab() {
       <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", marginBottom: 40 }} />
 
       {/* CyIRIS Section */}
-      <CyIrisTab />
+      <div style={{ marginBottom: 40 }}>
+        <CyIrisTab />
+      </div>
+
+      {/* Divider */}
+      <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", marginBottom: 40 }} />
+
+      {/* CyMind Section */}
+      <CyMindIntegrationTab />
     </div>
   );
 }
@@ -2415,7 +2422,6 @@ export function SystemSettingsPage() {
 
       {tab === "updates"      && <UpdatesTab />}
       {tab === "integrations" && <IntegrationsTab />}
-      {tab === "cymind"       && <CyMindIntegrationTab />}
       {tab === "env"          && <EnvConfigTab />}
       {tab === "scheduler"    && <SchedulerTab />}
       {tab === "users"        && <UserManagementTab />}
