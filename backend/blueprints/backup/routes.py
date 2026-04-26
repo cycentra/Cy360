@@ -57,8 +57,11 @@ _BACKUP_DIR = _BASE / "backups"
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _require_admin():
-    role = session.get("role", "")
-    if role != "admin":
+    email = session.get("user_email")
+    if not email:
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(email) != "admin":
         return jsonify({"error": "Admin required"}), 403
     return None
 

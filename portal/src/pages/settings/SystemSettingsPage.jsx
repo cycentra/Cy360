@@ -2396,10 +2396,10 @@ export function SystemSettingsPage() {
       {/* Page header */}
       <div style={{ marginBottom: 28 }}>
         <div style={{ color: "white", fontSize: 22, fontWeight: 700, fontFamily: "monospace", marginBottom: 4 }}>
-          System Settings
+          Settings
         </div>
         <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 13 }}>
-          Platform updates, release notes, and environment configuration
+          Platform updates, environment configuration, backup and integrations
         </div>
       </div>
 

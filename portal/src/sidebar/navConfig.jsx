@@ -61,7 +61,7 @@ export function buildNavSections({ installedModules = {}, data = null }) {
       section: "PLATFORM",
       items: [
         { id: "platform",         label: "Platform Modules", icon: SvgMods, badge: addonInstalled.length || 0, accent: "#b06eff" },
-        { id: "system-settings",  label: "System Settings",  icon: SvgGear, accent: "#00e5a0" },
+        { id: "system-settings",  label: "Settings",  icon: SvgGear, accent: "#00e5a0" },
       ],
     },
     {
