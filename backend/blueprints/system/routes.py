@@ -2562,6 +2562,18 @@ _DEFAULT_SCHEDULES = {
         "log": "/opt/cycentra/asm-scheduled.log",
         "desc": "Run automated ASM scan against a target domain",
     },
+    "backup": {
+        "enabled": False,
+        "frequency": "daily",
+        "hour": 2,
+        "minute": 0,
+        "retain_count": 14,
+        "retain_days": 30,
+        "label": "Automated Backup",
+        "command": "/opt/cycentra/run_backup.sh",
+        "log": "/var/log/cycentra/backup.log",
+        "desc": "Snapshot platform configs, env files, license and database to /opt/cycentra/backups/",
+    },
 }
 
 # Maps user-friendly frequency name → cron expression template
@@ -2638,6 +2650,7 @@ def _apply_schedules(schedules: dict) -> list[str]:
         "docker-maintenance.sh",
         "update_wordlist",
         "asm-scan-cron",
+        "cycentra-backup-cron",
     ]
     filtered = [
         ln for ln in lines
@@ -2689,6 +2702,25 @@ def _apply_schedules(schedules: dict) -> list[str]:
             entry  = f"{expr} {cmd}  # cycentra asm-scan-cron"
             filtered.append(entry)
             applied.append(entry)
+
+    # backup
+    bk = schedules.get("backup", {})
+    if bk.get("enabled"):
+        # Regenerate run_backup.sh with current retain settings
+        try:
+            from blueprints.backup.routes import _write_backup_script
+            _write_backup_script(
+                retain_count=int(bk.get("retain_count", 14)),
+                retain_days=int(bk.get("retain_days", 30)),
+            )
+        except Exception:
+            pass
+        expr  = _build_cron_expr(bk.get("frequency", "daily"), bk.get("hour", 2), bk.get("minute", 0))
+        cmd   = bk.get("command") or "/opt/cycentra/run_backup.sh"
+        log   = bk.get("log") or "/var/log/cycentra/backup.log"
+        entry = f"{expr} root {cmd} >> {log} 2>&1  # cycentra-backup-cron"
+        filtered.append(entry)
+        applied.append(entry)
 
     # Write new crontab
     new_crontab = "\n".join(filtered) + ("\n" if filtered else "")

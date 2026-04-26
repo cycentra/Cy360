@@ -2055,6 +2055,30 @@ function SchedulerTask({ taskId, task, onChange, baseDomain }) {
           </>
         )}
 
+        {/* Backup: retain count + retain days */}
+        {taskId === "backup" && (
+          <>
+            <div>
+              <div style={{ ...LABEL, marginBottom: 4 }}>Keep Last N</div>
+              <input
+                type="number" min={1} max={365}
+                value={task.retain_count ?? 14}
+                onChange={e => onChange(taskId, "retain_count", Math.max(1, parseInt(e.target.value) || 14))}
+                style={{ ...INPUT, width: 90, padding: "6px 10px" }}/>
+              <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, marginTop: 3 }}>archives</div>
+            </div>
+            <div>
+              <div style={{ ...LABEL, marginBottom: 4 }}>Delete After</div>
+              <input
+                type="number" min={1} max={730}
+                value={task.retain_days ?? 30}
+                onChange={e => onChange(taskId, "retain_days", Math.max(1, parseInt(e.target.value) || 30))}
+                style={{ ...INPUT, width: 90, padding: "6px 10px" }}/>
+              <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, marginTop: 3 }}>days</div>
+            </div>
+          </>
+        )}
+
         {/* ASM scan: domain (read-only from BASE_DOMAIN) + scan type */}
         {taskId === "asm_scan" && (
           <>
@@ -2139,7 +2163,7 @@ function SchedulerTab() {
   if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
   if (!schedules) return <div style={{ color: "#ff3b3b", fontFamily: "monospace", fontSize: 12 }}>Failed to load schedules.</div>;
 
-  const taskOrder = ["docker_maintenance", "asm_wordlist", "asm_scan"];
+  const taskOrder = ["docker_maintenance", "asm_wordlist", "asm_scan", "backup"];
 
   return (
     <div style={{ maxWidth: 860 }}>
@@ -2175,143 +2199,127 @@ function SchedulerTab() {
 
 // ════════════════════════════════════════════════════════════════════════════
 // TAB — Backup & Restore
+// Scheduling lives in the Scheduler tab (same system as other cron tasks).
 // ════════════════════════════════════════════════════════════════════════════
 
-const CRON_PRESETS = [
-  { label: "Every day at 2 AM",    value: "0 2 * * *" },
-  { label: "Every day at midnight", value: "0 0 * * *" },
-  { label: "Every 6 hours",        value: "0 */6 * * *" },
-  { label: "Every Sunday at 3 AM", value: "0 3 * * 0" },
-  { label: "Custom…",              value: "custom" },
+const BACKUP_INCLUDES = [
+  { file: "/opt/cycentra/*.json",           desc: "RBAC, module state, AI settings, schedules" },
+  { file: "/opt/cycentra/.env",             desc: "Core config — OAuth keys, BASE_DOMAIN, ports" },
+  { file: "/opt/cycentra/*.env",            desc: "CySIEM stack, per-component env files" },
+  { file: "/opt/cycentra/*.lic",            desc: "License file(s)" },
+  { file: "/opt/cycentra/modules/**/*.json", desc: "Per-module config files" },
+  { file: "/opt/cycentra/modules/**/.env",  desc: "Per-module env (CyIRIS, CySOAR, CyMISP, …)" },
+  { file: "database_dump.sql",              desc: "PostgreSQL dump — only if DATABASE_URL is set" },
 ];
 
 function BackupTab() {
-  const [backups,    setBackups]    = useState([]);
-  const [schedule,   setSchedule]   = useState(null);
-  const [loading,    setLoading]    = useState(true);
-  const [creating,   setCreating]   = useState(false);
-  const [restoring,  setRestoring]  = useState(null);   // backup_id being restored
-  const [deleting,   setDeleting]   = useState(null);   // backup_id being deleted
-  const [savingSch,  setSavingSch]  = useState(false);
-  const [customCron, setCustomCron] = useState("");
-  const [msg,        setMsg]        = useState(null);
+  const [backups,   setBackups]   = useState([]);
+  const [loading,   setLoading]   = useState(true);
+  const [creating,  setCreating]  = useState(false);
+  const [restoring, setRestoring] = useState(null);
+  const [deleting,  setDeleting]  = useState(null);
+  const [msg,       setMsg]       = useState(null);
 
-  const fetchAll = () => {
+  const fetchBackups = () => {
     setLoading(true);
-    Promise.all([
-      fetch(`${API_BASE}/api/backup/list`,     { credentials: "include" }).then(r => r.ok ? r.json() : null),
-      fetch(`${API_BASE}/api/backup/schedule`, { credentials: "include" }).then(r => r.ok ? r.json() : null),
-    ]).then(([bk, sc]) => {
-      if (bk?.backups) setBackups(bk.backups);
-      if (sc)          setSchedule(sc);
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    fetch(`${API_BASE}/api/backup/list`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.backups) setBackups(d.backups); setLoading(false); })
+      .catch(() => setLoading(false));
   };
 
-  useEffect(() => { fetchAll(); }, []);
+  useEffect(() => { fetchBackups(); }, []);
 
-  const flash = (ok, text) => {
-    setMsg({ ok, text });
-    setTimeout(() => setMsg(null), 4000);
-  };
+  const flash = (ok, text) => { setMsg({ ok, text }); setTimeout(() => setMsg(null), 5000); };
 
   const handleCreate = async () => {
     setCreating(true); setMsg(null);
     try {
       const r = await fetch(`${API_BASE}/api/backup/create`, { method: "POST", credentials: "include" });
       const d = await r.json();
-      if (d.ok) { flash(true, `Backup created: ${d.backup.id} (${d.backup.size_mb} MB)`); fetchAll(); }
+      if (d.ok) { flash(true, `Backup created: ${d.backup.id}  (${d.backup.size_mb} MB · ${d.backup.files} files)`); fetchBackups(); }
       else       flash(false, d.error || "Backup failed");
     } catch (e) { flash(false, String(e)); }
     finally { setCreating(false); }
   };
 
   const handleRestore = async (backupId) => {
-    if (!window.confirm(`Restore from ${backupId}?\n\nA pre-restore snapshot will be saved automatically before any files are overwritten.`)) return;
+    if (!window.confirm(
+      `Restore from ${backupId}?\n\n` +
+      `• All config files under /opt/cycentra/ will be overwritten.\n` +
+      `• A pre-restore snapshot is saved automatically so you can undo.\n\n` +
+      `The platform must be restarted after restore for changes to take effect.`
+    )) return;
     setRestoring(backupId); setMsg(null);
     try {
       const r = await fetch(`${API_BASE}/api/backup/restore/${encodeURIComponent(backupId)}`,
         { method: "POST", credentials: "include" });
       const d = await r.json();
-      if (d.ok) { flash(true, `${d.message}  (pre-restore snapshot: ${d.pre_backup_id || "n/a"})`); fetchAll(); }
+      if (d.ok) flash(true, `${d.message}  |  pre-restore snapshot: ${d.pre_backup_id || "n/a"}`);
       else       flash(false, d.error || "Restore failed");
     } catch (e) { flash(false, String(e)); }
-    finally { setRestoring(null); }
+    finally { setRestoring(null); fetchBackups(); }
   };
 
   const handleDelete = async (backupId) => {
-    if (!window.confirm(`Delete backup ${backupId}? This cannot be undone.`)) return;
+    if (!window.confirm(`Permanently delete ${backupId}? This cannot be undone.`)) return;
     setDeleting(backupId);
     try {
       const r = await fetch(`${API_BASE}/api/backup/${encodeURIComponent(backupId)}`,
         { method: "DELETE", credentials: "include" });
       const d = await r.json();
-      if (d.ok) { fetchAll(); }
-      else       flash(false, d.error || "Delete failed");
+      if (!d.ok) flash(false, d.error || "Delete failed");
     } catch (e) { flash(false, String(e)); }
-    finally { setDeleting(null); }
+    finally { setDeleting(null); fetchBackups(); }
   };
-
-  const handleScheduleSave = async () => {
-    if (!schedule) return;
-    setSavingSch(true); setMsg(null);
-    const cronVal = schedule.cron === "custom" ? customCron.trim() : schedule.cron;
-    try {
-      const r = await fetch(`${API_BASE}/api/backup/schedule`, {
-        method: "PUT", credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...schedule, cron: cronVal }),
-      });
-      const d = await r.json();
-      if (d.ok) { flash(true, "Schedule saved."); setSchedule(d.schedule); }
-      else       flash(false, d.error || "Save failed");
-    } catch (e) { flash(false, String(e)); }
-    finally { setSavingSch(false); }
-  };
-
-  const handleScheduleDisable = async () => {
-    setSavingSch(true); setMsg(null);
-    try {
-      const r = await fetch(`${API_BASE}/api/backup/schedule`, { method: "DELETE", credentials: "include" });
-      const d = await r.json();
-      if (d.ok) { flash(true, "Scheduled backups disabled."); setSchedule(s => ({ ...s, enabled: false })); }
-      else       flash(false, d.error || "Failed");
-    } catch (e) { flash(false, String(e)); }
-    finally { setSavingSch(false); }
-  };
-
-  const isCustomCron = schedule && !CRON_PRESETS.slice(0, -1).some(p => p.value === schedule.cron);
-
-  if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
 
   return (
-    <div style={{ maxWidth: 900 }}>
+    <div style={{ maxWidth: 920 }}>
 
-      {/* ── Manual Backup ───────────────────────────────────────── */}
-      <div style={CARD}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div>
-            <div style={LABEL}>Manual Backup</div>
-            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12 }}>
-              Snapshot all config files and environment settings to <code style={{ color: "#00e5a0", fontFamily: "monospace" }}>/opt/cycentra/backups/</code>
+      {/* ── What's included ─────────────────────────────────────── */}
+      <div style={{ ...CARD, marginBottom: 20 }}>
+        <div style={LABEL}>What Every Backup Contains</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px", marginTop: 8 }}>
+          {BACKUP_INCLUDES.map(it => (
+            <div key={it.file} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+              <code style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 11, whiteSpace: "nowrap", minWidth: 0, flexShrink: 0 }}>
+                {it.file}
+              </code>
+              <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, lineHeight: 1.5 }}>{it.desc}</span>
             </div>
-          </div>
+          ))}
+        </div>
+        <div style={{ marginTop: 12, borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: 10,
+          color: "rgba(255,255,255,0.2)", fontSize: 11, lineHeight: 1.7 }}>
+          <strong style={{ color: "rgba(255,255,255,0.35)" }}>Not backed up:</strong>{" "}
+          Docker images · log files · Python source code (all re-deployable via <code style={{ fontFamily: "monospace" }}>cycentra-setup.sh</code>).
+          <br/>
+          <strong style={{ color: "rgba(255,255,255,0.35)" }}>Scheduling:</strong>{" "}
+          Configure automated backup runs in the <strong>Scheduler</strong> tab (Automated Backup task).
+        </div>
+      </div>
+
+      {/* ── Create + List ───────────────────────────────────────── */}
+      <div style={CARD}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={LABEL}>Backup Archives</div>
           <button onClick={handleCreate} disabled={creating}
             style={{ ...BTN(), opacity: creating ? 0.5 : 1, whiteSpace: "nowrap" }}>
             {creating ? "Creating…" : "Create Backup Now"}
           </button>
         </div>
 
-        {/* Backup list */}
-        {backups.length === 0 ? (
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace", paddingTop: 8 }}>
-            No backups yet.
+        {loading ? (
+          <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>
+        ) : backups.length === 0 ? (
+          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace", padding: "8px 0" }}>
+            No backups yet — click "Create Backup Now" or enable the Automated Backup task in the Scheduler tab.
           </div>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: "monospace" }}>
             <thead>
               <tr>
-                {["Backup ID", "Created", "Size", "Actions"].map(h => (
+                {["Archive", "Created", "Size", "Actions"].map(h => (
                   <th key={h} style={{ ...LABEL, textAlign: "left", paddingBottom: 8, paddingRight: 16 }}>{h}</th>
                 ))}
               </tr>
@@ -2319,26 +2327,25 @@ function BackupTab() {
             <tbody>
               {backups.map(b => (
                 <tr key={b.id} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-                  <td style={{ color: "rgba(255,255,255,0.7)", padding: "8px 16px 8px 0" }}>{b.id}</td>
-                  <td style={{ color: "rgba(255,255,255,0.5)", paddingRight: 16 }}>{b.created}</td>
-                  <td style={{ color: "rgba(255,255,255,0.5)", paddingRight: 16 }}>{b.size_mb} MB</td>
+                  <td style={{ color: "rgba(255,255,255,0.65)", padding: "9px 16px 9px 0", maxWidth: 320, wordBreak: "break-all" }}>
+                    {b.id}
+                  </td>
+                  <td style={{ color: "rgba(255,255,255,0.45)", paddingRight: 16, whiteSpace: "nowrap" }}>{b.created}</td>
+                  <td style={{ color: "rgba(255,255,255,0.45)", paddingRight: 16, whiteSpace: "nowrap" }}>{b.size_mb} MB</td>
                   <td>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button
-                        onClick={() => handleRestore(b.id)}
-                        disabled={restoring === b.id}
-                        style={{ ...BTN(), padding: "4px 10px", fontSize: 10, opacity: restoring === b.id ? 0.5 : 1 }}>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <button onClick={() => handleRestore(b.id)} disabled={!!restoring}
+                        style={{ ...BTN(), padding: "4px 12px", fontSize: 10, opacity: restoring === b.id ? 0.5 : 1 }}>
                         {restoring === b.id ? "Restoring…" : "Restore"}
                       </button>
                       <a href={`${API_BASE}/api/backup/download/${encodeURIComponent(b.id)}`}
-                        style={{ ...BTN("#4d9eff"), padding: "4px 10px", fontSize: 10, textDecoration: "none", display: "inline-block" }}>
+                        style={{ ...BTN("#4d9eff"), padding: "4px 12px", fontSize: 10, textDecoration: "none", display: "inline-block" }}>
                         Download
                       </a>
-                      <button
-                        onClick={() => handleDelete(b.id)}
-                        disabled={deleting === b.id}
-                        style={{ background: "rgba(255,59,59,0.08)", color: "#ff3b3b", border: "1px solid rgba(255,59,59,0.25)",
-                          padding: "4px 10px", borderRadius: 4, fontFamily: "monospace", fontSize: 10, cursor: "pointer",
+                      <button onClick={() => handleDelete(b.id)} disabled={deleting === b.id}
+                        style={{ background: "rgba(255,59,59,0.08)", color: "#ff3b3b",
+                          border: "1px solid rgba(255,59,59,0.25)", padding: "4px 12px",
+                          borderRadius: 4, fontFamily: "monospace", fontSize: 10, cursor: "pointer",
                           opacity: deleting === b.id ? 0.5 : 1 }}>
                         {deleting === b.id ? "Deleting…" : "Delete"}
                       </button>
@@ -2349,99 +2356,13 @@ function BackupTab() {
             </tbody>
           </table>
         )}
+
+        {msg && (
+          <div style={{ color: msg.ok ? "#00e5a0" : "#ff3b3b", fontSize: 12, fontFamily: "monospace", marginTop: 14 }}>
+            {msg.ok ? "✓" : "✗"} {msg.text}
+          </div>
+        )}
       </div>
-
-      {/* ── Scheduled Backups ───────────────────────────────────── */}
-      {schedule && (
-        <div style={CARD}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <div style={LABEL}>Scheduled Backups</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
-                {schedule.enabled ? "Enabled" : "Disabled"}
-              </span>
-              <button
-                onClick={() => setSchedule(s => ({ ...s, enabled: !s.enabled }))}
-                style={{
-                  background: schedule.enabled ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.06)",
-                  color: schedule.enabled ? "#00e5a0" : "rgba(255,255,255,0.4)",
-                  border: `1px solid ${schedule.enabled ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.1)"}`,
-                  padding: "5px 14px", borderRadius: 4, fontFamily: "monospace", fontSize: 11,
-                  cursor: "pointer", fontWeight: 700,
-                }}>
-                {schedule.enabled ? "On" : "Off"}
-              </button>
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 16 }}>
-            {/* Frequency */}
-            <div>
-              <div style={LABEL}>Frequency</div>
-              <select
-                value={isCustomCron ? "custom" : schedule.cron}
-                onChange={e => setSchedule(s => ({ ...s, cron: e.target.value }))}
-                style={INPUT}>
-                {CRON_PRESETS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-              </select>
-            </div>
-
-            {/* Retain count */}
-            <div>
-              <div style={LABEL}>Keep Last N Backups</div>
-              <input type="number" min={1} max={100}
-                value={schedule.retain_count ?? 14}
-                onChange={e => setSchedule(s => ({ ...s, retain_count: parseInt(e.target.value) || 14 }))}
-                style={INPUT} />
-            </div>
-
-            {/* Retain days */}
-            <div>
-              <div style={LABEL}>Delete After (days)</div>
-              <input type="number" min={1} max={365}
-                value={schedule.retain_days ?? 30}
-                onChange={e => setSchedule(s => ({ ...s, retain_days: parseInt(e.target.value) || 30 }))}
-                style={INPUT} />
-            </div>
-          </div>
-
-          {/* Custom cron expression */}
-          {(isCustomCron || schedule.cron === "custom") && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={LABEL}>Custom Cron Expression</div>
-              <input
-                placeholder="e.g. 30 4 * * 1-5"
-                value={customCron || (isCustomCron ? schedule.cron : "")}
-                onChange={e => setCustomCron(e.target.value)}
-                style={INPUT} />
-              <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
-                Format: minute hour day-of-month month day-of-week
-              </div>
-            </div>
-          )}
-
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={handleScheduleSave} disabled={savingSch}
-              style={{ ...BTN(), opacity: savingSch ? 0.5 : 1 }}>
-              {savingSch ? "Saving…" : "Save Schedule"}
-            </button>
-            {schedule.enabled && (
-              <button onClick={handleScheduleDisable} disabled={savingSch}
-                style={{ background: "rgba(255,59,59,0.08)", color: "#ff3b3b", border: "1px solid rgba(255,59,59,0.25)",
-                  padding: "8px 18px", borderRadius: 4, fontFamily: "monospace", fontSize: 11, cursor: "pointer",
-                  fontWeight: 700, letterSpacing: "1px", textTransform: "uppercase" }}>
-                Disable Schedule
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      {msg && (
-        <div style={{ color: msg.ok ? "#00e5a0" : "#ff3b3b", fontSize: 12, fontFamily: "monospace", marginTop: 4 }}>
-          {msg.ok ? "✓" : "✗"} {msg.text}
-        </div>
-      )}
     </div>
   );
 }
