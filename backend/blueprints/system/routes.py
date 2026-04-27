@@ -2634,8 +2634,8 @@ def o365config_post():
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
     from blueprints.rbac.manager import get_user_role
-    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
-        return jsonify({"error": "Analyst or admin role required"}), 403
+    if get_user_role(session["user_email"]) != "admin":
+        return jsonify({"error": "Admin role required to configure integrations"}), 403
 
     data          = request.get_json() or {}
     tenant_id     = (data.get("tenant_id")     or "").strip()
@@ -2866,8 +2866,8 @@ def gcloudconfig_post():
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
     from blueprints.rbac.manager import get_user_role
-    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
-        return jsonify({"error": "Analyst or admin role required"}), 403
+    if get_user_role(session["user_email"]) != "admin":
+        return jsonify({"error": "Admin role required to configure integrations"}), 403
 
     data              = request.get_json() or {}
     credentials_raw   = data.get("credentials_json")

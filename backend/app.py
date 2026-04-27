@@ -30,6 +30,7 @@ from blueprints.asm.scanner       import asm_bp
 from blueprints.system.routes     import system_bp
 from blueprints.backup.routes     import backup_bp
 from blueprints.scheduler.routes  import scheduler_bp, init_scheduler
+from blueprints.marketplace.routes import marketplace_bp
 
 # siem_proxy.py lives at backend root — import as-is (already a Blueprint)
 from siem_proxy import siem_bp
@@ -47,7 +48,7 @@ def create_app() -> Flask:
     app.config.update(COOKIE_SETTINGS)
 
     # Register all blueprints
-    for bp in (auth_bp, oidc_bp, rbac_bp, platform_bp, asm_bp, siem_bp, system_bp, backup_bp, scheduler_bp):
+    for bp in (auth_bp, oidc_bp, rbac_bp, platform_bp, asm_bp, siem_bp, system_bp, backup_bp, scheduler_bp, marketplace_bp):
         app.register_blueprint(bp)
 
     # Start background job scheduler (only one gunicorn worker acquires lock)

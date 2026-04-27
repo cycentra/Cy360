@@ -61,7 +61,7 @@ import { DashboardPage }     from './pages/dashboard/DashboardPage.jsx';
 import { AssetsPage }        from './pages/assets/AssetsPage.jsx';
 import { VulnerabilityPage } from './pages/vulnerabilities/VulnerabilityPage.jsx';
 import { PlatformPage }      from './pages/platform/PlatformPage.jsx';
-import { UseCasesPage }      from './pages/usecases/UseCasesPage.jsx';
+import { MarketplacePage }   from './pages/marketplace/MarketplacePage.jsx';
 import { SystemSettingsPage } from './pages/settings/SystemSettingsPage.jsx';
 import { AssetModal }        from './pages/assets/AssetModal.jsx';
 import { ImportModal }       from './pages/assets/ImportModal.jsx';
@@ -338,7 +338,7 @@ export default function App() {
             {activeTab==="siem-incidents" && <SiemIncidentsPage/>}
             {activeTab==="siem-risk"      && <SiemRiskScoresPage/>}
             {activeTab==="siem-ueba"      && <SiemUebaPage/>}
-            {activeTab==="usecases"       && <UseCasesPage/>}
+            {activeTab==="marketplace"    && <MarketplacePage user={user}/>}
             {activeTab==="platform"       && <PlatformPage installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
             {activeTab==="system-settings" && <SystemSettingsPage />}
 
