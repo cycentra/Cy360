@@ -26,7 +26,7 @@ from core.config import (
     FRONTEND_URL, BASE_URL,
 )
 from core.helpers import enc, auth_event
-from blueprints.rbac.manager import get_user_role, get_user_apps, _load_rbac
+from blueprints.rbac.manager import get_user_role, get_user_apps, _get_user
 from core.config import AUTH_LOG_FILE
 
 auth_bp = Blueprint("auth", __name__)
@@ -91,8 +91,7 @@ def auth_google_callback():
     uid    = f"google_{info.get('sub', 'unknown')}"
     avatar = ''.join([w[0].upper() for w in name.split()[:2]])
 
-    rbac = _load_rbac()
-    if email not in rbac:
+    if not _get_user(email):
         auth_event("login", email, "portal", "denied", "not in allowlist")
         return redirect(
             f"{FRONTEND_URL}?auth=error&message=Access+denied.+Your+account+is+not+registered."
@@ -177,8 +176,7 @@ def auth_microsoft_callback():
     uid    = f"microsoft_{graph.get('id', 'unknown')}"
     avatar = ''.join([w[0].upper() for w in name.split()[:2]])
 
-    rbac = _load_rbac()
-    if email not in rbac:
+    if not _get_user(email):
         auth_event("login", email, "portal", "denied", "not in allowlist")
         return redirect(
             f"{FRONTEND_URL}?auth=error&message=Access+denied.+Your+account+is+not+registered."
@@ -269,8 +267,7 @@ def auth_local():
         auth_event("login", email, "portal", "error", "provider=local missing credentials")
         return _json({"error": "Email and password are required"}, 400)
 
-    rbac  = _load_rbac()
-    entry = rbac.get(email)
+    entry = _get_user(email)
 
     # Only allow users whose auth_type is "local" (or accounts with a password_hash)
     if not entry:

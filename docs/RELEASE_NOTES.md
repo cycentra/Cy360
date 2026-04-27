@@ -1,4 +1,4 @@
-## v1.0.282 -- 2026-04-27
+## v1.0.283 -- 2026-04-27
 
 ### Improvements
 
@@ -35,6 +35,11 @@
 
   - **`DELETE /api/rbac/users/<email>`**: Deletes from `cy_users` (previously edited
     `rbac.json` in-place).
+
+  - **OAuth callbacks use single-row DB lookup**: Google and Microsoft SSO callbacks now
+    call `_get_user(email)` (single `SELECT` by primary key) for the allowlist check
+    instead of loading the full user table. Same fix applied to local auth. All three
+    auth paths now make exactly one DB round-trip per login.
 
 ---
 
