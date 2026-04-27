@@ -1,8 +1,23 @@
-## v1.0.289 -- 2026-04-27
+## v1.0.290 -- 2026-04-27
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.290 -- 2026-04-27
+
+### Bug Fixes — Critical
+
+- **Backend crash-loop fixed (issues: local auth "Network error", Google SSO 502, scheduler UI)**  
+  `blueprints/scheduler/routes.py` `_load_jobs()` crashed at startup when reading the legacy dict-format `schedules.json`, iterating over string keys and calling `.get()` on them. Added `_normalise_legacy_job()` to convert the legacy flat-dict schema (`{job_id: {...}}`) to the list-of-dicts format the scheduler expects. The service was restart-looping 180+ times — this is now fixed, and the Flask backend (`cycentra-backend.service`) will come up cleanly.
+
+- **ASM PDF report — chart aspect ratios fixed**  
+  `cy_asm/reporting/pdf_base.py` `img_from_bytes()` previously called `Image(buf, width=w)` without an explicit height, allowing ReportLab to use an incorrect internal calculation that caused charts (gauge, radar, pie, world map) to appear extremely stretched. Now uses `ImageReader.getSize()` to compute the exact proportional height before constructing the `Image` object.
+
+- **ASM PDF report — CyCentra logo added to cover page**  
+  `build_cover()` now detects and embeds the actual CyCentra logo image (checked in priority order: `logo.png`, `logo-light.png`, `favicon-*.png`, `favicon.ico`). ICO files are transparently converted to PNG bytes via Pillow before embedding. Falls back gracefully to the existing "CY CENTRA" text monogram if no image is found.
 
 ---
 

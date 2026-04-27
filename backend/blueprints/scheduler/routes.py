@@ -49,10 +49,59 @@ _scheduler       = None   # APScheduler BackgroundScheduler instance
 _scheduler_owner = False  # True only in the worker that acquired the lock
 
 
+def _normalise_legacy_job(jid: str, jdata: dict) -> dict:
+    """Convert the legacy flat-dict schedules.json schema to the nested job schema."""
+    frequency = jdata.get("frequency", "hourly")
+    if frequency == "interval":
+        schedule = {"type": "interval", "seconds": int(jdata.get("seconds", 3600))}
+    else:
+        schedule = {
+            "type":        "cron",
+            "minute":      str(jdata.get("minute", "0")),
+            "hour":        str(jdata.get("hour",   "0")),
+            "day":         str(jdata.get("day",    "*")),
+            "month":       str(jdata.get("month",  "*")),
+            "day_of_week": str(jdata.get("day_of_week", "*")),
+        }
+
+    if jid == "asm_scan" or jdata.get("type") == "asm_scan":
+        jtype = "asm_scan"
+        params = {
+            "domain":             jdata.get("domain", ""),
+            "scan_type":          jdata.get("scan_type", "standard"),
+            "include_subdomains": bool(jdata.get("include_subdomains", True)),
+            "actor_uid":          "scheduler",
+        }
+    else:
+        jtype = jdata.get("type", jid)
+        params = jdata.get("params", {})
+
+    return {
+        "id":        jdata.get("id", jid),
+        "type":      jtype,
+        "name":      jdata.get("label", jdata.get("name", jid)),
+        "enabled":   bool(jdata.get("enabled", True)),
+        "params":    params,
+        "schedule":  schedule,
+        "label":     jdata.get("label", jid),
+        "desc":      jdata.get("desc", ""),
+        "log":       jdata.get("log", ""),
+        "frequency": frequency,
+    }
+
+
 def _load_jobs() -> list[dict]:
     try:
         if _STORE_PATH.exists():
-            return json.loads(_STORE_PATH.read_text()) or []
+            raw = json.loads(_STORE_PATH.read_text())
+            if isinstance(raw, dict):
+                # Legacy format: {"job_id": {...}, ...} — normalise to list
+                return [
+                    _normalise_legacy_job(k, v)
+                    for k, v in raw.items()
+                    if isinstance(v, dict)
+                ]
+            return raw or []
     except Exception:
         pass
     return []

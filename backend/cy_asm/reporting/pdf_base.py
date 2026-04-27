@@ -149,10 +149,20 @@ def rule(color=C_BORDER, thickness=0.5, width=BODY_W, space_before=4, space_afte
 
 
 def img_from_bytes(buf: io.BytesIO, width: float, height: Optional[float] = None) -> Image:
+    """Embed a BytesIO PNG into the PDF.
+
+    Always sets both width AND height explicitly so ReportLab never
+    stretches the image to fill an unconstrained table cell.
+    """
     buf.seek(0)
-    if height:
+    if height is not None:
         return Image(buf, width=width, height=height)
-    return Image(buf, width=width)
+    # Compute proportional height from the image's actual pixel dimensions.
+    reader = ImageReader(buf)
+    w_px, h_px = reader.getSize()
+    computed_height = width * h_px / w_px if w_px else width
+    buf.seek(0)
+    return Image(buf, width=width, height=computed_height)
 
 
 def severity_badge(sev: str) -> Table:
@@ -290,12 +300,34 @@ class CyCentraDocTemplate(BaseDocTemplate):
         canvas.restoreState()
 
 
+# ── Logo resolver — tries known paths in preference order ────────────────────
+_LOGO_CANDIDATES = [
+    "/var/www/cycentra360/logo.png",
+    "/var/www/cycentra360/logo-light.png",
+    "/opt/cycentra/logo.png",
+    "/var/www/cycentra360/favicon-192.png",
+    "/var/www/cycentra360/favicon-96.png",
+    "/var/www/cycentra360/favicon-32x32.png",
+    "/var/www/cycentra360/favicon.ico",
+]
+
+
+def _resolve_logo() -> Optional[str]:
+    """Return the first usable logo path, or None if none found."""
+    for p in _LOGO_CANDIDATES:
+        if os.path.isfile(p):
+            return p
+    return None
+
+
 # ── Cover Page ────────────────────────────────────────────────────────────────
 
 def build_cover(report_type: str, domain: str, org: str,
                 scan_id: str, scan_date: str,
                 posture_score: int, posture_grade: str) -> List:
     """Returns a list of flowables that form the full cover page."""
+
+    _logo_path = _resolve_logo()
 
     class CoverCanvas(Flowable):
         """Draw the gradient cover background + branding."""
@@ -321,7 +353,6 @@ def build_cover(report_type: str, domain: str, org: str,
             c.setFillColor(C_BLUE)
             c.rect(0, 0, 6 * mm, self.h, fill=1, stroke=0)
             # Diagonal accent top-right
-            from reportlab.graphics import renderPDF
             c.setFillColor(colors.HexColor("#162d52"))
             p = c.beginPath()
             p.moveTo(self.w, self.h)
@@ -330,16 +361,73 @@ def build_cover(report_type: str, domain: str, org: str,
             p.close()
             c.drawPath(p, fill=1, stroke=0)
 
-            # Logo area: CY monogram text
-            c.setFillColor(C_SKY)
-            c.setFont("Helvetica-Bold", 52)
-            c.drawString(2 * cm, self.h - 3.2 * cm, "CY")
-            c.setFillColor(colors.white)
-            c.setFont("Helvetica", 52)
-            c.drawString(2 * cm + 62, self.h - 3.2 * cm, "CENTRA")
+            # ── Logo area ─────────────────────────────────────────────────────
+            logo_top_y   = self.h - 1.8 * cm   # top of logo zone
+            logo_height  = 1.4 * cm             # target height for the logo image
+            text_label_y = self.h - 3.7 * cm   # tagline below logo
+
+            if _logo_path:
+                try:
+                    # Load logo; convert ICO → PNG bytes if needed
+                    if _logo_path.lower().endswith(".ico"):
+                        from PIL import Image as PILImage
+                        import io as _io
+                        pil_img = PILImage.open(_logo_path)
+                        # Use the largest size in the ICO if available
+                        if hasattr(pil_img, "sizes") and pil_img.sizes:
+                            best = max(pil_img.sizes, key=lambda s: s[0])
+                            pil_img.size = best
+                        pil_img = pil_img.convert("RGBA")
+                        buf = _io.BytesIO()
+                        pil_img.save(buf, format="PNG")
+                        buf.seek(0)
+                        logo_src = buf
+                    else:
+                        logo_src = _logo_path
+
+                    reader = ImageReader(logo_src)
+                    w_px, h_px = reader.getSize()
+                    logo_w = logo_height * w_px / h_px if h_px else logo_height
+
+                    if _logo_path.lower().endswith(".ico"):
+                        logo_src.seek(0)
+
+                    c.drawImage(
+                        logo_src if _logo_path.lower().endswith(".ico") else _logo_path,
+                        2 * cm,
+                        logo_top_y - logo_height,
+                        width=logo_w,
+                        height=logo_height,
+                        mask="auto",
+                    )
+                    # "CYCENTRA" wordmark next to logo
+                    wordmark_x = 2 * cm + logo_w + 0.35 * cm
+                    c.setFillColor(C_SKY)
+                    c.setFont("Helvetica-Bold", 28)
+                    c.drawString(wordmark_x, logo_top_y - 0.85 * cm, "CY")
+                    c.setFillColor(colors.white)
+                    c.setFont("Helvetica", 28)
+                    c.drawString(wordmark_x + 34, logo_top_y - 0.85 * cm, "CENTRA")
+                except Exception:
+                    # Fall back to text-only branding on any logo load error
+                    c.setFillColor(C_SKY)
+                    c.setFont("Helvetica-Bold", 52)
+                    c.drawString(2 * cm, self.h - 3.2 * cm, "CY")
+                    c.setFillColor(colors.white)
+                    c.setFont("Helvetica", 52)
+                    c.drawString(2 * cm + 62, self.h - 3.2 * cm, "CENTRA")
+            else:
+                # Text-only branding
+                c.setFillColor(C_SKY)
+                c.setFont("Helvetica-Bold", 52)
+                c.drawString(2 * cm, self.h - 3.2 * cm, "CY")
+                c.setFillColor(colors.white)
+                c.setFont("Helvetica", 52)
+                c.drawString(2 * cm + 62, self.h - 3.2 * cm, "CENTRA")
+
             c.setFillColor(C_SKY)
             c.setFont("Helvetica", 9)
-            c.drawString(2 * cm, self.h - 3.7 * cm, "FROM SIGNALS TO STRENGTH")
+            c.drawString(2 * cm, text_label_y, "FROM SIGNALS TO STRENGTH")
 
             # Horizontal divider
             c.setStrokeColor(C_SKY)
