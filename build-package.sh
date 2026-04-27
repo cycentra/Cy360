@@ -85,6 +85,18 @@ cp "$BUILD_DIR/cycentra-setup"    "$PKG_DIR/cycentra-setup"
 cp "$VALIDATOR_PY"               "$PKG_DIR/license_validator.py"
 success "Runtime validator included: license_validator.py"
 
+# rbac.default.json ships the OOB default admin (cyadmin@cycentra.com / Admin@123).
+# setup.sh uses it as the seed for rbac.json on fresh installs and as a Flask
+# fallback when rbac.json is absent.  Without it, the bootstrap falls through to
+# the hardcoded guarantee in _migrate_json() — but including the file is cleaner.
+RBAC_DEFAULT="$REPO_ROOT/backend/rbac.default.json"
+if [[ -f "$RBAC_DEFAULT" ]]; then
+    cp "$RBAC_DEFAULT" "$PKG_DIR/rbac.default.json"
+    success "Default RBAC included: rbac.default.json"
+else
+    warn "backend/rbac.default.json not found — local login bootstrap will use hardcoded fallback"
+fi
+
 # docker-maintenance.sh must be bundled so cycentra-setup.sh can deploy it to
 # /opt/cycentra/docker-maintenance.sh.  Without this file the Scheduler tab
 # cannot run Docker maintenance jobs (setup.sh silently skips missing files).
