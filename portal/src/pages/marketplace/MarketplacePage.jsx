@@ -1,19 +1,17 @@
 /**
  * src/pages/marketplace/MarketplacePage.jsx
  * ==========================================
- * Integration Marketplace — pulls item catalog from the CyCentra cloud
- * (cycentra.com/marketplace/catalog.json), tracks installs server-side,
- * and lets admins pull + configure integrations and playbooks.
+ * Integration Marketplace — catalog is fetched through the cycentra360
+ * backend proxy (/api/marketplace/catalog) so the cycentra.com token never
+ * reaches the browser. Admins can add/edit/delete custom catalog items.
  *
  * Roles:
  *   any role  — browse, search, view details
- *   admin     — pull from cloud, configure, remove
+ *   admin     — pull, configure, remove, add/edit/delete custom items
  */
 
 import { useState, useEffect, useCallback } from "react";
 import { API_BASE } from "../../core/constants";
-
-const CATALOG_URL = "https://cycentra.com/marketplace/catalog.json";
 
 // ── O365 config modal ─────────────────────────────────────────────────────────
 
@@ -409,25 +407,229 @@ function PlaybookModal({ item, onClose }) {
   );
 }
 
+// ── Admin: catalog item form modal (create / edit custom items) ───────────────
+
+const EMPTY_ITEM = { id:"", name:"", type:"integration", category:"", vendor:"CyCentra", icon:"🔧", color:"#4d9eff", description:"", modules_required:"", estimated_time:"", tags:"", config_type:"", cysoar_flow:"", steps:"" };
+
+function CatalogItemFormModal({ initial, onClose, onSaved }) {
+  const isEdit = !!initial?.id;
+  const [form, setForm] = useState(initial ? {
+    ...EMPTY_ITEM,
+    ...initial,
+    modules_required: (initial.modules_required || []).join(", "),
+    tags:             (initial.tags || []).join(", "),
+    steps:            (initial.steps || []).join("\n"),
+  } : EMPTY_ITEM);
+  const [saving, setSaving] = useState(false);
+  const [error,  setError]  = useState(null);
+
+  function set(key, val) { setForm(f => ({ ...f, [key]: val })); }
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    setError(null);
+    setSaving(true);
+
+    const payload = {
+      id:               form.id.trim(),
+      name:             form.name.trim(),
+      type:             form.type,
+      category:         form.category.trim(),
+      vendor:           form.vendor.trim(),
+      icon:             form.icon.trim(),
+      color:            form.color.trim(),
+      description:      form.description.trim(),
+      modules_required: form.modules_required.split(",").map(s => s.trim()).filter(Boolean),
+      estimated_time:   form.estimated_time.trim(),
+      tags:             form.tags.split(",").map(s => s.trim().toLowerCase()).filter(Boolean),
+      config_type:      form.config_type || undefined,
+      cysoar_flow:      form.cysoar_flow.trim() || undefined,
+      steps:            form.steps.split("\n").map(s => s.trim()).filter(Boolean),
+    };
+
+    const url    = isEdit ? `${API_BASE}/api/marketplace/catalog/custom/${initial.id}` : `${API_BASE}/api/marketplace/catalog/custom`;
+    const method = isEdit ? "PUT" : "POST";
+
+    fetch(url, { method, credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+      .then(r => r.json().then(d => ({ ok: r.ok, data: d })))
+      .then(({ ok, data }) => {
+        if (ok && data.ok) { onSaved(data.item, isEdit); }
+        else setError(data.error || "Save failed");
+      })
+      .catch(() => setError("Network error"))
+      .finally(() => setSaving(false));
+  }
+
+  const inp = { width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:4, padding:"8px 12px", color:"white", fontSize:13, fontFamily:"monospace", outline:"none", boxSizing:"border-box" };
+  const lbl = { color:"rgba(255,255,255,0.4)", fontSize:10, fontFamily:"monospace", letterSpacing:"0.8px", textTransform:"uppercase", marginBottom:5, display:"block" };
+  const row = { marginBottom:14 };
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.88)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200, backdropFilter:"blur(6px)" }} onClick={onClose}>
+      <div style={{ background:"#0d0f14", border:"1px solid rgba(77,158,255,0.3)", borderTop:"2px solid #4d9eff", borderRadius:8, padding:32, width:"min(640px,95vw)", maxHeight:"90vh", overflowY:"auto" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:24 }}>
+          <div>
+            <div style={{ color:"white", fontSize:17, fontWeight:700 }}>{isEdit ? "Edit Custom Item" : "Add to Marketplace"}</div>
+            <div style={{ color:"rgba(255,255,255,0.35)", fontSize:11, fontFamily:"monospace", marginTop:3 }}>Custom items are stored on this server and merged with the cloud catalog.</div>
+          </div>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.4)", cursor:"pointer", fontSize:22 }}>×</button>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          {/* ID + Name */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
+            <div>
+              <label style={lbl}>ID <span style={{ color:"rgba(255,59,59,0.7)" }}>*</span></label>
+              <input value={form.id} onChange={e => set("id", e.target.value)} placeholder="my-custom-integration" required disabled={isEdit} style={{ ...inp, opacity: isEdit ? 0.5 : 1 }} />
+              {!isEdit && <div style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace", marginTop:4 }}>lowercase, hyphens only</div>}
+            </div>
+            <div>
+              <label style={lbl}>Name <span style={{ color:"rgba(255,59,59,0.7)" }}>*</span></label>
+              <input value={form.name} onChange={e => set("name", e.target.value)} placeholder="My Integration" required style={inp} />
+            </div>
+          </div>
+
+          {/* Type + Category + Vendor */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, ...row }}>
+            <div>
+              <label style={lbl}>Type <span style={{ color:"rgba(255,59,59,0.7)" }}>*</span></label>
+              <select value={form.type} onChange={e => set("type", e.target.value)} style={{ ...inp, cursor:"pointer" }}>
+                <option value="integration">Integration</option>
+                <option value="playbook">Playbook</option>
+              </select>
+            </div>
+            <div>
+              <label style={lbl}>Category</label>
+              <input value={form.category} onChange={e => set("category", e.target.value)} placeholder="Cloud, SOAR, …" style={inp} />
+            </div>
+            <div>
+              <label style={lbl}>Vendor</label>
+              <input value={form.vendor} onChange={e => set("vendor", e.target.value)} placeholder="CyCentra" style={inp} />
+            </div>
+          </div>
+
+          {/* Icon + Color + Estimated Time */}
+          <div style={{ display:"grid", gridTemplateColumns:"80px 130px 1fr", gap:14, ...row }}>
+            <div>
+              <label style={lbl}>Icon</label>
+              <input value={form.icon} onChange={e => set("icon", e.target.value)} placeholder="🔧" style={inp} />
+            </div>
+            <div>
+              <label style={lbl}>Accent Color</label>
+              <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                <input type="color" value={form.color} onChange={e => set("color", e.target.value)} style={{ width:36, height:34, borderRadius:4, border:"1px solid rgba(255,255,255,0.12)", background:"transparent", cursor:"pointer" }} />
+                <input value={form.color} onChange={e => set("color", e.target.value)} style={{ ...inp, flex:1 }} />
+              </div>
+            </div>
+            <div>
+              <label style={lbl}>Estimated Time</label>
+              <input value={form.estimated_time} onChange={e => set("estimated_time", e.target.value)} placeholder="~5 min to configure" style={inp} />
+            </div>
+          </div>
+
+          {/* Description */}
+          <div style={row}>
+            <label style={lbl}>Description <span style={{ color:"rgba(255,59,59,0.7)" }}>*</span></label>
+            <textarea value={form.description} onChange={e => set("description", e.target.value)} rows={3} required placeholder="What does this integration do?" style={{ ...inp, resize:"vertical" }} />
+          </div>
+
+          {/* Modules + Tags */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, ...row }}>
+            <div>
+              <label style={lbl}>Required Modules</label>
+              <input value={form.modules_required} onChange={e => set("modules_required", e.target.value)} placeholder="CySIEM, CySOAR" style={inp} />
+              <div style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace", marginTop:4 }}>comma-separated</div>
+            </div>
+            <div>
+              <label style={lbl}>Tags</label>
+              <input value={form.tags} onChange={e => set("tags", e.target.value)} placeholder="cloud, azure, audit" style={inp} />
+              <div style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace", marginTop:4 }}>comma-separated</div>
+            </div>
+          </div>
+
+          {/* Integration-specific fields */}
+          {form.type === "integration" && (
+            <div style={row}>
+              <label style={lbl}>Config Type</label>
+              <select value={form.config_type} onChange={e => set("config_type", e.target.value)} style={{ ...inp, cursor:"pointer" }}>
+                <option value="">— None (manual configuration) —</option>
+                <option value="o365">o365 — Office 365 wodle form</option>
+                <option value="gcloud">gcloud — Google Cloud wodle form</option>
+              </select>
+            </div>
+          )}
+
+          {/* Playbook-specific fields */}
+          {form.type === "playbook" && (
+            <>
+              <div style={row}>
+                <label style={lbl}>CySOAR Flow File</label>
+                <input value={form.cysoar_flow} onChange={e => set("cysoar_flow", e.target.value)} placeholder="my_playbook.py" style={inp} />
+              </div>
+              <div style={row}>
+                <label style={lbl}>Automation Steps</label>
+                <textarea value={form.steps} onChange={e => set("steps", e.target.value)} rows={5} placeholder={"Step 1 description\nStep 2 description\nStep 3 description"} style={{ ...inp, resize:"vertical" }} />
+                <div style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace", marginTop:4 }}>one step per line</div>
+              </div>
+            </>
+          )}
+
+          {error && (
+            <div style={{ background:"rgba(255,59,59,0.08)", border:"1px solid rgba(255,59,59,0.25)", borderRadius:4, padding:"10px 14px", fontSize:12, color:"#ff8080", marginBottom:16 }}>
+              ✗ {error}
+            </div>
+          )}
+
+          <div style={{ display:"flex", gap:10, marginTop:8 }}>
+            <button type="submit" disabled={saving} style={{ flex:1, background:saving?"rgba(77,158,255,0.3)":"#4d9eff", color:"#0d0f14", border:"none", borderRadius:4, padding:"12px", fontFamily:"monospace", fontSize:12, fontWeight:700, cursor:saving?"not-allowed":"pointer", letterSpacing:"1px", textTransform:"uppercase" }}>
+              {saving ? "Saving…" : isEdit ? "Save Changes" : "Add to Marketplace"}
+            </button>
+            <button type="button" onClick={onClose} style={{ padding:"12px 20px", background:"transparent", color:"rgba(255,255,255,0.4)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:4, fontFamily:"monospace", fontSize:12, cursor:"pointer" }}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // ── Marketplace card ──────────────────────────────────────────────────────────
 
-function MarketplaceCard({ item, isInstalled, isAdmin, pulling, onPull, onRemove, onConfigure, onViewDetails }) {
+function MarketplaceCard({ item, isInstalled, isAdmin, pulling, onPull, onRemove, onConfigure, onViewDetails, onEdit, onCatalogDelete }) {
   const isIntegration = item.type === "integration";
-  const isPulling = pulling === item.id;
+  const isCustom      = item.source === "custom";
+  const isPulling     = pulling === item.id;
 
   return (
     <div style={{ background:"rgba(255,255,255,0.025)", border:`1px solid ${item.color}20`, borderTop:`2px solid ${item.color}`, borderRadius:5, padding:"20px 22px", display:"flex", flexDirection:"column", gap:0 }}>
 
-      {/* Type + installed badge row */}
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
-        <span style={{ background:isIntegration?"rgba(0,229,160,0.08)":"rgba(77,158,255,0.08)", color:isIntegration?"#00e5a0":"#4d9eff", border:`1px solid ${isIntegration?"rgba(0,229,160,0.2)":"rgba(77,158,255,0.2)"}`, fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2, letterSpacing:"1px", textTransform:"uppercase" }}>
-          {isIntegration ? "Integration" : "Playbook"}
-        </span>
-        {isInstalled && (
-          <span style={{ background:"rgba(0,229,160,0.1)", color:"#00e5a0", border:"1px solid rgba(0,229,160,0.25)", fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2, letterSpacing:"1px" }}>
-            ✓ INSTALLED
+      {/* Type + source + installed badge row */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10, flexWrap:"wrap", gap:4 }}>
+        <div style={{ display:"flex", gap:5 }}>
+          <span style={{ background:isIntegration?"rgba(0,229,160,0.08)":"rgba(77,158,255,0.08)", color:isIntegration?"#00e5a0":"#4d9eff", border:`1px solid ${isIntegration?"rgba(0,229,160,0.2)":"rgba(77,158,255,0.2)"}`, fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2, letterSpacing:"1px", textTransform:"uppercase" }}>
+            {isIntegration ? "Integration" : "Playbook"}
           </span>
-        )}
+          {isCustom && (
+            <span style={{ background:"rgba(176,110,255,0.08)", color:"#b06eff", border:"1px solid rgba(176,110,255,0.2)", fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2, letterSpacing:"1px" }}>
+              Custom
+            </span>
+          )}
+        </div>
+        <div style={{ display:"flex", gap:5, alignItems:"center" }}>
+          {isInstalled && (
+            <span style={{ background:"rgba(0,229,160,0.1)", color:"#00e5a0", border:"1px solid rgba(0,229,160,0.25)", fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2, letterSpacing:"1px" }}>
+              ✓ INSTALLED
+            </span>
+          )}
+          {/* Admin edit/delete for custom items */}
+          {isAdmin && isCustom && (
+            <div style={{ display:"flex", gap:4 }}>
+              <button onClick={() => onEdit(item)} title="Edit this item" style={{ background:"rgba(77,158,255,0.08)", color:"#4d9eff", border:"1px solid rgba(77,158,255,0.2)", borderRadius:3, padding:"2px 8px", fontFamily:"monospace", fontSize:9, cursor:"pointer", letterSpacing:"0.5px" }}>Edit</button>
+              <button onClick={() => onCatalogDelete(item)} title="Remove from catalog" style={{ background:"rgba(255,59,59,0.06)", color:"rgba(255,80,80,0.7)", border:"1px solid rgba(255,59,59,0.15)", borderRadius:3, padding:"2px 8px", fontFamily:"monospace", fontSize:9, cursor:"pointer" }}>✕</button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Icon + name */}
@@ -514,14 +716,15 @@ export function MarketplacePage({ user }) {
   const [detailModal,     setDetailModal]     = useState(null);
   const [pulling,         setPulling]         = useState(null);
   const [pullError,       setPullError]       = useState(null);
+  const [catalogFormItem, setCatalogFormItem] = useState(null); // null=closed, EMPTY_ITEM=new, item=edit
 
-  // Fetch catalog from cloud
+  // Fetch catalog via backend proxy (keeps token off the browser)
   useEffect(() => {
-    fetch(CATALOG_URL)
+    fetch(`${API_BASE}/api/marketplace/catalog`, { credentials: "include" })
       .then(r => r.ok ? r.json() : Promise.reject("unavailable"))
       .then(d => { setCatalog(d.items || []); setCatalogLoading(false); })
       .catch(() => {
-        setCatalogError("Could not reach the CyCentra cloud marketplace. Check your internet connection.");
+        setCatalogError("Could not load the marketplace catalog. Check your connection or contact your administrator.");
         setCatalogLoading(false);
       });
   }, []);
@@ -565,6 +768,31 @@ export function MarketplacePage({ user }) {
       .catch(() => {});
   }, [isAdmin]);
 
+  // Catalog management handlers (admin: custom items only)
+  const handleCatalogSaved = useCallback((savedItem, isEdit) => {
+    savedItem.source = "custom";
+    setCatalog(prev =>
+      isEdit
+        ? prev.map(i => i.id === savedItem.id ? savedItem : i)
+        : [...prev, savedItem]
+    );
+    setCatalogFormItem(null);
+  }, []);
+
+  const handleCatalogDelete = useCallback((item) => {
+    if (!isAdmin) return;
+    if (!window.confirm(`Remove "${item.name}" from the marketplace catalog? Installed state will also be cleared.`)) return;
+    fetch(`${API_BASE}/api/marketplace/catalog/custom/${item.id}`, { method: "DELETE", credentials: "include" })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          setCatalog(prev => prev.filter(i => i.id !== item.id));
+          setInstalled(prev => { const s = new Set(prev); s.delete(item.id); return s; });
+        }
+      })
+      .catch(() => {});
+  }, [isAdmin]);
+
   // Filter + split
   const filtered = catalog.filter(item => {
     const q = search.toLowerCase();
@@ -588,21 +816,31 @@ export function MarketplacePage({ user }) {
     <div>
       {/* ── Header ── */}
       <div style={{ marginBottom:28 }}>
-        <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:8, flexWrap:"wrap" }}>
-          <h1 style={{ fontSize:22, fontWeight:700, color:"white", margin:0 }}>Integration Marketplace</h1>
-          {!catalogLoading && !catalogError && (
-            <span style={{ background:"rgba(0,229,160,0.12)", color:"#00e5a0", border:"1px solid rgba(0,229,160,0.25)", fontSize:9, fontFamily:"monospace", padding:"3px 10px", borderRadius:2, fontWeight:700, letterSpacing:"1px" }}>
-              {catalog.length} FROM CLOUD
-            </span>
-          )}
-          {!isAdmin && (
-            <span style={{ background:"rgba(255,140,0,0.08)", color:"rgba(255,140,0,0.7)", border:"1px solid rgba(255,140,0,0.2)", fontSize:9, fontFamily:"monospace", padding:"3px 10px", borderRadius:2, letterSpacing:"1px" }}>
-              🔒 VIEW ONLY — ADMIN REQUIRED TO PULL
-            </span>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:8, flexWrap:"wrap" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+            <h1 style={{ fontSize:22, fontWeight:700, color:"white", margin:0 }}>Integration Marketplace</h1>
+            {!catalogLoading && !catalogError && (
+              <span style={{ background:"rgba(0,229,160,0.12)", color:"#00e5a0", border:"1px solid rgba(0,229,160,0.25)", fontSize:9, fontFamily:"monospace", padding:"3px 10px", borderRadius:2, fontWeight:700, letterSpacing:"1px" }}>
+                {catalog.length} ITEMS
+              </span>
+            )}
+            {!isAdmin && (
+              <span style={{ background:"rgba(255,140,0,0.08)", color:"rgba(255,140,0,0.7)", border:"1px solid rgba(255,140,0,0.2)", fontSize:9, fontFamily:"monospace", padding:"3px 10px", borderRadius:2, letterSpacing:"1px" }}>
+                🔒 VIEW ONLY — ADMIN REQUIRED TO PULL
+              </span>
+            )}
+          </div>
+          {/* Admin: add custom item to catalog */}
+          {isAdmin && (
+            <button
+              onClick={() => setCatalogFormItem(EMPTY_ITEM)}
+              style={{ background:"rgba(77,158,255,0.1)", color:"#4d9eff", border:"1px solid rgba(77,158,255,0.25)", borderRadius:4, padding:"8px 16px", fontFamily:"monospace", fontSize:11, fontWeight:700, cursor:"pointer", letterSpacing:"0.5px", whiteSpace:"nowrap" }}>
+              + Add to Marketplace
+            </button>
           )}
         </div>
         <p style={{ color:"rgba(255,255,255,0.4)", fontSize:13, margin:0 }}>
-          Pull and configure security integrations and automation playbooks from the CyCentra cloud.
+          Pull and configure security integrations and automation playbooks from the CyCentra cloud. Admins can add custom items.
         </p>
       </div>
 
@@ -675,6 +913,8 @@ export function MarketplacePage({ user }) {
                 onRemove={handleRemove}
                 onConfigure={setConfigModal}
                 onViewDetails={setDetailModal}
+                onEdit={setCatalogFormItem}
+                onCatalogDelete={handleCatalogDelete}
               />
             ))}
           </div>
@@ -704,6 +944,8 @@ export function MarketplacePage({ user }) {
                 onRemove={handleRemove}
                 onConfigure={setConfigModal}
                 onViewDetails={setDetailModal}
+                onEdit={setCatalogFormItem}
+                onCatalogDelete={handleCatalogDelete}
               />
             ))}
           </div>
@@ -732,10 +974,19 @@ export function MarketplacePage({ user }) {
         </div>
       )}
 
-      {/* ── Config modals ── */}
-      {configModal?.config_type === "o365"    && <O365ConfigModal    item={configModal} onClose={() => setConfigModal(null)} />}
-      {configModal?.config_type === "gcloud"  && <GCloudConfigModal  item={configModal} onClose={() => setConfigModal(null)} />}
-      {detailModal                             && <PlaybookModal      item={detailModal} onClose={() => setDetailModal(null)} />}
+      {/* ── Config / detail modals ── */}
+      {configModal?.config_type === "o365"   && <O365ConfigModal   item={configModal}     onClose={() => setConfigModal(null)} />}
+      {configModal?.config_type === "gcloud" && <GCloudConfigModal item={configModal}     onClose={() => setConfigModal(null)} />}
+      {detailModal                           && <PlaybookModal     item={detailModal}     onClose={() => setDetailModal(null)} />}
+
+      {/* ── Admin: add / edit custom catalog item ── */}
+      {catalogFormItem !== null && (
+        <CatalogItemFormModal
+          initial={catalogFormItem?.id ? catalogFormItem : null}
+          onClose={() => setCatalogFormItem(null)}
+          onSaved={handleCatalogSaved}
+        />
+      )}
     </div>
   );
 }

@@ -135,6 +135,17 @@ IRIS_API_KEY = os.environ.get("IRIS_API_KEY", "")
 # WAZUH_URL example: https://wazuh.cycentra.com
 WAZUH_URL    = os.environ.get("WAZUH_URL", "")
 
+# ── Cloud Marketplace ─────────────────────────────────────────────────────────
+# Pre-shared token sent as X-CyCentra-Token when the backend proxies the
+# cloud catalog from cycentra.com. Set the same value in the cycentra.com
+# container env as MARKETPLACE_CATALOG_TOKEN so nginx can validate it.
+# Generate with: python3 -c "import secrets; print(secrets.token_hex(32))"
+MARKETPLACE_CATALOG_TOKEN = os.environ.get("MARKETPLACE_CATALOG_TOKEN", "")
+MARKETPLACE_CATALOG_URL   = os.environ.get(
+    "MARKETPLACE_CATALOG_URL",
+    "https://cycentra.com/marketplace/catalog.json",
+)
+
 # ── CORS allowed origins ───────────────────────────────────────────────────────
 CORS_ALLOWED_ORIGINS = {
     FRONTEND_URL,
