@@ -31,6 +31,13 @@ def _load_rbac() -> dict:
             return json.loads(RBAC_FILE.read_text())
     except Exception:
         pass
+    # Fall back to rbac.default.json in the same directory (bundled default)
+    _default = RBAC_FILE.parent / "rbac.default.json"
+    try:
+        if _default.exists():
+            return json.loads(_default.read_text())
+    except Exception:
+        pass
     return {}
 
 

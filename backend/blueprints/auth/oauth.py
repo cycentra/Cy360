@@ -251,10 +251,15 @@ def auth_local_options():
 @auth_bp.route("/auth/local", methods=["POST"])
 def auth_local():
     """Authenticate with email + password against rbac.json (local accounts only)."""
+    from core.helpers import add_cors_headers
+
+    def _json(body, status):
+        return add_cors_headers(make_response(jsonify(body), status))
+
     try:
         import bcrypt as _bcrypt
     except ImportError:
-        return jsonify({"error": "Local authentication unavailable (bcrypt not installed)"}), 503
+        return _json({"error": "Local authentication unavailable (bcrypt not installed)"}, 503)
 
     data     = request.get_json(silent=True) or {}
     email    = (data.get("email") or "").strip().lower()
@@ -262,7 +267,7 @@ def auth_local():
 
     if not email or not password:
         auth_event("login", email, "portal", "error", "provider=local missing credentials")
-        return jsonify({"error": "Email and password are required"}), 400
+        return _json({"error": "Email and password are required"}, 400)
 
     rbac  = _load_rbac()
     entry = rbac.get(email)
@@ -270,14 +275,14 @@ def auth_local():
     # Only allow users whose auth_type is "local" (or accounts with a password_hash)
     if not entry:
         auth_event("login", email, "portal", "denied", "provider=local user not found")
-        return jsonify({"error": "Invalid credentials"}), 401
+        return _json({"error": "Invalid credentials"}, 401)
 
     auth_type = entry.get("auth_type", "sso")
     pw_hash   = entry.get("password_hash", "")
 
     if auth_type != "local" or not pw_hash:
         auth_event("login", email, "portal", "denied", "provider=local not a local account")
-        return jsonify({"error": "Local login not enabled for this account"}), 401
+        return _json({"error": "Local login not enabled for this account"}, 401)
 
     try:
         valid = _bcrypt.checkpw(password.encode("utf-8"), pw_hash.encode("utf-8"))
@@ -286,7 +291,7 @@ def auth_local():
 
     if not valid:
         auth_event("login", email, "portal", "denied", "provider=local bad password")
-        return jsonify({"error": "Invalid credentials"}), 401
+        return _json({"error": "Invalid credentials"}, 401)
 
     name   = entry.get("name") or email.split("@")[0].title()
     uid    = f"local_{email}"
@@ -298,7 +303,7 @@ def auth_local():
     session.permanent     = True
     auth_event("login", email, "portal", "success", "provider=local")
 
-    return jsonify({
+    return _json({
         "status":   "success",
         "provider": "local",
         "name":     name,
@@ -307,4 +312,4 @@ def auth_local():
         "avatar":   avatar,
         "role":     get_user_role(email),
         "apps":     get_user_apps(email),
-    })
+    }, 200)

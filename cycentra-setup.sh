@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.280 -- 2026-04-27 13:29 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.281 -- 2026-04-27 13:45 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -2614,9 +2614,15 @@ if [[ "$MODE" == "full" ]]; then
     # RBAC: install OOB default if not already present.
     # rbac.default.json ships in the bundle with cyadmin@cycentra.com (local auth).
     # Existing deployments retain their current rbac.json untouched.
+    # Always deploy rbac.default.json as a permanent reference (Flask fallback when rbac.json is absent)
+    if [[ -f "${BUNDLE_DIR}/rbac.default.json" ]]; then
+        cp "${BUNDLE_DIR}/rbac.default.json" /opt/cycentra/rbac.default.json
+        chmod 600 /opt/cycentra/rbac.default.json
+    fi
+
     if [[ ! -f /opt/cycentra/rbac.json ]]; then
-        if [[ -f "${BUNDLE_DIR}/rbac.default.json" ]]; then
-            cp "${BUNDLE_DIR}/rbac.default.json" /opt/cycentra/rbac.json
+        if [[ -f "/opt/cycentra/rbac.default.json" ]]; then
+            cp /opt/cycentra/rbac.default.json /opt/cycentra/rbac.json
             chmod 600 /opt/cycentra/rbac.json
             success "rbac.json installed from bundle default (cyadmin@cycentra.com / Admin@123)"
         else

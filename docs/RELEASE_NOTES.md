@@ -1,3 +1,39 @@
+## v1.0.281 -- 2026-04-27
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.281 -- 2026-04-27
+
+### Bug Fixes — Local Authentication CORS & RBAC Fallback
+
+  - **Local auth: CORS headers on all responses** (root cause of "Network error"): The
+    `POST /auth/local` endpoint was returning 401/4xx responses without
+    `Access-Control-Allow-Origin` / `Access-Control-Allow-Credentials` headers. For
+    credentialed cross-origin `fetch()` calls (portal at `cy360.*`, API at `cyasm.*`),
+    the browser refuses to expose any response that lacks CORS headers — `fetch()` throws
+    a TypeError which the catch block reported as "Network error — please try again",
+    completely hiding the real error. All responses from `/auth/local` now go through
+    `add_cors_headers()`.
+
+  - **`_load_rbac()` falls back to `rbac.default.json`**: When `/opt/cycentra/rbac.json`
+    is absent (e.g. renamed/deleted), the RBAC loader now tries
+    `/opt/cycentra/rbac.default.json` before returning an empty dict. This ensures the
+    bundled default account (`cyadmin@cycentra.com`) is always available as a recovery
+    path without requiring a full re-install.
+
+  - **`setup.sh` always deploys `rbac.default.json`**: The RBAC setup step now copies
+    `rbac.default.json` from the bundle to `/opt/cycentra/rbac.default.json` on every
+    run (not just on first install), so the Flask fallback file is always up-to-date.
+
+  - **`bcrypt` added to `requirements.txt`**: Was missing from the declared dependencies;
+    local auth silently failed with a 503 if bcrypt happened not to be installed.
+
+---
+
 ## v1.0.280 -- 2026-04-27
 
 ### Improvements
