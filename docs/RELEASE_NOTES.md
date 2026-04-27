@@ -1,8 +1,28 @@
-## v1.0.285 -- 2026-04-27
+## v1.0.286 -- 2026-04-27
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.285 -- 2026-04-27
+
+### Bug Fix — Local login UI shows "Network error" despite backend success
+
+  **Root cause:** Duplicate CORS headers on every `/auth/local` response.
+  `app.py` has a global `@app.after_request` hook that calls `add_cors_headers()`
+  on every response. The `/auth/local` handler was also wrapping every response
+  manually with its own `add_cors_headers()` call (via `_json()` helper added in
+  v1.0.281). This produced two `Access-Control-Allow-Origin` headers on every
+  response. The browser CORS spec requires exactly one value — receiving two causes
+  the browser to reject the response entirely, and the `fetch()` catch block
+  reported it as "Network error".
+
+  **Fix:** Removed the manual `add_cors_headers()` / `_json()` wrapper from
+  `/auth/local`. All responses now go through the single global `after_request`
+  hook only. The OPTIONS preflight handler is also simplified to a plain
+  `make_response('', 204)` — the global hook adds its CORS headers.
 
 ---
 
