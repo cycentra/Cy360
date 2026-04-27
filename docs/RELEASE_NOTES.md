@@ -1,8 +1,40 @@
-## v1.0.281 -- 2026-04-27
+## v1.0.282 -- 2026-04-27
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.282 -- 2026-04-27
+
+### Feature — PostgreSQL-backed User Management (RBAC)
+
+  - **`cy_users` table in `correlation` DB**: User accounts (roles, auth types, bcrypt
+    hashes) are now stored in the existing PostgreSQL 16 cluster (`correlation` DB,
+    port 5433) instead of a flat JSON file. No new database or database user is required.
+
+  - **Auto-create & auto-migrate**: On first Flask startup, `blueprints/rbac/manager.py`
+    runs `CREATE TABLE IF NOT EXISTS cy_users` and, if the table is empty, migrates all
+    entries from `rbac.json` / `rbac.default.json` automatically.
+
+  - **Graceful JSON fallback**: If `CYCENTRA_DB_URL` is empty or the DB is unreachable,
+    every RBAC function falls back to reading `rbac.json` — no downtime on DB failure.
+
+  - **`psycopg2-binary>=2.9` added** to `requirements.txt` for synchronous PostgreSQL
+    access from Flask.
+
+  - **`CYCENTRA_DB_URL` env var**: Added to `core/config.py` and written to
+    `/opt/cycentra/.env` automatically by `setup.sh` (both full-install and update-mode
+    patch paths). Value:
+    `postgresql://corruser:<pass>@127.0.0.1:5433/correlation`
+
+  - **`POST /api/rbac/users`**: Now accepts `auth_type`, `password`, `name`, `apps`
+    in addition to `role`. Passwords are bcrypt-hashed server-side. Underlying write
+    uses PostgreSQL UPSERT (`ON CONFLICT DO UPDATE`).
+
+  - **`DELETE /api/rbac/users/<email>`**: Deletes from `cy_users` (previously edited
+    `rbac.json` in-place).
 
 ---
 

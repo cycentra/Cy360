@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.281 -- 2026-04-27 13:45 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.282 -- 2026-04-27 13:51 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1088,11 +1088,20 @@ PATCHEOF
         OAUTH2PROXY_COOKIE_SECRET="$_new_cookie_secret"
     fi
 
+    # Add CYCENTRA_DB_URL if missing (introduced with PostgreSQL-backed RBAC)
+    if ! grep -q "^CYCENTRA_DB_URL=" "$_env" 2>/dev/null; then
+        _CY_DB_URL="postgresql://corruser:${CORR_DB_PASS}@127.0.0.1:5433/correlation"
+        cat >> "$_env" << PATCHEOF
+
+# ── CyCentra 360 user DB — Flask RBAC backed by PostgreSQL ─────────────────────
+CYCENTRA_DB_URL=${_CY_DB_URL}
+PATCHEOF
+        info "Added CYCENTRA_DB_URL to .env"
+    fi
+
     chmod 600 "$_env"
     success ".env patched"
 fi
-
-# ── Step 10: Write .env files (full install only) ─────────────────────────────
 if [[ "$MODE" == "full" ]]; then
 
     step_header "WRITING CONFIGURATION FILES"
@@ -1161,6 +1170,10 @@ SMTP_PASS=${SMTP_PASS:-}
 SUPPORT_EMAIL=${SUPPORT_EMAIL:-support@cycentra.com}
 
 SIEM_ENGINE_URL=http://127.0.0.1:8100
+
+# ── CyCentra 360 user DB — Flask RBAC backed by PostgreSQL ─────────────────────
+# Reuses the existing correlation DB (port 5433) — no new database required.
+CYCENTRA_DB_URL=postgresql://corruser:${CORR_DB_PASS}@127.0.0.1:5433/correlation
 
 # GitHub token — used by the portal backend to download updates/upgrades without
 # requiring the customer to enter it in the UI.  Set via GH_TOKEN env var at install time.

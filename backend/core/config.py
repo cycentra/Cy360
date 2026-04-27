@@ -105,6 +105,15 @@ SCANS_DIR        = Path("/var/log/cycentra/cy-asm/scans")
 ASM_LOGS         = Path("/var/log/cycentra/cy-asm/logs")
 AI_SETTINGS_FILE = Path("/opt/cycentra/ai_settings.json")
 
+# ── User management DB ────────────────────────────────────────────────────────
+# Reuses the existing correlation PostgreSQL 16 cluster (port 5433, corruser).
+# setup.sh writes CYCENTRA_DB_URL to /opt/cycentra/.env automatically.
+# If absent Flask falls back to rbac.json (backward-compatible).
+CYCENTRA_DB_URL = os.environ.get(
+    "CYCENTRA_DB_URL",
+    "postgresql://corruser:@127.0.0.1:5433/correlation",
+)
+
 # Locate cy_asm package regardless of install method
 _SITE_PKG = Path(site.getsitepackages()[0])
 ASM_DIR   = _SITE_PKG / "cy_asm"
