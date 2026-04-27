@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.294 -- 2026-04-27 19:06 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.295 -- 2026-04-27 22:28 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1744,6 +1744,20 @@ CY_ROLES_EOF
             success "nginx cyasm: duplicate CORS headers removed" || \
             warn "nginx reload failed after CORS patch — check: nginx -t"
     fi
+
+    # ── Remove OPTIONS intercept from cyasm nginx block (added before v1.0.295) ──
+    # The Flask app.py blanket handler (/auth/<path>) returns 204 + full CORS
+    # headers for every OPTIONS preflight. The nginx-level `if ($request_method
+    # = OPTIONS) { return 204; }` was intercepting those requests before Flask
+    # saw them and returning 204 with NO Access-Control-* headers, causing the
+    # browser to reject every /auth/local CORS preflight → "Network error".
+    if [[ -f "$_NGINX_MOD" ]] && grep -q 'request_method = OPTIONS.*return 204' "$_NGINX_MOD" 2>/dev/null; then
+        sed -i '/if (\$request_method = OPTIONS) { return 204; }/d' "$_NGINX_MOD" || true
+        sed -i '/if ($request_method = OPTIONS) { return 204; }/d' "$_NGINX_MOD" || true
+        nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
+            success "nginx cyasm: OPTIONS intercept removed — Flask handles CORS preflight" || \
+            warn "nginx reload failed after OPTIONS patch — check: nginx -t"
+    fi
 fi  # end IAP setup
 
 # ── Step 11: Deploy portal static files ──────────────────────────────────────
@@ -2168,7 +2182,6 @@ server {
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
     add_header Strict-Transport-Security "max-age=31536000" always;
-    if (\$request_method = OPTIONS) { return 204; }
     location / {
         proxy_pass http://127.0.0.1:5252;
         proxy_http_version 1.1;

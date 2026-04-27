@@ -3109,7 +3109,11 @@ def _load_schedules() -> dict:
             # Merge with defaults to fill in any new tasks added in later versions
             merged = {}
             for k, default in _DEFAULT_SCHEDULES.items():
-                merged[k] = {**default, **stored.get(k, {})}
+                task = {**default, **stored.get(k, {})}
+                # Log path is not user-configurable — always use the current default
+                # so relocated log destinations are reflected immediately in the UI
+                task["log"] = default["log"]
+                merged[k] = task
             return merged
         except Exception:
             pass

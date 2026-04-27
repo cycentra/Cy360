@@ -74,7 +74,12 @@ def _normalise_legacy_job(jid: str, jdata: dict) -> dict:
         }
     else:
         jtype = jdata.get("type", jid)
-        params = jdata.get("params", {})
+        params = dict(jdata.get("params", {}))
+        # Capture command/log from legacy flat-dict format into params
+        if "command" not in params and jdata.get("command") is not None:
+            params["command"] = jdata.get("command")
+        if "log" not in params and jdata.get("log"):
+            params["log"] = jdata.get("log")
 
     return {
         "id":        jdata.get("id", jid),
@@ -130,6 +135,24 @@ def _remove_job_from_store(job_id: str) -> bool:
 
 # ── Scheduler init (called once per worker; only one acquires lock) ────────────
 
+def _run_command(command: str, log_path: str):
+    """APScheduler job callback — run a shell command, append output to log_path."""
+    if not command:
+        log.warning("scheduler: command job has no command set — skipping")
+        return
+    log.info("scheduler_command_start: %s", command)
+    try:
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a") as lf:
+            lf.write(f"\n[{datetime.now(timezone.utc).isoformat()}] scheduler run: {command}\n")
+            result = subprocess.run(
+                command, shell=True, stdout=lf, stderr=lf, timeout=3600,
+            )
+        log.info("scheduler_command_done: %s rc=%d", command, result.returncode)
+    except Exception as e:
+        log.error("scheduler_command_error: %s err=%s", command, e)
+
+
 def _run_asm_scan(domain: str, scan_type: str, include_subdomains: bool, actor_uid: str):
     """APScheduler job callback — mirrors ASM blueprint trigger logic."""
     from core.config import SCANS_DIR, ASM_LOGS, ASM_DIR
@@ -175,6 +198,20 @@ def _add_to_apscheduler(sched, job: dict) -> None:
             "include_subdomains": bool(params.get("include_subdomains", True)),
             "actor_uid":          params.get("actor_uid", "scheduler"),
         }
+    elif jtype in ("docker_maintenance", "backup", "asm_wordlist"):
+        command  = params.get("command") or ""
+        log_path = params.get("log", f"/opt/cycentra/{jtype}.log")
+        if not command:
+            if jtype == "asm_wordlist":
+                # Built-in Python wordlist updater — no shell script needed
+                from core.config import ASM_DIR
+                wl_script = ASM_DIR / "modules" / "Utils" / "update_wordlist.py"
+                command = f"{sys.executable} {wl_script}"
+            else:
+                log.warning("scheduler: job '%s' type='%s' has no command — skipping", job.get("id"), jtype)
+                return
+        fn        = _run_command
+        fn_kwargs = {"command": command, "log_path": log_path}
     else:
         log.warning("scheduler: unknown job type '%s' — skipping", jtype)
         return
