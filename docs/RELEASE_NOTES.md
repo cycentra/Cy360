@@ -1,8 +1,21 @@
-## v1.0.283 -- 2026-04-27
+## v1.0.284 -- 2026-04-27
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.283 -- 2026-04-27
+
+### Improvement — User Management UI: auth type + password for local accounts
+
+  - **Add User form** (Settings → User Management) now has an **SSO / Local** selector.
+    When "Local" is chosen a password field appears. The password is sent to the backend
+    and stored as a bcrypt hash — never in plain text.
+  - Validation: local accounts require a non-empty password before the Add button
+    submits. SSO accounts require only email + role (unchanged behaviour).
+  - On success the form resets all fields including the auth type selector.
 
 ---
 

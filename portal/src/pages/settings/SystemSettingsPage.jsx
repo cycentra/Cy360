@@ -550,9 +550,11 @@ function UserManagementTab() {
   const [users,     setUsers]     = useState({});
   const [loading,   setLoading]   = useState(true);
   const [msg,       setMsg]       = useState(null);
-  const [newEmail,  setNewEmail]  = useState("");
-  const [newRole,   setNewRole]   = useState("viewer");
-  const [adding,    setAdding]    = useState(false);
+  const [newEmail,    setNewEmail]    = useState("");
+  const [newRole,     setNewRole]     = useState("viewer");
+  const [newAuthType, setNewAuthType] = useState("sso");
+  const [newPassword, setNewPassword] = useState("");
+  const [adding,      setAdding]      = useState(false);
 
   const showMsg = (ok, text) => {
     setMsg({ ok, text });
@@ -615,18 +617,26 @@ function UserManagementTab() {
       showMsg(false, "Invalid email address format");
       return;
     }
+    if (newAuthType === "local" && !newPassword.trim()) {
+      showMsg(false, "Password is required for local accounts");
+      return;
+    }
     setAdding(true);
+    const payload = { email: trimmed, role: newRole, auth_type: newAuthType };
+    if (newAuthType === "local") payload.password = newPassword;
     const r = await fetch(`${API_BASE}/api/rbac/users`, {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: trimmed, role: newRole }),
+      body: JSON.stringify(payload),
     });
     const d = await r.json().catch(() => ({}));
     if (r.ok) {
       await reloadUsers();
       setNewEmail("");
       setNewRole("viewer");
-      showMsg(true, `Added ${trimmed} as ${newRole}`);
+      setNewAuthType("sso");
+      setNewPassword("");
+      showMsg(true, `Added ${trimmed} as ${newRole} (${newAuthType})`);
     } else {
       showMsg(false, d.error || "Add failed");
     }
@@ -722,7 +732,7 @@ function UserManagementTab() {
       {/* Add user form */}
       <div style={{ ...CARD }}>
         <div style={{ ...LABEL }}>Add User</div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: newAuthType === "local" ? 8 : 0 }}>
           <input
             type="email"
             placeholder="user@example.com"
@@ -738,6 +748,14 @@ function UserManagementTab() {
           >
             {VALID_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
           </select>
+          <select
+            value={newAuthType}
+            onChange={e => { setNewAuthType(e.target.value); setNewPassword(""); }}
+            style={{ ...INPUT, width: "auto", padding: "8px 12px", flex: "0 0 auto" }}
+          >
+            <option value="sso">SSO</option>
+            <option value="local">Local</option>
+          </select>
           <button
             onClick={handleAdd}
             disabled={adding || !newEmail.trim()}
@@ -746,6 +764,21 @@ function UserManagementTab() {
             {adding ? "Adding…" : "Add User"}
           </button>
         </div>
+        {newAuthType === "local" && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+            <input
+              type="password"
+              placeholder="Initial password"
+              value={newPassword}
+              onChange={e => setNewPassword(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && handleAdd()}
+              style={{ ...INPUT, flex: 1, minWidth: 220 }}
+            />
+            <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, fontFamily: "monospace" }}>
+              Required for local accounts — stored as bcrypt hash
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
