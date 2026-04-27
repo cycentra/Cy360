@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.286 -- 2026-04-27 14:25 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.287 -- 2026-04-27 14:57 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1728,6 +1728,22 @@ CY_ROLES_EOF
             success "nginx cysiem: X-Proxy-Roles patched to all_access" || \
             warn "nginx reload failed after X-Proxy-Roles patch — check: nginx -t"
     fi
+
+    # ── Remove duplicate CORS headers from cyasm nginx block (added before v1.0.286) ──
+    # Flask's global after_request hook is the single CORS authority. nginx was also
+    # adding CORS headers on the cyasm vhost, producing duplicates that caused the
+    # browser to reject every /auth/local response with "Network error".
+    if [[ -f "$_NGINX_MOD" ]] && grep -q 'cors_origin\|Access-Control-Allow-Origin' "$_NGINX_MOD" 2>/dev/null; then
+        sed -i '/set \$cors_origin/d' "$_NGINX_MOD" || true
+        sed -i '/if.*http_origin.*cors_origin/d' "$_NGINX_MOD" || true
+        sed -i '/add_header Access-Control-Allow-Origin/d' "$_NGINX_MOD" || true
+        sed -i '/add_header Access-Control-Allow-Credentials/d' "$_NGINX_MOD" || true
+        sed -i '/add_header Access-Control-Allow-Methods/d' "$_NGINX_MOD" || true
+        sed -i '/add_header Access-Control-Allow-Headers.*CyCentra/d' "$_NGINX_MOD" || true
+        nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
+            success "nginx cyasm: duplicate CORS headers removed" || \
+            warn "nginx reload failed after CORS patch — check: nginx -t"
+    fi
 fi  # end IAP setup
 
 # ── Step 11: Deploy portal static files ──────────────────────────────────────
@@ -2152,12 +2168,6 @@ server {
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
     add_header Strict-Transport-Security "max-age=31536000" always;
-    set \$cors_origin "";
-    if (\$http_origin ~* "^https://(cy360|cysiem|cyiris|cysoar)\.${BASE_DOMAIN}\$") { set \$cors_origin \$http_origin; }
-    add_header Access-Control-Allow-Origin      \$cors_origin always;
-    add_header Access-Control-Allow-Credentials "true" always;
-    add_header Access-Control-Allow-Methods     "GET, POST, DELETE, OPTIONS" always;
-    add_header Access-Control-Allow-Headers     "Content-Type, Authorization, X-CyCentra-AdminKey" always;
     if (\$request_method = OPTIONS) { return 204; }
     location / {
         proxy_pass http://127.0.0.1:5252;

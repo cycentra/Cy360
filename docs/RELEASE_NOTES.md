@@ -1,8 +1,32 @@
-## v1.0.286 -- 2026-04-27
+## v1.0.287 -- 2026-04-27
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.286 -- 2026-04-27
+
+### Bug Fix — Local login "Network error": duplicate CORS headers from nginx + Flask
+
+  **Root cause:** The `cyasm.cycentra.com` nginx server block was adding its own
+  `Access-Control-Allow-*` headers, and Flask's global `@app.after_request` hook was
+  also adding them. Every response carried the headers twice; the browser CORS spec
+  requires exactly one `Access-Control-Allow-Origin` value — two values causes the
+  browser to reject the response entirely, surfacing as "Network error" in the UI.
+  The backend showed a 200 success in logs because the rejection happens client-side
+  after the response is received.
+
+  **Fix:**
+  - Removed the four CORS `add_header` directives from the `cyasm` nginx server block
+    template in `setup.sh`. Flask is now the single CORS authority via its global
+    `after_request` hook.
+  - Added an idempotent `sed` patch in the `--update` path that strips those lines from
+    already-deployed nginx configs, then reloads nginx automatically.
+
+  **After `--update`:** nginx reloads without CORS headers; Flask adds them once;
+  local login works end-to-end.
 
 ---
 
