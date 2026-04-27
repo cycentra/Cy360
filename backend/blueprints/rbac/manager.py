@@ -4,9 +4,8 @@ blueprints/rbac/manager.py
 RBAC — Role-Based Access Control backed by PostgreSQL (cy_users table).
 
 Single source of truth: `cy_users` table in the `correlation` database
-(PostgreSQL 16, port 5433).  On first startup the table is auto-created and
-any existing rbac.json entries are migrated in.  rbac.json / rbac.default.json
-are retained as a cold fallback in case the DB is unreachable.
+(PostgreSQL 16, port 5433).  On every startup the table is auto-created (if
+missing) and the default admin account is guaranteed to exist.
 
 Schema
 ------
@@ -15,7 +14,7 @@ Schema
   auth_type     TEXT NOT NULL DEFAULT 'sso'   -- 'sso' | 'local'
   password_hash TEXT                           -- bcrypt, local accounts only
   name          TEXT
-  apps          TEXT                           -- JSON array or NULL
+  apps          TEXT                           -- JSON-encoded list or NULL
   created_at    TIMESTAMPTZ DEFAULT NOW()
   updated_at    TIMESTAMPTZ DEFAULT NOW()
 
@@ -36,7 +35,7 @@ from contextlib import contextmanager
 
 from flask import Blueprint, request, jsonify, session
 
-from core.config import RBAC_FILE, ROLE_APPS, VALID_ROLES, OIDC_CLIENTS, CYCENTRA_DB_URL
+from core.config import ROLE_APPS, VALID_ROLES, OIDC_CLIENTS, CYCENTRA_DB_URL
 from core.helpers import auth_event
 
 log = logging.getLogger(__name__)
@@ -70,9 +69,13 @@ ON CONFLICT (email) DO UPDATE SET
     updated_at    = NOW();
 """
 
+# Pre-computed bcrypt hash of "Admin@123" (rounds=12).
+# Used only when bcrypt is unavailable at bootstrap time.
+_DEFAULT_ADMIN_HASH = "$2b$12$r34CmzfuwGx8mu49lMiWm.WfeOOKeX8MDzpwEtkg6gmwA81q80sBm"
+
 # ── DB connection ─────────────────────────────────────────────────────────────
 
-_db_ready: bool = False   # set True once table exists + migration done
+_db_ready: bool = False   # set True once table + bootstrap confirmed
 
 
 @contextmanager
@@ -93,8 +96,23 @@ def _db():
         conn.close()
 
 
-def _ensure_table():
-    """Create cy_users if missing; migrate rbac.json on first run."""
+def _bootstrap_admin(cur) -> None:
+    """Ensure cyadmin@cycentra.com exists in cy_users. Idempotent."""
+    try:
+        import bcrypt as _bcrypt
+        pw_hash = _bcrypt.hashpw(b"Admin@123", _bcrypt.gensalt(12)).decode()
+    except ImportError:
+        pw_hash = _DEFAULT_ADMIN_HASH
+    cur.execute("""
+        INSERT INTO cy_users (email, role, auth_type, password_hash, name)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (email) DO NOTHING;
+    """, ("cyadmin@cycentra.com", "admin", "local", pw_hash, "CyCentra Admin"))
+    log.info("Bootstrap: cyadmin@cycentra.com ensured in cy_users")
+
+
+def _ensure_table() -> None:
+    """Create cy_users if missing and guarantee the default admin exists."""
     global _db_ready
     if _db_ready:
         return
@@ -102,144 +120,60 @@ def _ensure_table():
         with _db() as conn:
             cur = conn.cursor()
             cur.execute(_CREATE_TABLE)
-
-            # Migrate rbac.json → DB if the table is still empty
-            cur.execute("SELECT COUNT(*) FROM cy_users;")
-            count = cur.fetchone()[0]
-            if count == 0:
-                _migrate_json(cur)
+            _bootstrap_admin(cur)
         _db_ready = True
+        log.info("cy_users table ready (CYCENTRA_DB_URL=%s)", CYCENTRA_DB_URL)
     except Exception as exc:
-        log.warning("cy_users table init failed — falling back to JSON: %s", exc)
+        log.error("cy_users table init failed — local auth unavailable: %s", exc)
 
 
-def _migrate_json(cur):
-    """Import every entry from rbac.json (or rbac.default.json) into cy_users.
+# ── Internal DB helpers ───────────────────────────────────────────────────────
 
-    Falls back to rbac.json.old and, as a final guarantee, seeds the hardcoded
-    default admin so the system always has at least one login even when no JSON
-    files are present.
-    """
-    data = _json_load_raw()
-
-    # Additional fallback: try rbac.json.old (created when admin renames the file)
-    if not data:
-        _old = RBAC_FILE.parent / "rbac.json.old"
+def _row_to_entry(row: tuple) -> dict:
+    """Convert a (role, auth_type, pw_hash, name, apps_json) row to an entry dict."""
+    role, auth_type, pw_hash, name, apps_json = row
+    entry: dict = {"role": role, "auth_type": auth_type}
+    if pw_hash:
+        entry["password_hash"] = pw_hash
+    if name:
+        entry["name"] = name
+    if apps_json:
         try:
-            if _old.exists():
-                data = json.loads(_old.read_text())
-                log.info("Migrating from rbac.json.old (%d entries)", len(data))
+            entry["apps"] = json.loads(apps_json)
         except Exception:
             pass
+    return entry
 
-    if data:
-        for email, entry in data.items():
-            cur.execute(_UPSERT_USER, (
-                email,
-                entry.get("role", "viewer"),
-                entry.get("auth_type", "sso"),
-                entry.get("password_hash"),
-                entry.get("name"),
-                json.dumps(entry["apps"]) if "apps" in entry else None,
-            ))
-        log.info("Migrated %d users from rbac JSON into cy_users table", len(data))
-
-    # Always guarantee the default admin account exists — INSERT only if absent.
-    # This is idempotent: if cyadmin already came from JSON above, ON CONFLICT
-    # leaves it untouched (DO NOTHING variant keeps the existing password_hash).
-    _DEFAULT_HASH = "$2b$12$r34CmzfuwGx8mu49lMiWm.WfeOOKeX8MDzpwEtkg6gmwA81q80sBm"
-    try:
-        import bcrypt as _bcrypt
-        _default_pw = _bcrypt.hashpw(b"Admin@123", _bcrypt.gensalt(12)).decode()
-    except ImportError:
-        _default_pw = _DEFAULT_HASH  # pre-computed fallback
-
-    cur.execute("""
-        INSERT INTO cy_users (email, role, auth_type, password_hash, name)
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (email) DO NOTHING;
-    """, ("cyadmin@cycentra.com", "admin", "local", _default_pw, "CyCentra Admin"))
-    log.info("Default admin bootstrap: cyadmin@cycentra.com ensured in cy_users")
-
-
-# ── JSON helpers (fallback + migration source) ────────────────────────────────
-
-def _json_load_raw() -> dict:
-    """Load rbac.json, falling back to rbac.default.json."""
-    for path in (RBAC_FILE, RBAC_FILE.parent / "rbac.default.json"):
-        try:
-            if path.exists():
-                return json.loads(path.read_text())
-        except Exception:
-            pass
-    return {}
-
-
-# ── Public read functions ─────────────────────────────────────────────────────
 
 def _get_user(email: str) -> dict | None:
-    """Return the cy_users row for email as a dict, or None. Falls back to JSON."""
+    """Return the cy_users row for email as a dict, or None if not found."""
     _ensure_table()
-    try:
-        with _db() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT role, auth_type, password_hash, name, apps "
-                "FROM cy_users WHERE email = %s;", (email,)
-            )
-            row = cur.fetchone()
-        if row is None:
-            return None
-        role, auth_type, pw_hash, name, apps_json = row
-        entry = {"role": role, "auth_type": auth_type}
-        if pw_hash:
-            entry["password_hash"] = pw_hash
-        if name:
-            entry["name"] = name
-        if apps_json:
-            try:
-                entry["apps"] = json.loads(apps_json)
-            except Exception:
-                pass
-        return entry
-    except Exception as exc:
-        log.warning("DB read failed for %s — falling back to JSON: %s", email, exc)
-        return _json_load_raw().get(email)
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT role, auth_type, password_hash, name, apps "
+            "FROM cy_users WHERE email = %s;", (email,)
+        )
+        row = cur.fetchone()
+    return _row_to_entry(row) if row else None
 
 
 def _get_all_users() -> dict:
-    """Return all cy_users as {email: entry}. Falls back to JSON."""
+    """Return all cy_users rows as {email: entry dict}."""
     _ensure_table()
-    try:
-        with _db() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT email, role, auth_type, password_hash, name, apps "
-                "FROM cy_users ORDER BY email;"
-            )
-            rows = cur.fetchall()
-        result = {}
-        for email, role, auth_type, pw_hash, name, apps_json in rows:
-            entry = {"role": role, "auth_type": auth_type}
-            if pw_hash:
-                entry["password_hash"] = pw_hash
-            if name:
-                entry["name"] = name
-            if apps_json:
-                try:
-                    entry["apps"] = json.loads(apps_json)
-                except Exception:
-                    pass
-            result[email] = entry
-        return result
-    except Exception as exc:
-        log.warning("DB read (all users) failed — falling back to JSON: %s", exc)
-        return _json_load_raw()
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT email, role, auth_type, password_hash, name, apps "
+            "FROM cy_users ORDER BY email;"
+        )
+        rows = cur.fetchall()
+    return {email: _row_to_entry(rest) for email, *rest in rows}
 
 
 def _upsert_user(email: str, role: str, auth_type: str = "sso",
                  password_hash: str | None = None, name: str | None = None,
-                 apps: list | None = None):
+                 apps: list | None = None) -> None:
     """Insert or update a user in cy_users."""
     _ensure_table()
     apps_json = json.dumps(apps) if apps is not None else None
@@ -248,7 +182,7 @@ def _upsert_user(email: str, role: str, auth_type: str = "sso",
         cur.execute(_UPSERT_USER, (email, role, auth_type, password_hash, name, apps_json))
 
 
-def _delete_user(email: str):
+def _delete_user(email: str) -> None:
     """Delete a user from cy_users."""
     _ensure_table()
     with _db() as conn:
@@ -260,13 +194,20 @@ def _delete_user(email: str):
 
 def get_user_role(email: str) -> str:
     """Return the RBAC role for an email address. Defaults to 'viewer'."""
-    entry = _get_user(email)
-    return entry.get("role", "viewer") if entry else "viewer"
+    try:
+        entry = _get_user(email)
+        return entry.get("role", "viewer") if entry else "viewer"
+    except Exception as exc:
+        log.error("get_user_role failed for %s: %s", email, exc)
+        return "viewer"
 
 
 def get_user_apps(email: str) -> list:
     """Return the list of permitted app IDs for an email address."""
-    entry = _get_user(email) or {}
+    try:
+        entry = _get_user(email) or {}
+    except Exception:
+        entry = {}
     if "apps" in entry:
         return entry["apps"]
     return ROLE_APPS.get(entry.get("role", "viewer"), ["cy360"])
@@ -285,13 +226,6 @@ def user_can_access_client(email: str, client_id: str) -> bool:
     if client_id in get_user_apps(email):
         return True
     return False
-
-
-# ── Backward-compat shim (used by blueprints/auth/oauth.py) ──────────────────
-
-def _load_rbac() -> dict:
-    """Legacy shim — returns all users as a dict. New code uses _get_user()."""
-    return _get_all_users()
 
 
 # ── API routes ────────────────────────────────────────────────────────────────

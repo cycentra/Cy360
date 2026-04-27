@@ -1,3 +1,22 @@
+## v1.0.289 -- 2026-04-27
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.289 -- 2026-04-27
+
+### Auth / RBAC
+
+  - Removed all JSON file references from RBAC backend — `cy_users` PostgreSQL table is now the sole source of truth with no file fallbacks.
+  - `cyadmin@cycentra.com` bootstrap now runs on every Flask startup (idempotent `ON CONFLICT DO NOTHING`), not only when the table is empty — fixes a race condition where the default admin could be missing if the table was created in a prior partial run.
+  - Removed `_migrate_json()`, `_json_load_raw()`, and `_load_rbac()` shim entirely.
+  - DB errors now propagate as 500 responses rather than silently falling through to missing users.
+
+---
+
 ## v1.0.288 -- 2026-04-27
 
 ### Improvements
