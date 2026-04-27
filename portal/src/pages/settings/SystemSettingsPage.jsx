@@ -555,6 +555,10 @@ function UserManagementTab() {
   const [newAuthType, setNewAuthType] = useState("sso");
   const [newPassword, setNewPassword] = useState("");
   const [adding,      setAdding]      = useState(false);
+  // Password-reset state
+  const [resetFor,     setResetFor]     = useState(null);   // email being reset
+  const [resetPw,      setResetPw]      = useState("");
+  const [resetLoading, setResetLoading] = useState(false);
 
   const showMsg = (ok, text) => {
     setMsg({ ok, text });
@@ -643,6 +647,28 @@ function UserManagementTab() {
     setAdding(false);
   };
 
+  const handleResetPassword = async (email) => {
+    if (resetPw.trim().length < 8) {
+      showMsg(false, "Password must be at least 8 characters");
+      return;
+    }
+    setResetLoading(true);
+    const r = await fetch(`${API_BASE}/api/rbac/users/${encodeURIComponent(email)}/reset-password`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: resetPw }),
+    });
+    const d = await r.json().catch(() => ({}));
+    setResetLoading(false);
+    if (r.ok) {
+      setResetFor(null);
+      setResetPw("");
+      showMsg(true, `Password updated for ${email}`);
+    } else {
+      showMsg(false, d.error || "Password reset failed");
+    }
+  };
+
   if (loading) {
     return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
   }
@@ -690,8 +716,9 @@ function UserManagementTab() {
 
       {/* User table */}
       <div style={{ ...CARD, padding: 0, overflow: "hidden", marginBottom: 20 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 150px 1fr 90px", gap: 0, padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 60px 140px 1fr 170px", gap: 0, padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)" }}>
           <span style={{ ...LABEL, marginBottom: 0 }}>Email</span>
+          <span style={{ ...LABEL, marginBottom: 0 }}>Auth</span>
           <span style={{ ...LABEL, marginBottom: 0 }}>Role</span>
           <span style={{ ...LABEL, marginBottom: 0 }}>Apps</span>
           <span />
@@ -702,27 +729,74 @@ function UserManagementTab() {
           </div>
         ) : (
           entries.map(([email, entry]) => {
-            const role = entry.role || "viewer";
-            const apps = entry.apps || ROLE_APPS_MAP[role] || [];
+            const role     = entry.role || "viewer";
+            const authType = entry.auth_type || "sso";
+            const isLocal  = authType === "local";
+            const apps     = entry.apps || ROLE_APPS_MAP[role] || [];
             return (
-              <div key={email} style={{ display: "grid", gridTemplateColumns: "1fr 150px 1fr 90px", gap: 0, padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", alignItems: "center" }}>
-                <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 12, fontFamily: "monospace", wordBreak: "break-all", paddingRight: 8 }}>{email}</span>
-                <select
-                  value={role}
-                  onChange={e => handleRoleChange(email, e.target.value)}
-                  style={{ ...INPUT, padding: "4px 8px", fontSize: 11, width: "100%" }}
-                >
-                  {VALID_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-                </select>
-                <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace", paddingLeft: 12 }}>
-                  {apps.join(", ") || "—"}
-                </span>
-                <button
-                  onClick={() => handleDelete(email)}
-                  style={{ background: "rgba(255,59,59,0.08)", border: "1px solid rgba(255,59,59,0.3)", color: "#ff6b6b", borderRadius: 3, padding: "4px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700, letterSpacing: "0.5px", marginLeft: 8 }}
-                >
-                  DELETE
-                </button>
+              <div key={email}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 60px 140px 1fr 170px", gap: 0, padding: "10px 16px", borderBottom: resetFor === email ? "none" : "1px solid rgba(255,255,255,0.04)", alignItems: "center" }}>
+                  <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 12, fontFamily: "monospace", wordBreak: "break-all", paddingRight: 8 }}>{email}</span>
+                  <span>
+                    <span style={{
+                      fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "0.5px",
+                      padding: "2px 6px", borderRadius: 3,
+                      background: isLocal ? "rgba(0,229,160,0.1)" : "rgba(77,158,255,0.1)",
+                      color: isLocal ? "#00e5a0" : "#4d9eff",
+                      border: `1px solid ${isLocal ? "rgba(0,229,160,0.3)" : "rgba(77,158,255,0.3)"}`,
+                    }}>
+                      {isLocal ? "LOCAL" : "SSO"}
+                    </span>
+                  </span>
+                  <select
+                    value={role}
+                    onChange={e => handleRoleChange(email, e.target.value)}
+                    style={{ ...INPUT, padding: "4px 8px", fontSize: 11, width: "100%" }}
+                  >
+                    {VALID_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                  <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace", paddingLeft: 12 }}>
+                    {apps.join(", ") || "—"}
+                  </span>
+                  <div style={{ display: "flex", gap: 4, marginLeft: 8 }}>
+                    {isLocal && (
+                      <button
+                        onClick={() => { setResetFor(resetFor === email ? null : email); setResetPw(""); }}
+                        style={{ background: resetFor === email ? "rgba(255,165,0,0.15)" : "rgba(255,165,0,0.06)", border: `1px solid rgba(255,165,0,${resetFor === email ? "0.5" : "0.25"})`, color: "#ffa500", borderRadius: 3, padding: "4px 8px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700, letterSpacing: "0.5px", whiteSpace: "nowrap" }}
+                      >
+                        {resetFor === email ? "✕ CANCEL" : "RESET PW"}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDelete(email)}
+                      style={{ background: "rgba(255,59,59,0.08)", border: "1px solid rgba(255,59,59,0.3)", color: "#ff6b6b", borderRadius: 3, padding: "4px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700, letterSpacing: "0.5px" }}
+                    >
+                      DELETE
+                    </button>
+                  </div>
+                </div>
+                {resetFor === email && (
+                  <div style={{ padding: "10px 16px 14px", borderBottom: "1px solid rgba(255,255,255,0.04)", background: "rgba(255,165,0,0.03)" }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input
+                        type="password"
+                        placeholder="New password (min 8 characters)"
+                        value={resetPw}
+                        onChange={e => setResetPw(e.target.value)}
+                        onKeyDown={e => e.key === "Enter" && handleResetPassword(email)}
+                        style={{ ...INPUT, flex: 1 }}
+                        autoComplete="new-password"
+                      />
+                      <button
+                        onClick={() => handleResetPassword(email)}
+                        disabled={resetLoading || resetPw.trim().length < 8}
+                        style={{ background: "rgba(255,165,0,0.12)", color: "#ffa500", border: "1px solid rgba(255,165,0,0.4)", borderRadius: 3, padding: "8px 14px", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px", opacity: resetLoading || resetPw.trim().length < 8 ? 0.5 : 1, whiteSpace: "nowrap" }}
+                      >
+                        {resetLoading ? "Saving…" : "Set Password"}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })

@@ -103,6 +103,7 @@ MODULES_DIR   = Path("/opt/cycentra/modules")
 MODULES_STATE = Path("/opt/cycentra/modules_state.json")
 SCANS_DIR        = Path("/var/log/cycentra/cy-asm/scans")
 ASM_LOGS         = Path("/var/log/cycentra/cy-asm/logs")
+ASM_REPORTS_DIR  = Path("/var/log/cycentra/cy-asm/reports")
 AI_SETTINGS_FILE = Path("/opt/cycentra/ai_settings.json")
 
 # ── User management DB ────────────────────────────────────────────────────────

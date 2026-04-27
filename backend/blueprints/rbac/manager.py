@@ -33,10 +33,10 @@ import json
 import logging
 from contextlib import contextmanager
 
-from flask import Blueprint, request, jsonify, session
+from flask import Blueprint, request, jsonify, session, make_response
 
 from core.config import ROLE_APPS, VALID_ROLES, OIDC_CLIENTS, CYCENTRA_DB_URL
-from core.helpers import auth_event
+from core.helpers import auth_event, add_cors_headers
 
 log = logging.getLogger(__name__)
 
@@ -299,3 +299,51 @@ def rbac_delete_user(email):
     auth_event("rbac_user_deleted", caller, "", "success",
                f"removed user {email} from cy_users", request.remote_addr)
     return jsonify({"status": "deleted", "email": email})
+
+
+# ── Password reset (local accounts only, admin-only) ─────────────────────────
+
+@rbac_bp.route("/api/rbac/users/<path:email>/reset-password", methods=["OPTIONS"])
+def rbac_reset_pw_options(email):
+    return add_cors_headers(make_response('', 204))
+
+
+@rbac_bp.route("/api/rbac/users/<path:email>/reset-password", methods=["POST"])
+def rbac_reset_password(email):
+    """Reset the password for a local user account.  Admin-only."""
+    caller = session.get("user_email")
+    if not caller:
+        return jsonify({"error": "Not authenticated"}), 401
+
+    if get_user_role(caller) != "admin":
+        auth_event("rbac_denied", caller, "", "failure",
+                   f"POST /api/rbac/users/{email}/reset-password", request.remote_addr)
+        return jsonify({"error": "Admin access required"}), 403
+
+    entry = _get_user(email)
+    if not entry:
+        return jsonify({"error": "User not found"}), 404
+    if entry.get("auth_type") != "local":
+        return jsonify({"error": "Password reset is only available for local accounts"}), 400
+
+    data = request.get_json() or {}
+    new_password = data.get("password", "").strip()
+    if len(new_password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters"}), 400
+
+    try:
+        import bcrypt as _bcrypt
+        pw_hash = _bcrypt.hashpw(new_password.encode("utf-8"), _bcrypt.gensalt(12)).decode()
+    except ImportError:
+        return jsonify({"error": "bcrypt not available on this server"}), 503
+
+    try:
+        _upsert_user(email, entry["role"], "local", pw_hash,
+                     entry.get("name"), entry.get("apps"))
+    except Exception as exc:
+        log.error("Failed to reset password for %s: %s", email, exc)
+        return jsonify({"error": "Database error"}), 500
+
+    auth_event("rbac_password_reset", caller, "", "success",
+               f"password reset for local user {email}", request.remote_addr)
+    return jsonify({"status": "ok", "email": email})

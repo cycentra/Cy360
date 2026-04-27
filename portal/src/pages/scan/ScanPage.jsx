@@ -5,7 +5,7 @@
  * progress bar with %, module checklist, notify email, CLI equivalent block.
  */
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { API_BASE, _BASE_DOMAIN } from '../../core/constants.js';
 
 // Locked to the customer's own base domain — not a free-entry field
@@ -27,8 +27,20 @@ export function ScanPage({ user, onScanComplete }) {
   const [currentModule,     setCurrentModule] = useState("");
   const [elapsed,           setElapsed]    = useState(0);
   const [lastLog,           setLastLog]    = useState("");
+  const [reports,           setReports]    = useState([]);
+  const [reportsLoading,    setReportsLoading] = useState(false);
   const timerRef = useRef(null);
   const pollRef  = useRef(null);
+
+  const fetchReports = useCallback(() => {
+    setReportsLoading(true);
+    fetch(`${API_BASE}/api/scans/reports`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : [])
+      .then(d => { setReports(Array.isArray(d) ? d : []); setReportsLoading(false); })
+      .catch(() => setReportsLoading(false));
+  }, []);
+
+  useEffect(() => { fetchReports(); }, [fetchReports]);
 
   const fmt           = s => `${String(Math.floor(s / 60)).padStart(2,"0")}:${String(s % 60).padStart(2,"0")}`;
   const circumference = 2 * Math.PI * 54;
@@ -58,6 +70,7 @@ export function ScanPage({ user, onScanComplete }) {
         if (isDone) {
           clearInterval(pollRef.current); clearInterval(timerRef.current);
           setProgress(100); setCurrentModule("Complete"); setScanState("done");
+          fetchReports();
           try {
             const r2 = await fetch(`${API_BASE}/api/scans/latest?uid=${encodeURIComponent(user?.id || "")}`, { credentials: "include" });
             if (r2.ok) onScanComplete(await r2.json());
@@ -136,6 +149,23 @@ export function ScanPage({ user, onScanComplete }) {
     try {
       const res = await fetch(`${API_BASE}/api/scans/latest?uid=${encodeURIComponent(user?.id || "")}`);
       if (res.ok) onScanComplete(await res.json());
+    } catch {}
+  };
+
+  const handleDownloadReport = async (filename) => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/scans/reports/download?file=${encodeURIComponent(filename)}`,
+        { credentials: "include" }
+      );
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
     } catch {}
   };
 
@@ -288,6 +318,58 @@ export function ScanPage({ user, onScanComplete }) {
               })}
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* ── PDF Reports ───────────────────────────────────────────── */}
+      <div style={{ marginTop: 28 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>PDF Reports</span>
+            <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>— last 5 generated</span>
+          </div>
+          <button onClick={fetchReports} disabled={reportsLoading}
+            style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", borderRadius: 3, padding: "4px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", opacity: reportsLoading ? 0.5 : 1 }}>
+            {reportsLoading ? "Loading…" : "↺ Refresh"}
+          </button>
+        </div>
+
+        <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, overflow: "hidden" }}>
+          {reportsLoading ? (
+            <div style={{ padding: "20px 16px", color: "rgba(255,255,255,0.2)", fontFamily: "monospace", fontSize: 12 }}>Loading reports…</div>
+          ) : reports.length === 0 ? (
+            <div style={{ padding: "20px 16px", color: "rgba(255,255,255,0.2)", fontFamily: "monospace", fontSize: 12 }}>
+              No PDF reports found. Run a scan to generate Executive &amp; Technical reports.
+            </div>
+          ) : (
+            reports.map((r, i) => {
+              const dt       = new Date(r.modified * 1000);
+              const dateStr  = dt.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+              const timeStr  = dt.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+              const isExec   = r.type === "executive";
+              const typeColor = isExec ? "#4d9eff" : "#00e5a0";
+              return (
+                <div key={r.filename} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", borderBottom: i < reports.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none" }}>
+                  <div style={{ width: 7, height: 7, borderRadius: "50%", background: typeColor, flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 12, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.filename}</div>
+                    <div style={{ display: "flex", gap: 10, marginTop: 3 }}>
+                      <span style={{ color: typeColor, fontSize: 10, fontFamily: "monospace", textTransform: "uppercase", fontWeight: 700 }}>{r.type}</span>
+                      {r.domain && <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace" }}>{r.domain}</span>}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right", flexShrink: 0 }}>
+                    <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>{dateStr}</div>
+                    <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>{timeStr} · {r.size_kb} KB</div>
+                  </div>
+                  <button onClick={() => handleDownloadReport(r.filename)}
+                    style={{ background: `rgba(${isExec ? "77,158,255" : "0,229,160"},0.08)`, color: typeColor, border: `1px solid ${typeColor}40`, borderRadius: 3, padding: "5px 14px", fontSize: 10, fontFamily: "monospace", fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px", flexShrink: 0 }}>
+                    ↓ PDF
+                  </button>
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
     </div>

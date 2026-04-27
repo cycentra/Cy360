@@ -20,7 +20,7 @@ from pathlib import Path
 
 from flask import Blueprint, request, jsonify, make_response, session
 
-from core.config import SCANS_DIR, ASM_LOGS, ASM_DIR
+from core.config import SCANS_DIR, ASM_LOGS, ASM_DIR, ASM_REPORTS_DIR
 from core.helpers import add_cors_headers
 
 asm_bp = Blueprint("asm", __name__)
@@ -236,6 +236,83 @@ def get_scan_by_id(scan_id):
         except Exception:
             continue
     return jsonify({"error": "Scan not found"}), 404
+
+
+# ── PDF report listing ────────────────────────────────────────────────────────
+
+@asm_bp.route("/api/scans/reports")
+def list_pdf_reports():
+    """Return the last 5 generated PDF reports across all tenants."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+
+    all_pdfs = sorted(
+        glob.glob(str(ASM_REPORTS_DIR / "**" / "*.pdf"), recursive=True),
+        key=os.path.getmtime,
+        reverse=True,
+    )[:5]
+
+    reports = []
+    for p in all_pdfs:
+        fname  = os.path.basename(p)
+        # filename pattern: {type}_{domain}_{YYYYMMDDHHMMSS}.pdf
+        base   = fname[:-4]          # strip .pdf
+        parts  = base.split("_")
+        rtype  = parts[0] if parts else "report"
+        domain = "_".join(parts[1:-1]) if len(parts) >= 3 else ""
+        ts_str = parts[-1] if len(parts) >= 2 else ""
+        try:
+            from datetime import datetime as _dt
+            ts_iso = _dt.strptime(ts_str, "%Y%m%d%H%M%S").isoformat()
+        except Exception:
+            ts_iso = ""
+        reports.append({
+            "filename": fname,
+            "type":     rtype,
+            "domain":   domain,
+            "modified": os.path.getmtime(p),
+            "ts_iso":   ts_iso,
+            "size_kb":  round(os.path.getsize(p) / 1024),
+        })
+
+    return jsonify(reports)
+
+
+# ── PDF report download ───────────────────────────────────────────────────────
+
+@asm_bp.route("/api/scans/reports/download")
+def download_pdf_report():
+    """Serve a PDF report file.  Only files within ASM_REPORTS_DIR are served."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+
+    from flask import send_file
+
+    filename = request.args.get("file", "").strip()
+    # Reject path traversal attempts — filename only, no directory separators
+    if not filename or "/" in filename or "\\" in filename or ".." in filename:
+        return jsonify({"error": "Invalid filename"}), 400
+
+    matches = glob.glob(str(ASM_REPORTS_DIR / "**" / filename), recursive=True)
+    if not matches:
+        return jsonify({"error": "Report not found"}), 404
+
+    pdf_path = Path(matches[0])
+    # Second-layer check: resolved path must still sit inside ASM_REPORTS_DIR
+    try:
+        pdf_path.resolve().relative_to(ASM_REPORTS_DIR.resolve())
+    except ValueError:
+        return jsonify({"error": "Access denied"}), 403
+
+    if not pdf_path.is_file():
+        return jsonify({"error": "File not found"}), 404
+
+    return send_file(
+        str(pdf_path),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=filename,
+    )
 
 
 # ── ASM → CyIRIS escalation ───────────────────────────────────────────────────
