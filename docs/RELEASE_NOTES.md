@@ -1,8 +1,34 @@
-## v1.0.284 -- 2026-04-27
+## v1.0.285 -- 2026-04-27
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.284 -- 2026-04-27
+
+### Bug Fix — Local login always fails: cy_users table empty after migration
+
+  **Root cause (3-step chain):**
+  1. `rbac.json` was renamed to `rbac.json.old`; `rbac.default.json` was never deployed
+     (server hadn't been updated since that file was added in v1.0.279).
+  2. On Flask startup, `_ensure_table()` found `cy_users` empty and called
+     `_migrate_json()`, which checked only `rbac.json` and `rbac.default.json`.
+     Both missing → `if not data: return` → table stayed empty.
+  3. Every `_get_user()` query returned `None` → all logins (local and SSO) denied.
+
+  **Fixes applied to `_migrate_json()`:**
+  - Now also checks `rbac.json.old` as an additional fallback source, restoring
+    any users that were in the renamed file.
+  - **Always seeds** `cyadmin@cycentra.com` (admin / local / `Admin@123`) via
+    `INSERT ... ON CONFLICT DO NOTHING` regardless of whether any JSON files
+    existed. This is the self-contained bootstrap guarantee — local admin login
+    works even on a server with no RBAC files at all.
+
+  **After update + Flask restart the server will have:**
+  - `deepak1424@gmail.com` — admin, SSO (restored from `rbac.json.old`)
+  - `cyadmin@cycentra.com` — admin, local, password `Admin@123` (seeded)
 
 ---
 

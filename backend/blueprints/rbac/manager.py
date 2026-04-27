@@ -114,20 +114,52 @@ def _ensure_table():
 
 
 def _migrate_json(cur):
-    """Import every entry from rbac.json (or rbac.default.json) into cy_users."""
+    """Import every entry from rbac.json (or rbac.default.json) into cy_users.
+
+    Falls back to rbac.json.old and, as a final guarantee, seeds the hardcoded
+    default admin so the system always has at least one login even when no JSON
+    files are present.
+    """
     data = _json_load_raw()
+
+    # Additional fallback: try rbac.json.old (created when admin renames the file)
     if not data:
-        return
-    for email, entry in data.items():
-        cur.execute(_UPSERT_USER, (
-            email,
-            entry.get("role", "viewer"),
-            entry.get("auth_type", "sso"),
-            entry.get("password_hash"),
-            entry.get("name"),
-            json.dumps(entry["apps"]) if "apps" in entry else None,
-        ))
-    log.info("Migrated %d users from rbac.json into cy_users table", len(data))
+        _old = RBAC_FILE.parent / "rbac.json.old"
+        try:
+            if _old.exists():
+                data = json.loads(_old.read_text())
+                log.info("Migrating from rbac.json.old (%d entries)", len(data))
+        except Exception:
+            pass
+
+    if data:
+        for email, entry in data.items():
+            cur.execute(_UPSERT_USER, (
+                email,
+                entry.get("role", "viewer"),
+                entry.get("auth_type", "sso"),
+                entry.get("password_hash"),
+                entry.get("name"),
+                json.dumps(entry["apps"]) if "apps" in entry else None,
+            ))
+        log.info("Migrated %d users from rbac JSON into cy_users table", len(data))
+
+    # Always guarantee the default admin account exists — INSERT only if absent.
+    # This is idempotent: if cyadmin already came from JSON above, ON CONFLICT
+    # leaves it untouched (DO NOTHING variant keeps the existing password_hash).
+    _DEFAULT_HASH = "$2b$12$r34CmzfuwGx8mu49lMiWm.WfeOOKeX8MDzpwEtkg6gmwA81q80sBm"
+    try:
+        import bcrypt as _bcrypt
+        _default_pw = _bcrypt.hashpw(b"Admin@123", _bcrypt.gensalt(12)).decode()
+    except ImportError:
+        _default_pw = _DEFAULT_HASH  # pre-computed fallback
+
+    cur.execute("""
+        INSERT INTO cy_users (email, role, auth_type, password_hash, name)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (email) DO NOTHING;
+    """, ("cyadmin@cycentra.com", "admin", "local", _default_pw, "CyCentra Admin"))
+    log.info("Default admin bootstrap: cyadmin@cycentra.com ensured in cy_users")
 
 
 # ── JSON helpers (fallback + migration source) ────────────────────────────────
