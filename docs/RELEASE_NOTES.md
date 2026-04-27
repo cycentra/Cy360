@@ -1,3 +1,41 @@
+## v1.0.279 -- 2026-04-27
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.279 -- 2026-04-27
+
+### Features — Local Authentication & CyIRIS Environment Improvements
+
+  - **Local (username/password) authentication**: Added a new local login method
+    alongside the existing Google and Microsoft SSO options. A dedicated "Sign in with
+    local account" button is now present on the login page. Local users are stored in
+    `rbac.json` with `auth_type: "local"` and a bcrypt-hashed password. The new
+    `POST /auth/local` API endpoint validates credentials and creates the same session
+    cookie as SSO — all RBAC roles and app permissions apply identically.
+
+  - **OOB rbac.json with default local admin**: `rbac.default.json` is now bundled
+    with every release. On a fresh install, setup.sh copies this file to
+    `/opt/cycentra/rbac.json` (existing deployments are unaffected). The default file
+    contains a single local-auth admin account `cyadmin@cycentra.com` with password
+    `Admin@123` (bcrypt-hashed). Dynamic runtime creation of `rbac.json` from
+    `${CLIENT_EMAIL}` has been removed from `cycentra-setup.sh`.
+
+  - **CLOUD_IRIS_URL auto-populated on CyIRIS install**: When CyIRIS is installed
+    via Platform Modules and the admin API key is captured from the DB, the installer
+    now also ensures `CLOUD_IRIS_URL=http://127.0.0.1:4433` is present in
+    `/opt/cycentra/.env`. If the variable already has a non-empty value it is not
+    overwritten (backward-compatible).
+
+  - **rbac.json schema extended**: New optional fields `auth_type` (`"local"` or
+    `"sso"`) and `password_hash` (bcrypt) are supported per user entry. All existing
+    SSO-only entries without these fields continue to work unchanged.
+
+---
+
 ## v1.0.278 -- 2026-04-26
 
 ### Improvements

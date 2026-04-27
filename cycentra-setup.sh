@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.278 -- 2026-04-26 22:19 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.279 -- 2026-04-27 12:59 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -2611,13 +2611,19 @@ if [[ "$MODE" == "full" ]]; then
 
     step_header "RBAC & CONFIG"
 
-    # Only create rbac.json if it does not already exist
+    # RBAC: install OOB default if not already present.
+    # rbac.default.json ships in the bundle with cyadmin@cycentra.com (local auth).
+    # Existing deployments retain their current rbac.json untouched.
     if [[ ! -f /opt/cycentra/rbac.json ]]; then
-        info "rbac.json not found. Initializing with admin: ${CLIENT_EMAIL}"
-        cat > /opt/cycentra/rbac.json << RBACEOF
-{ "${CLIENT_EMAIL}": { "role": "admin" } }
-RBACEOF
-        success "rbac.json initialized"
+        if [[ -f "${BUNDLE_DIR}/rbac.default.json" ]]; then
+            cp "${BUNDLE_DIR}/rbac.default.json" /opt/cycentra/rbac.json
+            chmod 600 /opt/cycentra/rbac.json
+            success "rbac.json installed from bundle default (cyadmin@cycentra.com / Admin@123)"
+        else
+            warn "rbac.default.json not found in bundle — creating empty rbac.json"
+            echo '{}' > /opt/cycentra/rbac.json
+            chmod 600 /opt/cycentra/rbac.json
+        fi
     else
         success "Existing rbac.json detected — preserving user permissions"
     fi

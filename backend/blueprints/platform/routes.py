@@ -923,10 +923,20 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
                     _master_env = Path("/opt/cycentra/.env")
                     if _master_env.exists():
                         _env_text = _master_env.read_text()
-                        _env_text = re.sub(
-                            r"^CLOUD_IRIS_API_KEY=.*$", f"CLOUD_IRIS_API_KEY={_key}",
-                            _env_text, flags=re.MULTILINE,
-                        )
+                        # Update or append CLOUD_IRIS_API_KEY
+                        if re.search(r"^CLOUD_IRIS_API_KEY=", _env_text, flags=re.MULTILINE):
+                            _env_text = re.sub(
+                                r"^CLOUD_IRIS_API_KEY=.*$", f"CLOUD_IRIS_API_KEY={_key}",
+                                _env_text, flags=re.MULTILINE,
+                            )
+                        else:
+                            _env_text = _env_text.rstrip("\n") + f"\nCLOUD_IRIS_API_KEY={_key}\n"
+                        # Ensure CLOUD_IRIS_URL is set (local install default)
+                        _iris_url_default = "http://127.0.0.1:4433"
+                        if not re.search(r"^CLOUD_IRIS_URL=\S", _env_text, flags=re.MULTILINE):
+                            _env_text = _env_text.rstrip("\n") + f"\nCLOUD_IRIS_URL={_iris_url_default}\n"
+                            os.environ.setdefault("CLOUD_IRIS_URL", _iris_url_default)
+                            log(f"CyIRIS: CLOUD_IRIS_URL set to {_iris_url_default} in master .env")
                         _master_env.write_text(_env_text)
                         os.environ["CLOUD_IRIS_API_KEY"] = _key
                         log(f"CyIRIS: CLOUD_IRIS_API_KEY captured and written to master .env")

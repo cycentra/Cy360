@@ -1,0 +1,8 @@
+{
+  "cyadmin@cycentra.com": {
+    "role": "admin",
+    "auth_type": "local",
+    "name": "CyCentra Admin",
+    "password_hash": "$2b$12$r34CmzfuwGx8mu49lMiWm.WfeOOKeX8MDzpwEtkg6gmwA81q80sBm"
+  }
+}

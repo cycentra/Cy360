@@ -18,7 +18,7 @@ import base64
 import urllib.parse
 
 import requests as http_requests
-from flask import Blueprint, request, redirect, jsonify, session
+from flask import Blueprint, request, redirect, jsonify, session, make_response
 
 from core.config import (
     GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
@@ -238,3 +238,73 @@ def auth_logs():
         return jsonify({"events": events, "total": len(events)})
     except Exception:
         return jsonify({"events": [], "total": 0})
+
+
+# ── Local (username/password) authentication ──────────────────────────────────
+
+@auth_bp.route("/auth/local", methods=["OPTIONS"])
+def auth_local_options():
+    from core.helpers import add_cors_headers
+    return add_cors_headers(make_response('', 204))
+
+
+@auth_bp.route("/auth/local", methods=["POST"])
+def auth_local():
+    """Authenticate with email + password against rbac.json (local accounts only)."""
+    try:
+        import bcrypt as _bcrypt
+    except ImportError:
+        return jsonify({"error": "Local authentication unavailable (bcrypt not installed)"}), 503
+
+    data     = request.get_json(silent=True) or {}
+    email    = (data.get("email") or "").strip().lower()
+    password = (data.get("password") or "").strip()
+
+    if not email or not password:
+        auth_event("login", email, "portal", "error", "provider=local missing credentials")
+        return jsonify({"error": "Email and password are required"}), 400
+
+    rbac  = _load_rbac()
+    entry = rbac.get(email)
+
+    # Only allow users whose auth_type is "local" (or accounts with a password_hash)
+    if not entry:
+        auth_event("login", email, "portal", "denied", "provider=local user not found")
+        return jsonify({"error": "Invalid credentials"}), 401
+
+    auth_type = entry.get("auth_type", "sso")
+    pw_hash   = entry.get("password_hash", "")
+
+    if auth_type != "local" or not pw_hash:
+        auth_event("login", email, "portal", "denied", "provider=local not a local account")
+        return jsonify({"error": "Local login not enabled for this account"}), 401
+
+    try:
+        valid = _bcrypt.checkpw(password.encode("utf-8"), pw_hash.encode("utf-8"))
+    except Exception:
+        valid = False
+
+    if not valid:
+        auth_event("login", email, "portal", "denied", "provider=local bad password")
+        return jsonify({"error": "Invalid credentials"}), 401
+
+    name   = entry.get("name") or email.split("@")[0].title()
+    uid    = f"local_{email}"
+    avatar = ''.join([w[0].upper() for w in name.split()[:2]])
+
+    session["user_email"] = email
+    session["user_name"]  = name
+    session["user_uid"]   = uid
+    session.permanent     = True
+    auth_event("login", email, "portal", "success", "provider=local")
+
+    return jsonify({
+        "status":   "success",
+        "provider": "local",
+        "name":     name,
+        "email":    email,
+        "uid":      uid,
+        "avatar":   avatar,
+        "role":     get_user_role(email),
+        "apps":     get_user_apps(email),
+    })
