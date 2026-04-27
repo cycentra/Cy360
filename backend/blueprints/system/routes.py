@@ -3014,7 +3014,7 @@ _DEFAULT_SCHEDULES = {
         "minute": 0,
         "label": "Docker Maintenance",
         "command": "/opt/cycentra/docker-maintenance.sh",
-        "log": "/opt/cycentra/docker-maintenance.log",
+        "log": "/var/log/cycentra/docker-maintenance.log",
         "desc": "Prune unused images, volumes and stopped containers",
     },
     "asm_wordlist": {
@@ -3024,7 +3024,7 @@ _DEFAULT_SCHEDULES = {
         "minute": 0,
         "label": "ASM Wordlist Update",
         "command": None,   # resolved at runtime from installed path
-        "log": "/opt/cycentra/cron.log",
+        "log": "/var/log/cycentra/wordlist-update.log",
         "desc": "Update ASM subdomain wordlist from threat-intel feeds",
     },
     "asm_scan": {
@@ -3035,7 +3035,7 @@ _DEFAULT_SCHEDULES = {
         "domain": "",
         "scan_type": "passive",
         "label": "ASM Scheduled Scan",
-        "log": "/opt/cycentra/asm-scheduled.log",
+        "log": "/var/log/cycentra/asm-scheduled.log",
         "desc": "Run automated ASM scan against a target domain",
     },
     "backup": {
@@ -3140,7 +3140,7 @@ def _apply_schedules(schedules: dict) -> list[str]:
     if dm.get("enabled"):
         expr = _build_cron_expr(dm.get("frequency", "monthly"), dm.get("hour", 2), dm.get("minute", 0))
         cmd  = dm.get("command") or "/opt/cycentra/docker-maintenance.sh"
-        log  = dm.get("log") or "/opt/cycentra/docker-maintenance.log"
+        log  = dm.get("log") or "/var/log/cycentra/docker-maintenance.log"
         entry = f"{expr} {cmd} >> {log} 2>&1  # cycentra docker-maintenance.sh"
         filtered.append(entry)
         applied.append(entry)
@@ -3152,7 +3152,7 @@ def _apply_schedules(schedules: dict) -> list[str]:
         if wl_path:
             expr = _build_cron_expr(wl.get("frequency", "daily"), wl.get("hour", 0), wl.get("minute", 0))
             python_bin = os.environ.get("PYTHON_BIN", "python3")
-            log  = wl.get("log") or "/opt/cycentra/cron.log"
+            log  = wl.get("log") or "/var/log/cycentra/wordlist-update.log"
             entry = f"{expr} {python_bin} {wl_path} >> {log} 2>&1  # cycentra update_wordlist"
             filtered.append(entry)
             applied.append(entry)
@@ -3173,7 +3173,7 @@ def _apply_schedules(schedules: dict) -> list[str]:
         if domain:
             expr   = _build_cron_expr(sc.get("frequency", "weekly"), sc.get("hour", 3), sc.get("minute", 0))
             scan_t = sc.get("scan_type", "passive")
-            log    = sc.get("log") or "/opt/cycentra/asm-scheduled.log"
+            log    = sc.get("log") or "/var/log/cycentra/asm-scheduled.log"
             cmd    = _build_asm_scan_cron_cmd(domain, scan_t, log)
             entry  = f"{expr} {cmd}  # cycentra asm-scan-cron"
             filtered.append(entry)

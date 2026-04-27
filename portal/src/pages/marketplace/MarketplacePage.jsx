@@ -411,8 +411,16 @@ function PlaybookModal({ item, onClose }) {
 
 const EMPTY_ITEM = { id:"", name:"", type:"integration", category:"", vendor:"CyCentra", icon:"🔧", color:"#4d9eff", description:"", modules_required:"", estimated_time:"", tags:"", config_type:"", cysoar_flow:"", steps:"" };
 
+const STATUS_META = {
+  draft:     { label:"Draft",          color:"rgba(255,255,255,0.4)",  bg:"rgba(255,255,255,0.06)",  border:"rgba(255,255,255,0.12)" },
+  submitted: { label:"Pending Review", color:"rgba(255,140,0,0.9)",    bg:"rgba(255,140,0,0.08)",    border:"rgba(255,140,0,0.25)"   },
+  approved:  { label:"Approved",       color:"#00e5a0",                bg:"rgba(0,229,160,0.08)",    border:"rgba(0,229,160,0.25)"   },
+  rejected:  { label:"Rejected",       color:"rgba(255,59,59,0.9)",    bg:"rgba(255,59,59,0.08)",    border:"rgba(255,59,59,0.25)"   },
+};
+
 function CatalogItemFormModal({ initial, onClose, onSaved }) {
-  const isEdit = !!initial?.id;
+  const isEdit   = !!initial?.id;
+  const canEdit  = !isEdit || !["submitted"].includes(initial?.status);
   const [form, setForm] = useState(initial ? {
     ...EMPTY_ITEM,
     ...initial,
@@ -420,17 +428,15 @@ function CatalogItemFormModal({ initial, onClose, onSaved }) {
     tags:             (initial.tags || []).join(", "),
     steps:            (initial.steps || []).join("\n"),
   } : EMPTY_ITEM);
-  const [saving, setSaving] = useState(false);
-  const [error,  setError]  = useState(null);
+  const [saving,       setSaving]       = useState(false);
+  const [submitting,   setSubmitting]   = useState(false);
+  const [error,        setError]        = useState(null);
+  const [savedItem,    setSavedItem]    = useState(null);
 
   function set(key, val) { setForm(f => ({ ...f, [key]: val })); }
 
-  function handleSubmit(e) {
-    e.preventDefault();
-    setError(null);
-    setSaving(true);
-
-    const payload = {
+  function buildPayload() {
+    return {
       id:               form.id.trim(),
       name:             form.name.trim(),
       type:             form.type,
@@ -446,18 +452,41 @@ function CatalogItemFormModal({ initial, onClose, onSaved }) {
       cysoar_flow:      form.cysoar_flow.trim() || undefined,
       steps:            form.steps.split("\n").map(s => s.trim()).filter(Boolean),
     };
+  }
 
+  async function saveItem() {
     const url    = isEdit ? `${API_BASE}/api/marketplace/catalog/custom/${initial.id}` : `${API_BASE}/api/marketplace/catalog/custom`;
     const method = isEdit ? "PUT" : "POST";
+    const r = await fetch(url, { method, credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPayload()) });
+    const d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || "Save failed");
+    return d.item;
+  }
 
-    fetch(url, { method, credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
-      .then(r => r.json().then(d => ({ ok: r.ok, data: d })))
-      .then(({ ok, data }) => {
-        if (ok && data.ok) { onSaved(data.item, isEdit); }
-        else setError(data.error || "Save failed");
-      })
-      .catch(() => setError("Network error"))
-      .finally(() => setSaving(false));
+  async function handleSaveDraft(e) {
+    e.preventDefault();
+    setError(null); setSaving(true);
+    try {
+      const item = await saveItem();
+      setSavedItem(item);
+      onSaved(item, isEdit);
+    } catch(err) { setError(err.message); }
+    finally { setSaving(false); }
+  }
+
+  async function handleSubmitForReview(e) {
+    e.preventDefault();
+    setError(null); setSubmitting(true);
+    try {
+      // Save/update first, then submit
+      const item    = await saveItem();
+      const r2      = await fetch(`${API_BASE}/api/marketplace/catalog/custom/${item.id}/submit`, { method:"POST", credentials:"include" });
+      const d2      = await r2.json();
+      if (!r2.ok || !d2.ok) throw new Error(d2.error || "Submit failed");
+      setSavedItem(d2.item);
+      onSaved(d2.item, isEdit);
+    } catch(err) { setError(err.message); }
+    finally { setSubmitting(false); }
   }
 
   const inp = { width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:4, padding:"8px 12px", color:"white", fontSize:13, fontFamily:"monospace", outline:"none", boxSizing:"border-box" };
@@ -467,15 +496,29 @@ function CatalogItemFormModal({ initial, onClose, onSaved }) {
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.88)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:200, backdropFilter:"blur(6px)" }} onClick={onClose}>
       <div style={{ background:"#0d0f14", border:"1px solid rgba(77,158,255,0.3)", borderTop:"2px solid #4d9eff", borderRadius:8, padding:32, width:"min(640px,95vw)", maxHeight:"90vh", overflowY:"auto" }} onClick={e => e.stopPropagation()}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:24 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:24 }}>
           <div>
-            <div style={{ color:"white", fontSize:17, fontWeight:700 }}>{isEdit ? "Edit Custom Item" : "Add to Marketplace"}</div>
-            <div style={{ color:"rgba(255,255,255,0.35)", fontSize:11, fontFamily:"monospace", marginTop:3 }}>Custom items are stored on this server and merged with the cloud catalog.</div>
+            <div style={{ color:"white", fontSize:17, fontWeight:700 }}>{isEdit ? "Edit Custom Item" : "Contribute to Marketplace"}</div>
+            <div style={{ color:"rgba(255,255,255,0.35)", fontSize:11, fontFamily:"monospace", marginTop:3 }}>
+              {isEdit
+                ? `Status: ${STATUS_META[initial?.status]?.label || initial?.status || "draft"}`
+                : "Save as draft to review later, or submit directly for CyCentra approval."}
+            </div>
+            {initial?.status === "submitted" && (
+              <div style={{ marginTop:8, background:"rgba(255,140,0,0.08)", border:"1px solid rgba(255,140,0,0.2)", borderRadius:4, padding:"8px 12px", fontSize:11, color:"rgba(255,140,0,0.9)", fontFamily:"monospace" }}>
+                ⏳ Under review — editing is locked until approved or rejected.
+              </div>
+            )}
+            {initial?.status === "rejected" && initial?.rejection_reason && (
+              <div style={{ marginTop:8, background:"rgba(255,59,59,0.08)", border:"1px solid rgba(255,59,59,0.2)", borderRadius:4, padding:"8px 12px", fontSize:11, color:"#ff8080", fontFamily:"monospace" }}>
+                ✗ Rejected: {initial.rejection_reason}
+              </div>
+            )}
           </div>
-          <button onClick={onClose} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.4)", cursor:"pointer", fontSize:22 }}>×</button>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.4)", cursor:"pointer", fontSize:22, flexShrink:0 }}>×</button>
         </div>
 
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSaveDraft}>
           {/* ID + Name */}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
             <div>
@@ -580,16 +623,153 @@ function CatalogItemFormModal({ initial, onClose, onSaved }) {
             </div>
           )}
 
-          <div style={{ display:"flex", gap:10, marginTop:8 }}>
-            <button type="submit" disabled={saving} style={{ flex:1, background:saving?"rgba(77,158,255,0.3)":"#4d9eff", color:"#0d0f14", border:"none", borderRadius:4, padding:"12px", fontFamily:"monospace", fontSize:12, fontWeight:700, cursor:saving?"not-allowed":"pointer", letterSpacing:"1px", textTransform:"uppercase" }}>
-              {saving ? "Saving…" : isEdit ? "Save Changes" : "Add to Marketplace"}
+          {!canEdit ? null : (
+            <div style={{ display:"flex", gap:8, marginTop:8, flexWrap:"wrap" }}>
+              {/* Save as Draft */}
+              <button type="submit" disabled={saving || submitting}
+                style={{ flex:1, minWidth:140, background:"rgba(255,255,255,0.06)", color:saving?"rgba(255,255,255,0.3)":"rgba(255,255,255,0.75)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:4, padding:"11px", fontFamily:"monospace", fontSize:11, fontWeight:700, cursor:(saving||submitting)?"not-allowed":"pointer", letterSpacing:"1px", textTransform:"uppercase" }}>
+                {saving ? "Saving…" : "Save as Draft"}
+              </button>
+              {/* Submit for Review */}
+              <button type="button" disabled={saving || submitting} onClick={handleSubmitForReview}
+                style={{ flex:2, minWidth:180, background:(saving||submitting)?"rgba(0,229,160,0.15)":"rgba(0,229,160,0.12)", color:(saving||submitting)?"rgba(0,229,160,0.4)":"#00e5a0", border:"1px solid rgba(0,229,160,0.3)", borderRadius:4, padding:"11px", fontFamily:"monospace", fontSize:11, fontWeight:700, cursor:(saving||submitting)?"not-allowed":"pointer", letterSpacing:"1px", textTransform:"uppercase" }}>
+                {submitting ? "Submitting…" : "Submit for CyCentra Review"}
+              </button>
+              <button type="button" onClick={onClose}
+                style={{ padding:"11px 16px", background:"transparent", color:"rgba(255,255,255,0.35)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:4, fontFamily:"monospace", fontSize:11, cursor:"pointer" }}>
+                Cancel
+              </button>
+            </div>
+          )}
+          {!canEdit && (
+            <button type="button" onClick={onClose}
+              style={{ width:"100%", marginTop:8, padding:"11px", background:"transparent", color:"rgba(255,255,255,0.35)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:4, fontFamily:"monospace", fontSize:11, cursor:"pointer" }}>
+              Close
             </button>
-            <button type="button" onClick={onClose} style={{ padding:"12px 20px", background:"transparent", color:"rgba(255,255,255,0.4)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:4, fontFamily:"monospace", fontSize:12, cursor:"pointer" }}>
-              Cancel
-            </button>
-          </div>
+          )}
         </form>
       </div>
+    </div>
+  );
+}
+
+// ── CyCentra admin: pending review queue ──────────────────────────────────────
+
+function ReviewQueueSection({ onApprove, onReject }) {
+  const [submissions,  setSubmissions]  = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [rejectTarget, setRejectTarget] = useState(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [acting,       setActing]       = useState(null);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/marketplace/submissions`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => { setSubmissions(d.submissions || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  function handleApprove(item) {
+    setActing(item.id);
+    fetch(`${API_BASE}/api/marketplace/catalog/custom/${item.id}/approve`, { method:"POST", credentials:"include" })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          setSubmissions(prev => prev.filter(i => i.id !== item.id));
+          onApprove(d.item);
+        }
+      })
+      .finally(() => setActing(null));
+  }
+
+  function openReject(item) { setRejectTarget(item); setRejectReason(""); }
+
+  function handleReject() {
+    if (!rejectReason.trim() || !rejectTarget) return;
+    setActing(rejectTarget.id);
+    fetch(`${API_BASE}/api/marketplace/catalog/custom/${rejectTarget.id}/reject`, {
+      method:"POST", credentials:"include",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ reason: rejectReason.trim() }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          setSubmissions(prev => prev.filter(i => i.id !== rejectTarget.id));
+          onReject(d.item);
+        }
+      })
+      .finally(() => { setActing(null); setRejectTarget(null); });
+  }
+
+  if (loading) return null;
+  if (submissions.length === 0) return (
+    <div style={{ background:"rgba(0,229,160,0.04)", border:"1px solid rgba(0,229,160,0.1)", borderRadius:6, padding:"16px 20px", marginBottom:28, display:"flex", alignItems:"center", gap:12 }}>
+      <span style={{ fontSize:16 }}>✓</span>
+      <div style={{ color:"rgba(255,255,255,0.4)", fontSize:12, fontFamily:"monospace" }}>No items pending review.</div>
+    </div>
+  );
+
+  return (
+    <div style={{ marginBottom:32 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:16 }}>
+        <div style={{ color:"rgba(255,140,0,0.9)", fontSize:10, letterSpacing:"1.5px", fontFamily:"monospace", textTransform:"uppercase", fontWeight:700 }}>
+          Pending Your Review
+        </div>
+        <span style={{ background:"rgba(255,140,0,0.12)", color:"rgba(255,140,0,0.9)", fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2, border:"1px solid rgba(255,140,0,0.25)" }}>
+          {submissions.length} AWAITING APPROVAL
+        </span>
+      </div>
+
+      <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+        {submissions.map(item => (
+          <div key={item.id} style={{ background:"rgba(255,140,0,0.04)", border:"1px solid rgba(255,140,0,0.2)", borderRadius:6, padding:"16px 20px", display:"flex", gap:16, alignItems:"flex-start", flexWrap:"wrap" }}>
+            <span style={{ fontSize:24, flexShrink:0 }}>{item.icon}</span>
+            <div style={{ flex:1, minWidth:200 }}>
+              <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:4, flexWrap:"wrap" }}>
+                <div style={{ color:"white", fontSize:14, fontWeight:700 }}>{item.name}</div>
+                <span style={{ background:"rgba(77,158,255,0.08)", color:"#4d9eff", border:"1px solid rgba(77,158,255,0.2)", fontSize:9, fontFamily:"monospace", padding:"1px 6px", borderRadius:2 }}>{item.type}</span>
+                <span style={{ color:"rgba(255,255,255,0.3)", fontSize:10, fontFamily:"monospace" }}>{item.vendor}</span>
+              </div>
+              <div style={{ color:"rgba(255,255,255,0.5)", fontSize:12, lineHeight:1.6, marginBottom:6 }}>{item.description}</div>
+              <div style={{ color:"rgba(255,140,0,0.6)", fontSize:10, fontFamily:"monospace" }}>
+                Submitted by {item.submitted_by || item.created_by} · {item.submitted_at ? new Date(item.submitted_at).toLocaleDateString() : ""}
+              </div>
+            </div>
+            <div style={{ display:"flex", gap:8, flexShrink:0 }}>
+              <button onClick={() => handleApprove(item)} disabled={acting === item.id}
+                style={{ background:"rgba(0,229,160,0.12)", color:"#00e5a0", border:"1px solid rgba(0,229,160,0.3)", borderRadius:4, padding:"8px 16px", fontFamily:"monospace", fontSize:11, fontWeight:700, cursor:acting===item.id?"not-allowed":"pointer", letterSpacing:"0.5px" }}>
+                {acting === item.id ? "…" : "✓ Approve"}
+              </button>
+              <button onClick={() => openReject(item)} disabled={acting === item.id}
+                style={{ background:"rgba(255,59,59,0.06)", color:"rgba(255,80,80,0.8)", border:"1px solid rgba(255,59,59,0.2)", borderRadius:4, padding:"8px 16px", fontFamily:"monospace", fontSize:11, fontWeight:700, cursor:acting===item.id?"not-allowed":"pointer", letterSpacing:"0.5px" }}>
+                ✕ Reject
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Reject reason modal */}
+      {rejectTarget && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.88)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:250, backdropFilter:"blur(6px)" }} onClick={() => setRejectTarget(null)}>
+          <div style={{ background:"#0d0f14", border:"1px solid rgba(255,59,59,0.3)", borderTop:"2px solid rgba(255,59,59,0.8)", borderRadius:8, padding:28, width:"min(480px,92vw)" }} onClick={e => e.stopPropagation()}>
+            <div style={{ color:"white", fontSize:15, fontWeight:700, marginBottom:6 }}>Reject: {rejectTarget.name}</div>
+            <div style={{ color:"rgba(255,255,255,0.4)", fontSize:12, marginBottom:16 }}>Provide a reason so the submitter can improve and resubmit.</div>
+            <textarea value={rejectReason} onChange={e => setRejectReason(e.target.value)} rows={4} placeholder="e.g. Missing configuration schema, duplicate of an existing item, security concern…"
+              style={{ width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:4, padding:"9px 12px", color:"white", fontSize:13, fontFamily:"monospace", outline:"none", resize:"vertical", boxSizing:"border-box" }} />
+            <div style={{ display:"flex", gap:10, marginTop:14 }}>
+              <button onClick={handleReject} disabled={!rejectReason.trim()}
+                style={{ flex:1, background:rejectReason.trim()?"rgba(255,59,59,0.15)":"rgba(255,255,255,0.04)", color:rejectReason.trim()?"rgba(255,80,80,0.9)":"rgba(255,255,255,0.25)", border:`1px solid ${rejectReason.trim()?"rgba(255,59,59,0.35)":"rgba(255,255,255,0.08)"}`, borderRadius:4, padding:"10px", fontFamily:"monospace", fontSize:11, fontWeight:700, cursor:rejectReason.trim()?"pointer":"not-allowed", letterSpacing:"1px", textTransform:"uppercase" }}>
+                Confirm Rejection
+              </button>
+              <button onClick={() => setRejectTarget(null)} style={{ padding:"10px 16px", background:"transparent", color:"rgba(255,255,255,0.35)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:4, fontFamily:"monospace", fontSize:11, cursor:"pointer" }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -615,6 +795,14 @@ function MarketplaceCard({ item, isInstalled, isAdmin, pulling, onPull, onRemove
               Custom
             </span>
           )}
+          {isCustom && item.status && item.status !== "approved" && (() => {
+            const sm = STATUS_META[item.status] || {};
+            return (
+              <span style={{ background: sm.bg||"rgba(255,255,255,0.06)", color: sm.color||"rgba(255,255,255,0.5)", border:`1px solid ${sm.border||"rgba(255,255,255,0.12)"}`, fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2, letterSpacing:"1px" }}>
+                {sm.label || item.status}
+              </span>
+            );
+          })()}
         </div>
         <div style={{ display:"flex", gap:5, alignItems:"center" }}>
           {isInstalled && (
@@ -653,6 +841,12 @@ function MarketplaceCard({ item, isInstalled, isAdmin, pulling, onPull, onRemove
       <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginBottom:14 }}>{item.estimated_time}</div>
 
       {/* Actions */}
+      {/* Non-approved custom items: show pending notice instead of action buttons */}
+      {isCustom && item.status && item.status !== "approved" ? (
+        <div style={{ padding:"9px 12px", background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:4, color:"rgba(255,255,255,0.3)", fontFamily:"monospace", fontSize:10, textAlign:"center", letterSpacing:"0.5px" }}>
+          {item.status === "submitted" ? "Awaiting CyCentra review" : item.status === "rejected" ? "Submission rejected" : "Saved as draft"}
+        </div>
+      ) : (
       <div style={{ display:"flex", gap:8 }}>
         {isInstalled ? (
           <>
@@ -697,6 +891,7 @@ function MarketplaceCard({ item, isInstalled, isAdmin, pulling, onPull, onRemove
           </>
         )}
       </div>
+      )}
     </div>
   );
 }
@@ -706,23 +901,30 @@ function MarketplaceCard({ item, isInstalled, isAdmin, pulling, onPull, onRemove
 export function MarketplacePage({ user }) {
   const isAdmin = user?.role === "admin";
 
-  const [catalog,         setCatalog]         = useState([]);
-  const [catalogLoading,  setCatalogLoading]  = useState(true);
-  const [catalogError,    setCatalogError]    = useState(null);
-  const [installed,       setInstalled]       = useState(new Set());
-  const [search,          setSearch]          = useState("");
-  const [typeFilter,      setTypeFilter]      = useState("all");
-  const [configModal,     setConfigModal]     = useState(null);
-  const [detailModal,     setDetailModal]     = useState(null);
-  const [pulling,         setPulling]         = useState(null);
-  const [pullError,       setPullError]       = useState(null);
-  const [catalogFormItem, setCatalogFormItem] = useState(null); // null=closed, EMPTY_ITEM=new, item=edit
+  const [catalog,          setCatalog]          = useState([]);
+  const [catalogLoading,   setCatalogLoading]   = useState(true);
+  const [catalogError,     setCatalogError]     = useState(null);
+  const [isCycentraAdmin,  setIsCycentraAdmin]  = useState(false);
+  const [pendingCount,     setPendingCount]     = useState(0);
+  const [installed,        setInstalled]        = useState(new Set());
+  const [search,           setSearch]           = useState("");
+  const [typeFilter,       setTypeFilter]       = useState("all");
+  const [configModal,      setConfigModal]      = useState(null);
+  const [detailModal,      setDetailModal]      = useState(null);
+  const [pulling,          setPulling]          = useState(null);
+  const [pullError,        setPullError]        = useState(null);
+  const [catalogFormItem,  setCatalogFormItem]  = useState(null);
 
-  // Fetch catalog via backend proxy (keeps token off the browser)
+  // Fetch catalog via backend proxy — also tells us if this session is cycentra_admin
   useEffect(() => {
     fetch(`${API_BASE}/api/marketplace/catalog`, { credentials: "include" })
       .then(r => r.ok ? r.json() : Promise.reject("unavailable"))
-      .then(d => { setCatalog(d.items || []); setCatalogLoading(false); })
+      .then(d => {
+        setCatalog(d.items || []);
+        setIsCycentraAdmin(!!d.is_cycentra_admin);
+        setPendingCount(d.pending_count || 0);
+        setCatalogLoading(false);
+      })
       .catch(() => {
         setCatalogError("Could not load the marketplace catalog. Check your connection or contact your administrator.");
         setCatalogLoading(false);
@@ -776,7 +978,20 @@ export function MarketplacePage({ user }) {
         ? prev.map(i => i.id === savedItem.id ? savedItem : i)
         : [...prev, savedItem]
     );
+    if (savedItem.status === "submitted") setPendingCount(c => c + 1);
     setCatalogFormItem(null);
+  }, []);
+
+  const handleReviewApproved = useCallback((approvedItem) => {
+    approvedItem.source = "custom";
+    setCatalog(prev => prev.map(i => i.id === approvedItem.id ? approvedItem : i));
+    setPendingCount(c => Math.max(0, c - 1));
+  }, []);
+
+  const handleReviewRejected = useCallback((rejectedItem) => {
+    rejectedItem.source = "custom";
+    setCatalog(prev => prev.map(i => i.id === rejectedItem.id ? rejectedItem : i));
+    setPendingCount(c => Math.max(0, c - 1));
   }, []);
 
   const handleCatalogDelete = useCallback((item) => {
@@ -821,7 +1036,12 @@ export function MarketplacePage({ user }) {
             <h1 style={{ fontSize:22, fontWeight:700, color:"white", margin:0 }}>Integration Marketplace</h1>
             {!catalogLoading && !catalogError && (
               <span style={{ background:"rgba(0,229,160,0.12)", color:"#00e5a0", border:"1px solid rgba(0,229,160,0.25)", fontSize:9, fontFamily:"monospace", padding:"3px 10px", borderRadius:2, fontWeight:700, letterSpacing:"1px" }}>
-                {catalog.length} ITEMS
+                {catalog.filter(i => !["draft","submitted","rejected"].includes(i.status)).length} ITEMS
+              </span>
+            )}
+            {isCycentraAdmin && pendingCount > 0 && (
+              <span style={{ background:"rgba(255,140,0,0.12)", color:"rgba(255,140,0,0.95)", border:"1px solid rgba(255,140,0,0.3)", fontSize:9, fontFamily:"monospace", padding:"3px 10px", borderRadius:2, fontWeight:700, letterSpacing:"1px", animation:"pulse 2s infinite" }}>
+                {pendingCount} PENDING REVIEW ↑
               </span>
             )}
             {!isAdmin && (
@@ -830,19 +1050,24 @@ export function MarketplacePage({ user }) {
               </span>
             )}
           </div>
-          {/* Admin: add custom item to catalog */}
           {isAdmin && (
-            <button
-              onClick={() => setCatalogFormItem(EMPTY_ITEM)}
+            <button onClick={() => setCatalogFormItem(EMPTY_ITEM)}
               style={{ background:"rgba(77,158,255,0.1)", color:"#4d9eff", border:"1px solid rgba(77,158,255,0.25)", borderRadius:4, padding:"8px 16px", fontFamily:"monospace", fontSize:11, fontWeight:700, cursor:"pointer", letterSpacing:"0.5px", whiteSpace:"nowrap" }}>
-              + Add to Marketplace
+              + Contribute to Marketplace
             </button>
           )}
         </div>
         <p style={{ color:"rgba(255,255,255,0.4)", fontSize:13, margin:0 }}>
-          Pull and configure security integrations and automation playbooks from the CyCentra cloud. Admins can add custom items.
+          Browse, pull, and configure security integrations and automation playbooks.
+          {isAdmin && !isCycentraAdmin && " Admins can contribute new items — submitted content is reviewed by CyCentra before going live."}
+          {isCycentraAdmin && " Approve or reject items submitted for marketplace inclusion."}
         </p>
       </div>
+
+      {/* ── CyCentra admin: review queue ── */}
+      {isCycentraAdmin && !catalogLoading && (
+        <ReviewQueueSection onApprove={handleReviewApproved} onReject={handleReviewRejected} />
+      )}
 
       {/* ── Search + type filter ── */}
       <div style={{ display:"flex", gap:10, marginBottom:24, flexWrap:"wrap", alignItems:"center" }}>

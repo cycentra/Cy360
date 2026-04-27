@@ -145,6 +145,9 @@ MARKETPLACE_CATALOG_URL   = os.environ.get(
     "MARKETPLACE_CATALOG_URL",
     "https://cycentra.com/marketplace/catalog.json",
 )
+# Email of the CyCentra platform admin who can approve/reject submitted items.
+# Defaults to the bootstrap account; override in .env for production.
+CYCENTRA_ADMIN_EMAIL = os.environ.get("CYCENTRA_ADMIN_EMAIL", "cyadmin@cycentra.com")
 
 # ── CORS allowed origins ───────────────────────────────────────────────────────
 CORS_ALLOWED_ORIGINS = {

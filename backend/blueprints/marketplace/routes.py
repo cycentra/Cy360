@@ -1,25 +1,33 @@
 """
 blueprints/marketplace/routes.py
 =================================
-Integration Marketplace — catalog proxy, install-state tracking, and
-custom catalog management.
+Integration Marketplace — catalog, install-state, and submission workflow.
+
+Catalog hierarchy (merged in this order, later entries win on id collision):
+  1. _DEFAULT_CATALOG  — 8 built-in items shipped with the platform (always present)
+  2. Cloud items        — fetched from cycentra.com when MARKETPLACE_CATALOG_TOKEN is set
+  3. Custom items       — created by admins on this server (only "approved" ones shown
+                          in the public catalog; draft/submitted visible to admins only)
+
+Submission lifecycle (custom items only):
+  draft      → created by admin, not visible in public catalog
+  submitted  → submitted for review, visible only to admin + cycentra_admin
+  approved   → visible to everyone in the catalog
+  rejected   → not visible; admin sees the rejection reason
 
 Endpoints:
-  GET  /api/marketplace/catalog               fetch catalog (cloud + custom), admin-gated
-  POST /api/marketplace/catalog/custom        add a custom catalog item     (admin only)
-  PUT  /api/marketplace/catalog/custom/<id>   update a custom catalog item  (admin only)
-  DEL  /api/marketplace/catalog/custom/<id>   delete a custom catalog item  (admin only)
+  GET  /api/marketplace/catalog
+  POST /api/marketplace/catalog/custom
+  PUT  /api/marketplace/catalog/custom/<id>
+  DEL  /api/marketplace/catalog/custom/<id>
+  POST /api/marketplace/catalog/custom/<id>/submit
+  POST /api/marketplace/catalog/custom/<id>/approve  (cycentra_admin only)
+  POST /api/marketplace/catalog/custom/<id>/reject   (cycentra_admin only)
+  GET  /api/marketplace/submissions                  (cycentra_admin only)
 
-  GET    /api/marketplace/installed           list installed item IDs
-  POST   /api/marketplace/install             mark an item as installed      (admin only)
-  DELETE /api/marketplace/install/<item_id>   remove from installed list     (admin only)
-
-Security model:
-  - Catalog is fetched server-to-server from cycentra.com using a pre-shared
-    token (MARKETPLACE_CATALOG_TOKEN).  The token and the cloud URL never reach
-    the browser — only this backend knows them.
-  - Any authenticated session may read the catalog and the installed list.
-  - All write operations require admin role.
+  GET    /api/marketplace/installed
+  POST   /api/marketplace/install
+  DELETE /api/marketplace/install/<item_id>
 """
 
 import json
@@ -31,22 +39,101 @@ import requests as http_requests
 from flask import Blueprint, jsonify, request, session
 
 from core.helpers import add_cors_headers
-from core.config  import MARKETPLACE_CATALOG_TOKEN, MARKETPLACE_CATALOG_URL
+from core.config  import MARKETPLACE_CATALOG_TOKEN, MARKETPLACE_CATALOG_URL, CYCENTRA_ADMIN_EMAIL
 
 marketplace_bp = Blueprint("marketplace", __name__)
 
 _INSTALL_STATE_FILE  = "/var/ossec/etc/cycentra_marketplace.json"
 _CUSTOM_CATALOG_FILE = "/opt/cycentra/marketplace_custom.json"
 
-_BUILTIN_IDS = {
-    "office365", "google-cloud",
-    "phishing-response", "block-ip", "ioc-enrichment",
-    "malware-isolation", "vuln-ticket", "brute-force-response",
-}
-
-_VALID_TYPES      = {"integration", "playbook"}
+_VALID_TYPES        = {"integration", "playbook"}
+_VALID_STATUSES     = {"draft", "submitted", "approved", "rejected"}
 _VALID_CONFIG_TYPES = {"o365", "gcloud", None}
-_ID_RE            = re.compile(r"^[a-z0-9][a-z0-9\-]{1,48}[a-z0-9]$")
+_ID_RE              = re.compile(r"^[a-z0-9][a-z0-9\-]{1,48}[a-z0-9]$")
+
+# ── Default catalog — always available, no cloud token required ───────────────
+# These are the 8 built-in items shipped with every CyCentra installation.
+# They appear in the marketplace even before the MARKETPLACE_CATALOG_TOKEN is set.
+_DEFAULT_CATALOG = [
+    {
+        "id": "office365", "name": "Office 365", "type": "integration",
+        "category": "Cloud", "vendor": "Microsoft", "icon": "☁️", "color": "#0078d4",
+        "description": "Configure the Wazuh Office 365 audit log integration. Ingest Exchange, SharePoint, Azure AD and General audit events directly into CySIEM for unified cloud visibility.",
+        "modules_required": ["CySIEM"], "estimated_time": "~5 min to configure",
+        "tags": ["microsoft", "azure", "cloud", "o365", "exchange", "sharepoint", "audit"],
+        "config_type": "o365", "source": "default",
+    },
+    {
+        "id": "google-cloud", "name": "Google Cloud", "type": "integration",
+        "category": "Cloud", "vendor": "Google", "icon": "🔵", "color": "#4285f4",
+        "description": "Configure the Wazuh GCP Pub/Sub integration. Upload your Service Account JSON key to ingest Google Cloud audit logs into CySIEM. Custom security rules are deployed automatically.",
+        "modules_required": ["CySIEM"], "estimated_time": "~5 min to configure",
+        "tags": ["google", "gcp", "cloud", "pubsub", "audit", "iam", "logging"],
+        "config_type": "gcloud", "source": "default",
+    },
+    {
+        "id": "phishing-response", "name": "Phishing Response", "type": "playbook",
+        "category": "Incident Response", "vendor": "CyCentra", "icon": "🎣", "color": "#ff3b3b",
+        "description": "Auto-triage phishing emails. Extract IOCs, create a CyIRIS case, block sender domain in CySIEM, and notify the SOC team — all in under 60 seconds.",
+        "modules_required": ["CySOAR", "CyIRIS", "CySIEM"], "estimated_time": "~45 min to deploy",
+        "tags": ["phishing", "email", "incident", "ioc", "soar", "response", "triage"],
+        "cysoar_flow": "phishing_response.py",
+        "steps": ["Email received → CySOAR webhook trigger", "Extract headers, links, attachments", "VirusTotal/URLScan enrichment", "Auto-create CyIRIS case", "Block domain in CySIEM active response", "Alert SOC via Slack/Teams"],
+        "source": "default",
+    },
+    {
+        "id": "block-ip", "name": "Block IP", "type": "playbook",
+        "category": "Active Response", "vendor": "CyCentra", "icon": "🚫", "color": "#ff8c00",
+        "description": "Instantly block a malicious IP across all agents via CySIEM active response. Triggered by alert level, CyIRIS case or manual override.",
+        "modules_required": ["CySOAR", "CySIEM"], "estimated_time": "~20 min to deploy",
+        "tags": ["block", "ip", "active-response", "firewall", "soar"],
+        "cysoar_flow": "block_ip.py",
+        "steps": ["Trigger: alert level ≥12 or manual", "Validate IP is not on allowlist", "Execute active-response on all agents", "Log block to CyIRIS case", "Schedule unblock review in 24h"],
+        "source": "default",
+    },
+    {
+        "id": "ioc-enrichment", "name": "IOC Enrichment", "type": "playbook",
+        "category": "Threat Intelligence", "vendor": "CyCentra", "icon": "🔍", "color": "#4d9eff",
+        "description": "Automatically enrich indicators of compromise from CySIEM alerts. Query VirusTotal, Shodan, and AbuseIPDB, then push enriched data to CyIRIS.",
+        "modules_required": ["CySOAR", "CySIEM", "CyIRIS"], "estimated_time": "~30 min to deploy",
+        "tags": ["ioc", "enrichment", "virustotal", "shodan", "threat-intel", "soar"],
+        "cysoar_flow": "ioc_enrichment.py",
+        "steps": ["Receive IOC from CySIEM alert", "Query VirusTotal, Shodan, AbuseIPDB", "Score severity based on response", "Update CyIRIS case with enrichment", "Set ticket priority based on score"],
+        "source": "default",
+    },
+    {
+        "id": "malware-isolation", "name": "Malware Isolation", "type": "playbook",
+        "category": "Active Response", "vendor": "CyCentra", "icon": "🦠", "color": "#b06eff",
+        "description": "Isolate a compromised endpoint on detection. Quarantine the agent, take a memory snapshot, create a CyIRIS IR case, and alert the on-call analyst.",
+        "modules_required": ["CySOAR", "CySIEM", "CyIRIS"], "estimated_time": "~60 min to deploy",
+        "tags": ["malware", "isolation", "quarantine", "endpoint", "forensics", "soar"],
+        "cysoar_flow": "malware_isolation.py",
+        "steps": ["CySIEM fires malware detection rule", "CySOAR validates confidence threshold", "Isolate agent via Wazuh active response", "Trigger memory acquisition script", "Create priority CyIRIS case with evidence", "Page on-call analyst"],
+        "source": "default",
+    },
+    {
+        "id": "vuln-ticket", "name": "Vulnerability Ticketing", "type": "playbook",
+        "category": "Vulnerability Management", "vendor": "CyCentra", "icon": "📋", "color": "#f5c518",
+        "description": "Automatically create and assign remediation tickets for Critical and High CVEs discovered by CySIEM. Includes SLA tracking and escalation.",
+        "modules_required": ["CySOAR", "CySIEM", "CyIRIS"], "estimated_time": "~45 min to deploy",
+        "tags": ["vulnerability", "cve", "ticketing", "sla", "remediation", "soar"],
+        "cysoar_flow": "vuln_ticketing.py",
+        "steps": ["CySIEM CVE detection alert", "Filter: severity Critical or High", "Deduplicate against open CyIRIS cases", "Create CyIRIS case with CVE details", "Assign to asset owner", "Set SLA timer: Critical=24h, High=7d"],
+        "source": "default",
+    },
+    {
+        "id": "brute-force-response", "name": "Brute Force Response", "type": "playbook",
+        "category": "Active Response", "vendor": "CyCentra", "icon": "🔐", "color": "#00e5a0",
+        "description": "Detect and respond to brute force login attempts. Temporarily block offending IPs, alert the user, and create an investigation case.",
+        "modules_required": ["CySOAR", "CySIEM", "CyIRIS"], "estimated_time": "~30 min to deploy",
+        "tags": ["brute-force", "login", "authentication", "block", "active-response", "soar"],
+        "cysoar_flow": "brute_force.py",
+        "steps": ["CySIEM: 10+ failed logins in 60s", "Extract source IP and target account", "Block IP for 1 hour via active response", "Notify target user via email", "Create CyIRIS case for investigation", "Auto-close if no further activity in 24h"],
+        "source": "default",
+    },
+]
+
+_DEFAULT_IDS = {item["id"] for item in _DEFAULT_CATALOG}
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -67,6 +154,11 @@ def _require_admin():
     return None
 
 
+def _is_cycentra_admin():
+    email = session.get("user_email", "")
+    return email == CYCENTRA_ADMIN_EMAIL
+
+
 def _read_json(path, default):
     try:
         with open(path) as f:
@@ -83,7 +175,6 @@ def _write_json(path, data):
 
 
 def _fetch_cloud_catalog():
-    """Fetch the cloud catalog server-to-server using the pre-shared token."""
     if not MARKETPLACE_CATALOG_TOKEN:
         return []
     try:
@@ -93,7 +184,10 @@ def _fetch_cloud_catalog():
             timeout=6,
         )
         if resp.ok:
-            return resp.json().get("items", [])
+            items = resp.json().get("items", [])
+            for item in items:
+                item["source"] = "cloud"
+            return items
     except Exception:
         pass
     return []
@@ -107,38 +201,107 @@ def _write_custom_catalog(items):
     _write_json(_CUSTOM_CATALOG_FILE, {"items": items})
 
 
+def _now():
+    return datetime.datetime.utcnow().isoformat() + "Z"
+
+
 # ── CORS preflight ────────────────────────────────────────────────────────────
 
-@marketplace_bp.route("/api/marketplace/catalog",                   methods=["OPTIONS"])
-@marketplace_bp.route("/api/marketplace/catalog/custom",            methods=["OPTIONS"])
-@marketplace_bp.route("/api/marketplace/catalog/custom/<item_id>",  methods=["OPTIONS"])
-@marketplace_bp.route("/api/marketplace/installed",                 methods=["OPTIONS"])
-@marketplace_bp.route("/api/marketplace/install",                   methods=["OPTIONS"])
-@marketplace_bp.route("/api/marketplace/install/<item_id>",         methods=["OPTIONS"])
-def marketplace_options(item_id=None):
-    return add_cors_headers(jsonify({}))
+_PREFLIGHT_ROUTES = [
+    "/api/marketplace/catalog",
+    "/api/marketplace/catalog/custom",
+    "/api/marketplace/catalog/custom/<item_id>",
+    "/api/marketplace/catalog/custom/<item_id>/submit",
+    "/api/marketplace/catalog/custom/<item_id>/approve",
+    "/api/marketplace/catalog/custom/<item_id>/reject",
+    "/api/marketplace/submissions",
+    "/api/marketplace/installed",
+    "/api/marketplace/install",
+    "/api/marketplace/install/<item_id>",
+]
+
+for _r in _PREFLIGHT_ROUTES:
+    marketplace_bp.add_url_rule(
+        _r, f"options_{_r.replace('/', '_').replace('<', '').replace('>', '')}",
+        lambda **_kw: add_cors_headers(jsonify({})),
+        methods=["OPTIONS"],
+    )
 
 
 # ── GET /api/marketplace/catalog ─────────────────────────────────────────────
 
 @marketplace_bp.route("/api/marketplace/catalog", methods=["GET"])
 def marketplace_catalog():
-    """Return the merged catalog (cloud items + custom items).
-    Any authenticated user can read. The cloud fetch uses the pre-shared token
-    transparently — the browser never sees the token or the cycentra.com URL."""
+    """Return the merged catalog visible to the calling user.
+
+    Public catalog (any authenticated user):
+      - All _DEFAULT_CATALOG items (always present)
+      - Cloud items (if token configured)
+      - Custom items with status == "approved"
+
+    Admin view extras:
+      - Custom items with status == "draft" or "submitted" (scoped to creator,
+        or all if cycentra_admin)
+    """
     err = _require_auth()
     if err:
         return add_cors_headers(err[0]), err[1]
 
-    cloud_items  = _fetch_cloud_catalog()
+    caller       = session["user_email"]
+    from blueprints.rbac.manager import get_user_role
+    caller_role  = get_user_role(caller)
+    is_admin     = caller_role == "admin"
+    is_cycentra  = _is_cycentra_admin()
+
+    # 1. Start with default built-ins
+    by_id = {item["id"]: dict(item) for item in _DEFAULT_CATALOG}
+
+    # 2. Merge cloud items (override defaults by id if present)
+    for item in _fetch_cloud_catalog():
+        by_id[item["id"]] = item
+
+    public_items = list(by_id.values())
+
+    # 3. Append custom items based on status + role
     custom_items = _read_custom_catalog()
-
-    for item in cloud_items:
-        item["source"] = "cloud"
     for item in custom_items:
-        item["source"] = "custom"
+        status = item.get("status", "draft")
+        if status == "approved":
+            item["source"] = "custom"
+            public_items.append(item)
+        elif is_admin or is_cycentra:
+            # Admins see their own drafts/submitted; cycentra_admin sees all
+            if is_cycentra or item.get("created_by") == caller:
+                item["source"] = "custom"
+                public_items.append(item)
 
-    resp = jsonify({"ok": True, "items": cloud_items + custom_items})
+    # Count pending submissions so the frontend can show a badge
+    pending_count = sum(1 for i in custom_items if i.get("status") == "submitted")
+
+    resp = jsonify({
+        "ok":                True,
+        "items":             public_items,
+        "is_cycentra_admin": is_cycentra,
+        "pending_count":     pending_count if is_cycentra else 0,
+    })
+    return add_cors_headers(resp)
+
+
+# ── GET /api/marketplace/submissions ─────────────────────────────────────────
+
+@marketplace_bp.route("/api/marketplace/submissions", methods=["GET"])
+def marketplace_submissions():
+    """List items pending review. CyCentra admin only."""
+    err = _require_auth()
+    if err:
+        return add_cors_headers(err[0]), err[1]
+
+    if not _is_cycentra_admin():
+        return add_cors_headers(jsonify({"error": "CyCentra admin access required"})), 403
+
+    custom_items = _read_custom_catalog()
+    pending = [i for i in custom_items if i.get("status") == "submitted"]
+    resp = jsonify({"ok": True, "submissions": pending, "count": len(pending)})
     return add_cors_headers(resp)
 
 
@@ -146,7 +309,7 @@ def marketplace_catalog():
 
 @marketplace_bp.route("/api/marketplace/catalog/custom", methods=["POST"])
 def catalog_custom_create():
-    """Add a new custom catalog item. Admin only."""
+    """Create a new custom catalog item as a draft. Admin only."""
     err = _require_admin()
     if err:
         return add_cors_headers(err[0]), err[1]
@@ -156,16 +319,15 @@ def catalog_custom_create():
     if err_resp:
         return add_cors_headers(err_resp[0]), err_resp[1]
 
-    items = _read_custom_catalog()
-
-    # Guard: no duplicate IDs across cloud built-ins or existing custom items
-    all_ids = _BUILTIN_IDS | {i["id"] for i in items}
+    items  = _read_custom_catalog()
+    all_ids = _DEFAULT_IDS | {i["id"] for i in items}
     if data["id"] in all_ids:
         resp = jsonify({"error": f"ID '{data['id']}' is already in use"})
         return add_cors_headers(resp), 409
 
     item = _sanitise_item(data)
-    item["created_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+    item["status"]     = "draft"
+    item["created_at"] = _now()
     item["created_by"] = session["user_email"]
     items.append(item)
     _write_custom_catalog(items)
@@ -178,30 +340,34 @@ def catalog_custom_create():
 
 @marketplace_bp.route("/api/marketplace/catalog/custom/<item_id>", methods=["PUT"])
 def catalog_custom_update(item_id):
-    """Update an existing custom catalog item. Admin only."""
+    """Update a custom item (allowed while draft or rejected). Admin only."""
     err = _require_admin()
     if err:
         return add_cors_headers(err[0]), err[1]
 
-    if item_id in _BUILTIN_IDS:
-        resp = jsonify({"error": "Built-in cloud items cannot be edited here"})
-        return add_cors_headers(resp), 403
+    if item_id in _DEFAULT_IDS:
+        return add_cors_headers(jsonify({"error": "Built-in items cannot be edited"})), 403
 
     items = _read_custom_catalog()
     idx   = next((i for i, x in enumerate(items) if x["id"] == item_id), None)
     if idx is None:
         return add_cors_headers(jsonify({"error": "Item not found"})), 404
 
-    data = request.get_json() or {}
-    data["id"] = item_id  # id is immutable
+    existing_status = items[idx].get("status", "draft")
+    if existing_status == "submitted":
+        return add_cors_headers(jsonify({"error": "Cannot edit while under review — recall first"})), 409
+
+    data     = request.get_json() or {}
+    data["id"] = item_id
     err_resp = _validate_catalog_item(data, existing_id=item_id)
     if err_resp:
         return add_cors_headers(err_resp[0]), err_resp[1]
 
     updated = _sanitise_item(data)
+    updated["status"]     = existing_status
     updated["created_at"] = items[idx].get("created_at")
     updated["created_by"] = items[idx].get("created_by")
-    updated["updated_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+    updated["updated_at"] = _now()
     updated["updated_by"] = session["user_email"]
     items[idx] = updated
     _write_custom_catalog(items)
@@ -214,23 +380,21 @@ def catalog_custom_update(item_id):
 
 @marketplace_bp.route("/api/marketplace/catalog/custom/<item_id>", methods=["DELETE"])
 def catalog_custom_delete(item_id):
-    """Delete a custom catalog item. Admin only."""
+    """Delete a custom item. Admin only."""
     err = _require_admin()
     if err:
         return add_cors_headers(err[0]), err[1]
 
-    if item_id in _BUILTIN_IDS:
-        resp = jsonify({"error": "Built-in cloud items cannot be deleted"})
-        return add_cors_headers(resp), 403
+    if item_id in _DEFAULT_IDS:
+        return add_cors_headers(jsonify({"error": "Built-in items cannot be deleted"})), 403
 
-    items = _read_custom_catalog()
+    items     = _read_custom_catalog()
     new_items = [i for i in items if i["id"] != item_id]
     if len(new_items) == len(items):
         return add_cors_headers(jsonify({"error": "Item not found"})), 404
 
     _write_custom_catalog(new_items)
 
-    # Also remove from installed list if present
     state     = _read_json(_INSTALL_STATE_FILE, {})
     installed = state.get("installed", [])
     if item_id in installed:
@@ -239,7 +403,94 @@ def catalog_custom_delete(item_id):
         state["installed"] = installed
         _write_json(_INSTALL_STATE_FILE, state)
 
-    resp = jsonify({"ok": True, "deleted": item_id})
+    return add_cors_headers(jsonify({"ok": True, "deleted": item_id}))
+
+
+# ── POST /api/marketplace/catalog/custom/<id>/submit ─────────────────────────
+
+@marketplace_bp.route("/api/marketplace/catalog/custom/<item_id>/submit", methods=["POST"])
+def catalog_custom_submit(item_id):
+    """Submit a draft item for CyCentra review. Admin only."""
+    err = _require_admin()
+    if err:
+        return add_cors_headers(err[0]), err[1]
+
+    items = _read_custom_catalog()
+    idx   = next((i for i, x in enumerate(items) if x["id"] == item_id), None)
+    if idx is None:
+        return add_cors_headers(jsonify({"error": "Item not found"})), 404
+
+    if items[idx].get("status") not in ("draft", "rejected"):
+        return add_cors_headers(jsonify({"error": f"Item is already {items[idx].get('status')}"})), 409
+
+    items[idx]["status"]       = "submitted"
+    items[idx]["submitted_at"] = _now()
+    items[idx]["submitted_by"] = session["user_email"]
+    items[idx].pop("rejection_reason", None)
+    _write_custom_catalog(items)
+
+    resp = jsonify({"ok": True, "item": items[idx], "message": "Submitted for CyCentra review. You will be notified once approved."})
+    return add_cors_headers(resp)
+
+
+# ── POST /api/marketplace/catalog/custom/<id>/approve ────────────────────────
+
+@marketplace_bp.route("/api/marketplace/catalog/custom/<item_id>/approve", methods=["POST"])
+def catalog_custom_approve(item_id):
+    """Approve a submitted item — makes it visible in the public catalog. CyCentra admin only."""
+    err = _require_auth()
+    if err:
+        return add_cors_headers(err[0]), err[1]
+
+    if not _is_cycentra_admin():
+        return add_cors_headers(jsonify({"error": "CyCentra admin access required to approve items"})), 403
+
+    items = _read_custom_catalog()
+    idx   = next((i for i, x in enumerate(items) if x["id"] == item_id), None)
+    if idx is None:
+        return add_cors_headers(jsonify({"error": "Item not found"})), 404
+
+    if items[idx].get("status") != "submitted":
+        return add_cors_headers(jsonify({"error": "Only submitted items can be approved"})), 409
+
+    items[idx]["status"]      = "approved"
+    items[idx]["approved_at"] = _now()
+    items[idx]["approved_by"] = session["user_email"]
+    _write_custom_catalog(items)
+
+    resp = jsonify({"ok": True, "item": items[idx], "message": f"'{items[idx]['name']}' is now live in the marketplace."})
+    return add_cors_headers(resp)
+
+
+# ── POST /api/marketplace/catalog/custom/<id>/reject ─────────────────────────
+
+@marketplace_bp.route("/api/marketplace/catalog/custom/<item_id>/reject", methods=["POST"])
+def catalog_custom_reject(item_id):
+    """Reject a submitted item with a reason. CyCentra admin only."""
+    err = _require_auth()
+    if err:
+        return add_cors_headers(err[0]), err[1]
+
+    if not _is_cycentra_admin():
+        return add_cors_headers(jsonify({"error": "CyCentra admin access required to reject items"})), 403
+
+    items = _read_custom_catalog()
+    idx   = next((i for i, x in enumerate(items) if x["id"] == item_id), None)
+    if idx is None:
+        return add_cors_headers(jsonify({"error": "Item not found"})), 404
+
+    data   = request.get_json() or {}
+    reason = (data.get("reason") or "").strip()
+    if not reason:
+        return add_cors_headers(jsonify({"error": "A rejection reason is required"})), 400
+
+    items[idx]["status"]           = "rejected"
+    items[idx]["rejected_at"]      = _now()
+    items[idx]["rejected_by"]      = session["user_email"]
+    items[idx]["rejection_reason"] = reason
+    _write_custom_catalog(items)
+
+    resp = jsonify({"ok": True, "item": items[idx], "message": "Item rejected."})
     return add_cors_headers(resp)
 
 
@@ -247,36 +498,31 @@ def catalog_custom_delete(item_id):
 
 @marketplace_bp.route("/api/marketplace/installed", methods=["GET"])
 def marketplace_installed():
-    """Return the list of installed item IDs. Any authenticated user may call this."""
     err = _require_auth()
     if err:
         return add_cors_headers(err[0]), err[1]
 
     state     = _read_json(_INSTALL_STATE_FILE, {})
     installed = state.get("installed", [])
-    resp = jsonify({"ok": True, "installed": installed})
-    return add_cors_headers(resp)
+    return add_cors_headers(jsonify({"ok": True, "installed": installed}))
 
 
 # ── POST /api/marketplace/install ────────────────────────────────────────────
 
 @marketplace_bp.route("/api/marketplace/install", methods=["POST"])
 def marketplace_install():
-    """Mark a catalog item as installed on this server. Admin only."""
     err = _require_admin()
     if err:
         return add_cors_headers(err[0]), err[1]
 
     data    = request.get_json() or {}
     item_id = (data.get("id") or "").strip()
-
     if not item_id:
         return add_cors_headers(jsonify({"error": "item id required"})), 400
 
-    custom_ids = {i["id"] for i in _read_custom_catalog()}
-    if item_id not in _BUILTIN_IDS and item_id not in custom_ids:
-        resp = jsonify({"error": f"Unknown item '{item_id}' — pull from a valid catalog entry"})
-        return add_cors_headers(resp), 400
+    custom_ids = {i["id"] for i in _read_custom_catalog() if i.get("status") == "approved"}
+    if item_id not in _DEFAULT_IDS and item_id not in custom_ids:
+        return add_cors_headers(jsonify({"error": f"Unknown or unapproved item '{item_id}'"})), 400
 
     state     = _read_json(_INSTALL_STATE_FILE, {})
     installed = state.get("installed", [])
@@ -284,23 +530,18 @@ def marketplace_install():
 
     if item_id not in installed:
         installed.append(item_id)
-        meta[item_id] = {
-            "installed_at": datetime.datetime.utcnow().isoformat() + "Z",
-            "installed_by": session["user_email"],
-        }
+        meta[item_id] = {"installed_at": _now(), "installed_by": session["user_email"]}
         state["installed"]      = installed
         state["installed_meta"] = meta
         _write_json(_INSTALL_STATE_FILE, state)
 
-    resp = jsonify({"ok": True, "installed": installed})
-    return add_cors_headers(resp)
+    return add_cors_headers(jsonify({"ok": True, "installed": installed}))
 
 
 # ── DELETE /api/marketplace/install/<item_id> ─────────────────────────────────
 
 @marketplace_bp.route("/api/marketplace/install/<item_id>", methods=["DELETE"])
 def marketplace_uninstall(item_id):
-    """Remove an item from the installed list. Admin only."""
     err = _require_admin()
     if err:
         return add_cors_headers(err[0]), err[1]
@@ -316,48 +557,34 @@ def marketplace_uninstall(item_id):
         state["installed_meta"] = meta
         _write_json(_INSTALL_STATE_FILE, state)
 
-    resp = jsonify({"ok": True, "installed": installed})
-    return add_cors_headers(resp)
+    return add_cors_headers(jsonify({"ok": True, "installed": installed}))
 
 
 # ── validation helpers ────────────────────────────────────────────────────────
 
 def _validate_catalog_item(data, existing_id):
-    """Return (jsonify_response, status_code) on error, None on success."""
     item_id = (data.get("id") or "").strip()
     if not item_id or not _ID_RE.match(item_id):
-        resp = jsonify({"error": "id must be lowercase alphanumeric + hyphens, 3–50 chars"})
-        return resp, 400
-
+        return jsonify({"error": "id must be lowercase alphanumeric + hyphens, 3–50 chars"}), 400
     if not (data.get("name") or "").strip():
         return jsonify({"error": "name is required"}), 400
-
     if data.get("type") not in _VALID_TYPES:
         return jsonify({"error": f"type must be one of: {sorted(_VALID_TYPES)}"}), 400
-
     if not (data.get("description") or "").strip():
         return jsonify({"error": "description is required"}), 400
-
     config_type = data.get("config_type")
     if config_type not in _VALID_CONFIG_TYPES:
-        return jsonify({"error": f"config_type must be one of: o365, gcloud, or omitted"}), 400
-
+        return jsonify({"error": "config_type must be o365, gcloud, or omitted"}), 400
     return None
 
 
 def _sanitise_item(data):
-    """Return a clean dict with only recognised catalog fields."""
-    steps = data.get("steps") or []
-    if not isinstance(steps, list):
-        steps = []
-
+    steps   = data.get("steps") or []
     modules = data.get("modules_required") or []
-    if not isinstance(modules, list):
-        modules = []
-
-    tags = data.get("tags") or []
-    if not isinstance(tags, list):
-        tags = []
+    tags    = data.get("tags") or []
+    if not isinstance(steps,   list): steps   = []
+    if not isinstance(modules, list): modules = []
+    if not isinstance(tags,    list): tags    = []
 
     item = {
         "id":               (data.get("id") or "").strip(),
@@ -372,12 +599,10 @@ def _sanitise_item(data):
         "estimated_time":   (data.get("estimated_time") or "").strip(),
         "tags":             [str(t).strip().lower() for t in tags if str(t).strip()],
     }
-
     if data.get("config_type"):
         item["config_type"] = data["config_type"]
     if data.get("cysoar_flow"):
         item["cysoar_flow"] = (data["cysoar_flow"] or "").strip()
     if steps:
         item["steps"] = [str(s).strip() for s in steps if str(s).strip()]
-
     return item
