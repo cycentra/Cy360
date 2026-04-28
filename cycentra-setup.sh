@@ -616,8 +616,43 @@ if [[ -f "$WAZUH_YML" ]]; then
         fi
     fi
 
+    # ── Write proxy auth settings early (idempotent) ─────────────────────────
+    # Same logic as step 4.3b — writing here ensures proxy auth survives even if
+    # setup.sh is interrupted before step 4.3b runs, or is re-run in update mode
+    # only up to this step.  Step 4.3b will re-apply (no-op if already correct).
+    python3 - "$WAZUH_YML" << 'WAZUH_EARLY_PROXY_EOF'
+import sys
+path = sys.argv[1]
+with open(path, "rb") as f:
+    raw = f.read().replace(b"\x00", b"")
+text = raw.decode("utf-8")
+remove_prefixes = [
+    "opensearch_security.auth.type",
+    "opensearch_security.proxycache.",
+    "opensearch_security.openid.",
+    "opensearch.requestHeadersAllowlist",
+    "# CyCentra 360 IAP proxy auth",
+    "# Authentication gate:",
+    "# Wazuh trusts",
+]
+cleaned = "\n".join(
+    line for line in text.splitlines()
+    if not any(line.strip().startswith(p) for p in remove_prefixes)
+).rstrip() + "\n"
+cleaned += (
+    "# CyCentra 360 IAP proxy auth — written by cycentra-setup.sh\n"
+    "opensearch_security.auth.type: proxy\n"
+    "opensearch_security.proxycache.user_header: \"x-proxy-user\"\n"
+    "opensearch_security.proxycache.roles_header: \"x-proxy-roles\"\n"
+    "opensearch.requestHeadersAllowlist: [\"securitytenant\",\"Authorization\",\"x-proxy-user\",\"x-proxy-roles\"]\n"
+)
+with open(path, "w") as f:
+    f.write(cleaned)
+print("Wazuh proxy auth config written (early, step 4.1)")
+WAZUH_EARLY_PROXY_EOF
+
     systemctl restart wazuh-dashboard 2>/dev/null || true
-    success "CySIEM Dashboard configured: host=127.0.0.1, port=5601"
+    success "CySIEM Dashboard configured: host=127.0.0.1, port=5601, auth.type=proxy"
 
 fi
 

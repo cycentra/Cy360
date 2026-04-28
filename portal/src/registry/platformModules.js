@@ -18,7 +18,7 @@ export const PLATFORM_MODULES = {
     icon: "👁️", color: "#ff8c00",
     ram_gb: 8, disk_gb: 50, install_time: "N/A",
     port: 443, healthPath: "/api/status",
-    ssoProtocol: "SAML",
+    ssoProtocol: "proxy",
     features: ["Endpoint monitoring","Log analysis","FIM","Vuln detection","Threat intelligence","Custom rules","SAML SSO"],
     docsUrl: "https://documentation.wazuh.com",
     embeddedPath: null,
