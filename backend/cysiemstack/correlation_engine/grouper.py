@@ -44,13 +44,22 @@ def _merge_unique(existing: list, new_val) -> list:
 # ── ID generation ──────────────────────────────────────────────────────────────
 
 async def _get_next_id(db: AsyncSession) -> str:
+    """
+    Generate the next incident ID by finding the highest existing numeric
+    suffix and incrementing it.  Using COUNT(*) is incorrect when IDs have
+    gaps (e.g. after engine restarts that replay alerts) — the count falls
+    below the real max, causing duplicate-PK IntegrityErrors on every INSERT.
+    """
     prefix = settings.incident_id_prefix
     result = await db.execute(
-        text("SELECT COUNT(*) FROM incidents WHERE id LIKE :prefix"),
-        {"prefix": f"{prefix}-%"}
+        text(
+            "SELECT COALESCE(MAX(CAST(SPLIT_PART(id, '-', 2) AS INTEGER)), 0) "
+            "FROM incidents WHERE id LIKE :prefix"
+        ),
+        {"prefix": f"{prefix}-%"},
     )
-    count = result.scalar() or 0
-    return f"{prefix}-{str(count + 1).zfill(5)}"
+    max_num = result.scalar() or 0
+    return f"{prefix}-{str(max_num + 1).zfill(5)}"
 
 
 # ── Find matching open incident ────────────────────────────────────────────────
