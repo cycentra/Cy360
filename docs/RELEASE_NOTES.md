@@ -1,3 +1,11 @@
+## v1.0.299 -- 2026-04-28
+
+### Improvements
+
+  - Scheduler timezone, ASM log timestamps, O365 status sync
+
+---
+
 ## v1.0.298 -- 2026-04-28
 
 ### Bug Fixes
