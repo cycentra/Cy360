@@ -32,6 +32,7 @@ Endpoints:
 """
 
 import json
+import logging
 import os
 import re
 import datetime
@@ -43,6 +44,7 @@ from core.helpers import add_cors_headers
 from core.config  import MARKETPLACE_CATALOG_TOKEN, MARKETPLACE_CATALOG_URL, CYCENTRA_ADMIN_EMAIL
 
 marketplace_bp = Blueprint("marketplace", __name__)
+log = logging.getLogger(__name__)
 
 _INSTALL_STATE_FILE  = "/var/ossec/etc/cycentra_marketplace.json"
 _CUSTOM_CATALOG_FILE = "/opt/cycentra/marketplace_custom.json"
@@ -113,8 +115,13 @@ def _fetch_cloud_catalog():
             for item in items:
                 item["source"] = "cloud"
             return items, "ok"
-    except Exception:
-        pass
+        log.warning(
+            "marketplace catalog fetch failed — HTTP %s from %s "
+            "(if 403: restart the cycentra.com container so nginx picks up the token)",
+            resp.status_code, MARKETPLACE_CATALOG_URL,
+        )
+    except Exception as exc:
+        log.warning("marketplace catalog fetch error — %s: %s", type(exc).__name__, exc)
     return [], "fetch_error"
 
 
