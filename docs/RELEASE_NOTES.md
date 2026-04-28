@@ -1,3 +1,11 @@
+## v1.0.298 -- 2026-04-28
+
+### Bug Fixes
+
+  - Fix scheduler: invalid */0 cron and wordlist wrong save path
+
+---
+
 ## v1.0.297 -- 2026-04-28
 
 ### Bug Fixes
