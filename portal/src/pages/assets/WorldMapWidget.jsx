@@ -10,8 +10,11 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { API_BASE, RISK_CONFIG } from "../../core/constants.js";
 
 // ── Projection ──────────────────────────────────────────────────────────────
+// Full coordinate space — paths and dots use W×H internally
 const W = 820, H = 400;
 const project = (lon, lat) => [((lon + 180) / 360) * W, ((90 - lat) / 180) * H];
+// Cropped viewport: trims poles, aspect ≈ 3.28 so map renders much shorter
+const VB_Y = 28, VB_H = 250;   // shows lat ~77°N → ~39°S
 
 // ── Continent / landmass path data ──────────────────────────────────────────
 // Equirectangular projection, viewBox 0 0 820 400
@@ -94,11 +97,24 @@ export function WorldMapWidget({ assets }) {
   const [tooltip, setTooltip] = useState(null);
   const sweepRef = useRef(null);
 
-  // Unique IPv4 IPs from ALL assets (primary + subdomains), skip IPv6 and placeholder "—"
-  const _isIPv4 = ip => ip && ip !== "—" && !ip.includes(":");
-  const uniqueIPs = [...new Set(
-    assets.filter(a => _isIPv4(a.ip)).map(a => a.ip)
-  )];
+  const _isIPv4 = ip => typeof ip === "string" && ip !== "—" && !ip.includes(":") && ip.trim() !== "";
+
+  // Best resolvable IPv4 for an asset: primary a.ip first, then first valid dns_ips entry.
+  // Many assets carry "—" or null as a.ip but DO have a.dns_ips populated by the scanner.
+  const _assetIP = a => {
+    if (_isIPv4(a.ip)) return a.ip;
+    if (a.dns_ips?.length > 0) {
+      for (const entry of a.dns_ips) {
+        const ip = typeof entry === "string" ? entry : entry?.ip;
+        if (_isIPv4(ip)) return ip;
+      }
+    }
+    return null;
+  };
+
+  // Pair each asset with its best IP, discard unmappable ones
+  const assetIPs = assets.map(a => ({ a, ip: _assetIP(a) })).filter(x => x.ip);
+  const uniqueIPs = [...new Set(assetIPs.map(x => x.ip))];
 
   const fetchGeo = useCallback(async () => {
     if (!uniqueIPs.length) return;
@@ -117,18 +133,18 @@ export function WorldMapWidget({ assets }) {
 
   useEffect(() => { fetchGeo(); }, [fetchGeo]);
 
-  // Build dot list, group ALL assets by resolved IP (primary + subdomains)
+  // Build dot list — one dot per unique IP, count = number of assets sharing that IP
   const dotsByIP = {};
-  assets.filter(a => _isIPv4(a.ip) && geoMap[a.ip]).forEach(a => {
-    const geo = geoMap[a.ip];
-    if (!dotsByIP[a.ip]) dotsByIP[a.ip] = { ...a, ...geo, xy: project(geo.lon, geo.lat), count: 0, hosts: [] };
-    dotsByIP[a.ip].count++;
-    dotsByIP[a.ip].hosts.push(a.host);
-    // Escalate risk if any co-located asset is worse
+  assetIPs.filter(x => geoMap[x.ip]).forEach(({ a, ip }) => {
+    const geo = geoMap[ip];
+    if (!dotsByIP[ip]) dotsByIP[ip] = { ...a, ip, ...geo, xy: project(geo.lon, geo.lat), count: 0, hosts: [] };
+    dotsByIP[ip].count++;
+    dotsByIP[ip].hosts.push(a.host);
     const order = { critical:0, high:1, medium:2, low:3 };
-    if ((order[a.risk] ?? 3) < (order[dotsByIP[a.ip].risk] ?? 3)) dotsByIP[a.ip].risk = a.risk;
+    if ((order[a.risk] ?? 3) < (order[dotsByIP[ip].risk] ?? 3)) dotsByIP[ip].risk = a.risk;
   });
   const dots = Object.values(dotsByIP);
+  const mappedTotal = dots.reduce((s, d) => s + d.count, 0);
 
   // CSS keyframes injected once
   const styleTag = (
@@ -162,7 +178,9 @@ export function WorldMapWidget({ assets }) {
         <div>
           <div style={{ color:"rgba(255,255,255,0.3)", fontSize:10, letterSpacing:"1.5px", fontFamily:"monospace", textTransform:"uppercase" }}>Asset Geo-Location</div>
           <div style={{ color:"rgba(255,255,255,0.45)", fontSize:11, marginTop:2 }}>
-            {assets.length} asset{assets.length !== 1 ? "s" : ""} · {dots.length} location{dots.length !== 1 ? "s" : ""} mapped
+            {assets.length} total assets
+            {mappedTotal > 0 && <span style={{ color:"rgba(0,229,160,0.7)", marginLeft:6 }}>· {mappedTotal} mapped across {dots.length} location{dots.length !== 1 ? "s" : ""}</span>}
+            {assets.length > mappedTotal && mappedTotal > 0 && <span style={{ color:"rgba(255,255,255,0.28)", marginLeft:6 }}>· {assets.length - mappedTotal} no resolvable IP</span>}
             {loading && <span style={{ color:"rgba(255,255,255,0.2)", marginLeft:8, fontFamily:"monospace", fontSize:10 }}>resolving…</span>}
           </div>
         </div>
@@ -172,10 +190,11 @@ export function WorldMapWidget({ assets }) {
         </button>
       </div>
 
-      {/* Map */}
-      <div style={{ borderRadius:5, overflow:"hidden", background:"#04060e", boxShadow:"inset 0 0 40px rgba(0,229,160,0.03)" }}>
+      {/* Map — aspectRatio crops poles, keeps the map compact */}
+      <div style={{ borderRadius:5, overflow:"hidden", background:"#04060e",
+        aspectRatio:`${W}/${VB_H}`, boxShadow:"inset 0 0 40px rgba(0,229,160,0.03)" }}>
         {styleTag}
-        <svg viewBox={`0 0 ${W} ${H}`} style={{ width:"100%", height:"auto", display:"block" }}
+        <svg viewBox={`0 ${VB_Y} ${W} ${VB_H}`} style={{ width:"100%", height:"100%", display:"block" }}
           onMouseLeave={() => setTooltip(null)}>
           <defs>
             <radialGradient id="ocean-grad" cx="50%" cy="50%" r="70%">
@@ -268,14 +287,14 @@ export function WorldMapWidget({ assets }) {
 
           {/* Empty state */}
           {!loading && dots.length === 0 && (
-            <text x={W/2} y={H/2} textAnchor="middle"
+            <text x={W/2} y={VB_Y + VB_H/2} textAnchor="middle"
               fill="rgba(255,255,255,0.14)" fontSize={12} fontFamily="monospace">
               No resolved IPs — scan assets to populate map
             </text>
           )}
 
           {/* Corner label */}
-          <text x={8} y={H-8} fill="rgba(0,229,160,0.25)" fontSize={8} fontFamily="monospace">ASSET GEO-LOCATION INTELLIGENCE</text>
+          <text x={12} y={VB_Y + VB_H - 8} fill="rgba(0,229,160,0.22)" fontSize={8} fontFamily="monospace">ASSET GEO-LOCATION INTELLIGENCE</text>
         </svg>
       </div>
 
@@ -288,9 +307,11 @@ export function WorldMapWidget({ assets }) {
             <span style={{ color:"rgba(255,255,255,0.28)", fontSize:10, fontFamily:"monospace", textTransform:"uppercase", letterSpacing:"0.8px" }}>{r}</span>
           </div>
         ))}
-        <div style={{ marginLeft:"auto", color:"rgba(255,255,255,0.18)", fontSize:10, fontFamily:"monospace" }}>
-          {dots.reduce((sum, d) => sum + d.count, 0)} primary assets mapped
-        </div>
+        {assets.length > mappedTotal && (
+          <div style={{ marginLeft:"auto", color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace" }}>
+            {assets.length - mappedTotal} asset{assets.length - mappedTotal !== 1 ? "s" : ""} without resolvable IP
+          </div>
+        )}
       </div>
     </div>
   );

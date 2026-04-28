@@ -796,19 +796,19 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
       {/* ── Filter pills ───────────────────────────────────────────────────── */}
       {assets.length > 0 && (
         <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center" }}>
-          <span style={{ color: "rgba(255,255,255,0.22)", fontSize: 9, fontFamily: "monospace", marginRight: 2 }}>FILTER:</span>
+          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginRight: 4 }}>FILTER:</span>
           {[
-            { key: null,       label: `ALL  ${assets.length}`,      color: "rgba(255,255,255,0.45)" },
+            { key: null,       label: `ALL  ${assets.length}`,      color: "#ffffff" },
             { key: "new",      label: `NEW  ${newCount}`,           color: "#00e5a0" },
             { key: "dropped",  label: `DROPPED  ${droppedCount}`,   color: "#ff8c00" },
-            { key: "existing", label: `EXISTING  ${existingCount}`, color: "rgba(77,158,255,0.85)" },
+            { key: "existing", label: `EXISTING  ${existingCount}`, color: "#4d9eff" },
           ].map(({ key, label, color }) => (
             <button key={String(key)} onClick={() => toggleFilter(key)} style={{
-              background: discoveryFilter === key ? `${color}15` : "rgba(255,255,255,0.03)",
-              border: `1px solid ${discoveryFilter === key ? color + "55" : "rgba(255,255,255,0.09)"}`,
-              color: discoveryFilter === key ? color : "rgba(255,255,255,0.3)",
+              background: discoveryFilter === key ? `${color}20` : "rgba(255,255,255,0.06)",
+              border: `1px solid ${discoveryFilter === key ? color + "70" : "rgba(255,255,255,0.2)"}`,
+              color: discoveryFilter === key ? color : "rgba(255,255,255,0.65)",
               fontSize: 9, fontFamily: "monospace", fontWeight: 700,
-              padding: "4px 10px", borderRadius: 3, cursor: "pointer", letterSpacing: "0.8px",
+              padding: "5px 12px", borderRadius: 3, cursor: "pointer", letterSpacing: "0.8px",
             }}>{label}</button>
           ))}
         </div>
