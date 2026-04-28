@@ -2080,6 +2080,20 @@ function CyMindIntegrationTab() {
 // Manage cron schedules for docker-maintenance, ASM wordlist, ASM scan
 // ════════════════════════════════════════════════════════════════════════════
 
+// Common IANA timezones shown in the selector.  The browser's detected zone
+// is prepended at runtime if it's not already in this list.
+const COMMON_TIMEZONES = [
+  "UTC",
+  "America/New_York","America/Chicago","America/Denver","America/Los_Angeles",
+  "America/Toronto","America/Vancouver","America/Sao_Paulo","America/Mexico_City",
+  "Europe/London","Europe/Paris","Europe/Berlin","Europe/Madrid","Europe/Rome",
+  "Europe/Amsterdam","Europe/Stockholm","Europe/Warsaw","Europe/Istanbul",
+  "Europe/Moscow","Asia/Dubai","Asia/Kolkata","Asia/Colombo",
+  "Asia/Dhaka","Asia/Kathmandu","Asia/Bangkok","Asia/Singapore",
+  "Asia/Hong_Kong","Asia/Tokyo","Asia/Seoul","Asia/Karachi",
+  "Australia/Sydney","Australia/Melbourne","Pacific/Auckland","Pacific/Auckland",
+];
+
 const FREQ_OPTIONS = [
   { value: "minute",    label: "Every Minute"  },
   { value: "hourly",    label: "Hourly"        },
@@ -2096,9 +2110,22 @@ const SCAN_TYPES = [
   { value: "deep",     label: "Deep — Exhaustive scan including dark web & supply chain"  },
 ];
 
-function SchedulerTask({ taskId, task, onChange, baseDomain }) {
+function SchedulerTask({ taskId, task, onChange, baseDomain, timezone }) {
   const accent = task.enabled ? "#00e5a0" : "rgba(255,255,255,0.25)";
   const showTime = task.frequency !== "minute";
+
+  // Compute UTC equivalent of the configured local time for display in the log footer.
+  const utcPreview = (() => {
+    if (!showTime || !timezone || timezone === "UTC") return null;
+    try {
+      const h = task.hour ?? 0;
+      const m = task.minute ?? 0;
+      const now = new Date();
+      now.setHours(h, m, 0, 0);
+      const utcStr = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
+      return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")} ${timezone} = ${utcStr} UTC`;
+    } catch { return null; }
+  })();
   const [logLines, setLogLines] = useState(null);
   const [logError, setLogError] = useState(false);
 
@@ -2234,6 +2261,11 @@ function SchedulerTask({ taskId, task, onChange, baseDomain }) {
           {task.log && (
             <div style={{ color: "rgba(0,229,160,0.6)", marginBottom: logLines && logLines.length > 0 ? 6 : 0 }}>
               Log → <code style={{ color: "rgba(255,255,255,0.35)" }}>{task.log}</code>
+              {utcPreview && (
+                <span style={{ marginLeft: 12, color: "rgba(255,200,0,0.55)", fontSize: 10, fontFamily: "monospace" }}>
+                  ⏱ {utcPreview}
+                </span>
+              )}
             </div>
           )}
           {logLines && logLines.length > 0 && (
@@ -2267,12 +2299,22 @@ function SchedulerTab() {
   const [saving,      setSaving]      = useState(false);
   const [msg,         setMsg]         = useState(null);
 
+  // Auto-detect browser timezone; prepend to list if not already present
+  const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const tzOptions  = COMMON_TIMEZONES.includes(browserTz)
+    ? COMMON_TIMEZONES
+    : [browserTz, ...COMMON_TIMEZONES];
+
+  const [timezone, setTimezone] = useState(browserTz);
+
   useEffect(() => {
     fetch(`${API_BASE}/api/system/schedules`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (d?.schedules) setSchedules(d.schedules);
         if (d?.base_domain) setBaseDomain(d.base_domain);
+        // Restore saved timezone or keep the browser-detected one
+        if (d?.timezone && d.timezone !== "UTC") setTimezone(d.timezone);
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -2288,11 +2330,11 @@ function SchedulerTab() {
       const r = await fetch(`${API_BASE}/api/system/schedules`, {
         method: "PUT", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ schedules }),
+        body: JSON.stringify({ schedules, timezone }),
       });
       const d = await r.json();
       if (d.ok) {
-        setMsg({ ok: true, text: `Schedules saved. ${d.applied} cron job(s) active.` });
+        setMsg({ ok: true, text: `Schedules saved. ${d.applied} cron job(s) active. Times stored as ${timezone}, converted to UTC for cron.` });
       } else {
         setMsg({ ok: false, text: d.error || "Save failed" });
       }
@@ -2315,8 +2357,22 @@ function SchedulerTab() {
         </div>
       </div>
 
+      {/* Timezone selector — applies to all tasks */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 22, background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 5, padding: "12px 16px" }}>
+        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace", letterSpacing: "0.8px", textTransform: "uppercase", whiteSpace: "nowrap" }}>Your Timezone</span>
+        <select
+          value={timezone}
+          onChange={e => setTimezone(e.target.value)}
+          style={{ ...INPUT, flex: 1, maxWidth: 320, padding: "6px 10px" }}>
+          {tzOptions.map(tz => <option key={tz} value={tz}>{tz}</option>)}
+        </select>
+        <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>
+          Hour/minute values you enter are in this timezone · backend converts to UTC for cron
+        </span>
+      </div>
+
       {taskOrder.map(id => schedules[id] && (
-        <SchedulerTask key={id} taskId={id} task={schedules[id]} onChange={handleChange} baseDomain={baseDomain} />
+        <SchedulerTask key={id} taskId={id} task={schedules[id]} onChange={handleChange} baseDomain={baseDomain} timezone={timezone} />
       ))}
 
       <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 8 }}>

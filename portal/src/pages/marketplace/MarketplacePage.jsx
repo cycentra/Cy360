@@ -23,7 +23,7 @@ const O365_SUBSCRIPTIONS = [
 ];
 const O365_INTERVALS = ["1m","5m","10m","15m","30m","1h","2h","6h","12h","24h"];
 
-function O365ConfigModal({ item, onClose }) {
+function O365ConfigModal({ item, onClose, onSaved }) {
   const [tenantId,          setTenantId]          = useState("");
   const [clientId,          setClientId]          = useState("");
   const [clientSecret,      setClientSecret]      = useState("");
@@ -65,7 +65,10 @@ function O365ConfigModal({ item, onClose }) {
       body: JSON.stringify({ tenant_id: tenantId, client_id: clientId, client_secret: clientSecret, interval, subscriptions: subs, enabled }),
     })
       .then(r => r.json().then(d => ({ ok: r.ok, data: d })))
-      .then(({ ok, data }) => setResult({ ok: ok && data.ok, msg: data.message || data.error || (ok ? "Saved" : "Error") }))
+      .then(({ ok, data }) => {
+        setResult({ ok: ok && data.ok, msg: data.message || data.error || (ok ? "Saved" : "Error") });
+        if (ok && data.ok && onSaved) onSaved();
+      })
       .catch(() => setResult({ ok: false, msg: "Network error" }))
       .finally(() => setSaving(false));
   }
@@ -776,7 +779,7 @@ function ReviewQueueSection({ onApprove, onReject }) {
 
 // ── Marketplace card ──────────────────────────────────────────────────────────
 
-function MarketplaceCard({ item, isInstalled, isAdmin, pulling, onPull, onRemove, onConfigure, onViewDetails, onEdit, onCatalogDelete }) {
+function MarketplaceCard({ item, isInstalled, isConfigured, isAdmin, pulling, onPull, onRemove, onConfigure, onViewDetails, onEdit, onCatalogDelete }) {
   const isIntegration = item.type === "integration";
   const isCustom      = item.source === "custom";
   const isPulling     = pulling === item.id;
@@ -805,7 +808,17 @@ function MarketplaceCard({ item, isInstalled, isAdmin, pulling, onPull, onRemove
           })()}
         </div>
         <div style={{ display:"flex", gap:5, alignItems:"center" }}>
-          {isInstalled && (
+          {isInstalled && isConfigured && (
+            <span style={{ background:"rgba(0,229,160,0.1)", color:"#00e5a0", border:"1px solid rgba(0,229,160,0.25)", fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2, letterSpacing:"1px" }}>
+              ✓ ACTIVE
+            </span>
+          )}
+          {isInstalled && !isConfigured && item.config_type && (
+            <span title="Integration installed but credentials not yet configured in Wazuh" style={{ background:"rgba(255,180,0,0.1)", color:"#ffb400", border:"1px solid rgba(255,180,0,0.3)", fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2, letterSpacing:"1px", cursor:"default" }}>
+              ⚠ NEEDS SETUP
+            </span>
+          )}
+          {isInstalled && !item.config_type && (
             <span style={{ background:"rgba(0,229,160,0.1)", color:"#00e5a0", border:"1px solid rgba(0,229,160,0.25)", fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2, letterSpacing:"1px" }}>
               ✓ INSTALLED
             </span>
@@ -907,6 +920,7 @@ export function MarketplacePage({ user }) {
   const [isCycentraAdmin,  setIsCycentraAdmin]  = useState(false);
   const [pendingCount,     setPendingCount]     = useState(0);
   const [installed,        setInstalled]        = useState(new Set());
+  const [configured,       setConfigured]       = useState(new Set());
   const [search,           setSearch]           = useState("");
   const [typeFilter,       setTypeFilter]       = useState("all");
   const [configModal,      setConfigModal]      = useState(null);
@@ -931,11 +945,14 @@ export function MarketplacePage({ user }) {
       });
   }, []);
 
-  // Fetch installed items from backend
+  // Fetch installed + configured items from backend
   useEffect(() => {
     fetch(`${API_BASE}/api/marketplace/installed`, { credentials: "include" })
       .then(r => r.ok ? r.json() : Promise.reject())
-      .then(d => setInstalled(new Set(d.installed || [])))
+      .then(d => {
+        setInstalled(new Set(d.installed || []));
+        setConfigured(new Set(d.configured || []));
+      })
       .catch(() => {});
   }, []);
 
@@ -1132,6 +1149,7 @@ export function MarketplacePage({ user }) {
                 key={item.id}
                 item={item}
                 isInstalled={true}
+                isConfigured={configured.has(item.id)}
                 isAdmin={isAdmin}
                 pulling={pulling}
                 onPull={handlePull}
@@ -1200,7 +1218,7 @@ export function MarketplacePage({ user }) {
       )}
 
       {/* ── Config / detail modals ── */}
-      {configModal?.config_type === "o365"   && <O365ConfigModal   item={configModal}     onClose={() => setConfigModal(null)} />}
+      {configModal?.config_type === "o365"   && <O365ConfigModal   item={configModal}     onClose={() => setConfigModal(null)} onSaved={() => { fetch(`${API_BASE}/api/marketplace/installed`,{credentials:"include"}).then(r=>r.json()).then(d=>{setInstalled(new Set(d.installed||[]));setConfigured(new Set(d.configured||[]));}).catch(()=>{}); }} />}
       {configModal?.config_type === "gcloud" && <GCloudConfigModal item={configModal}     onClose={() => setConfigModal(null)} />}
       {detailModal                           && <PlaybookModal     item={detailModal}     onClose={() => setDetailModal(null)} />}
 

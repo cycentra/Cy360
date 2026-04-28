@@ -496,6 +496,43 @@ def catalog_custom_reject(item_id):
 
 # ── GET /api/marketplace/installed ───────────────────────────────────────────
 
+def _configured_items(installed: list) -> list:
+    """Return the subset of installed items whose backend integration is actually active.
+
+    'Installed' only means the user clicked Install in the marketplace and the
+    state was recorded.  'Configured' means the underlying Wazuh wodle / config
+    is present and non-placeholder.  When these diverge (e.g. setup script wiped
+    ossec.conf after the user configured O365) the UI must warn the user.
+    """
+    configured = []
+    if "office365" in installed:
+        try:
+            from pathlib import Path as _Path
+            content = _Path("/var/ossec/etc/ossec.conf").read_text()
+            if re.search(r'<wodle name="office365">', content):
+                # Also verify credentials aren't still placeholders
+                m = re.search(r'<wodle name="office365">(.*?)</wodle>', content, re.DOTALL)
+                if m and "PLACEHOLDER" not in m.group(1):
+                    configured.append("office365")
+        except OSError:
+            pass
+    if "google-cloud" in installed:
+        try:
+            from pathlib import Path as _Path
+            content = _Path("/var/ossec/etc/ossec.conf").read_text()
+            if re.search(r'<wodle name="gcp-pubsub">', content):
+                configured.append("google-cloud")
+        except OSError:
+            pass
+    # Playbooks and module-based items are always considered configured once installed
+    always_configured = {"phishing-response", "block-ip", "ioc-enrichment", "malware-isolation",
+                         "threat-intel-feed", "vulnerability-report", "compliance-checker"}
+    for item_id in installed:
+        if item_id in always_configured:
+            configured.append(item_id)
+    return configured
+
+
 @marketplace_bp.route("/api/marketplace/installed", methods=["GET"])
 def marketplace_installed():
     err = _require_auth()
@@ -504,7 +541,8 @@ def marketplace_installed():
 
     state     = _read_json(_INSTALL_STATE_FILE, {})
     installed = state.get("installed", [])
-    return add_cors_headers(jsonify({"ok": True, "installed": installed}))
+    configured = _configured_items(installed)
+    return add_cors_headers(jsonify({"ok": True, "installed": installed, "configured": configured}))
 
 
 # ── POST /api/marketplace/install ────────────────────────────────────────────

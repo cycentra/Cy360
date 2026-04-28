@@ -3149,6 +3149,21 @@ _FREQ_CRON_MAP = {
 }
 
 
+def _local_to_utc(hour: int, minute: int, tz_name: str) -> tuple[int, int]:
+    """Convert a local wall-clock time to UTC hour/minute using the given IANA timezone.
+    Falls back to the original values if the timezone is unknown or zoneinfo unavailable."""
+    if not tz_name or tz_name.upper() == "UTC":
+        return hour, minute
+    try:
+        from zoneinfo import ZoneInfo
+        from datetime import datetime as _dt
+        local_dt = _dt.now(ZoneInfo(tz_name)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+        utc_dt   = local_dt.astimezone(ZoneInfo("UTC"))
+        return utc_dt.hour, utc_dt.minute
+    except Exception:
+        return hour, minute
+
+
 def _build_cron_expr(frequency: str, hour: int, minute: int) -> str:
     template = _FREQ_CRON_MAP.get(frequency, "{M} {H} * * *")
     # */0 is invalid cron syntax — Ubuntu cron silently skips the entire job.
@@ -3180,14 +3195,15 @@ def _resolve_wordlist_path() -> str | None:
 
 def _build_asm_scan_cron_cmd(domain: str, scan_type: str, log: str) -> str:
     """Build the curl command that triggers the ASM scan endpoint from cron."""
-    # Read BASE_URL from env so we hit the local Flask process
     base_url = os.environ.get("BASE_URL", "https://cyasm.cycentra.com")
+    # Wrap in a subshell so we can emit a timestamped header before the curl JSON response.
     return (
+        f'{{ echo "[$(date \'+%Y-%m-%d %H:%M:%S UTC\')] Triggering {scan_type} scan → {domain}"; '
         f'curl -s -X POST {base_url}/api/scan/trigger '
         f'-H "Content-Type: application/json" '
         f'-b /opt/cycentra/cron_session.cookie '
-        f'-d \'{{"domain":"{domain}","scan_type":"{scan_type}","uid":"scheduler"}}\' '
-        f'>> {log} 2>&1'
+        f'-d \'{{"domain":"{domain}","scan_type":"{scan_type}","uid":"scheduler"}}\'; '
+        f'echo; }} >> {log} 2>&1'
     )
 
 
@@ -3251,6 +3267,19 @@ def _load_schedules() -> dict:
 def _apply_schedules(schedules: dict) -> list[str]:
     """Re-write cron entries for all managed tasks. Returns list of applied entries."""
     import tempfile as _tempfile
+
+    # Timezone stored at the top level of the schedules dict; falls back to UTC.
+    tz = schedules.get("_timezone", "UTC") or "UTC"
+
+    def _cron(task: dict, default_freq: str, default_hour: int, default_minute: int) -> str:
+        freq = task.get("frequency", default_freq)
+        h    = task.get("hour",   default_hour)
+        m    = task.get("minute", default_minute)
+        # "minute" frequency (*/N) is independent of wall-clock time — no conversion needed.
+        if freq != "minute":
+            h, m = _local_to_utc(h, m, tz)
+        return _build_cron_expr(freq, h, m)
+
     # Read current crontab, strip all cycentra-managed lines
     rc, crontab_out, _ = _run_cmd("crontab -l")
     lines = [] if rc != 0 else crontab_out.splitlines()
@@ -3274,7 +3303,7 @@ def _apply_schedules(schedules: dict) -> list[str]:
             _write_docker_maintenance_script()
         except Exception:
             pass
-        expr = _build_cron_expr(dm.get("frequency", "monthly"), dm.get("hour", 2), dm.get("minute", 0))
+        expr = _cron(dm, "monthly", 2, 0)
         cmd  = dm.get("command") or "/opt/cycentra/docker-maintenance.sh"
         log  = dm.get("log") or "/var/log/cycentra/docker-maintenance.log"
         entry = f"{expr} {cmd} >> {log} 2>&1  # cycentra docker-maintenance.sh"
@@ -3286,14 +3315,20 @@ def _apply_schedules(schedules: dict) -> list[str]:
     if wl.get("enabled"):
         wl_path = _resolve_wordlist_path()
         if wl_path:
-            expr = _build_cron_expr(wl.get("frequency", "daily"), wl.get("hour", 0), wl.get("minute", 0))
+            expr = _cron(wl, "daily", 0, 0)
             python_bin = os.environ.get("PYTHON_BIN", "python3")
             log  = wl.get("log") or "/var/log/cycentra/wordlist-update.log"
             # update_wordlist.py uses a relative SAVE_PATH ("wordlists/subdomains.txt").
             # Cron's working dir is /root, so without cd the file lands in /root/wordlists/
             # instead of the cy_asm package dir the scanner reads from.
+            # Subshell adds timestamps so the log clearly shows when each run started/ended.
             modules_dir = str(Path(wl_path).parent.parent)
-            entry = f"{expr} cd {modules_dir} && {python_bin} {wl_path} >> {log} 2>&1  # cycentra update_wordlist"
+            entry = (
+                f"{expr} {{ echo \"[$(date '+%Y-%m-%d %H:%M:%S UTC')] Wordlist update starting\"; "
+                f"cd {modules_dir} && {python_bin} {wl_path}; "
+                f"echo \"[$(date '+%Y-%m-%d %H:%M:%S UTC')] Wordlist update complete\"; "
+                f"}} >> {log} 2>&1  # cycentra update_wordlist"
+            )
             filtered.append(entry)
             applied.append(entry)
 
@@ -3311,7 +3346,7 @@ def _apply_schedules(schedules: dict) -> list[str]:
             except Exception:
                 pass
         if domain:
-            expr   = _build_cron_expr(sc.get("frequency", "weekly"), sc.get("hour", 3), sc.get("minute", 0))
+            expr   = _cron(sc, "weekly", 3, 0)
             scan_t = sc.get("scan_type", "passive")
             log    = sc.get("log") or "/var/log/cycentra/asm-scheduled.log"
             cmd    = _build_asm_scan_cron_cmd(domain, scan_t, log)
@@ -3331,7 +3366,7 @@ def _apply_schedules(schedules: dict) -> list[str]:
             )
         except Exception:
             pass
-        expr  = _build_cron_expr(bk.get("frequency", "daily"), bk.get("hour", 2), bk.get("minute", 0))
+        expr  = _cron(bk, "daily", 2, 0)
         cmd   = bk.get("command") or "/opt/cycentra/run_backup.sh"
         log   = bk.get("log") or "/var/log/cycentra/backup.log"
         entry = f"{expr} {cmd} >> {log} 2>&1  # cycentra-backup-cron"
@@ -3378,7 +3413,8 @@ def get_schedules():
             pass
     # Always set ASM scan domain to BASE_DOMAIN — not user-configurable
     schedules["asm_scan"]["domain"] = base_domain
-    return jsonify({"schedules": schedules, "base_domain": base_domain})
+    timezone = schedules.pop("_timezone", "UTC") or "UTC"
+    return jsonify({"schedules": schedules, "base_domain": base_domain, "timezone": timezone})
 
 
 @system_bp.route("/api/system/schedules", methods=["PUT"])
@@ -3389,7 +3425,9 @@ def put_schedules():
     if get_user_role(session["user_email"]) != "admin":
         return jsonify({"error": "Admin role required"}), 403
 
-    incoming = (request.get_json() or {}).get("schedules", {})
+    body     = request.get_json() or {}
+    incoming = body.get("schedules", {})
+    timezone = (body.get("timezone") or "UTC").strip()
     if not isinstance(incoming, dict):
         return jsonify({"error": "Invalid payload"}), 400
 
@@ -3406,6 +3444,9 @@ def put_schedules():
             patch.pop("domain", None)
         current[task_id].update({k: v for k, v in patch.items() if not k.startswith("_")})
 
+    # Persist timezone alongside schedules so it survives server restarts
+    current["_timezone"] = timezone
+
     # Save
     try:
         _SCHEDULES_FILE.write_text(json.dumps(current, indent=2))
@@ -3413,7 +3454,7 @@ def put_schedules():
         return jsonify({"error": f"Could not save schedules: {e}"}), 500
 
     applied = _apply_schedules(current)
-    return jsonify({"ok": True, "applied": len(applied), "entries": applied})
+    return jsonify({"ok": True, "applied": len(applied), "entries": applied, "timezone": timezone})
 
 
 @system_bp.route("/api/system/schedule-log/<task_id>", methods=["OPTIONS"])
