@@ -1,3 +1,11 @@
+## v1.0.309 -- 2026-04-28
+
+### Bug Fixes
+
+  - Fix CySIEM auto-login: write proxy auth config before first dashboard restart
+
+---
+
 ## v1.0.308 -- 2026-04-28
 
 ### Improvements
