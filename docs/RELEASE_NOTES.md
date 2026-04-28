@@ -1,3 +1,11 @@
+## v1.0.297 -- 2026-04-28
+
+### Bug Fixes
+
+  - Fix scheduler jobs and O365 integration
+
+---
+
 ## v1.0.296 -- 2026-04-28
 
 ### Improvements
