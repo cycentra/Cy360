@@ -27,7 +27,7 @@ from blueprints.oidc.provider     import oidc_bp
 from blueprints.rbac.manager      import rbac_bp
 from blueprints.platform.routes   import platform_bp
 from blueprints.asm.scanner       import asm_bp
-from blueprints.system.routes     import system_bp
+from blueprints.system.routes     import system_bp, reapply_o365_if_missing
 from blueprints.backup.routes     import backup_bp
 from blueprints.scheduler.routes  import scheduler_bp, init_scheduler
 from blueprints.marketplace.routes import marketplace_bp
@@ -53,6 +53,9 @@ def create_app() -> Flask:
 
     # Start background job scheduler (only one gunicorn worker acquires lock)
     init_scheduler(app)
+
+    # Re-inject O365 wodle if ossec.conf was reset by setup script since last save
+    reapply_o365_if_missing()
 
     # Global CORS — applied after every response
     @app.after_request

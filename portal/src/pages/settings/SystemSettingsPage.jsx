@@ -2099,6 +2099,19 @@ const SCAN_TYPES = [
 function SchedulerTask({ taskId, task, onChange, baseDomain }) {
   const accent = task.enabled ? "#00e5a0" : "rgba(255,255,255,0.25)";
   const showTime = task.frequency !== "minute";
+  const [logLines, setLogLines] = useState(null);
+  const [logError, setLogError] = useState(false);
+
+  useEffect(() => {
+    if (!task.enabled) { setLogLines(null); return; }
+    fetch(`${API_BASE}/api/system/schedule-log/${taskId}`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d?.ok) setLogLines(d.lines || []);
+        else setLogError(true);
+      })
+      .catch(() => setLogError(true));
+  }, [taskId, task.enabled]);
 
   return (
     <div style={{ background: "rgba(255,255,255,0.025)", border: `1px solid ${accent}25`, borderLeft: `3px solid ${accent}`, borderRadius: 5, padding: "18px 20px", marginBottom: 14 }}>
@@ -2215,10 +2228,32 @@ function SchedulerTask({ taskId, task, onChange, baseDomain }) {
         )}
       </div>
 
-      {/* Cron preview */}
+      {/* Log path + recent output */}
       {task.enabled && (
-        <div style={{ marginTop: 12, background: "rgba(0,0,0,0.3)", borderRadius: 3, padding: "6px 10px", fontFamily: "monospace", fontSize: 10, color: "rgba(0,229,160,0.6)" }}>
-          {task.log && <>Log → <code style={{ color: "rgba(255,255,255,0.35)" }}>{task.log}</code></>}
+        <div style={{ marginTop: 12, background: "rgba(0,0,0,0.3)", borderRadius: 3, padding: "8px 10px", fontFamily: "monospace", fontSize: 10 }}>
+          {task.log && (
+            <div style={{ color: "rgba(0,229,160,0.6)", marginBottom: logLines && logLines.length > 0 ? 6 : 0 }}>
+              Log → <code style={{ color: "rgba(255,255,255,0.35)" }}>{task.log}</code>
+            </div>
+          )}
+          {logLines && logLines.length > 0 && (
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 6 }}>
+              {logLines.slice(-8).map((ln, i) => {
+                const isError = /error|not found|failed|exception/i.test(ln);
+                return (
+                  <div key={i} style={{ color: isError ? "#ff6b6b" : "rgba(255,255,255,0.45)", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                    {ln}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {logLines && logLines.length === 0 && (
+            <div style={{ color: "rgba(255,255,255,0.2)" }}>No output yet — job has not run since log was created.</div>
+          )}
+          {logError && (
+            <div style={{ color: "rgba(255,255,255,0.2)" }}>Log file not readable.</div>
+          )}
         </div>
       )}
     </div>

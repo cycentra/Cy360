@@ -2592,9 +2592,25 @@ def o365config_get():
     except PermissionError:
         return jsonify({"ok": False, "error": "Permission denied reading ossec.conf"}), 403
 
-    # Extract current values (redact secrets)
+    # Extract the office365 wodle block first — all field reads are scoped to it
+    # so we never accidentally match <disabled> or <interval> from other sections.
+    wodle_match = re.search(r'<wodle name="office365">(.*?)</wodle>', content, re.DOTALL)
+    if not wodle_match:
+        # Wodle not present — integration not configured
+        return add_cors_headers(jsonify({
+            "ok":            True,
+            "enabled":       False,
+            "interval":      "30m",
+            "tenant_id":     "",
+            "client_id":     "",
+            "client_secret": "",
+            "subscriptions": [],
+        }))
+
+    wodle_block = wodle_match.group(1)
+
     def _extract(tag):
-        m = re.search(rf"<{tag}>(.*?)</{tag}>", content)
+        m = re.search(rf"<{tag}>(.*?)</{tag}>", wodle_block)
         return m.group(1).strip() if m else ""
 
     disabled_val = _extract("disabled")
@@ -2602,7 +2618,7 @@ def o365config_get():
     tenant_id    = _extract("tenant_id")
     client_id    = _extract("client_id")
 
-    subs = re.findall(r"<subscription>(.*?)</subscription>", content)
+    subs = re.findall(r"<subscription>(.*?)</subscription>", wodle_block)
 
     # cycentra-setup.sh injects PLACEHOLDER_M365_* values during initial install.
     # Return empty string for those so the UI treats the field as unconfigured.
@@ -2716,6 +2732,23 @@ def o365config_post():
             f"\n  {new_wodle}\n</ossec_config>",
         )
 
+    # Persist credentials separately so the wodle can be re-applied after Wazuh resets
+    # (e.g. after cycentra-setup.sh re-runs and regenerates ossec.conf from scratch).
+    _O365_CACHE = Path("/opt/cycentra/o365_config.json")
+    try:
+        import stat as _stat
+        _O365_CACHE.write_text(json.dumps({
+            "tenant_id":     tenant_id,
+            "client_id":     client_id,
+            "client_secret": client_secret,
+            "interval":      interval,
+            "subscriptions": subscriptions,
+            "enabled":       enabled,
+        }, indent=2))
+        _O365_CACHE.chmod(0o600)
+    except OSError:
+        pass  # non-fatal — ossec.conf write below is the authoritative path
+
     # Write back with backup
     backup = Path(f"{_OSSEC_CONF}.o365bak")
     try:
@@ -2741,6 +2774,57 @@ def o365config_post():
         "enabled": enabled,
         "message": "Office 365 integration configured and wazuh-manager restarted successfully",
     }))
+
+
+def reapply_o365_if_missing():
+    """Called at Flask startup: if ossec.conf has no office365 wodle but we have a
+    cached config at /opt/cycentra/o365_config.json, inject the wodle and reload Wazuh.
+    This recovers from the setup script overwriting ossec.conf on server restart."""
+    _O365_CACHE = Path("/opt/cycentra/o365_config.json")
+    if not _OSSEC_CONF.exists() or not _O365_CACHE.exists():
+        return
+    try:
+        content = _OSSEC_CONF.read_text()
+        if re.search(r'<wodle name="office365">', content):
+            return  # already present — nothing to do
+        cfg = json.loads(_O365_CACHE.read_text())
+    except Exception:
+        return
+
+    tenant_id     = cfg.get("tenant_id", "")
+    client_id     = cfg.get("client_id", "")
+    client_secret = cfg.get("client_secret", "")
+    interval      = cfg.get("interval", "30m")
+    subscriptions = cfg.get("subscriptions", list(_O365_VALID_SUBSCRIPTIONS))
+    enabled       = cfg.get("enabled", True)
+
+    if not tenant_id or not client_id or not client_secret:
+        return
+
+    disabled_str = "no" if enabled else "yes"
+    subs_xml = "\n".join(f"      <subscription>{s}</subscription>" for s in subscriptions)
+    new_wodle = (
+        f'<wodle name="office365">\n'
+        f'    <disabled>{disabled_str}</disabled>\n'
+        f'    <interval>{interval}</interval>\n'
+        f'    <curl_max_size>1M</curl_max_size>\n'
+        f'    <run_on_start>yes</run_on_start>\n'
+        f'    <api_auth>\n'
+        f'      <tenant_id>{tenant_id}</tenant_id>\n'
+        f'      <client_id>{client_id}</client_id>\n'
+        f'      <client_secret>{client_secret}</client_secret>\n'
+        f'    </api_auth>\n'
+        f'    <subscriptions>\n'
+        f'{subs_xml}\n'
+        f'    </subscriptions>\n'
+        f'  </wodle>'
+    )
+    try:
+        updated = content.replace("</ossec_config>", f"\n  {new_wodle}\n</ossec_config>")
+        _OSSEC_CONF.write_text(updated)
+        _run_cmd("systemctl reload-or-restart wazuh-manager")
+    except Exception:
+        pass
 
 
 # ── Google Cloud (GCP Pub/Sub) Wazuh Integration ──────────────────────────────
@@ -3102,6 +3186,45 @@ def _build_asm_scan_cron_cmd(domain: str, scan_type: str, log: str) -> str:
     )
 
 
+def _write_docker_maintenance_script():
+    """Write /opt/cycentra/docker-maintenance.sh — mirrors how backup writes run_backup.sh.
+    Called each time the docker_maintenance schedule is applied so the script is always present."""
+    script = """\
+#!/bin/bash
+# CyCentra 360 — Docker Maintenance
+# Generated by the system scheduler — do not edit manually.
+# Removes stopped containers, unused networks, stale images (>14 days),
+# build cache, and orphaned volumes.
+
+RETENTION="336h"
+TS=$(date '+%Y-%m-%d %H:%M:%S')
+
+echo "[$TS] Docker maintenance starting"
+docker system df
+
+echo "[$TS] Step 1: Removing stopped containers and unused networks..."
+docker system prune -f
+
+echo "[$TS] Step 2: Removing images older than $RETENTION..."
+docker image prune -a -f --filter "until=$RETENTION"
+
+echo "[$TS] Step 3: Cleaning up build cache..."
+docker builder prune -f
+
+echo "[$TS] Step 4: Clearing orphaned volumes..."
+docker volume prune -f
+
+echo "[$TS] Docker maintenance complete. New usage:"
+docker system df
+"""
+    try:
+        script_path = Path("/opt/cycentra/docker-maintenance.sh")
+        script_path.write_text(script)
+        script_path.chmod(0o755)
+    except OSError:
+        pass
+
+
 def _load_schedules() -> dict:
     if _SCHEDULES_FILE.exists():
         try:
@@ -3142,6 +3265,10 @@ def _apply_schedules(schedules: dict) -> list[str]:
     # docker_maintenance
     dm = schedules.get("docker_maintenance", {})
     if dm.get("enabled"):
+        try:
+            _write_docker_maintenance_script()
+        except Exception:
+            pass
         expr = _build_cron_expr(dm.get("frequency", "monthly"), dm.get("hour", 2), dm.get("minute", 0))
         cmd  = dm.get("command") or "/opt/cycentra/docker-maintenance.sh"
         log  = dm.get("log") or "/var/log/cycentra/docker-maintenance.log"
@@ -3278,3 +3405,31 @@ def put_schedules():
 
     applied = _apply_schedules(current)
     return jsonify({"ok": True, "applied": len(applied), "entries": applied})
+
+
+@system_bp.route("/api/system/schedule-log/<task_id>", methods=["OPTIONS"])
+def schedule_log_options(task_id):
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/schedule-log/<task_id>", methods=["GET"])
+def schedule_log_get(task_id):
+    """Return the last N lines from a scheduled task's log file."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+
+    schedules = _load_schedules()
+    if task_id not in schedules:
+        return jsonify({"error": "Unknown task"}), 404
+
+    log_path = Path(schedules[task_id].get("log", ""))
+    if not log_path or not log_path.exists():
+        return add_cors_headers(jsonify({"ok": True, "lines": [], "path": str(log_path)}))
+
+    try:
+        lines = log_path.read_text(errors="replace").splitlines()
+        tail = lines[-30:] if len(lines) > 30 else lines
+    except OSError:
+        return add_cors_headers(jsonify({"ok": True, "lines": [], "path": str(log_path)}))
+
+    return add_cors_headers(jsonify({"ok": True, "lines": tail, "path": str(log_path)}))
