@@ -1,3 +1,25 @@
+## v1.0.302 -- 2026-04-28
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.302 -- 2026-04-29
+
+### Features
+
+- **Cloud Marketplace model** — no integrations or playbooks are bundled with the platform at ship time; all items originate from the cloud marketplace and are pulled on demand.
+- **My Integrations & Playbooks page** — `UseCasesPage` now fetches from `/api/marketplace/catalog` + `/api/marketplace/installed` and displays only items the user has pulled. Empty state guides users to the Integration Marketplace.
+- **Office 365 native module** — Wazuh integration upgraded from deprecated `<wodle name="office365">` to the native `<office365>` block format across all config surfaces (system routes, UseCasesPage modal, MarketplacePage modal).
+- **O365 `api_type` selector** — choose between `commercial`, `gcc`, and `gcc-high` subscription plans.
+- **O365 `only_future_events` toggle** — exposed in both the UseCasesPage and MarketplacePage config modals; defaults to enabled.
+- **DLP.All subscription** — `DLP (Data Loss Prevention)` subscription option added to O365 integration.
+- **Marketplace backend** — removed `_DEFAULT_CATALOG` hard-coded items; catalog is now cloud-only with on-server custom items. Removed `_DEFAULT_IDS` install whitelist; validation is now format-based only.
+
+---
+
 ## v1.0.301 -- 2026-04-28
 
 ### Improvements

@@ -676,6 +676,91 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
   );
 }
 
+// ── Asset Discovery Donut + Chart widget ──────────────────────────────────────
+
+function AssetDonut({ newCount, existingCount }) {
+  const total = (newCount + existingCount) || 1;
+  const r = 34, cx = 50, cy = 50;
+  const C = 2 * Math.PI * r;
+  const newFrac  = newCount  / total;
+  const existFrac = existingCount / total;
+
+  return (
+    <svg viewBox="0 0 100 100" width="88" height="88">
+      {/* Track */}
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="13"/>
+      {/* Existing arc (blue) — starts right after new segment */}
+      {existingCount > 0 && (
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(77,158,255,0.5)" strokeWidth="13"
+          strokeDasharray={`${(existFrac * C).toFixed(1)} ${(newFrac * C).toFixed(1)}`}
+          strokeDashoffset={(existFrac * C).toFixed(1)}
+          transform={`rotate(-90 ${cx} ${cy})`}/>
+      )}
+      {/* New arc (teal) — from 12 o'clock */}
+      {newCount > 0 && (
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="#00e5a0" strokeWidth="13"
+          strokeDasharray={`${(newFrac * C).toFixed(1)} ${(existFrac * C).toFixed(1)}`}
+          strokeDashoffset="0"
+          transform={`rotate(-90 ${cx} ${cy})`}/>
+      )}
+      <text x={cx} y={cy - 2} textAnchor="middle" fill="white" fontSize="14" fontWeight="bold" fontFamily="monospace">{newCount + existingCount}</text>
+      <text x={cx} y={cy + 10} textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize="6" fontFamily="monospace" letterSpacing="1">ASSETS</text>
+    </svg>
+  );
+}
+
+function AssetDiscoveryChart({ assets }) {
+  const newCount      = assets.filter(a => a.is_new === true || a.change === "new" || a.change === "appeared").length;
+  const existingCount = assets.filter(a => a.change === "persisted" || a.change === "disappeared").length;
+  const total         = assets.length || 1;
+
+  return (
+    <div style={{
+      width: 200, flexShrink: 0,
+      background: "rgba(255,255,255,0.012)", border: "1px solid rgba(255,255,255,0.06)",
+      borderRadius: 6, padding: "16px",
+      display: "flex", flexDirection: "column",
+    }}>
+      <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace",
+        letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 14 }}>Asset Discovery</div>
+
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
+        <AssetDonut newCount={newCount} existingCount={existingCount} />
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {/* New */}
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+            <span style={{ color: "#00e5a0", fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>● NEW</span>
+            <span style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>{newCount}</span>
+          </div>
+          <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2 }}>
+            <div style={{ height: "100%", width: `${(newCount / total) * 100}%`, background: "#00e5a0", borderRadius: 2, minWidth: newCount > 0 ? 4 : 0 }}/>
+          </div>
+        </div>
+        {/* Existing */}
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+            <span style={{ color: "rgba(77,158,255,0.8)", fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>● EXISTING</span>
+            <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>{existingCount}</span>
+          </div>
+          <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2 }}>
+            <div style={{ height: "100%", width: `${(existingCount / total) * 100}%`, background: "rgba(77,158,255,0.5)", borderRadius: 2, minWidth: existingCount > 0 ? 4 : 0 }}/>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: "auto", paddingTop: 14,
+        borderTop: "1px solid rgba(255,255,255,0.06)",
+        display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace" }}>TOTAL</span>
+        <span style={{ color: "white", fontSize: 15, fontFamily: "monospace", fontWeight: 700 }}>{assets.length}</span>
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
@@ -722,12 +807,18 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
         </button>
       </div>
 
-      <WorldMapWidget assets={assets} />
+      {/* Map + Discovery chart side by side */}
+      <div style={{ display: "flex", gap: 16, marginBottom: 24, alignItems: "stretch" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <WorldMapWidget assets={assets} />
+        </div>
+        <AssetDiscoveryChart assets={assets} />
+      </div>
 
       <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, overflow: "hidden" }}>
-        {/* Column header — mirrors DashboardPage Critical & High layout */}
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 120px 160px 140px 90px 130px 28px", padding: "10px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.3)", fontSize: 10, letterSpacing: "1.2px", textTransform: "uppercase", fontFamily: "monospace" }}>
-          <span>Risk</span><span>Host</span><span>IP</span><span>Type</span><span>Ports</span><span>Findings</span><span>Status</span><span></span>
+        {/* Column header */}
+        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 120px 160px 140px 90px 90px 130px 28px", padding: "10px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.3)", fontSize: 10, letterSpacing: "1.2px", textTransform: "uppercase", fontFamily: "monospace" }}>
+          <span>Risk</span><span>Host</span><span>IP</span><span>Type</span><span>Ports</span><span>Findings</span><span>Discovery</span><span>Status</span><span></span>
         </div>
 
         {assets.length === 0 && (
@@ -745,7 +836,7 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
               onClick={(e) => openDrawer(a, e)}
               style={{
                 display: "grid",
-                gridTemplateColumns: "110px 1fr 120px 160px 140px 90px 130px 28px",
+                gridTemplateColumns: "110px 1fr 120px 160px 140px 90px 90px 130px 28px",
                 padding: "13px 20px", gap: 8,
                 borderBottom: "1px solid rgba(255,255,255,0.04)",
                 background: isActive ? "rgba(255,255,255,0.04)" : i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
@@ -768,9 +859,19 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
               <span style={{ color: (a.vulnerabilities?.length || 0) > 0 ? "#ff3b3b" : "rgba(255,255,255,0.25)", fontFamily: "monospace", fontSize: 12, fontWeight: (a.vulnerabilities?.length || 0) > 0 ? 700 : 400 }}>
                 {(a.vulnerabilities?.length || 0) > 0 ? `▲ ${a.vulnerabilities.length}` : "—"}
               </span>
-              {/* Single active state indicator — no inline buttons */}
+              {/* Discovery badge */}
+              {(a.is_new === true || a.change === "new" || a.change === "appeared") ? (
+                <span style={{ background: "rgba(0,229,160,0.1)", color: "#00e5a0",
+                  border: "1px solid rgba(0,229,160,0.3)", fontSize: 9, fontWeight: 700,
+                  fontFamily: "monospace", letterSpacing: "1px",
+                  padding: "2px 7px", borderRadius: 2, whiteSpace: "nowrap" }}>● NEW</span>
+              ) : (a.change === "persisted" || a.change === "disappeared") ? (
+                <span style={{ color: "rgba(77,158,255,0.55)", fontSize: 9,
+                  fontFamily: "monospace", letterSpacing: "0.8px" }}>EXISTING</span>
+              ) : (
+                <span style={{ color: "rgba(255,255,255,0.15)", fontFamily: "monospace", fontSize: 11 }}>—</span>
+              )}
               <StatusBadge status={curStat} />
-              {/* Open-panel chevron */}
               <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, textAlign: "center" }}>↗</span>
             </div>
           );

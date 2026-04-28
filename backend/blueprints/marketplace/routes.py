@@ -4,10 +4,11 @@ blueprints/marketplace/routes.py
 Integration Marketplace — catalog, install-state, and submission workflow.
 
 Catalog hierarchy (merged in this order, later entries win on id collision):
-  1. _DEFAULT_CATALOG  — 8 built-in items shipped with the platform (always present)
-  2. Cloud items        — fetched from cycentra.com when MARKETPLACE_CATALOG_TOKEN is set
-  3. Custom items       — created by admins on this server (only "approved" ones shown
-                          in the public catalog; draft/submitted visible to admins only)
+  1. Cloud items   — fetched live from cycentra.com when MARKETPLACE_CATALOG_TOKEN is set
+  2. Custom items  — created by admins on this server (only "approved" ones shown
+                     in the public catalog; draft/submitted visible to admins only)
+
+No items are bundled or hardcoded. Everything comes from the cloud marketplace.
 
 Submission lifecycle (custom items only):
   draft      → created by admin, not visible in public catalog
@@ -51,89 +52,6 @@ _VALID_STATUSES     = {"draft", "submitted", "approved", "rejected"}
 _VALID_CONFIG_TYPES = {"o365", "gcloud", None}
 _ID_RE              = re.compile(r"^[a-z0-9][a-z0-9\-]{1,48}[a-z0-9]$")
 
-# ── Default catalog — always available, no cloud token required ───────────────
-# These are the 8 built-in items shipped with every CyCentra installation.
-# They appear in the marketplace even before the MARKETPLACE_CATALOG_TOKEN is set.
-_DEFAULT_CATALOG = [
-    {
-        "id": "office365", "name": "Office 365", "type": "integration",
-        "category": "Cloud", "vendor": "Microsoft", "icon": "☁️", "color": "#0078d4",
-        "description": "Configure the Wazuh Office 365 audit log integration. Ingest Exchange, SharePoint, Azure AD and General audit events directly into CySIEM for unified cloud visibility.",
-        "modules_required": ["CySIEM"], "estimated_time": "~5 min to configure",
-        "tags": ["microsoft", "azure", "cloud", "o365", "exchange", "sharepoint", "audit"],
-        "config_type": "o365", "source": "default",
-    },
-    {
-        "id": "google-cloud", "name": "Google Cloud", "type": "integration",
-        "category": "Cloud", "vendor": "Google", "icon": "🔵", "color": "#4285f4",
-        "description": "Configure the Wazuh GCP Pub/Sub integration. Upload your Service Account JSON key to ingest Google Cloud audit logs into CySIEM. Custom security rules are deployed automatically.",
-        "modules_required": ["CySIEM"], "estimated_time": "~5 min to configure",
-        "tags": ["google", "gcp", "cloud", "pubsub", "audit", "iam", "logging"],
-        "config_type": "gcloud", "source": "default",
-    },
-    {
-        "id": "phishing-response", "name": "Phishing Response", "type": "playbook",
-        "category": "Incident Response", "vendor": "CyCentra", "icon": "🎣", "color": "#ff3b3b",
-        "description": "Auto-triage phishing emails. Extract IOCs, create a CyIRIS case, block sender domain in CySIEM, and notify the SOC team — all in under 60 seconds.",
-        "modules_required": ["CySOAR", "CyIRIS", "CySIEM"], "estimated_time": "~45 min to deploy",
-        "tags": ["phishing", "email", "incident", "ioc", "soar", "response", "triage"],
-        "cysoar_flow": "phishing_response.py",
-        "steps": ["Email received → CySOAR webhook trigger", "Extract headers, links, attachments", "VirusTotal/URLScan enrichment", "Auto-create CyIRIS case", "Block domain in CySIEM active response", "Alert SOC via Slack/Teams"],
-        "source": "default",
-    },
-    {
-        "id": "block-ip", "name": "Block IP", "type": "playbook",
-        "category": "Active Response", "vendor": "CyCentra", "icon": "🚫", "color": "#ff8c00",
-        "description": "Instantly block a malicious IP across all agents via CySIEM active response. Triggered by alert level, CyIRIS case or manual override.",
-        "modules_required": ["CySOAR", "CySIEM"], "estimated_time": "~20 min to deploy",
-        "tags": ["block", "ip", "active-response", "firewall", "soar"],
-        "cysoar_flow": "block_ip.py",
-        "steps": ["Trigger: alert level ≥12 or manual", "Validate IP is not on allowlist", "Execute active-response on all agents", "Log block to CyIRIS case", "Schedule unblock review in 24h"],
-        "source": "default",
-    },
-    {
-        "id": "ioc-enrichment", "name": "IOC Enrichment", "type": "playbook",
-        "category": "Threat Intelligence", "vendor": "CyCentra", "icon": "🔍", "color": "#4d9eff",
-        "description": "Automatically enrich indicators of compromise from CySIEM alerts. Query VirusTotal, Shodan, and AbuseIPDB, then push enriched data to CyIRIS.",
-        "modules_required": ["CySOAR", "CySIEM", "CyIRIS"], "estimated_time": "~30 min to deploy",
-        "tags": ["ioc", "enrichment", "virustotal", "shodan", "threat-intel", "soar"],
-        "cysoar_flow": "ioc_enrichment.py",
-        "steps": ["Receive IOC from CySIEM alert", "Query VirusTotal, Shodan, AbuseIPDB", "Score severity based on response", "Update CyIRIS case with enrichment", "Set ticket priority based on score"],
-        "source": "default",
-    },
-    {
-        "id": "malware-isolation", "name": "Malware Isolation", "type": "playbook",
-        "category": "Active Response", "vendor": "CyCentra", "icon": "🦠", "color": "#b06eff",
-        "description": "Isolate a compromised endpoint on detection. Quarantine the agent, take a memory snapshot, create a CyIRIS IR case, and alert the on-call analyst.",
-        "modules_required": ["CySOAR", "CySIEM", "CyIRIS"], "estimated_time": "~60 min to deploy",
-        "tags": ["malware", "isolation", "quarantine", "endpoint", "forensics", "soar"],
-        "cysoar_flow": "malware_isolation.py",
-        "steps": ["CySIEM fires malware detection rule", "CySOAR validates confidence threshold", "Isolate agent via Wazuh active response", "Trigger memory acquisition script", "Create priority CyIRIS case with evidence", "Page on-call analyst"],
-        "source": "default",
-    },
-    {
-        "id": "vuln-ticket", "name": "Vulnerability Ticketing", "type": "playbook",
-        "category": "Vulnerability Management", "vendor": "CyCentra", "icon": "📋", "color": "#f5c518",
-        "description": "Automatically create and assign remediation tickets for Critical and High CVEs discovered by CySIEM. Includes SLA tracking and escalation.",
-        "modules_required": ["CySOAR", "CySIEM", "CyIRIS"], "estimated_time": "~45 min to deploy",
-        "tags": ["vulnerability", "cve", "ticketing", "sla", "remediation", "soar"],
-        "cysoar_flow": "vuln_ticketing.py",
-        "steps": ["CySIEM CVE detection alert", "Filter: severity Critical or High", "Deduplicate against open CyIRIS cases", "Create CyIRIS case with CVE details", "Assign to asset owner", "Set SLA timer: Critical=24h, High=7d"],
-        "source": "default",
-    },
-    {
-        "id": "brute-force-response", "name": "Brute Force Response", "type": "playbook",
-        "category": "Active Response", "vendor": "CyCentra", "icon": "🔐", "color": "#00e5a0",
-        "description": "Detect and respond to brute force login attempts. Temporarily block offending IPs, alert the user, and create an investigation case.",
-        "modules_required": ["CySOAR", "CySIEM", "CyIRIS"], "estimated_time": "~30 min to deploy",
-        "tags": ["brute-force", "login", "authentication", "block", "active-response", "soar"],
-        "cysoar_flow": "brute_force.py",
-        "steps": ["CySIEM: 10+ failed logins in 60s", "Extract source IP and target account", "Block IP for 1 hour via active response", "Notify target user via email", "Create CyIRIS case for investigation", "Auto-close if no further activity in 24h"],
-        "source": "default",
-    },
-]
-
-_DEFAULT_IDS = {item["id"] for item in _DEFAULT_CATALOG}
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -253,10 +171,8 @@ def marketplace_catalog():
     is_admin     = caller_role == "admin"
     is_cycentra  = _is_cycentra_admin()
 
-    # 1. Start with default built-ins
-    by_id = {item["id"]: dict(item) for item in _DEFAULT_CATALOG}
-
-    # 2. Merge cloud items (override defaults by id if present)
+    # Cloud items are the sole source of catalog content
+    by_id = {}
     for item in _fetch_cloud_catalog():
         by_id[item["id"]] = item
 
@@ -497,38 +413,34 @@ def catalog_custom_reject(item_id):
 # ── GET /api/marketplace/installed ───────────────────────────────────────────
 
 def _configured_items(installed: list) -> list:
-    """Return the subset of installed items whose backend integration is actually active.
+    """Return the subset of installed items whose backend integration is actively configured.
 
-    'Installed' only means the user clicked Install in the marketplace and the
-    state was recorded.  'Configured' means the underlying Wazuh wodle / config
-    is present and non-placeholder.  When these diverge (e.g. setup script wiped
-    ossec.conf after the user configured O365) the UI must warn the user.
+    For cloud integrations (office365, google-cloud) we check that the corresponding
+    Wazuh config block is present and non-placeholder in ossec.conf.
+    All other items (playbooks, integrations without active Wazuh config) are
+    considered configured once installed.
     """
     configured = []
-    if "office365" in installed:
-        try:
-            from pathlib import Path as _Path
-            content = _Path("/var/ossec/etc/ossec.conf").read_text()
-            if re.search(r'<wodle name="office365">', content):
-                # Also verify credentials aren't still placeholders
-                m = re.search(r'<wodle name="office365">(.*?)</wodle>', content, re.DOTALL)
+    for item_id in installed:
+        if item_id == "office365":
+            try:
+                from pathlib import Path as _Path
+                content = _Path("/var/ossec/etc/ossec.conf").read_text()
+                m = re.search(r'<office365>(.*?)</office365>', content, re.DOTALL)
                 if m and "PLACEHOLDER" not in m.group(1):
                     configured.append("office365")
-        except OSError:
-            pass
-    if "google-cloud" in installed:
-        try:
-            from pathlib import Path as _Path
-            content = _Path("/var/ossec/etc/ossec.conf").read_text()
-            if re.search(r'<wodle name="gcp-pubsub">', content):
-                configured.append("google-cloud")
-        except OSError:
-            pass
-    # Playbooks and module-based items are always considered configured once installed
-    always_configured = {"phishing-response", "block-ip", "ioc-enrichment", "malware-isolation",
-                         "threat-intel-feed", "vulnerability-report", "compliance-checker"}
-    for item_id in installed:
-        if item_id in always_configured:
+            except OSError:
+                pass
+        elif item_id == "google-cloud":
+            try:
+                from pathlib import Path as _Path
+                content = _Path("/var/ossec/etc/ossec.conf").read_text()
+                if re.search(r'<wodle name="gcp-pubsub">', content):
+                    configured.append("google-cloud")
+            except OSError:
+                pass
+        else:
+            # Playbooks and all other integrations are configured once installed
             configured.append(item_id)
     return configured
 
@@ -558,9 +470,8 @@ def marketplace_install():
     if not item_id:
         return add_cors_headers(jsonify({"error": "item id required"})), 400
 
-    custom_ids = {i["id"] for i in _read_custom_catalog() if i.get("status") == "approved"}
-    if item_id not in _DEFAULT_IDS and item_id not in custom_ids:
-        return add_cors_headers(jsonify({"error": f"Unknown or unapproved item '{item_id}'"})), 400
+    if not _ID_RE.match(item_id):
+        return add_cors_headers(jsonify({"error": "Invalid item id format"})), 400
 
     state     = _read_json(_INSTALL_STATE_FILE, {})
     installed = state.get("installed", [])

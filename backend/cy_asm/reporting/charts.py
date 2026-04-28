@@ -317,25 +317,30 @@ def ssl_donut(ssl_ok: bool, days_left: Optional[int],
 # ── 9. Email Security Score Bar ───────────────────────────────────────────────
 
 def email_score_bar(score_str: str, checks: Dict[str, bool]) -> io.BytesIO:
-    """Horizontal bar chart for email security checks."""
+    """Horizontal bar chart for email security checks with control name labels."""
     names  = list(checks.keys())
     values = [1 if v else 0 for v in checks.values()]
     colors = [GREEN if v else RED for v in values]
 
-    fig, ax = plt.subplots(figsize=(5, max(2.5, len(names) * 0.38 + 0.6)),
+    fig, ax = plt.subplots(figsize=(6, max(2.5, len(names) * 0.44 + 0.8)),
                            facecolor=LIGHT_BG)
     ax.set_facecolor(LIGHT_BG)
     bars = ax.barh(names, [1] * len(names), color=[GRID_COL] * len(names),
                    height=0.5, edgecolor="white")
-    for bar, col, val in zip(bars, colors, values):
+    for bar, col, val, name in zip(bars, colors, values, names):
         ax.barh(bar.get_y() + bar.get_height() / 4,
                 val, height=0.5, left=bar.get_x(),
                 color=col, alpha=0.85)
+        # PASS / FAIL label on the right
         ax.text(1.05, bar.get_y() + bar.get_height() / 2,
                 "PASS" if val else "FAIL",
                 va="center", fontsize=7.5,
                 color=GREEN if val else RED, fontweight="bold")
-    ax.set_xlim(0, 1.4)
+        # Control name label on the left
+        ax.text(-0.03, bar.get_y() + bar.get_height() / 2,
+                name, ha="right", va="center",
+                fontsize=7.5, color=NAVY, fontweight="bold")
+    ax.set_xlim(-0.55, 1.4)
     ax.set_title(f"Email Security Controls  [{score_str}]",
                  fontsize=9, fontweight="bold", color=NAVY)
     ax.axis("off")

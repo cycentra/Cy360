@@ -1,137 +1,92 @@
 /**
  * src/pages/usecases/UseCasesPage.jsx
  * ======================================
- * Use Case Marketplace — pre-built CySOAR automation playbook templates
- * and cloud integration configuration widgets.
+ * My Integrations & Playbooks — shows items the user has pulled from the
+ * Integration Marketplace. No items are hardcoded; everything originates
+ * from the cloud marketplace via GET /api/marketplace/catalog.
  */
 
 import { useState, useEffect } from "react";
 import { API_BASE } from "../../core/constants";
 
-const USE_CASES = [
-  {
-    id:"phishing-response", title:"Phishing Response", icon:"🎣", color:"#ff3b3b", category:"Incident Response",
-    description:"Auto-triage phishing emails. Extract IOCs, create a CyIRIS case, block sender domain in CySIEM, and notify the SOC team — all in under 60 seconds.",
-    steps:["Email received → CySOAR webhook trigger","Extract headers, links, attachments","VirusTotal/URLScan enrichment","Auto-create CyIRIS case","Block domain in CySIEM active response","Alert SOC via Slack/Teams"],
-    modules:["CySOAR","CyIRIS","CySIEM"], time:"~45 min to deploy", cysoarFlow:"phishing_response.py",
-  },
-  {
-    id:"block-ip", title:"Block IP", icon:"🚫", color:"#ff8c00", category:"Active Response",
-    description:"Instantly block a malicious IP across all agents via CySIEM active response. Triggered by alert level, CyIRIS case or manual override.",
-    steps:["Trigger: alert level ≥12 or manual","Validate IP is not on allowlist","Execute active-response on all agents","Log block to CyIRIS case","Schedule unblock review in 24h"],
-    modules:["CySOAR","CySIEM"], time:"~20 min to deploy", cysoarFlow:"block_ip.py",
-  },
-  {
-    id:"ioc-enrichment", title:"IOC Enrichment", icon:"🔍", color:"#4d9eff", category:"Threat Intelligence",
-    description:"Automatically enrich indicators of compromise from CySIEM alerts. Query VirusTotal, Shodan, and AbuseIPDB, then push enriched data to CyIRIS.",
-    steps:["Receive IOC from CySIEM alert","Query VirusTotal, Shodan, AbuseIPDB","Score severity based on response","Update CyIRIS case with enrichment","Set ticket priority based on score"],
-    modules:["CySOAR","CySIEM","CyIRIS"], time:"~30 min to deploy", cysoarFlow:"ioc_enrichment.py",
-  },
-  {
-    id:"malware-isolation", title:"Malware Isolation", icon:"🦠", color:"#b06eff", category:"Active Response",
-    description:"Isolate a compromised endpoint on detection. Quarantine the agent, take a memory snapshot, create a CyIRIS IR case, and alert the on-call analyst.",
-    steps:["CySIEM fires malware detection rule","CySOAR validates confidence threshold","Isolate agent via Wazuh active response","Trigger memory acquisition script","Create priority CyIRIS case with evidence","Page on-call analyst"],
-    modules:["CySOAR","CySIEM","CyIRIS"], time:"~60 min to deploy", cysoarFlow:"malware_isolation.py",
-  },
-  {
-    id:"vuln-ticket", title:"Vulnerability Ticketing", icon:"📋", color:"#f5c518", category:"Vulnerability Management",
-    description:"Automatically create and assign remediation tickets for Critical and High CVEs discovered by CySIEM. Includes SLA tracking and escalation.",
-    steps:["CySIEM CVE detection alert","Filter: severity Critical or High","Deduplicate against open CyIRIS cases","Create CyIRIS case with CVE details","Assign to asset owner","Set SLA timer: Critical=24h, High=7d"],
-    modules:["CySOAR","CySIEM","CyIRIS"], time:"~45 min to deploy", cysoarFlow:"vuln_ticketing.py",
-  },
-  {
-    id:"brute-force-response", title:"Brute Force Response", icon:"🔐", color:"#00e5a0", category:"Active Response",
-    description:"Detect and respond to brute force login attempts. Temporarily block offending IPs, alert the user, and create an investigation case.",
-    steps:["CySIEM: 10+ failed logins in 60s","Extract source IP and target account","Block IP for 1 hour via active response","Notify target user via email","Create CyIRIS case for investigation","Auto-close if no further activity in 24h"],
-    modules:["CySOAR","CySIEM","CyIRIS"], time:"~30 min to deploy", cysoarFlow:"brute_force.py",
-  },
-  {
-    id:"office365", title:"Office 365", icon:"☁️", color:"#0078d4", category:"Cloud Management",
-    description:"Configure the Wazuh Office 365 audit log integration. Ingest Exchange, SharePoint, Azure AD and General audit events directly into CySIEM for unified cloud visibility.",
-    modules:["CySIEM"], time:"~5 min to configure",
-    isConfigWidget: true,
-  },
-  {
-    id:"google-cloud", title:"Google Cloud", icon:"🔵", color:"#4285f4", category:"Cloud Management",
-    description:"Configure the Wazuh GCP Pub/Sub integration. Upload your Service Account JSON key to ingest Google Cloud audit logs — Admin Activity, Data Access, System Events — directly into CySIEM. Custom security rules are deployed automatically.",
-    modules:["CySIEM"], time:"~5 min to configure",
-    isConfigWidget: true,
-    isGCloudWidget: true,
-  },
-];
+// ── Installed item card ───────────────────────────────────────────────────────
 
-function UseCaseCard({ uc, onExpand }) {
+function InstalledCard({ item, isConfigured, onOpen }) {
+  const isIntegration = item.type === "integration";
+  const hasConfig     = !!item.config_type;
   return (
-    <div onClick={() => onExpand(uc)}
-      style={{ background:"rgba(255,255,255,0.025)", border:`1px solid ${uc.color}20`, borderTop:`2px solid ${uc.color}`, borderRadius:5, padding:"20px 22px", cursor:"pointer" }}>
+    <div style={{ background:"rgba(255,255,255,0.025)", border:`1px solid ${item.color}20`, borderTop:`2px solid ${item.color}`, borderRadius:5, padding:"20px 22px", display:"flex", flexDirection:"column" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+        <span style={{ background:isIntegration?"rgba(0,229,160,0.08)":"rgba(77,158,255,0.08)", color:isIntegration?"#00e5a0":"#4d9eff", border:`1px solid ${isIntegration?"rgba(0,229,160,0.2)":"rgba(77,158,255,0.2)"}`, fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2, letterSpacing:"1px", textTransform:"uppercase" }}>
+          {isIntegration ? "Integration" : "Playbook"}
+        </span>
+        {hasConfig ? (
+          isConfigured
+            ? <span style={{ background:"rgba(0,229,160,0.1)", color:"#00e5a0", border:"1px solid rgba(0,229,160,0.25)", fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2, letterSpacing:"1px" }}>✓ ACTIVE</span>
+            : <span style={{ background:"rgba(255,180,0,0.1)", color:"#ffb400", border:"1px solid rgba(255,180,0,0.3)", fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2, letterSpacing:"1px" }}>⚠ NEEDS SETUP</span>
+        ) : (
+          <span style={{ background:"rgba(0,229,160,0.1)", color:"#00e5a0", border:"1px solid rgba(0,229,160,0.25)", fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2, letterSpacing:"1px" }}>✓ INSTALLED</span>
+        )}
+      </div>
       <div style={{ display:"flex", gap:12, alignItems:"flex-start", marginBottom:10 }}>
-        <span style={{ fontSize:22 }}>{uc.icon}</span>
+        <span style={{ fontSize:22 }}>{item.icon}</span>
         <div style={{ flex:1 }}>
-          <div style={{ color:"white", fontSize:15, fontWeight:700 }}>{uc.title}</div>
-          <div style={{ color:uc.color, fontSize:9, fontFamily:"monospace", letterSpacing:"1px", textTransform:"uppercase", marginTop:3 }}>{uc.category}</div>
+          <div style={{ color:"white", fontSize:15, fontWeight:700 }}>{item.name}</div>
+          <div style={{ color:"rgba(255,255,255,0.3)", fontSize:10, fontFamily:"monospace", marginTop:2 }}>{item.vendor} · {item.category}</div>
         </div>
       </div>
-      <div style={{ color:"rgba(255,255,255,0.55)", fontSize:12, lineHeight:1.6, marginBottom:14 }}>{uc.description}</div>
+      <div style={{ color:"rgba(255,255,255,0.55)", fontSize:12, lineHeight:1.6, marginBottom:14, flex:1 }}>{item.description}</div>
       <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:14 }}>
-        {uc.modules.map(m => (
+        {item.modules_required?.map(m => (
           <span key={m} style={{ background:"rgba(255,255,255,0.06)", color:"rgba(255,255,255,0.5)", border:"1px solid rgba(255,255,255,0.1)", fontSize:9, fontFamily:"monospace", padding:"2px 8px", borderRadius:2 }}>{m}</span>
         ))}
       </div>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-        <span style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace" }}>{uc.time}</span>
-        <span style={{ color:uc.color, fontSize:11, fontFamily:"monospace" }}>View details →</span>
-      </div>
+      <button onClick={() => onOpen(item)}
+        style={{ width:"100%", background:hasConfig?item.color:"rgba(255,255,255,0.04)", color:hasConfig?"#0d0f14":"rgba(255,255,255,0.6)", border:hasConfig?"none":"1px solid rgba(255,255,255,0.1)", borderRadius:4, padding:"9px 12px", fontFamily:"monospace", fontSize:11, fontWeight:700, cursor:"pointer", letterSpacing:"1px", textTransform:"uppercase" }}>
+        {isIntegration && hasConfig ? "Configure" : isIntegration ? "View Details" : "View Steps"}
+      </button>
     </div>
   );
 }
 
-function UseCaseModal({ uc, onClose }) {
-  if (!uc) return null;
+// ── Steps / detail modal (playbooks + unconfigured integrations) ──────────────
+
+function StepsModal({ item, onClose }) {
+  if (!item) return null;
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.88)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:150, backdropFilter:"blur(6px)" }} onClick={onClose}>
-      <div style={{ background:"#0d0f14", border:`1px solid ${uc.color}40`, borderTop:`2px solid ${uc.color}`, borderRadius:8, padding:36, width:"min(640px,95vw)", maxHeight:"85vh", overflowY:"auto" }} onClick={e => e.stopPropagation()}>
+      <div style={{ background:"#0d0f14", border:`1px solid ${item.color}40`, borderTop:`2px solid ${item.color}`, borderRadius:8, padding:36, width:"min(640px,95vw)", maxHeight:"85vh", overflowY:"auto" }} onClick={e => e.stopPropagation()}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:24 }}>
           <div style={{ display:"flex", alignItems:"center", gap:14 }}>
-            <span style={{ fontSize:36 }}>{uc.icon}</span>
+            <span style={{ fontSize:36 }}>{item.icon}</span>
             <div>
-              <div style={{ color:"white", fontSize:20, fontWeight:700 }}>{uc.title}</div>
-              <div style={{ color:"rgba(255,255,255,0.35)", fontSize:11, fontFamily:"monospace", marginTop:3 }}>{uc.category} · {uc.time}</div>
+              <div style={{ color:"white", fontSize:20, fontWeight:700 }}>{item.name}</div>
+              <div style={{ color:"rgba(255,255,255,0.35)", fontSize:11, fontFamily:"monospace", marginTop:3 }}>{item.category} · {item.estimated_time}</div>
             </div>
           </div>
           <button onClick={onClose} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.4)", cursor:"pointer", fontSize:22 }}>×</button>
         </div>
-
-        <div style={{ color:"rgba(255,255,255,0.6)", fontSize:13, lineHeight:1.7, marginBottom:24 }}>{uc.description}</div>
-
-        <div style={{ marginBottom:24 }}>
-          <div style={{ color:"rgba(255,255,255,0.3)", fontSize:10, letterSpacing:"1.5px", textTransform:"uppercase", fontFamily:"monospace", marginBottom:12 }}>Automation Steps</div>
-          {uc.steps.map((step, i) => (
-            <div key={i} style={{ display:"flex", gap:12, alignItems:"flex-start", marginBottom:10 }}>
-              <div style={{ width:22, height:22, borderRadius:"50%", background:`${uc.color}20`, border:`1px solid ${uc.color}40`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1 }}>
-                <span style={{ color:uc.color, fontSize:10, fontWeight:700, fontFamily:"monospace" }}>{i + 1}</span>
+        <div style={{ color:"rgba(255,255,255,0.6)", fontSize:13, lineHeight:1.7, marginBottom:24 }}>{item.description}</div>
+        {item.steps?.length > 0 && (
+          <div style={{ marginBottom:24 }}>
+            <div style={{ color:"rgba(255,255,255,0.3)", fontSize:10, letterSpacing:"1.5px", textTransform:"uppercase", fontFamily:"monospace", marginBottom:12 }}>Automation Steps</div>
+            {item.steps.map((step, i) => (
+              <div key={i} style={{ display:"flex", gap:12, alignItems:"flex-start", marginBottom:10 }}>
+                <div style={{ width:22, height:22, borderRadius:"50%", background:`${item.color}20`, border:`1px solid ${item.color}40`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:1 }}>
+                  <span style={{ color:item.color, fontSize:10, fontWeight:700, fontFamily:"monospace" }}>{i + 1}</span>
+                </div>
+                <span style={{ color:"rgba(255,255,255,0.65)", fontSize:13, lineHeight:1.5, paddingTop:2 }}>{step}</span>
               </div>
-              <span style={{ color:"rgba(255,255,255,0.65)", fontSize:13, lineHeight:1.5, paddingTop:2 }}>{step}</span>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ background:"rgba(0,0,0,0.4)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:4, padding:"14px 18px", marginBottom:24 }}>
-          <div style={{ color:"rgba(255,255,255,0.3)", fontSize:10, fontFamily:"monospace", marginBottom:6 }}>CYSOAR FLOW</div>
-          <code style={{ color:"#00e5a0", fontSize:12, fontFamily:"monospace" }}>
-            cysoar import-flow {uc.cysoarFlow} --workspace cycentra
-          </code>
-        </div>
-
-        <div style={{ display:"flex", gap:10 }}>
-          <button onClick={onClose}
-            style={{ flex:1, background:uc.color, color:"#0d0f14", border:"none", borderRadius:4, padding:"12px", fontFamily:"monospace", fontSize:12, fontWeight:700, cursor:"pointer", letterSpacing:"1px", textTransform:"uppercase" }}>
-            Deploy Template
-          </button>
-          <button onClick={onClose}
-            style={{ padding:"12px 20px", background:"transparent", color:"rgba(255,255,255,0.4)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:4, fontFamily:"monospace", fontSize:12, cursor:"pointer" }}>
-            Close
-          </button>
-        </div>
+            ))}
+          </div>
+        )}
+        {item.cysoar_flow && (
+          <div style={{ background:"rgba(0,0,0,0.4)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:4, padding:"14px 18px", marginBottom:24 }}>
+            <div style={{ color:"rgba(255,255,255,0.3)", fontSize:10, fontFamily:"monospace", marginBottom:6 }}>CYSOAR FLOW</div>
+            <code style={{ color:"#00e5a0", fontSize:12, fontFamily:"monospace" }}>cysoar import-flow {item.cysoar_flow} --workspace cycentra</code>
+          </div>
+        )}
+        <button onClick={onClose} style={{ width:"100%", background:"transparent", color:"rgba(255,255,255,0.4)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:4, padding:"12px", fontFamily:"monospace", fontSize:12, cursor:"pointer" }}>Close</button>
       </div>
     </div>
   );
@@ -608,60 +563,83 @@ function GCloudConfigModal({ uc, onClose }) {
 
 
 export function UseCasesPage() {
-  const [expanded,  setExpanded]  = useState(null);
-  const [catFilter, setCatFilter] = useState("all");
+  const [items,      setItems]      = useState([]);
+  const [installed,  setInstalled]  = useState(new Set());
+  const [configured, setConfigured] = useState(new Set());
+  const [loading,    setLoading]    = useState(true);
+  const [error,      setError]      = useState(null);
+  const [modal,      setModal]      = useState(null); // { type: 'o365'|'gcloud'|'steps', item }
 
-  const categories = ["all", ...new Set(USE_CASES.map(u => u.category))];
-  const filtered   = catFilter === "all" ? USE_CASES : USE_CASES.filter(u => u.category === catFilter);
+  useEffect(() => {
+    Promise.all([
+      fetch(`${API_BASE}/api/marketplace/catalog`,   { credentials: "include" }).then(r => r.ok ? r.json() : Promise.reject("catalog")),
+      fetch(`${API_BASE}/api/marketplace/installed`, { credentials: "include" }).then(r => r.ok ? r.json() : Promise.reject("installed")),
+    ])
+      .then(([cat, inst]) => {
+        setItems(cat.items || []);
+        setInstalled(new Set(inst.installed || []));
+        setConfigured(new Set(inst.configured || []));
+        setLoading(false);
+      })
+      .catch(() => { setError("Could not load installed items."); setLoading(false); });
+  }, []);
+
+  function openModal(item) {
+    if (item.config_type === "o365")    setModal({ type: "o365",   item });
+    else if (item.config_type === "gcloud") setModal({ type: "gcloud", item });
+    else                                setModal({ type: "steps",  item });
+  }
+
+  const myItems = items.filter(i => installed.has(i.id));
+
+  if (loading) return (
+    <div style={{ padding:"40px 32px", color:"rgba(255,255,255,0.35)", fontFamily:"monospace", fontSize:13 }}>Loading…</div>
+  );
+  if (error) return (
+    <div style={{ padding:"40px 32px", color:"#ff8080", fontFamily:"monospace", fontSize:13 }}>{error}</div>
+  );
 
   return (
     <div>
       <div style={{ marginBottom:28 }}>
         <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:8 }}>
-          <h1 style={{ fontSize:22, fontWeight:700, color:"white" }}>Use Case Marketplace</h1>
-          <span style={{ background:"rgba(0,229,160,0.12)", color:"#00e5a0", border:"1px solid rgba(0,229,160,0.25)", fontSize:9, fontFamily:"monospace", padding:"3px 10px", borderRadius:2, fontWeight:700, letterSpacing:"1px" }}>
-            {USE_CASES.length} TEMPLATES
-          </span>
+          <h1 style={{ fontSize:22, fontWeight:700, color:"white", margin:0 }}>My Integrations &amp; Playbooks</h1>
+          {myItems.length > 0 && (
+            <span style={{ background:"rgba(0,229,160,0.12)", color:"#00e5a0", border:"1px solid rgba(0,229,160,0.25)", fontSize:9, fontFamily:"monospace", padding:"3px 10px", borderRadius:2, fontWeight:700, letterSpacing:"1px" }}>
+              {myItems.length} INSTALLED
+            </span>
+          )}
         </div>
-        <p style={{ color:"rgba(255,255,255,0.4)", fontSize:13 }}>
-          Pre-built CySOAR automation playbooks and cloud integration configurators.
+        <p style={{ color:"rgba(255,255,255,0.4)", fontSize:13, margin:0 }}>
+          Integrations and playbooks you have pulled from the marketplace.
         </p>
       </div>
 
-      {/* Category filter */}
-      <div style={{ display:"flex", gap:6, marginBottom:24, flexWrap:"wrap" }}>
-        {categories.map(cat => (
-          <button key={cat} onClick={() => setCatFilter(cat)}
-            style={{ background:catFilter===cat?"rgba(0,229,160,0.12)":"rgba(255,255,255,0.04)", color:catFilter===cat?"#00e5a0":"rgba(255,255,255,0.45)", border:`1px solid ${catFilter===cat?"rgba(0,229,160,0.3)":"rgba(255,255,255,0.08)"}`, borderRadius:20, padding:"6px 14px", fontSize:11, fontFamily:"monospace", cursor:"pointer", textTransform:"capitalize" }}>
-            {cat}
-          </button>
-        ))}
-      </div>
-
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(300px, 1fr))", gap:16 }}>
-        {filtered.map(uc => <UseCaseCard key={uc.id} uc={uc} onExpand={setExpanded}/>)}
-      </div>
-
-      {/* CySOAR note */}
-      <div style={{ marginTop:28, background:"rgba(77,158,255,0.04)", border:"1px solid rgba(77,158,255,0.15)", borderRadius:6, padding:"20px 24px" }}>
-        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
-          <span style={{ fontSize:20 }}>⚡</span>
-          <span style={{ color:"rgba(255,255,255,0.7)", fontSize:14, fontWeight:600 }}>CySOAR Integration</span>
+      {myItems.length === 0 ? (
+        <div style={{ background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:8, padding:"48px 32px", textAlign:"center" }}>
+          <div style={{ fontSize:40, marginBottom:16 }}>📦</div>
+          <div style={{ color:"rgba(255,255,255,0.6)", fontSize:15, fontWeight:600, marginBottom:8 }}>Nothing installed yet</div>
+          <div style={{ color:"rgba(255,255,255,0.3)", fontSize:12, lineHeight:1.7, maxWidth:420, margin:"0 auto" }}>
+            Browse the <strong style={{ color:"#00e5a0" }}>Integration Marketplace</strong> to discover
+            and pull security playbooks and cloud integrations into your portal.
+          </div>
         </div>
-        <div style={{ color:"rgba(255,255,255,0.4)", fontSize:12, lineHeight:1.8 }}>
-          All templates are CySOAR-native Python scripts with built-in secret management, retry logic and webhook endpoints.
-          Deploy via <code style={{ color:"#4d9eff" }}>cysoar CLI</code> or drag-and-drop into your CySOAR workspace.
-          OIDC SSO means no separate login — your CyCentra 360 session carries through automatically.
+      ) : (
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(300px, 1fr))", gap:16 }}>
+          {myItems.map(item => (
+            <InstalledCard
+              key={item.id}
+              item={item}
+              isConfigured={configured.has(item.id)}
+              onOpen={openModal}
+            />
+          ))}
         </div>
-      </div>
-
-      {expanded && (
-        expanded.isGCloudWidget
-          ? <GCloudConfigModal uc={expanded} onClose={() => setExpanded(null)}/>
-          : expanded.isConfigWidget
-            ? <O365ConfigModal uc={expanded} onClose={() => setExpanded(null)}/>
-            : <UseCaseModal    uc={expanded} onClose={() => setExpanded(null)}/>
       )}
+
+      {modal?.type === "o365"   && <O365ConfigModal   uc={modal.item} onClose={() => setModal(null)} />}
+      {modal?.type === "gcloud" && <GCloudConfigModal uc={modal.item} onClose={() => setModal(null)} />}
+      {modal?.type === "steps"  && <StepsModal        item={modal.item} onClose={() => setModal(null)} />}
     </div>
   );
 }
