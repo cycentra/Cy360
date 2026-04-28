@@ -3151,6 +3151,11 @@ _FREQ_CRON_MAP = {
 
 def _build_cron_expr(frequency: str, hour: int, minute: int) -> str:
     template = _FREQ_CRON_MAP.get(frequency, "{M} {H} * * *")
+    # */0 is invalid cron syntax — Ubuntu cron silently skips the entire job.
+    # When "every minute" is selected the minute field is hidden in the UI so
+    # it stays at its previous value; clamp 0 → 1 so we always emit */1 (every minute).
+    if frequency == "minute" and minute == 0:
+        minute = 1
     return template.replace("{H}", str(hour)).replace("{M}", str(minute))
 
 
@@ -3284,7 +3289,11 @@ def _apply_schedules(schedules: dict) -> list[str]:
             expr = _build_cron_expr(wl.get("frequency", "daily"), wl.get("hour", 0), wl.get("minute", 0))
             python_bin = os.environ.get("PYTHON_BIN", "python3")
             log  = wl.get("log") or "/var/log/cycentra/wordlist-update.log"
-            entry = f"{expr} {python_bin} {wl_path} >> {log} 2>&1  # cycentra update_wordlist"
+            # update_wordlist.py uses a relative SAVE_PATH ("wordlists/subdomains.txt").
+            # Cron's working dir is /root, so without cd the file lands in /root/wordlists/
+            # instead of the cy_asm package dir the scanner reads from.
+            modules_dir = str(Path(wl_path).parent.parent)
+            entry = f"{expr} cd {modules_dir} && {python_bin} {wl_path} >> {log} 2>&1  # cycentra update_wordlist"
             filtered.append(entry)
             applied.append(entry)
 
