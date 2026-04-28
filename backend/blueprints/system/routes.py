@@ -3198,7 +3198,7 @@ def _build_asm_scan_cron_cmd(domain: str, scan_type: str, log: str) -> str:
     base_url = os.environ.get("BASE_URL", "https://cyasm.cycentra.com")
     # Wrap in a subshell so we can emit a timestamped header before the curl JSON response.
     return (
-        f'{{ echo "[$(date \'+%Y-%m-%d %H:%M:%S UTC\')] Triggering {scan_type} scan → {domain}"; '
+        f'{{ echo "[$(date \'+\\%Y-\\%m-\\%d \\%H:\\%M:\\%S UTC\')] Triggering {scan_type} scan → {domain}"; '
         f'curl -s -X POST {base_url}/api/scan/trigger '
         f'-H "Content-Type: application/json" '
         f'-b /opt/cycentra/cron_session.cookie '
@@ -3324,9 +3324,9 @@ def _apply_schedules(schedules: dict) -> list[str]:
             # Subshell adds timestamps so the log clearly shows when each run started/ended.
             modules_dir = str(Path(wl_path).parent.parent)
             entry = (
-                f"{expr} {{ echo \"[$(date '+%Y-%m-%d %H:%M:%S UTC')] Wordlist update starting\"; "
+                f"{expr} {{ echo \"[$(date '+\\%Y-\\%m-\\%d \\%H:\\%M:\\%S UTC')] Wordlist update starting\"; "
                 f"cd {modules_dir} && {python_bin} {wl_path}; "
-                f"echo \"[$(date '+%Y-%m-%d %H:%M:%S UTC')] Wordlist update complete\"; "
+                f"echo \"[$(date '+\\%Y-\\%m-\\%d \\%H:\\%M:\\%S UTC')] Wordlist update complete\"; "
                 f"}} >> {log} 2>&1  # cycentra update_wordlist"
             )
             filtered.append(entry)
