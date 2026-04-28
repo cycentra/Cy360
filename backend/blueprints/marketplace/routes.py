@@ -97,17 +97,14 @@ def _write_json(path, data):
 def _fetch_cloud_catalog():
     """Fetch the catalog from cycentra.com.
 
+    catalog.json is public information — no token required.
     Returns a (items, status) tuple where status is one of:
-      'ok'            — successfully fetched
-      'token_missing' — MARKETPLACE_CATALOG_TOKEN not configured
-      'fetch_error'   — token set but network/parse error
+      'ok'          — successfully fetched
+      'fetch_error' — network/parse error
     """
-    if not MARKETPLACE_CATALOG_TOKEN:
-        return [], "token_missing"
     try:
         resp = http_requests.get(
             MARKETPLACE_CATALOG_URL,
-            headers={"X-CyCentra-Token": MARKETPLACE_CATALOG_TOKEN},
             timeout=6,
         )
         if resp.ok:
@@ -116,8 +113,7 @@ def _fetch_cloud_catalog():
                 item["source"] = "cloud"
             return items, "ok"
         log.warning(
-            "marketplace catalog fetch failed — HTTP %s from %s "
-            "(if 403: restart the cycentra.com container so nginx picks up the token)",
+            "marketplace catalog fetch failed — HTTP %s from %s",
             resp.status_code, MARKETPLACE_CATALOG_URL,
         )
     except Exception as exc:

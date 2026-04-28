@@ -944,7 +944,7 @@ export function MarketplacePage({ user }) {
   const [catalog,          setCatalog]          = useState([]);
   const [catalogLoading,   setCatalogLoading]   = useState(true);
   const [catalogError,     setCatalogError]     = useState(null);
-  const [cloudStatus,      setCloudStatus]      = useState(null);  // 'ok'|'token_missing'|'fetch_error'
+  const [cloudStatus,      setCloudStatus]      = useState(null);  // 'ok'|'fetch_error'
   const [isCycentraAdmin,  setIsCycentraAdmin]  = useState(false);
   const [pendingCount,     setPendingCount]     = useState(0);
   const [installed,        setInstalled]        = useState(new Set());
@@ -1141,34 +1141,6 @@ export function MarketplacePage({ user }) {
       </div>
 
       {/* ── Cloud status banners ── */}
-      {!catalogLoading && cloudStatus === "token_missing" && (
-        <div style={{ background:"rgba(255,140,0,0.06)", border:"1px solid rgba(255,140,0,0.25)", borderRadius:6, padding:"18px 22px", marginBottom:24 }}>
-          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
-            <span style={{ fontSize:18 }}>⚠</span>
-            <div style={{ color:"rgba(255,140,0,0.95)", fontSize:13, fontWeight:700 }}>Cloud Marketplace Not Connected</div>
-          </div>
-          <div style={{ color:"rgba(255,255,255,0.5)", fontSize:12, lineHeight:1.8, marginBottom:12 }}>
-            <code style={{ color:"#ffb400" }}>MARKETPLACE_CATALOG_TOKEN</code> is not set on this server.
-            The token is generated automatically when cycentra.com is installed — find it on the <strong style={{ color:"rgba(255,255,255,0.7)" }}>cycentra.com server</strong> at:
-          </div>
-          <div style={{ background:"rgba(0,0,0,0.3)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:4, padding:"12px 16px", fontFamily:"monospace", fontSize:11, color:"rgba(255,255,255,0.5)", lineHeight:2, marginBottom:12 }}>
-            <div style={{ color:"rgba(255,255,255,0.3)", marginBottom:4 }}># On the cycentra.com server — read the token:</div>
-            <div><span style={{ color:"#ffb400" }}>cat</span> <span style={{ color:"#00e5a0" }}>/opt/cycentra-web/.env</span></div>
-          </div>
-          <div style={{ color:"rgba(255,255,255,0.5)", fontSize:12, lineHeight:1.8, marginBottom:12 }}>
-            Then add it to <code style={{ color:"rgba(255,255,255,0.7)" }}>/opt/cycentra/.env</code> on <strong style={{ color:"rgba(255,255,255,0.7)" }}>this server</strong>:
-          </div>
-          <div style={{ background:"rgba(0,0,0,0.3)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:4, padding:"12px 16px", fontFamily:"monospace", fontSize:11, color:"rgba(255,255,255,0.5)", lineHeight:2 }}>
-            <div style={{ color:"rgba(255,255,255,0.3)", marginBottom:4 }}># Append to /opt/cycentra/.env on this cycentra360 server:</div>
-            <div><span style={{ color:"#ffb400" }}>MARKETPLACE_CATALOG_TOKEN</span>=<span style={{ color:"#00e5a0" }}>&lt;value from /opt/cycentra-web/.env&gt;</span></div>
-            <div style={{ color:"rgba(255,255,255,0.3)", marginTop:8, marginBottom:4 }}># Then restart:</div>
-            <div style={{ color:"rgba(255,255,255,0.6)" }}>sudo systemctl restart cycentra</div>
-          </div>
-          <div style={{ color:"rgba(255,255,255,0.3)", fontSize:11, fontFamily:"monospace", marginTop:10 }}>
-            If cycentra.com was installed before this feature, re-run <code style={{ color:"rgba(255,255,255,0.5)" }}>bash cycentra.com-setup.sh</code> on that server to generate and persist the token.
-          </div>
-        </div>
-      )}
       {!catalogLoading && cloudStatus === "fetch_error" && (
         <div style={{ background:"rgba(255,59,59,0.05)", border:"1px solid rgba(255,59,59,0.2)", borderRadius:6, padding:"14px 18px", marginBottom:24, display:"flex", alignItems:"center", gap:12 }}>
           <span style={{ fontSize:16 }}>⚠</span>
