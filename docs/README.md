@@ -63,3 +63,44 @@ Cycentra360 follows a modular, microservices-inspired architecture:
 ## Support & Resources
 - For detailed installation and configuration, refer to the full documentation in this folder
 - Contact support for enterprise assistance or advanced troubleshooting
+
+
+=============== Marketplace Implementation =================
+What was done
+Naming & taxonomy
+Before	After	Reason
+"Use Cases" (nav label)	"Marketplace"	Matches the cloud-pull concept; users pull things from a marketplace
+"Cloud Management" items	type: integration	Connectors to cloud services — different mental model from SOAR flows
+SOAR flow items	type: playbook	Automation scripts you deploy; a "use case" is what they solve
+No vendor attribution	vendor field	Helps users search/filter ("Microsoft", "Google", "CyCentra")
+Two-tier architecture
+
+cycentra.com/marketplace/catalog.json   ← static JSON, nginx-served
+        ↓ fetch on page load
+CyCentra 360 — Marketplace page
+  ├─ "Installed on this Server" section
+  └─ "Available from Cloud" section
+cycentra.com/public/marketplace/catalog.json — 8-item catalog with full metadata, tags, config types, and playbook steps. Add new items here and they appear instantly in all connected platforms.
+
+Platform changes
+portal/src/pages/marketplace/MarketplacePage.jsx — new page: fetches from cloud, search bar, type tabs (All / Integrations / Playbooks), split Available/Installed view, auto-opens Configure after Pull
+portal/src/sidebar/navConfig.jsx — "Use Cases" → "Marketplace" with store icon
+portal/src/App.jsx — routes marketplace tab to <MarketplacePage user={user}/>
+Backend
+backend/blueprints/marketplace/routes.py — 3 endpoints, install state persisted to /var/ossec/etc/cycentra_marketplace.json
+backend/app.py — marketplace_bp registered
+backend/blueprints/system/routes.py — both o365config and gcloudconfig POST routes tightened from admin OR analyst → admin only
+Admin RBAC enforcement — two layers
+Action	Frontend	Backend
+Browse catalog	Any role	Any authenticated user
+Pull / Install	Admin → enabled button; others see 🔒 Pull disabled	GET /api/marketplace/install → 403 for non-admin
+Configure credentials	Admin → enabled button; others see 🔒 Configure disabled	POST /api/system/o365config / gcloudconfig → 403 for non-admin
+Remove installed	Admin only (button hidden for others)	DELETE /api/marketplace/install/<id> → 403 for non-admin
+One thing to add on cycentra.com
+Add this to the nginx config for the /marketplace/ path so the platform can fetch across domains:
+
+
+location /marketplace/ {
+    add_header Access-Control-Allow-Origin "*";
+    add_header Cache-Control "public, max-age=3600";
+}

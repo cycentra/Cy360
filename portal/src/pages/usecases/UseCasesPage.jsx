@@ -142,16 +142,25 @@ const O365_SUBSCRIPTIONS = [
   { id: "Audit.Exchange",             label: "Exchange" },
   { id: "Audit.SharePoint",           label: "SharePoint" },
   { id: "Audit.General",              label: "General" },
+  { id: "DLP.All",                    label: "DLP (Data Loss Prevention)" },
 ];
 
 const O365_INTERVALS = ["1m","5m","10m","15m","30m","1h","2h","6h","12h","24h"];
+
+const O365_API_TYPES = [
+  { id: "commercial", label: "Commercial (Microsoft 365)" },
+  { id: "gcc",        label: "GCC (US Government)" },
+  { id: "gcc-high",   label: "GCC High (US DoD / High Security)" },
+];
 
 function O365ConfigModal({ uc, onClose }) {
   const [tenantId,          setTenantId]          = useState("");
   const [clientId,          setClientId]          = useState("");
   const [clientSecret,      setClientSecret]      = useState("");
-  const [interval,          setInterval]          = useState("30m");
-  const [subs,              setSubs]              = useState(O365_SUBSCRIPTIONS.map(s => s.id));
+  const [apiType,           setApiType]           = useState("commercial");
+  const [interval,          setInterval]          = useState("1m");
+  const [onlyFutureEvents,  setOnlyFutureEvents]  = useState(true);
+  const [subs,              setSubs]              = useState(O365_SUBSCRIPTIONS.filter(s => s.id !== "DLP.All").map(s => s.id));
   const [enabled,           setEnabled]           = useState(true);
   const [saving,            setSaving]            = useState(false);
   const [result,            setResult]            = useState(null);
@@ -167,8 +176,10 @@ function O365ConfigModal({ uc, onClose }) {
           if (d.tenant_id)  setTenantId(d.tenant_id);
           if (d.client_id)  setClientId(d.client_id);
           if (d.interval)   setInterval(d.interval);
+          if (d.api_type)   setApiType(d.api_type);
           if (d.subscriptions && d.subscriptions.length) setSubs(d.subscriptions);
           setEnabled(d.enabled !== false);
+          setOnlyFutureEvents(d.only_future_events !== false);
           // Secret is never returned — track whether one is already configured
           setHasExistingSecret(!!d.tenant_id && !d.tenant_id.startsWith("PLACEHOLDER"));
         }
@@ -191,7 +202,7 @@ function O365ConfigModal({ uc, onClose }) {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tenant_id: tenantId, client_id: clientId, client_secret: clientSecret, interval, subscriptions: subs, enabled }),
+      body: JSON.stringify({ tenant_id: tenantId, client_id: clientId, client_secret: clientSecret, api_type: apiType, interval, only_future_events: onlyFutureEvents, subscriptions: subs, enabled }),
     })
       .then(r => r.json().then(d => ({ ok: r.ok, data: d })))
       .then(({ ok, data }) => setResult({ ok: ok && data.ok, msg: data.message || data.error || (ok ? "Saved" : "Error") }))
@@ -218,14 +229,14 @@ function O365ConfigModal({ uc, onClose }) {
             <span style={{ fontSize:34 }}>☁️</span>
             <div>
               <div style={{ color:"white", fontSize:19, fontWeight:700 }}>Office 365 Integration</div>
-              <div style={{ color:"rgba(255,255,255,0.35)", fontSize:11, fontFamily:"monospace", marginTop:3 }}>Cloud Management · Wazuh wodle configuration</div>
+              <div style={{ color:"rgba(255,255,255,0.35)", fontSize:11, fontFamily:"monospace", marginTop:3 }}>Cloud Management · Wazuh native office365 module</div>
             </div>
           </div>
           <button onClick={onClose} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.4)", cursor:"pointer", fontSize:22 }}>×</button>
         </div>
 
         <div style={{ color:"rgba(255,255,255,0.5)", fontSize:12, lineHeight:1.7, marginBottom:24 }}>
-          Configure the Wazuh <code style={{ color:"#0078d4" }}>office365</code> wodle to ingest Microsoft 365 audit logs into CySIEM.
+          Configure the Wazuh native <code style={{ color:"#0078d4" }}>office365</code> module to ingest Microsoft 365 audit logs into CySIEM.
           Credentials are written directly into <code style={{ color:"rgba(255,255,255,0.6)" }}>/var/ossec/etc/ossec.conf</code> and
           <strong style={{ color:"rgba(255,255,255,0.75)" }}> wazuh-manager is restarted automatically</strong>.
         </div>
@@ -249,11 +260,20 @@ function O365ConfigModal({ uc, onClose }) {
               <label style={labelStyle}>Client ID (Application ID)</label>
               <input value={clientId} onChange={e => setClientId(e.target.value)} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required style={inputStyle} />
             </div>
-            <div>
+            <div style={{ marginBottom:14 }}>
               <label style={labelStyle}>Client Secret</label>
               <input type="password" value={clientSecret} onChange={e => setClientSecret(e.target.value)} placeholder={hasExistingSecret ? "Leave blank to keep existing secret" : "Enter client secret"} required={!hasExistingSecret} style={inputStyle} autoComplete="new-password" />
               <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
                 {hasExistingSecret ? "Secret already configured — leave blank to keep it unchanged" : "Secret is write-only — never returned by the API"}
+              </div>
+            </div>
+            <div>
+              <label style={labelStyle}>Subscription Plan (api_type)</label>
+              <select value={apiType} onChange={e => setApiType(e.target.value)} style={{ ...inputStyle, cursor:"pointer" }}>
+                {O365_API_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+              </select>
+              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
+                commercial — standard Microsoft 365 · gcc / gcc-high — US government plans
               </div>
             </div>
           </div>
@@ -281,12 +301,21 @@ function O365ConfigModal({ uc, onClose }) {
           </div>
 
           {/* Enable toggle */}
-          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:24 }}>
-            <input type="checkbox" id="o365enabled" checked={enabled} onChange={e => setEnabled(e.target.checked)}
-              style={{ accentColor:"#0078d4", width:15, height:15, cursor:"pointer" }} />
-            <label htmlFor="o365enabled" style={{ color:"rgba(255,255,255,0.6)", fontSize:13, cursor:"pointer" }}>
-              Enable integration (<code style={{ color:"#0078d4" }}>disabled=no</code> in ossec.conf)
-            </label>
+          <div style={{ display:"flex", flexDirection:"column", gap:10, marginBottom:24 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              <input type="checkbox" id="o365enabled" checked={enabled} onChange={e => setEnabled(e.target.checked)}
+                style={{ accentColor:"#0078d4", width:15, height:15, cursor:"pointer" }} />
+              <label htmlFor="o365enabled" style={{ color:"rgba(255,255,255,0.6)", fontSize:13, cursor:"pointer" }}>
+                Enable integration (<code style={{ color:"#0078d4" }}>enabled=yes</code> in ossec.conf)
+              </label>
+            </div>
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              <input type="checkbox" id="o365future" checked={onlyFutureEvents} onChange={e => setOnlyFutureEvents(e.target.checked)}
+                style={{ accentColor:"#0078d4", width:15, height:15, cursor:"pointer" }} />
+              <label htmlFor="o365future" style={{ color:"rgba(255,255,255,0.6)", fontSize:13, cursor:"pointer" }}>
+                Only future events (<code style={{ color:"#0078d4" }}>only_future_events=yes</code> — skip historical logs)
+              </label>
+            </div>
           </div>
 
           {/* Result banner */}

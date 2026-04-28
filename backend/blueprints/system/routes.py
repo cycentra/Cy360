@@ -2568,9 +2568,12 @@ _O365_VALID_SUBSCRIPTIONS = {
     "Audit.Exchange",
     "Audit.SharePoint",
     "Audit.General",
+    "DLP.All",
 }
 
 _O365_VALID_INTERVALS = {"1m", "5m", "10m", "15m", "30m", "1h", "2h", "6h", "12h", "24h"}
+
+_O365_VALID_API_TYPES = {"commercial", "gcc", "gcc-high"}
 
 
 @system_bp.route("/api/system/o365config", methods=["OPTIONS"])
@@ -2580,7 +2583,7 @@ def o365config_options():
 
 @system_bp.route("/api/system/o365config", methods=["GET"])
 def o365config_get():
-    """Return the current Office 365 wodle configuration (credentials redacted)."""
+    """Return the current Office 365 native module configuration (credentials redacted)."""
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
 
@@ -2592,60 +2595,67 @@ def o365config_get():
     except PermissionError:
         return jsonify({"ok": False, "error": "Permission denied reading ossec.conf"}), 403
 
-    # Extract the office365 wodle block first — all field reads are scoped to it
-    # so we never accidentally match <disabled> or <interval> from other sections.
-    wodle_match = re.search(r'<wodle name="office365">(.*?)</wodle>', content, re.DOTALL)
-    if not wodle_match:
-        # Wodle not present — integration not configured
+    # Extract the native <office365> block — scoped to avoid matching tags in other sections.
+    module_match = re.search(r'<office365>(.*?)</office365>', content, re.DOTALL)
+    if not module_match:
+        # Module not present — integration not configured
         return add_cors_headers(jsonify({
-            "ok":            True,
-            "enabled":       False,
-            "interval":      "30m",
-            "tenant_id":     "",
-            "client_id":     "",
-            "client_secret": "",
-            "subscriptions": [],
+            "ok":                 True,
+            "enabled":            False,
+            "interval":           "1m",
+            "only_future_events": True,
+            "api_type":           "commercial",
+            "tenant_id":          "",
+            "client_id":          "",
+            "client_secret":      "",
+            "subscriptions":      [],
         }))
 
-    wodle_block = wodle_match.group(1)
+    module_block = module_match.group(1)
 
     def _extract(tag):
-        m = re.search(rf"<{tag}>(.*?)</{tag}>", wodle_block)
+        m = re.search(rf"<{tag}>(.*?)</{tag}>", module_block)
         return m.group(1).strip() if m else ""
 
-    disabled_val = _extract("disabled")
-    interval_val = _extract("interval")
-    tenant_id    = _extract("tenant_id")
-    client_id    = _extract("client_id")
+    enabled_val          = _extract("enabled")
+    interval_val         = _extract("interval")
+    only_future_val      = _extract("only_future_events")
+    tenant_id            = _extract("tenant_id")
+    client_id            = _extract("client_id")
+    api_type             = _extract("api_type") or "commercial"
 
-    subs = re.findall(r"<subscription>(.*?)</subscription>", wodle_block)
+    subs = re.findall(r"<subscription>(.*?)</subscription>", module_block)
 
     # cycentra-setup.sh injects PLACEHOLDER_M365_* values during initial install.
     # Return empty string for those so the UI treats the field as unconfigured.
     return add_cors_headers(jsonify({
-        "ok":            True,
-        "enabled":       disabled_val == "no",
-        "interval":      interval_val or "30m",
-        "tenant_id":     tenant_id if not tenant_id.startswith("PLACEHOLDER") else "",
-        "client_id":     client_id  if not client_id.startswith("PLACEHOLDER")  else "",
-        "client_secret": "",   # never returned — write-only field
-        "subscriptions": subs,
+        "ok":                 True,
+        "enabled":            enabled_val != "no",
+        "interval":           interval_val or "1m",
+        "only_future_events": only_future_val != "no",
+        "api_type":           api_type if api_type in _O365_VALID_API_TYPES else "commercial",
+        "tenant_id":          tenant_id if not tenant_id.startswith("PLACEHOLDER") else "",
+        "client_id":          client_id  if not client_id.startswith("PLACEHOLDER")  else "",
+        "client_secret":      "",   # never returned — write-only field
+        "subscriptions":      subs,
     }))
 
 
 @system_bp.route("/api/system/o365config", methods=["POST"])
 def o365config_post():
-    """Inject O365 credentials into the Wazuh ossec.conf office365 wodle and restart
-    the wazuh-manager service.
+    """Write O365 credentials into the Wazuh ossec.conf native <office365> module block
+    and restart the wazuh-manager service.
 
     Body (JSON):
-      tenant_id    – Azure tenant UUID
-      client_id    – Azure app client ID
-      client_secret – Azure app client secret (omit or send empty string to keep the
-                      value already present in ossec.conf)
-      interval     – poll interval (default "30m")
-      subscriptions – list of audit log subscriptions (default: all four)
-      enabled      – bool, whether to set <disabled>no</disabled> (default true)
+      tenant_id           – Azure tenant UUID
+      client_id           – Azure app client ID
+      client_secret       – Azure app client secret (omit or send empty string to keep
+                            the value already present in ossec.conf)
+      api_type            – Office 365 subscription plan: commercial | gcc | gcc-high
+      interval            – poll interval (default "1m")
+      only_future_events  – bool, collect only events generated after start (default true)
+      subscriptions       – list of audit log subscriptions (default: all)
+      enabled             – bool, whether to enable the module (default true)
     """
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
@@ -2653,19 +2663,25 @@ def o365config_post():
     if get_user_role(session["user_email"]) != "admin":
         return jsonify({"error": "Admin role required to configure integrations"}), 403
 
-    data          = request.get_json() or {}
-    tenant_id     = (data.get("tenant_id")     or "").strip()
-    client_id     = (data.get("client_id")     or "").strip()
-    client_secret = (data.get("client_secret") or "").strip()
-    interval      = (data.get("interval")      or "30m").strip()
-    subscriptions = data.get("subscriptions") or list(_O365_VALID_SUBSCRIPTIONS)
-    enabled       = bool(data.get("enabled", True))
+    data                = request.get_json() or {}
+    tenant_id           = (data.get("tenant_id")     or "").strip()
+    client_id           = (data.get("client_id")     or "").strip()
+    client_secret       = (data.get("client_secret") or "").strip()
+    api_type            = (data.get("api_type")      or "commercial").strip()
+    interval            = (data.get("interval")      or "1m").strip()
+    only_future_events  = bool(data.get("only_future_events", True))
+    subscriptions       = data.get("subscriptions") or list(_O365_VALID_SUBSCRIPTIONS)
+    enabled             = bool(data.get("enabled", True))
 
     # Validate required fields
     if not tenant_id:
         return jsonify({"ok": False, "error": "tenant_id is required"}), 400
     if not client_id:
         return jsonify({"ok": False, "error": "client_id is required"}), 400
+
+    # Validate api_type
+    if api_type not in _O365_VALID_API_TYPES:
+        return jsonify({"ok": False, "error": f"api_type must be one of: {', '.join(sorted(_O365_VALID_API_TYPES))}"}), 400
 
     # Validate interval
     if interval not in _O365_VALID_INTERVALS:
@@ -2694,56 +2710,61 @@ def o365config_post():
             return jsonify({"ok": False, "error": "client_secret is required for the initial configuration"}), 400
         client_secret = existing_secret
 
-    disabled_str = "no" if enabled else "yes"
+    enabled_str         = "yes" if enabled else "no"
+    only_future_str     = "yes" if only_future_events else "no"
 
     # Build the subscription block
     subs_xml = "\n".join(
         f"      <subscription>{s}</subscription>" for s in subscriptions
     )
 
-    new_wodle = (
-        f'<wodle name="office365">\n'
-        f'    <disabled>{disabled_str}</disabled>\n'
+    new_block = (
+        f'<office365>\n'
+        f'    <enabled>{enabled_str}</enabled>\n'
         f'    <interval>{interval}</interval>\n'
         f'    <curl_max_size>1M</curl_max_size>\n'
-        f'    <run_on_start>yes</run_on_start>\n'
+        f'    <only_future_events>{only_future_str}</only_future_events>\n'
         f'    <api_auth>\n'
         f'      <tenant_id>{tenant_id}</tenant_id>\n'
         f'      <client_id>{client_id}</client_id>\n'
         f'      <client_secret>{client_secret}</client_secret>\n'
+        f'      <api_type>{api_type}</api_type>\n'
         f'    </api_auth>\n'
         f'    <subscriptions>\n'
         f'{subs_xml}\n'
         f'    </subscriptions>\n'
-        f'  </wodle>'
+        f'  </office365>'
     )
 
-    # Replace existing office365 wodle block or append before </ossec_config>
+    # Remove any legacy wodle-format block if present, then replace or inject native block
+    content = re.sub(r'<wodle name="office365">.*?</wodle>', '', content, flags=re.DOTALL)
+
     updated, n_subs = re.subn(
-        r'<wodle name="office365">.*?</wodle>',
-        new_wodle,
+        r'<office365>.*?</office365>',
+        new_block,
         content,
         flags=re.DOTALL,
     )
     if n_subs == 0:
-        # Wodle block not present — inject before closing tag
+        # Block not present — inject before closing tag
         updated = content.replace(
             "</ossec_config>",
-            f"\n  {new_wodle}\n</ossec_config>",
+            f"\n  {new_block}\n</ossec_config>",
         )
 
-    # Persist credentials separately so the wodle can be re-applied after Wazuh resets
-    # (e.g. after cycentra-setup.sh re-runs and regenerates ossec.conf from scratch).
+    # Persist credentials so the block can be re-applied if Wazuh resets ossec.conf
+    # (e.g. after cycentra-setup.sh re-runs on server update).
     _O365_CACHE = Path("/opt/cycentra/o365_config.json")
     try:
-        import stat as _stat
         _O365_CACHE.write_text(json.dumps({
-            "tenant_id":     tenant_id,
-            "client_id":     client_id,
-            "client_secret": client_secret,
-            "interval":      interval,
-            "subscriptions": subscriptions,
-            "enabled":       enabled,
+            "tenant_id":          tenant_id,
+            "client_id":          client_id,
+            "client_secret":      client_secret,
+            "api_type":           api_type,
+            "interval":           interval,
+            "only_future_events": only_future_events,
+            "subscriptions":      subscriptions,
+            "enabled":            enabled,
         }, indent=2))
         _O365_CACHE.chmod(0o600)
     except OSError:
@@ -2777,50 +2798,56 @@ def o365config_post():
 
 
 def reapply_o365_if_missing():
-    """Called at Flask startup: if ossec.conf has no office365 wodle but we have a
-    cached config at /opt/cycentra/o365_config.json, inject the wodle and reload Wazuh.
+    """Called at Flask startup: if ossec.conf has no <office365> block but we have a
+    cached config at /opt/cycentra/o365_config.json, inject the block and reload Wazuh.
     This recovers from the setup script overwriting ossec.conf on server restart."""
     _O365_CACHE = Path("/opt/cycentra/o365_config.json")
     if not _OSSEC_CONF.exists() or not _O365_CACHE.exists():
         return
     try:
         content = _OSSEC_CONF.read_text()
-        if re.search(r'<wodle name="office365">', content):
+        if re.search(r'<office365>', content):
             return  # already present — nothing to do
         cfg = json.loads(_O365_CACHE.read_text())
     except Exception:
         return
 
-    tenant_id     = cfg.get("tenant_id", "")
-    client_id     = cfg.get("client_id", "")
-    client_secret = cfg.get("client_secret", "")
-    interval      = cfg.get("interval", "30m")
-    subscriptions = cfg.get("subscriptions", list(_O365_VALID_SUBSCRIPTIONS))
-    enabled       = cfg.get("enabled", True)
+    tenant_id          = cfg.get("tenant_id", "")
+    client_id          = cfg.get("client_id", "")
+    client_secret      = cfg.get("client_secret", "")
+    api_type           = cfg.get("api_type", "commercial")
+    interval           = cfg.get("interval", "1m")
+    only_future_events = cfg.get("only_future_events", True)
+    subscriptions      = cfg.get("subscriptions", list(_O365_VALID_SUBSCRIPTIONS))
+    enabled            = cfg.get("enabled", True)
 
     if not tenant_id or not client_id or not client_secret:
         return
 
-    disabled_str = "no" if enabled else "yes"
+    enabled_str     = "yes" if enabled else "no"
+    only_future_str = "yes" if only_future_events else "no"
     subs_xml = "\n".join(f"      <subscription>{s}</subscription>" for s in subscriptions)
-    new_wodle = (
-        f'<wodle name="office365">\n'
-        f'    <disabled>{disabled_str}</disabled>\n'
+    new_block = (
+        f'<office365>\n'
+        f'    <enabled>{enabled_str}</enabled>\n'
         f'    <interval>{interval}</interval>\n'
         f'    <curl_max_size>1M</curl_max_size>\n'
-        f'    <run_on_start>yes</run_on_start>\n'
+        f'    <only_future_events>{only_future_str}</only_future_events>\n'
         f'    <api_auth>\n'
         f'      <tenant_id>{tenant_id}</tenant_id>\n'
         f'      <client_id>{client_id}</client_id>\n'
         f'      <client_secret>{client_secret}</client_secret>\n'
+        f'      <api_type>{api_type}</api_type>\n'
         f'    </api_auth>\n'
         f'    <subscriptions>\n'
         f'{subs_xml}\n'
         f'    </subscriptions>\n'
-        f'  </wodle>'
+        f'  </office365>'
     )
     try:
-        updated = content.replace("</ossec_config>", f"\n  {new_wodle}\n</ossec_config>")
+        # Remove any legacy wodle-format block before injecting native block
+        content = re.sub(r'<wodle name="office365">.*?</wodle>', '', content, flags=re.DOTALL)
+        updated = content.replace("</ossec_config>", f"\n  {new_block}\n</ossec_config>")
         _OSSEC_CONF.write_text(updated)
         _run_cmd("systemctl reload-or-restart wazuh-manager")
     except Exception:
