@@ -944,6 +944,7 @@ export function MarketplacePage({ user }) {
   const [catalog,          setCatalog]          = useState([]);
   const [catalogLoading,   setCatalogLoading]   = useState(true);
   const [catalogError,     setCatalogError]     = useState(null);
+  const [cloudStatus,      setCloudStatus]      = useState(null);  // 'ok'|'token_missing'|'fetch_error'
   const [isCycentraAdmin,  setIsCycentraAdmin]  = useState(false);
   const [pendingCount,     setPendingCount]     = useState(0);
   const [installed,        setInstalled]        = useState(new Set());
@@ -962,6 +963,7 @@ export function MarketplacePage({ user }) {
       .then(r => r.ok ? r.json() : Promise.reject("unavailable"))
       .then(d => {
         setCatalog(d.items || []);
+        setCloudStatus(d.cloud_status || null);
         setIsCycentraAdmin(!!d.is_cycentra_admin);
         setPendingCount(d.pending_count || 0);
         setCatalogLoading(false);
@@ -1137,6 +1139,38 @@ export function MarketplacePage({ user }) {
           ))}
         </div>
       </div>
+
+      {/* ── Cloud status banners ── */}
+      {!catalogLoading && cloudStatus === "token_missing" && (
+        <div style={{ background:"rgba(255,140,0,0.06)", border:"1px solid rgba(255,140,0,0.25)", borderRadius:6, padding:"18px 22px", marginBottom:24 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
+            <span style={{ fontSize:18 }}>⚠</span>
+            <div style={{ color:"rgba(255,140,0,0.95)", fontSize:13, fontWeight:700 }}>Cloud Marketplace Not Connected</div>
+          </div>
+          <div style={{ color:"rgba(255,255,255,0.5)", fontSize:12, lineHeight:1.8, marginBottom:12 }}>
+            <code style={{ color:"#ffb400" }}>MARKETPLACE_CATALOG_TOKEN</code> is not set — the platform cannot fetch
+            integrations or playbooks from <code style={{ color:"rgba(255,255,255,0.6)" }}>cycentra.com</code>.
+          </div>
+          <div style={{ background:"rgba(0,0,0,0.3)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:4, padding:"12px 16px", fontFamily:"monospace", fontSize:11, color:"rgba(255,255,255,0.5)", lineHeight:2 }}>
+            <div style={{ color:"rgba(255,255,255,0.3)", marginBottom:4 }}># Add to <strong style={{ color:"rgba(255,255,255,0.55)" }}>/opt/cycentra/.env</strong> — use the same value configured on cycentra.com</div>
+            <div><span style={{ color:"#ffb400" }}>MARKETPLACE_CATALOG_TOKEN</span>=<span style={{ color:"#00e5a0" }}>your-64-char-hex-token</span></div>
+            <div style={{ color:"rgba(255,255,255,0.3)", marginTop:8, marginBottom:4 }}># Generate a new token (run once, set on both servers):</div>
+            <div style={{ color:"rgba(255,255,255,0.6)" }}>python3 -c <span style={{ color:"#4d9eff" }}>"import secrets; print(secrets.token_hex(32))"</span></div>
+          </div>
+          <div style={{ color:"rgba(255,255,255,0.3)", fontSize:11, fontFamily:"monospace", marginTop:10 }}>
+            After adding the token, restart the backend: <code style={{ color:"rgba(255,255,255,0.5)" }}>sudo systemctl restart cycentra</code>
+          </div>
+        </div>
+      )}
+      {!catalogLoading && cloudStatus === "fetch_error" && (
+        <div style={{ background:"rgba(255,59,59,0.05)", border:"1px solid rgba(255,59,59,0.2)", borderRadius:6, padding:"14px 18px", marginBottom:24, display:"flex", alignItems:"center", gap:12 }}>
+          <span style={{ fontSize:16 }}>⚠</span>
+          <div>
+            <div style={{ color:"rgba(255,80,80,0.9)", fontSize:12, fontWeight:600, marginBottom:3 }}>Cloud catalog temporarily unavailable</div>
+            <div style={{ color:"rgba(255,255,255,0.35)", fontSize:11 }}>Could not reach cycentra.com. Your installed items remain active. Retry by refreshing the page.</div>
+          </div>
+        </div>
+      )}
 
       {/* ── Pull error banner ── */}
       {pullError && (

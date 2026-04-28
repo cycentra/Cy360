@@ -93,8 +93,15 @@ def _write_json(path, data):
 
 
 def _fetch_cloud_catalog():
+    """Fetch the catalog from cycentra.com.
+
+    Returns a (items, status) tuple where status is one of:
+      'ok'            — successfully fetched
+      'token_missing' — MARKETPLACE_CATALOG_TOKEN not configured
+      'fetch_error'   — token set but network/parse error
+    """
     if not MARKETPLACE_CATALOG_TOKEN:
-        return []
+        return [], "token_missing"
     try:
         resp = http_requests.get(
             MARKETPLACE_CATALOG_URL,
@@ -105,10 +112,10 @@ def _fetch_cloud_catalog():
             items = resp.json().get("items", [])
             for item in items:
                 item["source"] = "cloud"
-            return items
+            return items, "ok"
     except Exception:
         pass
-    return []
+    return [], "fetch_error"
 
 
 def _read_custom_catalog():
@@ -152,14 +159,16 @@ for _r in _PREFLIGHT_ROUTES:
 def marketplace_catalog():
     """Return the merged catalog visible to the calling user.
 
-    Public catalog (any authenticated user):
-      - All _DEFAULT_CATALOG items (always present)
-      - Cloud items (if token configured)
-      - Custom items with status == "approved"
+    Catalog sources:
+      - Cloud items   — fetched from cycentra.com (requires MARKETPLACE_CATALOG_TOKEN)
+      - Custom items  — admin-created on this server; only 'approved' ones public
 
     Admin view extras:
-      - Custom items with status == "draft" or "submitted" (scoped to creator,
+      - Custom items with status == 'draft' or 'submitted' (scoped to creator,
         or all if cycentra_admin)
+
+    Response includes cloud_status so the frontend can show a setup prompt when
+    the token is not yet configured.
     """
     err = _require_auth()
     if err:
@@ -171,14 +180,12 @@ def marketplace_catalog():
     is_admin     = caller_role == "admin"
     is_cycentra  = _is_cycentra_admin()
 
-    # Cloud items are the sole source of catalog content
-    by_id = {}
-    for item in _fetch_cloud_catalog():
-        by_id[item["id"]] = item
-
+    # Cloud items are the primary source of catalog content
+    cloud_items, cloud_status = _fetch_cloud_catalog()
+    by_id = {item["id"]: item for item in cloud_items}
     public_items = list(by_id.values())
 
-    # 3. Append custom items based on status + role
+    # Append custom items based on status + role
     custom_items = _read_custom_catalog()
     for item in custom_items:
         status = item.get("status", "draft")
@@ -197,6 +204,7 @@ def marketplace_catalog():
     resp = jsonify({
         "ok":                True,
         "items":             public_items,
+        "cloud_status":      cloud_status,
         "is_cycentra_admin": is_cycentra,
         "pending_count":     pending_count if is_cycentra else 0,
     })
@@ -236,7 +244,9 @@ def catalog_custom_create():
         return add_cors_headers(err_resp[0]), err_resp[1]
 
     items  = _read_custom_catalog()
-    all_ids = _DEFAULT_IDS | {i["id"] for i in items}
+    # Prevent duplicate IDs against both cloud catalog and existing custom items
+    cloud_ids = {i["id"] for i in _fetch_cloud_catalog()[0]}
+    all_ids   = cloud_ids | {i["id"] for i in items}
     if data["id"] in all_ids:
         resp = jsonify({"error": f"ID '{data['id']}' is already in use"})
         return add_cors_headers(resp), 409
@@ -261,9 +271,8 @@ def catalog_custom_update(item_id):
     if err:
         return add_cors_headers(err[0]), err[1]
 
-    if item_id in _DEFAULT_IDS:
-        return add_cors_headers(jsonify({"error": "Built-in items cannot be edited"})), 403
-
+    # Cloud-sourced items live in the cloud catalog, not the custom file;
+    # if someone tries an ID that matches a cloud item it simply won't be found below.
     items = _read_custom_catalog()
     idx   = next((i for i, x in enumerate(items) if x["id"] == item_id), None)
     if idx is None:
@@ -301,9 +310,8 @@ def catalog_custom_delete(item_id):
     if err:
         return add_cors_headers(err[0]), err[1]
 
-    if item_id in _DEFAULT_IDS:
-        return add_cors_headers(jsonify({"error": "Built-in items cannot be deleted"})), 403
-
+    # Cloud items live only in the cloud catalog; they are not in the custom file
+    # and will simply return 404 below if someone passes a cloud item ID.
     items     = _read_custom_catalog()
     new_items = [i for i in items if i["id"] != item_id]
     if len(new_items) == len(items):

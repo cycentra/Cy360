@@ -676,97 +676,14 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
   );
 }
 
-// ── Asset Discovery Donut + Chart widget ──────────────────────────────────────
-
-function AssetDonut({ newCount, existingCount }) {
-  const total = (newCount + existingCount) || 1;
-  const r = 34, cx = 50, cy = 50;
-  const C = 2 * Math.PI * r;
-  const newFrac  = newCount  / total;
-  const existFrac = existingCount / total;
-
-  return (
-    <svg viewBox="0 0 100 100" width="88" height="88">
-      {/* Track */}
-      <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="13"/>
-      {/* Existing arc (blue) — starts right after new segment */}
-      {existingCount > 0 && (
-        <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(77,158,255,0.5)" strokeWidth="13"
-          strokeDasharray={`${(existFrac * C).toFixed(1)} ${(newFrac * C).toFixed(1)}`}
-          strokeDashoffset={(existFrac * C).toFixed(1)}
-          transform={`rotate(-90 ${cx} ${cy})`}/>
-      )}
-      {/* New arc (teal) — from 12 o'clock */}
-      {newCount > 0 && (
-        <circle cx={cx} cy={cy} r={r} fill="none" stroke="#00e5a0" strokeWidth="13"
-          strokeDasharray={`${(newFrac * C).toFixed(1)} ${(existFrac * C).toFixed(1)}`}
-          strokeDashoffset="0"
-          transform={`rotate(-90 ${cx} ${cy})`}/>
-      )}
-      <text x={cx} y={cy - 2} textAnchor="middle" fill="white" fontSize="14" fontWeight="bold" fontFamily="monospace">{newCount + existingCount}</text>
-      <text x={cx} y={cy + 10} textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize="6" fontFamily="monospace" letterSpacing="1">ASSETS</text>
-    </svg>
-  );
-}
-
-function AssetDiscoveryChart({ assets }) {
-  const newCount      = assets.filter(a => a.is_new === true || a.change === "new" || a.change === "appeared").length;
-  const existingCount = assets.filter(a => a.change === "persisted" || a.change === "disappeared").length;
-  const total         = assets.length || 1;
-
-  return (
-    <div style={{
-      width: 200, flexShrink: 0,
-      background: "rgba(255,255,255,0.012)", border: "1px solid rgba(255,255,255,0.06)",
-      borderRadius: 6, padding: "16px",
-      display: "flex", flexDirection: "column",
-    }}>
-      <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace",
-        letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 14 }}>Asset Discovery</div>
-
-      <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
-        <AssetDonut newCount={newCount} existingCount={existingCount} />
-      </div>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {/* New */}
-        <div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-            <span style={{ color: "#00e5a0", fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>● NEW</span>
-            <span style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>{newCount}</span>
-          </div>
-          <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2 }}>
-            <div style={{ height: "100%", width: `${(newCount / total) * 100}%`, background: "#00e5a0", borderRadius: 2, minWidth: newCount > 0 ? 4 : 0 }}/>
-          </div>
-        </div>
-        {/* Existing */}
-        <div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-            <span style={{ color: "rgba(77,158,255,0.8)", fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>● EXISTING</span>
-            <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>{existingCount}</span>
-          </div>
-          <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2 }}>
-            <div style={{ height: "100%", width: `${(existingCount / total) * 100}%`, background: "rgba(77,158,255,0.5)", borderRadius: 2, minWidth: existingCount > 0 ? 4 : 0 }}/>
-          </div>
-        </div>
-      </div>
-
-      <div style={{ marginTop: "auto", paddingTop: 14,
-        borderTop: "1px solid rgba(255,255,255,0.06)",
-        display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace" }}>TOTAL</span>
-        <span style={{ color: "white", fontSize: 15, fontFamily: "monospace", fontWeight: 700 }}>{assets.length}</span>
-      </div>
-    </div>
-  );
-}
-
 // ── Main page ─────────────────────────────────────────────────────────────────
 
+const GRID_COLS = "90px 1fr 105px 130px 110px 72px 84px 110px 24px";
+
 export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
-  // Status overrides from /api/asm/statuses
-  const [assetStatuses, setAssetStatuses] = useState({});
-  const [activeAsset,   setActiveAsset]   = useState(null);
+  const [assetStatuses,   setAssetStatuses]   = useState({});
+  const [activeAsset,     setActiveAsset]     = useState(null);
+  const [discoveryFilter, setDiscoveryFilter] = useState(null); // null | "new" | "dropped" | "existing"
 
   useEffect(() => {
     fetch("/api/asm/statuses", { credentials: "include" })
@@ -778,14 +695,28 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
   const handleStatusChange = (assetId, newStatus) =>
     setAssetStatuses(prev => ({ ...prev, [assetId]: newStatus }));
 
-  // Do NOT call setSelectedAsset here — that would open the redundant AssetModal
-  // from App.jsx level. The AssetDrawer is the single detailed view.
   const openDrawer  = (a, e) => { e.stopPropagation(); setActiveAsset(a); };
   const closeDrawer = () => setActiveAsset(null);
 
+  // Discovery predicates — driven by the `change` field written by the scan engine
+  const isNew      = a => a.is_new === true || a.change === "new" || a.change === "appeared";
+  const isDropped  = a => a.change === "disappeared";
+  const isExisting = a => a.change === "persisted";
+  // "baseline" = first ever scan, no prior state to diff against
+
+  const newCount      = assets.filter(isNew).length;
+  const droppedCount  = assets.filter(isDropped).length;
+  const existingCount = assets.filter(isExisting).length;
+
+  const filteredAssets = discoveryFilter === "new"      ? assets.filter(isNew)
+                       : discoveryFilter === "dropped"  ? assets.filter(isDropped)
+                       : discoveryFilter === "existing" ? assets.filter(isExisting)
+                       : assets;
+
+  const toggleFilter = key => setDiscoveryFilter(f => f === key ? null : key);
+
   return (
     <div>
-      {/* Slide-out drawer */}
       {activeAsset && (
         <AssetDrawer
           asset={activeAsset}
@@ -795,7 +726,8 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
         />
       )}
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+      {/* Page header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700 }}>Asset Inventory</h1>
           <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 13, marginTop: 4 }}>
@@ -807,41 +739,118 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
         </button>
       </div>
 
-      {/* Map + Discovery chart side by side */}
-      <div style={{ display: "flex", gap: 16, marginBottom: 24, alignItems: "stretch" }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <WorldMapWidget assets={assets} />
+      {/* ── Discovery Alert Banner ─────────────────────────────────────────── */}
+      {(newCount > 0 || droppedCount > 0) && (
+        <div style={{ display: "flex", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+          {newCount > 0 && (
+            <div style={{
+              flex: 1, minWidth: 240,
+              background: "rgba(0,229,160,0.04)", border: "1px solid rgba(0,229,160,0.22)",
+              borderLeft: "3px solid #00e5a0", borderRadius: 5, padding: "11px 16px",
+              display: "flex", alignItems: "center", gap: 14,
+            }}>
+              <div style={{ color: "#00e5a0", fontSize: 24, fontWeight: 700, fontFamily: "monospace", flexShrink: 0, lineHeight: 1 }}>{newCount}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: "#00e5a0", fontSize: 11, fontWeight: 700, fontFamily: "monospace", letterSpacing: "0.8px" }}>
+                  NEW ASSET{newCount !== 1 ? "S" : ""} DETECTED
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.38)", fontSize: 10, marginTop: 2 }}>
+                  Not present in previous scan — verify ownership and exposure
+                </div>
+              </div>
+              <button onClick={() => toggleFilter("new")} style={{
+                background: discoveryFilter === "new" ? "rgba(0,229,160,0.18)" : "rgba(0,229,160,0.06)",
+                border: "1px solid rgba(0,229,160,0.3)", color: "#00e5a0",
+                fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "0.8px",
+                padding: "4px 10px", borderRadius: 3, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+              }}>{discoveryFilter === "new" ? "CLEAR" : "SHOW ONLY"}</button>
+            </div>
+          )}
+          {droppedCount > 0 && (
+            <div style={{
+              flex: 1, minWidth: 240,
+              background: "rgba(255,140,0,0.04)", border: "1px solid rgba(255,140,0,0.28)",
+              borderLeft: "3px solid #ff8c00", borderRadius: 5, padding: "11px 16px",
+              display: "flex", alignItems: "center", gap: 14,
+            }}>
+              <div style={{ color: "#ff8c00", fontSize: 24, fontWeight: 700, fontFamily: "monospace", flexShrink: 0, lineHeight: 1 }}>{droppedCount}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: "#ff8c00", fontSize: 11, fontWeight: 700, fontFamily: "monospace", letterSpacing: "0.8px" }}>
+                  ASSET{droppedCount !== 1 ? "S" : ""} DROPPED FROM SCAN
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.38)", fontSize: 10, marginTop: 2 }}>
+                  Was reachable last scan — now missing. Investigate immediately.
+                </div>
+              </div>
+              <button onClick={() => toggleFilter("dropped")} style={{
+                background: discoveryFilter === "dropped" ? "rgba(255,140,0,0.18)" : "rgba(255,140,0,0.06)",
+                border: "1px solid rgba(255,140,0,0.32)", color: "#ff8c00",
+                fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "0.8px",
+                padding: "4px 10px", borderRadius: 3, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+              }}>{discoveryFilter === "dropped" ? "CLEAR" : "SHOW ONLY"}</button>
+            </div>
+          )}
         </div>
-        <AssetDiscoveryChart assets={assets} />
-      </div>
+      )}
+
+      {/* ── Filter pills ───────────────────────────────────────────────────── */}
+      {assets.length > 0 && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center" }}>
+          <span style={{ color: "rgba(255,255,255,0.22)", fontSize: 9, fontFamily: "monospace", marginRight: 2 }}>FILTER:</span>
+          {[
+            { key: null,       label: `ALL  ${assets.length}`,      color: "rgba(255,255,255,0.45)" },
+            { key: "new",      label: `NEW  ${newCount}`,           color: "#00e5a0" },
+            { key: "dropped",  label: `DROPPED  ${droppedCount}`,   color: "#ff8c00" },
+            { key: "existing", label: `EXISTING  ${existingCount}`, color: "rgba(77,158,255,0.85)" },
+          ].map(({ key, label, color }) => (
+            <button key={String(key)} onClick={() => toggleFilter(key)} style={{
+              background: discoveryFilter === key ? `${color}15` : "rgba(255,255,255,0.03)",
+              border: `1px solid ${discoveryFilter === key ? color + "55" : "rgba(255,255,255,0.09)"}`,
+              color: discoveryFilter === key ? color : "rgba(255,255,255,0.3)",
+              fontSize: 9, fontFamily: "monospace", fontWeight: 700,
+              padding: "4px 10px", borderRadius: 3, cursor: "pointer", letterSpacing: "0.8px",
+            }}>{label}</button>
+          ))}
+        </div>
+      )}
+
+      <WorldMapWidget assets={assets} />
 
       <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, overflow: "hidden" }}>
         {/* Column header */}
-        <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 120px 160px 140px 90px 90px 130px 28px", padding: "10px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.3)", fontSize: 10, letterSpacing: "1.2px", textTransform: "uppercase", fontFamily: "monospace" }}>
+        <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, padding: "10px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.3)", fontSize: 10, letterSpacing: "1.2px", textTransform: "uppercase", fontFamily: "monospace" }}>
           <span>Risk</span><span>Host</span><span>IP</span><span>Type</span><span>Ports</span><span>Findings</span><span>Discovery</span><span>Status</span><span></span>
         </div>
 
-        {assets.length === 0 && (
+        {filteredAssets.length === 0 && (
           <div style={{ padding: "32px 20px", textAlign: "center", color: "rgba(255,255,255,0.2)", fontFamily: "monospace" }}>
-            No assets — import a scan or launch a new one
+            {discoveryFilter ? `No ${discoveryFilter} assets in this scan` : "No assets — import a scan or launch a new one"}
           </div>
         )}
 
-        {assets.map((a, i) => {
+        {filteredAssets.map((a, i) => {
           const _aEntry  = assetStatuses[a.host];
           const curStat  = (typeof _aEntry === "object" ? _aEntry?.status : _aEntry) || a.status || "open";
           const isActive = activeAsset?.host === a.host;
+          const _new     = isNew(a);
+          const _dropped = isDropped(a);
+
           return (
             <div key={a.id}
               onClick={(e) => openDrawer(a, e)}
               style={{
                 display: "grid",
-                gridTemplateColumns: "110px 1fr 120px 160px 140px 90px 90px 130px 28px",
+                gridTemplateColumns: GRID_COLS,
                 padding: "13px 20px", gap: 8,
                 borderBottom: "1px solid rgba(255,255,255,0.04)",
-                background: isActive ? "rgba(255,255,255,0.04)" : i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
-                alignItems: "center", cursor: "pointer",
-                transition: "background 0.1s",
+                borderLeft: _dropped ? "3px solid rgba(255,140,0,0.55)"
+                          : _new     ? "3px solid rgba(0,229,160,0.4)"
+                          : "3px solid transparent",
+                background: isActive  ? "rgba(255,255,255,0.04)"
+                          : _dropped  ? "rgba(255,140,0,0.025)"
+                          : _new      ? "rgba(0,229,160,0.018)"
+                          : i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
+                alignItems: "center", cursor: "pointer", transition: "background 0.1s",
               }}>
               <span><Badge risk={a.risk}/></span>
               <div>
@@ -859,18 +868,26 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
               <span style={{ color: (a.vulnerabilities?.length || 0) > 0 ? "#ff3b3b" : "rgba(255,255,255,0.25)", fontFamily: "monospace", fontSize: 12, fontWeight: (a.vulnerabilities?.length || 0) > 0 ? 700 : 400 }}>
                 {(a.vulnerabilities?.length || 0) > 0 ? `▲ ${a.vulnerabilities.length}` : "—"}
               </span>
+
               {/* Discovery badge */}
-              {(a.is_new === true || a.change === "new" || a.change === "appeared") ? (
+              {_new ? (
                 <span style={{ background: "rgba(0,229,160,0.1)", color: "#00e5a0",
                   border: "1px solid rgba(0,229,160,0.3)", fontSize: 9, fontWeight: 700,
                   fontFamily: "monospace", letterSpacing: "1px",
                   padding: "2px 7px", borderRadius: 2, whiteSpace: "nowrap" }}>● NEW</span>
-              ) : (a.change === "persisted" || a.change === "disappeared") ? (
+              ) : _dropped ? (
+                <span style={{ background: "rgba(255,140,0,0.1)", color: "#ff8c00",
+                  border: "1px solid rgba(255,140,0,0.35)", fontSize: 9, fontWeight: 700,
+                  fontFamily: "monospace", letterSpacing: "1px",
+                  padding: "2px 7px", borderRadius: 2, whiteSpace: "nowrap" }}>▼ DROPPED</span>
+              ) : isExisting(a) ? (
                 <span style={{ color: "rgba(77,158,255,0.55)", fontSize: 9,
                   fontFamily: "monospace", letterSpacing: "0.8px" }}>EXISTING</span>
               ) : (
-                <span style={{ color: "rgba(255,255,255,0.15)", fontFamily: "monospace", fontSize: 11 }}>—</span>
+                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 9,
+                  fontFamily: "monospace", letterSpacing: "0.5px" }}>BASELINE</span>
               )}
+
               <StatusBadge status={curStat} />
               <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, textAlign: "center" }}>↗</span>
             </div>
