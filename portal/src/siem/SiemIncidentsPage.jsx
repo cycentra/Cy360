@@ -1268,7 +1268,7 @@ export function SiemIncidentsPage() {
               gridTemplateColumns: "130px 75px 1fr 110px 60px 75px 80px 100px",
               gap: 10, padding: "10px 16px",
               background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-              {["ID", "SEVERITY", "AFFECTED HOSTS", "TYPE / CATEGORY", "ALERTS", "STATUS", "INTEL", "LAST SEEN"].map(h => (
+              {["ID", "SEVERITY", "SOURCE / HOSTS", "TYPE / CATEGORY", "ALERTS", "STATUS", "INTEL", "LAST SEEN"].map(h => (
                 <div key={h} style={{ color: "rgba(255,255,255,0.3)", fontSize: 10,
                   fontFamily: "monospace", letterSpacing: "1px" }}>{h}</div>
               ))}
@@ -1289,9 +1289,24 @@ export function SiemIncidentsPage() {
                 <div style={{ color: "#4d9eff", fontSize: 11, fontFamily: "monospace",
                   fontWeight: 700 }}>{inc.id}</div>
                 <div><SevBadge severity={inc.severity} /></div>
-                <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 12, overflow: "hidden",
-                  textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {(inc.affected_agents || []).join(", ") || "—"}
+                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {(inc.categories || []).includes("cloud") ? (
+                    <span title={`Cloud collector: ${(inc.affected_agents || []).join(", ")}`}
+                      style={{ color: "#4d9eff", fontSize: 11, fontFamily: "monospace",
+                        display: "flex", alignItems: "center", gap: 4 }}>
+                      <span style={{ fontSize: 10 }}>☁</span>
+                      {/* Show the cloud service from categories (e.g. "cloud") and actual users/IPs, not the collector agent */}
+                      {(inc.affected_users || []).length > 0
+                        ? (inc.affected_users || []).slice(0, 2).join(", ")
+                        : (inc.src_ips || []).length > 0
+                          ? (inc.src_ips || []).slice(0, 1).join(", ")
+                          : "Cloud event"}
+                    </span>
+                  ) : (
+                    <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
+                      {(inc.affected_agents || []).join(", ") || "—"}
+                    </span>
+                  )}
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
                   {(inc.categories || []).slice(0, 2).map(cat => (
