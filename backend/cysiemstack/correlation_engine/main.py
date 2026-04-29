@@ -238,14 +238,15 @@ async def lifespan(app: FastAPI):
     await init_db()
     log.info("database_ready")
 
-    # ── One-time migration: upgrade legacy 'cloud' → specific cloud source ────
-    # Incidents ingested before the _CLOUD_SOURCE_MAP normaliser fix have
-    # categories=['cloud'].  Identify them by querying their linked alerts'
-    # rule groups and update the category to the specific service name.
+    # ── Startup migrations (idempotent — safe to re-run on every restart) ────
     try:
         from models import AsyncSessionLocal as _ASL
         from sqlalchemy import text as _text
         async with _ASL() as _db:
+
+            # Migration 1: upgrade legacy 'cloud' → 'o365' in incidents.categories
+            # Incidents ingested before the _CLOUD_SOURCE_MAP normaliser fix have
+            # categories=['cloud']. Identify by querying linked alert rule groups.
             await _db.execute(_text("""
                 UPDATE incidents i
                 SET categories = array_replace(categories, 'cloud', 'o365')
@@ -259,10 +260,71 @@ async def lifespan(app: FastAPI):
                         )
                   )
             """))
+            log.info("migration_1_incidents_cloud_to_o365_complete")
+
+            # Migration 2: upgrade alerts.category from 'cloud' → 'o365' for O365 alerts
+            # Alerts ingested before the normaliser fix have category='cloud' even when
+            # the rule groups include 'office365'. This blocks risk_scorer.recalculate_all()
+            # from finding cloud entities (it queries Alert.category='o365').
+            await _db.execute(_text("""
+                UPDATE alerts
+                SET category = 'o365'
+                WHERE category = 'cloud'
+                  AND (
+                      full_alert->'rule'->'groups' ? 'office365'
+                      OR full_alert->'data'->>'integration' = 'office365'
+                  )
+            """))
+            log.info("migration_2_alerts_cloud_to_o365_complete")
+
+            # Migration 3: backfill alerts.username from O365 MailboxOwnerUPN
+            # Alerts ingested before the _extract_username O365 fix have username=NULL.
+            # Backfill from data.office365.MailboxOwnerUPN (email address, not GUID).
+            await _db.execute(_text("""
+                UPDATE alerts
+                SET username = full_alert->'data'->'office365'->>'MailboxOwnerUPN'
+                WHERE username IS NULL
+                  AND full_alert->'data'->'office365'->>'MailboxOwnerUPN' LIKE '%@%'
+            """))
+            # Also try UserId if MailboxOwnerUPN not present (some O365 events)
+            await _db.execute(_text("""
+                UPDATE alerts
+                SET username = full_alert->'data'->'office365'->>'UserId'
+                WHERE username IS NULL
+                  AND full_alert->'data'->'office365'->>'UserId' LIKE '%@%'
+            """))
+            log.info("migration_3_alerts_username_backfill_complete")
+
+            # Migration 4: close stale false_positive incidents where fp >= threshold
+            # Incidents created before the advance_incident_status fix were set to
+            # 'false_positive' by the old code. The scheduler promotes them only after
+            # 7 days. Immediately close any whose fp_probability >= fpThreshold.
+            try:
+                import json as _json
+                from pathlib import Path as _Path
+                _ai = _Path("/opt/cycentra/ai_settings.json")
+                _raw = _ai.read_text() if _ai.exists() else "{}"
+                _fp_thresh = float(_json.loads(_raw).get("iris", {}).get("fpThreshold", 90.0))
+            except Exception:
+                _fp_thresh = 90.0
+            await _db.execute(_text(f"""
+                UPDATE incidents
+                SET status    = 'closed',
+                    closed_at = NOW(),
+                    updated_at = NOW(),
+                    false_positive_reason = COALESCE(
+                        false_positive_reason,
+                        'Auto-closed by startup migration: FP probability >= threshold {_fp_thresh:.1f}'
+                    )
+                WHERE status = 'false_positive'
+                  AND fp_probability >= {_fp_thresh}
+            """))
+            log.info("migration_4_fp_incidents_closed_complete", threshold=_fp_thresh)
+
             await _db.commit()
-            log.info("cloud_category_migration_complete")
+            log.info("all_startup_migrations_complete")
     except Exception as _e:
-        log.warning("cloud_category_migration_skipped", error=str(_e))
+        log.warning("startup_migration_skipped", error=str(_e))
     # ─────────────────────────────────────────────────────────────────────────
     ingestor_task   = asyncio.create_task(run_ingestor())
     log.info("ingestor_started")

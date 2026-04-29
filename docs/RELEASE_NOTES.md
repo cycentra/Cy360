@@ -1,6 +1,24 @@
-## v1.0.322 -- 2026-04-29
+## v1.0.323 -- 2026-04-29
 
 ### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.323 -- 2026-04-29
+
+### Bug Fixes
+
+- **FP incidents stuck in "false_positive" state despite slider at 50%** — The `advance_incident_status()` fix (v1.0.319) correctly sets new incidents to `closed`. However 82 existing incidents were already written as `false_positive` by the old code before the fix was deployed. The `_fp_auto_close_scheduler` only promotes them after 7 days — they would remain visible in Active Incidents for a week. Added startup migration 4: on engine boot, all `false_positive` incidents where `fp_probability >= fpThreshold` (read live from `ai_settings.json`) are immediately closed. (`main.py` lifespan)
+
+- **O365 incidents still showing "☁ Cloud" — alerts.category not migrated** — The normaliser fix (v1.0.312) correctly classifies new O365 alerts as `o365`. The prior lifespan migration (v1.0.319) updated `incidents.categories` cloud→o365. But the underlying `alerts.category` column was never updated — still stored as `cloud` for all 50 pre-fix alerts. This caused: (a) `_merge_categories()` in the grouper to re-inject `cloud` when new alerts merged into existing incidents, overriding the fixed category; (b) `risk_scorer.recalculate_all()` to find zero `o365` alerts and skip the Microsoft 365 entity entirely. Added startup migration 2: backfills `alerts.category` to `o365` for all alerts whose `full_alert` contains `office365` rule groups. (`main.py` lifespan)
+
+- **UEBA / Entity Risk missing O365 users and showing only postgres/proxy** — `alerts.username` is NULL for all 93 pre-fix alerts because the O365 username extraction (MailboxOwnerUPN/UserId path in `_extract_username`) was added in v1.0.319 but not backfilled. UEBA baselines only contain `postgres` and `proxy` — SSH brute-force srcuser values extracted from pre-fix auth alerts. Added startup migration 3: backfills `alerts.username` from `full_alert→data→office365→MailboxOwnerUPN` (email only, `LIKE '%@%'`) then from `UserId` as fallback. On next `recalculate_all()` scheduler run, O365 users will appear in Entity Risk and Behavioral Analytics. (`main.py` lifespan)
+
+---
+
+## v1.0.322 -- 2026-04-29
 
   - Stability and performance improvements.
 
