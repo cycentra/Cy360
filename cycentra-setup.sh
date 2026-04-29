@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.314 -- 2026-04-29 11:05 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.315 -- 2026-04-29 11:28 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -2572,9 +2572,23 @@ if [[ -d "/var/ossec" ]]; then
     fi
 
     if [[ -f "$CONFIG_SRC/conf/ossec.conf" ]]; then
-        cp "$CONFIG_SRC/conf/ossec.conf" /var/ossec/etc/ossec.conf
-        chmod 660 /var/ossec/etc/ossec.conf
-        success "ossec.conf deployed"
+        if [[ "$MODE" == "update" && -f "/var/ossec/etc/ossec.conf" ]]; then
+            # --update: preserve the live ossec.conf so custom integrations
+            # (O365, Google Workspace, AWS, etc.) configured post-install are not wiped.
+            # The template is saved alongside the live file for reference/diffing.
+            cp "$CONFIG_SRC/conf/ossec.conf" "/var/ossec/etc/ossec.conf.new-$(date +%Y%m%d)"
+            info "ossec.conf update skipped — live config preserved (custom integrations safe)"
+            info "New template saved as /var/ossec/etc/ossec.conf.new-$(date +%Y%m%d) for reference"
+        else
+            # Fresh install or explicit --upgrade: deploy the bundled template
+            if [[ -f "/var/ossec/etc/ossec.conf" ]]; then
+                cp "/var/ossec/etc/ossec.conf" "/var/ossec/etc/ossec.conf.backup-$(date +%Y%m%d-%H%M%S)"
+                info "Existing ossec.conf backed up"
+            fi
+            cp "$CONFIG_SRC/conf/ossec.conf" /var/ossec/etc/ossec.conf
+            chmod 660 /var/ossec/etc/ossec.conf
+            success "ossec.conf deployed"
+        fi
     fi
 
     # ── Agent configuration (shared/default/agent.conf) ──────────────────────
