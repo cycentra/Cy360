@@ -406,8 +406,17 @@ async def advance_incident_status(
 
     Returns (new_status, iris_result)
     """
-    cfg       = _load_iris_config()
-    threshold = cfg["fp_threshold"] if cfg else settings.iris_fp_threshold
+    cfg = _load_iris_config()
+
+    # Read threshold directly from ai_settings.json so the slider in
+    # Settings → Integrations → CyIRIS is always respected, even when the
+    # IRIS connection itself is disabled (mode = "disabled" → cfg is None).
+    try:
+        _raw      = _AI_SETTINGS_FILE.read_text() if _AI_SETTINGS_FILE.exists() else "{}"
+        threshold = float(json.loads(_raw).get("iris", {}).get(
+            "fpThreshold", settings.iris_fp_threshold))
+    except Exception:
+        threshold = cfg["fp_threshold"] if cfg else settings.iris_fp_threshold
 
     prev_status = incident.status
 

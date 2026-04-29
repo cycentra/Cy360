@@ -115,6 +115,44 @@ class TestFPAutoClose:
         # closed_at should NOT have been overwritten
         assert inc.closed_at == original_closed_at
 
+    @pytest.mark.asyncio
+    async def test_threshold_respected_when_iris_disabled(self, monkeypatch):
+        """
+        Slider value must be used even when IRIS mode = disabled.
+
+        When _load_iris_config() returns None (mode=disabled), the threshold
+        must still come from ai_settings.json (fpThreshold=60), NOT from the
+        hard-coded settings default (90.0).  An incident at fp=70 must close.
+        """
+        import json, tempfile, pathlib
+        sys.path.insert(0, os.path.join(
+            os.path.dirname(__file__), "../../backend/cysiemstack/correlation_engine"))
+        import iris_connector
+
+        # Simulate ai_settings.json with fpThreshold=60, mode=disabled
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        json.dump({"iris": {"mode": "disabled", "fpThreshold": 60}}, tmp)
+        tmp.close()
+        monkeypatch.setattr(iris_connector, "_AI_SETTINGS_FILE",
+                            pathlib.Path(tmp.name))
+
+        # IRIS is disabled → _load_iris_config returns None
+        monkeypatch.setattr(iris_connector, "_load_iris_config", lambda: None)
+        monkeypatch.setattr(iris_connector, "write_audit", AsyncMock())
+
+        from iris_connector import advance_incident_status
+
+        db  = AsyncMock()
+        inc = _make_incident(status="investigating")
+
+        new_status, _ = await advance_incident_status(db, inc, fp_score=70.0,
+                                                       actor="system", enriched=True)
+
+        assert new_status == "closed", (
+            f"Expected 'closed', got '{new_status}'. "
+            "Slider value (60%) must be used even when IRIS connection is disabled."
+        )
+
 
 # ===========================================================================
 # Bug 2 — Cloud entity risk scoring

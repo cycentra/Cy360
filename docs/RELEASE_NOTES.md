@@ -1,6 +1,20 @@
-## v1.0.319 -- 2026-04-29
+## v1.0.320 -- 2026-04-29
 
 ### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.320 -- 2026-04-29
+
+### Bug Fixes
+
+- **FP auto-close threshold slider now respected in all IRIS modes** — When IRIS connection mode was set to `disabled`, `_load_iris_config()` returned `None` and `advance_incident_status()` fell back to the hard-coded default threshold (90%) instead of the user's slider value. The UI description states "False-positive auto-close still active based on threshold" even in disabled mode — this is now true. The threshold is read directly from `ai_settings.json` regardless of IRIS connection state, so user preference (slider set to e.g. 60%) is always honoured. (`iris_connector.py` `advance_incident_status()`)
+
+---
+
+## v1.0.319 -- 2026-04-29
 
   - Stability and performance improvements.
 
