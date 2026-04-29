@@ -1,8 +1,16 @@
-## v1.0.312 -- 2026-04-29
+## v1.0.313 -- 2026-04-29
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.312 -- 2026-04-29
+
+### Improvements
+
+  - **Cloud integration source specificity** — Incidents sourced from cloud integrations now display the specific service name instead of the generic "Cloud event" label. The normaliser maps Wazuh rule groups to named sources: `office365`/`o365` → **Microsoft 365**, `azure`/`msaz` → **Microsoft Azure**, `aws`/`cloudtrail` → **AWS**, `gcp` → **Google Cloud**, `github` → **GitHub**. Both the incidents table and the incident drawer now show the service name with a ☁ icon. The drawer section header also includes the service name (e.g. "CLOUD COLLECTOR AGENT (☁ Microsoft 365)"). Legacy `cloud` category on pre-existing incidents is handled as a graceful fallback.
 
 ---
 

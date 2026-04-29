@@ -105,6 +105,21 @@ def _lookup_geoip(ip: str) -> dict:
         return {}
 
 
+# ── Cloud integration source map ─────────────────────────────────────────────
+# Maps Wazuh rule groups → normalised cloud source category string.
+# Order matters: check most-specific groups first.
+_CLOUD_SOURCE_MAP: dict[str, str] = {
+    'office365': 'o365',
+    'o365':      'o365',
+    'azure':     'azure',
+    'msaz':      'azure',
+    'aws':       'aws',
+    'cloudtrail':'aws',
+    'gcp':       'gcp',
+    'github':    'github',
+}
+
+
 def _classify_category(rule_id: int, groups: list) -> str:
     """Map rule ID and groups to a high-level category string."""
     if rule_id in FIM_RULE_IDS or 'syscheck' in groups:
@@ -123,8 +138,9 @@ def _classify_category(rule_id: int, groups: list) -> str:
         return 'vulnerability'
     if 'network_scan' in groups or 'nmap' in groups:
         return 'scan'
-    if any(g in groups for g in ('aws', 'azure', 'office365', 'gcp', 'cloudtrail', 'o365', 'msaz', 'github')):
-        return 'cloud'
+    for grp in groups:
+        if grp in _CLOUD_SOURCE_MAP:
+            return _CLOUD_SOURCE_MAP[grp]
     return 'system'
 
 

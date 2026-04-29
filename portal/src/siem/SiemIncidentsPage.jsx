@@ -71,7 +71,28 @@ const CAT_COLORS = {
   authentication: "#ff8c00", brute_force: "#ff3b3b", malware: "#ff3b3b",
   fim: "#f5c518", web: "#4d9eff", scan: "#b36bff", vulnerability: "#ff8c00",
   system: "rgba(255,255,255,0.4)",
+  // Cloud integration sources (specific and legacy generic)
+  cloud: "#4d9eff", o365: "#4d9eff", azure: "#4d9eff",
+  aws: "#ff8c00", gcp: "#f5c518", github: "#b36bff",
 };
+
+// Known cloud-source category keys → human-readable label
+const CLOUD_CATEGORIES = {
+  o365:   "Microsoft 365",
+  azure:  "Microsoft Azure",
+  aws:    "AWS",
+  gcp:    "Google Cloud",
+  github: "GitHub",
+  cloud:  "Cloud",   // legacy fallback for incidents ingested before this fix
+};
+
+// Return the cloud service label if any category is a cloud source, else null
+function getCloudSource(categories) {
+  for (const cat of (categories || [])) {
+    if (cat in CLOUD_CATEGORIES) return CLOUD_CATEGORIES[cat];
+  }
+  return null;
+}
 
 // ── Incident drawer ────────────────────────────────────────────────────────────
 function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
@@ -289,17 +310,17 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
 
         {/* Agents / Cloud collector */}
         {agents.length > 0 && (() => {
-          const isCloud = categories.includes("cloud");
+          const cloudSource = getCloudSource(categories);
           return (
             <>
-              <SectionLabel>{isCloud ? "CLOUD COLLECTOR AGENT" : "AFFECTED HOSTS"}</SectionLabel>
-              {isCloud && (
+              <SectionLabel>{cloudSource ? `CLOUD COLLECTOR AGENT (☁ ${cloudSource})` : "AFFECTED HOSTS"}</SectionLabel>
+              {cloudSource && (
                 <div style={{ color: "rgba(77,158,255,0.8)", fontSize: 11, fontFamily: "monospace",
                   marginBottom: 8, padding: "7px 10px",
                   background: "rgba(77,158,255,0.06)", border: "1px solid rgba(77,158,255,0.18)",
                   borderRadius: 3, lineHeight: 1.5 }}>
-                  ☁ Cloud-sourced alert — this is the Wazuh agent that <em>collected</em> the event,
-                  not the victim host. Check <strong>Affected Users</strong> for the actual identity.
+                  ☁ <strong>{cloudSource}</strong> event — this is the Wazuh agent that <em>collected</em> the
+                  event, not the victim host. Check <strong>Affected Users</strong> for the actual identity.
                 </div>
               )}
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -1290,23 +1311,27 @@ export function SiemIncidentsPage() {
                   fontWeight: 700 }}>{inc.id}</div>
                 <div><SevBadge severity={inc.severity} /></div>
                 <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {(inc.categories || []).includes("cloud") ? (
-                    <span title={`Cloud collector: ${(inc.affected_agents || []).join(", ")}`}
-                      style={{ color: "#4d9eff", fontSize: 11, fontFamily: "monospace",
-                        display: "flex", alignItems: "center", gap: 4 }}>
-                      <span style={{ fontSize: 10 }}>☁</span>
-                      {/* Show the cloud service from categories (e.g. "cloud") and actual users/IPs, not the collector agent */}
-                      {(inc.affected_users || []).length > 0
-                        ? (inc.affected_users || []).slice(0, 2).join(", ")
-                        : (inc.src_ips || []).length > 0
-                          ? (inc.src_ips || []).slice(0, 1).join(", ")
-                          : "Cloud event"}
-                    </span>
-                  ) : (
-                    <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
-                      {(inc.affected_agents || []).join(", ") || "—"}
-                    </span>
-                  )}
+                  {(() => {
+                    const cloudSource = getCloudSource(inc.categories);
+                    if (cloudSource) return (
+                      <span title={`Cloud collector: ${(inc.affected_agents || []).join(", ")}`}
+                        style={{ color: "#4d9eff", fontSize: 11, fontFamily: "monospace",
+                          display: "flex", alignItems: "center", gap: 4 }}>
+                        <span style={{ fontSize: 10 }}>☁</span>
+                        <span style={{ fontWeight: 600 }}>{cloudSource}</span>
+                        {(inc.affected_users || []).length > 0 && (
+                          <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10 }}>
+                            · {(inc.affected_users || []).slice(0, 1).join(", ")}
+                          </span>
+                        )}
+                      </span>
+                    );
+                    return (
+                      <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 12 }}>
+                        {(inc.affected_agents || []).join(", ") || "—"}
+                      </span>
+                    );
+                  })()}
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
                   {(inc.categories || []).slice(0, 2).map(cat => (
