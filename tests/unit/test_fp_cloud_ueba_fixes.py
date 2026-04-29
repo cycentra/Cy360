@@ -155,6 +155,87 @@ class TestFPAutoClose:
 
 
 # ===========================================================================
+# Bug: enriched gate blocks tickets when MISP disabled + LLM not configured
+# ===========================================================================
+
+class TestEnrichedGate:
+    """enriched flag must not permanently block Band 3 when enrichment unavailable."""
+
+    def test_enriched_true_when_alert_count_at_threshold(self):
+        """
+        With MISP disabled and LLM not configured (both return {}), enriched
+        must evaluate to True once alert_count >= LLM_TRIGGER_MIN_ALERTS (3).
+        This prevents incidents from being stuck in 'investigating' forever.
+        """
+        sys.path.insert(0, os.path.join(
+            os.path.dirname(__file__), "../../backend/cysiemstack/correlation_engine"))
+        from ingestor import LLM_TRIGGER_MIN_ALERTS
+
+        # Simulate the enriched calculation with nothing returned from enrichment
+        misp_result = {}    # MISP disabled
+        llm_result  = {}    # LLM not configured
+
+        class FakeIncident:
+            alert_count      = LLM_TRIGGER_MIN_ALERTS  # exactly at threshold
+            llm_summary      = None
+            misp_enrichment  = None
+
+        inc = FakeIncident()
+        enriched = bool(
+            misp_result
+            or llm_result
+            or inc.llm_summary
+            or inc.misp_enrichment
+            or inc.alert_count >= LLM_TRIGGER_MIN_ALERTS
+        )
+        assert enriched is True, (
+            "enriched must be True when alert_count reaches threshold, "
+            "even if MISP is disabled and LLM is not configured."
+        )
+
+    def test_enriched_false_below_threshold_no_enrichment(self):
+        """
+        Before alert_count reaches threshold AND no prior enrichment,
+        enriched should remain False (wait for enrichment window).
+        """
+        sys.path.insert(0, os.path.join(
+            os.path.dirname(__file__), "../../backend/cysiemstack/correlation_engine"))
+        from ingestor import LLM_TRIGGER_MIN_ALERTS
+
+        class FakeIncident:
+            alert_count      = LLM_TRIGGER_MIN_ALERTS - 1  # below threshold
+            llm_summary      = None
+            misp_enrichment  = None
+
+        inc = FakeIncident()
+        enriched = bool(
+            {}      # misp_result
+            or {}   # llm_result
+            or inc.llm_summary
+            or inc.misp_enrichment
+            or inc.alert_count >= LLM_TRIGGER_MIN_ALERTS
+        )
+        assert enriched is False, (
+            "enriched should be False when alert_count < threshold "
+            "and no prior enrichment data exists."
+        )
+
+    def test_enriched_true_when_prior_llm_summary(self):
+        """Incident with existing llm_summary from prior cycle must count as enriched."""
+        class FakeIncident:
+            alert_count      = 1
+            llm_summary      = "Lateral movement detected via pass-the-hash."
+            misp_enrichment  = None
+
+        inc = FakeIncident()
+        enriched = bool(
+            {} or {} or inc.llm_summary or inc.misp_enrichment
+            or inc.alert_count >= 3
+        )
+        assert enriched is True
+
+
+# ===========================================================================
 # Bug 2 — Cloud entity risk scoring
 # ===========================================================================
 

@@ -1,6 +1,20 @@
-## v1.0.320 -- 2026-04-29
+## v1.0.321 -- 2026-04-29
 
 ### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.321 -- 2026-04-29
+
+### Bug Fixes
+
+- **Auto-ticket not raised when MISP disabled and CyMind not configured** — `enriched = bool(misp_result or llm_result)` evaluated to `False` when MISP is disabled (returns `{}`) and LLM is not configured (returns `{}`). Band 2 guard `fp_score >= 40.0 or not enriched` then trapped all incidents in "investigating" permanently — Band 3 (ticket creation) was never reached regardless of fp_score, severity, or alert count. Fixed: `enriched` is now `True` when alert_count reaches the LLM trigger threshold (3), indicating the enrichment window has closed. Also `True` when prior-cycle enrichment is stored on the incident (`llm_summary` or `misp_enrichment`). (`ingestor.py`)
+
+---
+
+## v1.0.320 -- 2026-04-29
 
   - Stability and performance improvements.
 

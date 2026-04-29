@@ -231,7 +231,21 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
 
             # 7. Confidence-score-based status advancement + IRIS ticket
             #    advance_incident_status() handles all bands and writes audit entries.
-            enriched = bool(misp_result or llm_result)
+            #
+            # enriched = True when:
+            #   (a) enrichment ran and returned data THIS cycle, OR
+            #   (b) incident already has enrichment stored from a previous cycle
+            #       (covers MISP with no IOC hits — still ran), OR
+            #   (c) alert_count has reached the LLM trigger threshold — the
+            #       enrichment window has closed; don't hold tickets indefinitely
+            #       when MISP is disabled and CyMind is not configured.
+            enriched = bool(
+                misp_result
+                or llm_result
+                or incident.llm_summary
+                or incident.misp_enrichment
+                or incident.alert_count >= LLM_TRIGGER_MIN_ALERTS
+            )
             new_status, iris_result = await advance_incident_status(
                 db, incident, fp_score,
                 actor="system",
