@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.325 -- 2026-04-29 21:46 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.326 -- 2026-04-29 22:02 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -891,13 +891,17 @@ else
 fi
 
 # ── Version pre-check (update mode only) ─────────────────────────────────────
+# NOTE: we do NOT exit early when already at the latest version.
+# Pip install is idempotent and the service restarts below are required to
+# ensure the running engine process loads the latest deployed bytecode.
+# Without the restart, stale in-memory bytecode survives indefinitely even
+# when .py files on disk are updated by pip.
 if [[ "$MODE" == "update" && "${FORCE_UPDATE:-0}" != "1" ]]; then
     _installed_ver=$(cat /opt/cycentra/version 2>/dev/null | tr -d '[:space:]' || echo "")
     if [[ -n "$_installed_ver" && "$_installed_ver" == "$CYCENTRA_VERSION" ]]; then
         echo ""
         success "Already at the latest version: ${CYCENTRA_VERSION}"
-        info    "Nothing to update. Run with FORCE_UPDATE=1 to re-apply the current version."
-        exit 0
+        info    "Re-applying packages and restarting services to ensure running code is current."
     elif [[ -n "$_installed_ver" ]]; then
         info "Update available: ${_installed_ver} → ${CYCENTRA_VERSION}"
     fi

@@ -1353,7 +1353,7 @@ export function SiemIncidentsPage() {
                           userSelect: "none" }}>
                         {h}
                         {key && (
-                          <span style={{ fontSize: 9, opacity: active ? 1 : 0.35 }}>
+                          <span style={{ fontSize: 13, opacity: active ? 1 : 0.4, lineHeight: 1 }}>
                             {active ? (sortDir === "asc" ? "↑" : "↓") : "↕"}
                           </span>
                         )}

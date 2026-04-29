@@ -1,3 +1,19 @@
+## v1.0.326 -- 2026-04-29
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.326 -- 2026-04-29
+
+### Bug Fixes
+
+- **FP auto-close, Entity Risk, and UEBA fixes not taking effect after `--update`** — Root cause: `cycentra-setup.sh --update` contained a version pre-check that called `exit 0` when the server was already at the latest version, aborting the entire script before reaching `systemctl restart cysiemstack-engine`. This meant: (1) the correlation engine process kept running with old in-memory bytecode indefinitely — `pip install` updates `.py` and `.pyc` files on disk but the running Python process never reloads them; (2) the startup data migrations added in v1.0.323 (close stale false_positive incidents, backfill alerts.category/username) never executed because the engine never restarted with the new `main.py`. Fixed: removed the `exit 0` early abort — `--update` now always re-applies packages and restarts services regardless of version match. Pip install is idempotent; the restart takes under 10 seconds. (`cycentra-setup.sh`)
+
+---
+
 ## v1.0.325 -- 2026-04-29
 
 ### Improvements

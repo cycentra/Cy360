@@ -684,6 +684,10 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
   const [assetStatuses,   setAssetStatuses]   = useState({});
   const [activeAsset,     setActiveAsset]     = useState(null);
   const [discoveryFilter, setDiscoveryFilter] = useState(null); // null | "new" | "dropped" | "existing"
+  const [sortField,  setSortField]  = useState("risk");
+  const [sortDir,    setSortDir]    = useState("asc");
+  const [pageSize,   setPageSize]   = useState(50);
+  const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
     fetch("/api/asm/statuses", { credentials: "include" })
@@ -713,7 +717,34 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
                        : discoveryFilter === "existing" ? assets.filter(isExisting)
                        : assets;
 
-  const toggleFilter = key => setDiscoveryFilter(f => f === key ? null : key);
+  const toggleFilter = key => { setDiscoveryFilter(f => f === key ? null : key); setCurrentPage(1); };
+
+  const ASSET_RISK_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+  const handleSort = (col) => {
+    if (sortField === col) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortField(col); setSortDir("asc"); }
+    setCurrentPage(1);
+  };
+  const getAssetFieldVal = (a, field) => {
+    switch (field) {
+      case "risk":      return ASSET_RISK_ORDER[a.risk] ?? 4;
+      case "host":      return (a.host || "").toLowerCase();
+      case "ip":        return (a.ip || "").toLowerCase();
+      case "type":      return (a.type || "").toLowerCase();
+      case "ports":     return (a.ports || []).length;
+      case "findings":  return (a.vulnerabilities || []).length;
+      case "discovery": return (a.change || "").toLowerCase();
+      case "status":    return ((typeof assetStatuses[a.host] === "object" ? assetStatuses[a.host]?.status : assetStatuses[a.host]) || a.status || "open").toLowerCase();
+      default: return 0;
+    }
+  };
+  const sortedAssets = [...filteredAssets].sort((a, b) => {
+    const va = getAssetFieldVal(a, sortField), vb = getAssetFieldVal(b, sortField);
+    const cmp = typeof va === "number" ? va - vb : (va < vb ? -1 : va > vb ? 1 : 0);
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+  const totalPages = Math.max(1, Math.ceil(sortedAssets.length / pageSize));
+  const pagedAssets = sortedAssets.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <div>
@@ -795,7 +826,7 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
 
       {/* ── Filter pills ───────────────────────────────────────────────────── */}
       {assets.length > 0 && (
-        <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginRight: 4 }}>FILTER:</span>
           {[
             { key: null,       label: `ALL  ${assets.length}`,      color: "#ffffff" },
@@ -811,6 +842,13 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
               padding: "5px 12px", borderRadius: 3, cursor: "pointer", letterSpacing: "0.8px",
             }}>{label}</button>
           ))}
+          <div style={{ marginLeft: "auto" }}>
+            <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+              style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)",
+                color: "white", padding: "5px 10px", borderRadius: 4, fontSize: 11, fontFamily: "monospace" }}>
+              {[50, 100, 250].map(n => <option key={n} value={n}>{n} / page</option>)}
+            </select>
+          </div>
         </div>
       )}
 
@@ -818,17 +856,38 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
 
       <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, overflow: "hidden" }}>
         {/* Column header */}
-        <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, padding: "10px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.3)", fontSize: 10, letterSpacing: "1.2px", textTransform: "uppercase", fontFamily: "monospace" }}>
-          <span>Risk</span><span>Host</span><span>IP</span><span>Type</span><span>Ports</span><span>Findings</span><span>Discovery</span><span>Status</span><span></span>
-        </div>
+        {(() => {
+          const COL_KEY = { "Risk": "risk", "Host": "host", "IP": "ip", "Type": "type",
+            "Ports": "ports", "Findings": "findings", "Discovery": "discovery", "Status": "status", "": null };
+          return (
+            <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, padding: "10px 20px",
+              borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.01)" }}>
+              {Object.entries(COL_KEY).map(([h, key]) => {
+                const active = key && sortField === key;
+                return (
+                  <span key={h} onClick={() => key && handleSort(key)}
+                    style={{ color: active ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.3)",
+                      fontSize: 10, letterSpacing: "1.2px", textTransform: "uppercase", fontFamily: "monospace",
+                      cursor: key ? "pointer" : "default", display: "flex", alignItems: "center",
+                      gap: 3, userSelect: "none" }}>
+                    {h}
+                    {key && <span style={{ fontSize: 13, opacity: active ? 1 : 0.4, lineHeight: 1 }}>
+                      {active ? (sortDir === "asc" ? "↑" : "↓") : "↕"}
+                    </span>}
+                  </span>
+                );
+              })}
+            </div>
+          );
+        })()}
 
-        {filteredAssets.length === 0 && (
+        {sortedAssets.length === 0 && (
           <div style={{ padding: "32px 20px", textAlign: "center", color: "rgba(255,255,255,0.2)", fontFamily: "monospace" }}>
             {discoveryFilter ? `No ${discoveryFilter} assets in this scan` : "No assets — import a scan or launch a new one"}
           </div>
         )}
 
-        {filteredAssets.map((a, i) => {
+        {pagedAssets.map((a, i) => {
           const _aEntry  = assetStatuses[a.host];
           const curStat  = (typeof _aEntry === "object" ? _aEntry?.status : _aEntry) || a.status || "open";
           const isActive = activeAsset?.host === a.host;
@@ -893,6 +952,42 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
             </div>
           );
         })}
+
+        {/* Pagination controls */}
+        {totalPages > 1 && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "10px 20px", borderTop: "1px solid rgba(255,255,255,0.06)",
+            background: "rgba(255,255,255,0.01)" }}>
+            <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace" }}>
+              {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, sortedAssets.length)} of {sortedAssets.length}
+            </span>
+            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+              <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}
+                style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
+                  color: currentPage === 1 ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.5)",
+                  padding: "3px 10px", borderRadius: 3, cursor: currentPage === 1 ? "default" : "pointer",
+                  fontSize: 11, fontFamily: "monospace" }}>‹ Prev</button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                .reduce((acc, p, idx, arr) => { if (idx > 0 && p - arr[idx - 1] > 1) acc.push("…"); acc.push(p); return acc; }, [])
+                .map((p, i) => typeof p === "string" ? (
+                  <span key={`ell-${i}`} style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, padding: "0 2px" }}>…</span>
+                ) : (
+                  <button key={p} onClick={() => setCurrentPage(p)}
+                    style={{ background: p === currentPage ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.04)",
+                      border: `1px solid ${p === currentPage ? "rgba(0,229,160,0.4)" : "rgba(255,255,255,0.1)"}`,
+                      color: p === currentPage ? "#00e5a0" : "rgba(255,255,255,0.4)",
+                      padding: "3px 8px", borderRadius: 3, cursor: "pointer",
+                      fontSize: 11, fontFamily: "monospace", minWidth: 28 }}>{p}</button>
+                ))}
+              <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}
+                style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
+                  color: currentPage === totalPages ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.5)",
+                  padding: "3px 10px", borderRadius: 3, cursor: currentPage === totalPages ? "default" : "pointer",
+                  fontSize: 11, fontFamily: "monospace" }}>Next ›</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
