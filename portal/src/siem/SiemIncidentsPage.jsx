@@ -1048,7 +1048,7 @@ export function SiemIncidentsPage() {
   const wsDebounce  = useRef(null); // timer ref for WS-triggered refetch debounce
 
   const fetchIncidents = useCallback(async () => {
-    const data = await siemFetch(siemApi.getIncidents({ ...filters, limit: 2000 }));
+    const data = await siemFetch(siemApi.getIncidents({ ...filters, limit: 200 }));
     if (data._offline || data._error) {
       setLoading(false);   // don't leave the spinner up on engine error / offline
       return;
