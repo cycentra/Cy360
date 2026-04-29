@@ -47,12 +47,11 @@ _REPORTS_BASE = Path("/var/log/cycentra/cy-asm/reports")
 _REPORT_LIMIT = 6
 
 
-def _prune_old_reports() -> None:
-    """Delete oldest PDFs so that no more than _REPORT_LIMIT files are retained."""
-    base = os.environ.get("CYCENTRA_REPORT_DIR", "").strip()
-    search_root = Path(base) if base else _REPORTS_BASE
+def _prune_old_reports(tenant_id: str) -> None:
+    """Delete oldest PDFs for this tenant so no more than _REPORT_LIMIT files are retained."""
+    tenant_dir = _output_dir(tenant_id)
     all_pdfs = sorted(
-        glob.glob(str(search_root / "**" / "*.pdf"), recursive=True),
+        glob.glob(str(tenant_dir / "*.pdf")),
         key=os.path.getmtime,
         reverse=True,
     )
@@ -123,7 +122,7 @@ def generate_all_reports(
         logger.error(f"[Reports] ❌ Technical report failed: {type(e).__name__}: {e}")
         tech_path = ""
 
-    _prune_old_reports()
+    _prune_old_reports(tenant_id)
 
     return exec_path, tech_path
 
