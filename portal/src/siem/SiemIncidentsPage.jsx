@@ -940,8 +940,8 @@ function IncidentTrendLine({ incidents }) {
   const pts = days.map(d => ({ d, k: dayKey(d), n: counts[dayKey(d)] || 0 }));
   const hasData = pts.some(p => p.n > 0);
 
-  const W = 520, H = 110;
-  const P = { t: 12, r: 10, b: 26, l: 30 };
+  const W = 520, H = 80;
+  const P = { t: 10, r: 10, b: 20, l: 26 };
   const iW = W - P.l - P.r, iH = H - P.t - P.b;
   const n  = pts.length;
   const mx = Math.max(...pts.map(p => p.n), 1);
@@ -957,7 +957,7 @@ function IncidentTrendLine({ incidents }) {
   }).join(" ");
   const areaPath = linePath + ` L ${xOf(n - 1)} ${P.t + iH} L ${P.l} ${P.t + iH} Z`;
 
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   return (
     <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
@@ -985,8 +985,8 @@ function IncidentTrendLine({ incidents }) {
               <g key={f}>
                 <line x1={P.l} y1={y} x2={W - P.r} y2={y} stroke="rgba(255,255,255,0.05)"
                   strokeWidth="1" strokeDasharray="3 4"/>
-                <text x={P.l - 4} y={y + 4} textAnchor="end" fill="rgba(255,255,255,0.2)"
-                  fontSize="9" fontFamily="monospace">{lbl}</text>
+                <text x={P.l - 4} y={y + 3} textAnchor="end" fill="rgba(255,255,255,0.2)"
+                  fontSize="7" fontFamily="monospace">{lbl}</text>
               </g>
             );
           })}
@@ -1003,8 +1003,8 @@ function IncidentTrendLine({ incidents }) {
                 onMouseMove={e  => setTooltip(t => t ? { ...t, sx: e.clientX, sy: e.clientY } : null)}
                 onMouseLeave={() => setTooltip(null)}/>
               {i % 2 === 0 && (
-                <text x={xOf(i)} y={H - 3} textAnchor="middle"
-                  fill="rgba(255,255,255,0.18)" fontSize="8" fontFamily="monospace">
+                <text x={xOf(i)} y={H - 2} textAnchor="middle"
+                  fill="rgba(255,255,255,0.18)" fontSize="7" fontFamily="monospace">
                   {p.d.toLocaleDateString("en-US", { month: "numeric", day: "numeric" })}
                 </text>
               )}
@@ -1040,11 +1040,15 @@ export function SiemIncidentsPage() {
   const [closing, setClosing]       = useState(false);
   const [purgeConfirm, setPurgeConfirm] = useState(false); // purge closed from DB
   const [purging, setPurging]       = useState(false);
+  const [sortField, setSortField]   = useState("severity");
+  const [sortDir, setSortDir]       = useState("asc");
+  const [pageSize, setPageSize]     = useState(50);
+  const [currentPage, setCurrentPage] = useState(1);
   const wsRef       = useRef(null);
   const wsDebounce  = useRef(null); // timer ref for WS-triggered refetch debounce
 
   const fetchIncidents = useCallback(async () => {
-    const data = await siemFetch(siemApi.getIncidents({ ...filters, limit: 100 }));
+    const data = await siemFetch(siemApi.getIncidents({ ...filters, limit: 2000 }));
     if (data._offline || data._error) {
       setLoading(false);   // don't leave the spinner up on engine error / offline
       return;
@@ -1086,6 +1090,18 @@ export function SiemIncidentsPage() {
     };
   }, [fetchIncidents]);
 
+  useEffect(() => { setCurrentPage(1); }, [filters]);
+
+  const handleSort = (col) => {
+    if (sortField === col) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortField(col);
+      setSortDir("asc");
+    }
+    setCurrentPage(1);
+  };
+
   const handlePatched = (updated) => {
     setIncidents(prev => prev.map(inc => inc.id === updated.id ? { ...inc, ...updated } : inc));
     setSelected(prev => prev?.id === updated.id ? { ...prev, ...updated } : prev);
@@ -1113,10 +1129,28 @@ export function SiemIncidentsPage() {
     }
   };
 
-  const sortedIncidents = [...incidents].sort((a, b) =>
-    (SEV_ORDER[a.severity] ?? 4) - (SEV_ORDER[b.severity] ?? 4) ||
-    new Date(b.last_seen) - new Date(a.last_seen)
-  );
+  const getFieldVal = (inc, field) => {
+    switch (field) {
+      case "id":       return (inc.id || "").toLowerCase();
+      case "severity": return SEV_ORDER[inc.severity] ?? 4;
+      case "source":   return ((inc.affected_agents || [])[0] || "").toLowerCase();
+      case "category": return ((inc.categories || [])[0] || "").toLowerCase();
+      case "alerts":   return inc.alert_count || 0;
+      case "status":   return (inc.status || "").toLowerCase();
+      case "last_seen":return new Date(inc.last_seen || 0).getTime();
+      default:         return 0;
+    }
+  };
+
+  const sortedIncidents = [...incidents].sort((a, b) => {
+    const va = getFieldVal(a, sortField);
+    const vb = getFieldVal(b, sortField);
+    let cmp = typeof va === "number" ? va - vb : (va < vb ? -1 : va > vb ? 1 : 0);
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+
+  const totalPages = Math.max(1, Math.ceil(sortedIncidents.length / pageSize));
+  const pagedIncidents = sortedIncidents.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   // ── Chart data (derived from the main incidents list) ─────────────────────
   const severityData = [
@@ -1214,6 +1248,12 @@ export function SiemIncidentsPage() {
               {opts.map((o, i) => <option key={o} value={o}>{labels[i]}</option>)}
             </select>
           ))}
+          <select value={pageSize}
+            onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+            style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)",
+              color: "white", padding: "8px 12px", borderRadius: 4, fontSize: 12, fontFamily: "monospace" }}>
+            {[50, 100, 250].map(n => <option key={n} value={n}>{n} / page</option>)}
+          </select>
           <button onClick={fetchIncidents}
             style={{ background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.3)",
               color: "#00e5a0", padding: "8px 16px", borderRadius: 4, cursor: "pointer",
@@ -1292,18 +1332,40 @@ export function SiemIncidentsPage() {
           <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
             borderRadius: 4, overflow: "hidden" }}>
             {/* Table header */}
-            <div style={{ display: "grid",
-              gridTemplateColumns: "130px 75px 1fr 110px 60px 75px 80px 100px",
-              gap: 10, padding: "10px 16px",
-              background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-              {["ID", "SEVERITY", "SOURCE / HOSTS", "TYPE / CATEGORY", "ALERTS", "STATUS", "INTEL", "LAST SEEN"].map(h => (
-                <div key={h} style={{ color: "rgba(255,255,255,0.3)", fontSize: 10,
-                  fontFamily: "monospace", letterSpacing: "1px" }}>{h}</div>
-              ))}
-            </div>
+            {(() => {
+              const COL_KEY = { "ID": "id", "SEVERITY": "severity", "SOURCE / HOSTS": "source",
+                "TYPE / CATEGORY": "category", "ALERTS": "alerts", "STATUS": "status",
+                "INTEL": null, "LAST SEEN": "last_seen" };
+              return (
+                <div style={{ display: "grid",
+                  gridTemplateColumns: "130px 75px 1fr 110px 60px 75px 80px 100px",
+                  gap: 10, padding: "10px 16px",
+                  background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                  {Object.entries(COL_KEY).map(([h, key]) => {
+                    const active = key && sortField === key;
+                    return (
+                      <div key={h}
+                        onClick={() => key && handleSort(key)}
+                        style={{ color: active ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.3)",
+                          fontSize: 10, fontFamily: "monospace", letterSpacing: "1px",
+                          cursor: key ? "pointer" : "default",
+                          display: "flex", alignItems: "center", gap: 3,
+                          userSelect: "none" }}>
+                        {h}
+                        {key && (
+                          <span style={{ fontSize: 9, opacity: active ? 1 : 0.35 }}>
+                            {active ? (sortDir === "asc" ? "↑" : "↓") : "↕"}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
 
             {/* Rows */}
-            {sortedIncidents.map(inc => (
+            {pagedIncidents.map(inc => (
               <div key={inc.id}
                 onClick={() => setSelected(inc)}
                 style={{ display: "grid",
@@ -1400,6 +1462,48 @@ export function SiemIncidentsPage() {
                 </div>
               </div>
             ))}
+
+            {/* Pagination controls */}
+            {totalPages > 1 && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+                padding: "10px 16px", borderTop: "1px solid rgba(255,255,255,0.06)",
+                background: "rgba(255,255,255,0.01)" }}>
+                <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace" }}>
+                  {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, sortedIncidents.length)} of {sortedIncidents.length}
+                </span>
+                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                  <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}
+                    style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
+                      color: currentPage === 1 ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.5)",
+                      padding: "3px 10px", borderRadius: 3,
+                      cursor: currentPage === 1 ? "default" : "pointer",
+                      fontSize: 11, fontFamily: "monospace" }}>‹ Prev</button>
+                  {Array.from({ length: totalPages }, (_, i) => i + 1)
+                    .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                    .reduce((acc, p, idx, arr) => {
+                      if (idx > 0 && p - arr[idx - 1] > 1) acc.push("…");
+                      acc.push(p);
+                      return acc;
+                    }, [])
+                    .map((p, i) => typeof p === "string" ? (
+                      <span key={`ell-${i}`} style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, padding: "0 2px" }}>…</span>
+                    ) : (
+                      <button key={p} onClick={() => setCurrentPage(p)}
+                        style={{ background: p === currentPage ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.04)",
+                          border: `1px solid ${p === currentPage ? "rgba(0,229,160,0.4)" : "rgba(255,255,255,0.1)"}`,
+                          color: p === currentPage ? "#00e5a0" : "rgba(255,255,255,0.4)",
+                          padding: "3px 8px", borderRadius: 3, cursor: "pointer",
+                          fontSize: 11, fontFamily: "monospace", minWidth: 28 }}>{p}</button>
+                    ))}
+                  <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}
+                    style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
+                      color: currentPage === totalPages ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.5)",
+                      padding: "3px 10px", borderRadius: 3,
+                      cursor: currentPage === totalPages ? "default" : "pointer",
+                      fontSize: 11, fontFamily: "monospace" }}>Next ›</button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
