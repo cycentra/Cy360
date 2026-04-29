@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.313 -- 2026-04-29 10:56 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.314 -- 2026-04-29 11:05 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -845,7 +845,7 @@ GH_REPO="cycentra360"
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 BUNDLE_DIR="/tmp/cycentra-release"
 
-if [[ -f "$_SCRIPT_DIR/manifest.json" ]]; then
+if [[ -f "$_SCRIPT_DIR/manifest.json" && "$_SCRIPT_DIR" != "/opt/cycentra" ]]; then
     info "Local bundle detected — skipping download"
     BUNDLE_DIR="$_SCRIPT_DIR"
     # Resolve version from local bundle for the update-mode pre-check below
@@ -960,9 +960,13 @@ _MAINT_SRC="${BUNDLE_DIR}/docker-maintenance.sh"
 [[ ! -f "$_MAINT_SRC" ]] && _MAINT_SRC="${_SCRIPT_DIR}/docker-maintenance.sh"   # fallback for dev
 _MAINT_DEST="/opt/cycentra/docker-maintenance.sh"
 if [[ -f "$_MAINT_SRC" ]]; then
-    cp "$_MAINT_SRC" "$_MAINT_DEST"
-    chmod 750 "$_MAINT_DEST"
-    success "docker-maintenance.sh deployed to ${_MAINT_DEST}"
+    if [[ "$(realpath "$_MAINT_SRC")" != "$(realpath "$_MAINT_DEST" 2>/dev/null)" ]]; then
+        cp "$_MAINT_SRC" "$_MAINT_DEST"
+        chmod 750 "$_MAINT_DEST"
+        success "docker-maintenance.sh deployed to ${_MAINT_DEST}"
+    else
+        success "docker-maintenance.sh already at ${_MAINT_DEST} — no copy needed"
+    fi
 else
     warn "docker-maintenance.sh not found in bundle — skipping deployment"
 fi
