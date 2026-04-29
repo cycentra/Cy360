@@ -100,10 +100,59 @@ async def _campaign_scheduler():
         await asyncio.sleep(300)
 
 
+# ── FP auto-close scheduler ──────────────────────────────────────────────────
+# Every 6 hours, advance false_positive incidents that have sat in that status
+# for more than FP_AUTO_CLOSE_DAYS to "closed".  This bridges the lifecycle gap:
+#   auto-FP (day 0)  →  auto-closed (day 7)  →  auto-archived (day 30)
+# Analysts can still reopen from "closed" → "investigating" if needed.
+FP_AUTO_CLOSE_DAYS = 7
+
+async def _fp_auto_close_scheduler():
+    from models import AsyncSessionLocal
+    from iris_connector import write_audit
+    await asyncio.sleep(120)  # let engine fully boot before first check
+    while True:
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=FP_AUTO_CLOSE_DAYS)
+            async with AsyncSessionLocal() as db:
+                stale = list((await db.execute(
+                    select(Incident)
+                    .where(Incident.status == "false_positive")
+                    .where(Incident.updated_at < cutoff)
+                )).scalars().all())
+                closed_count = 0
+                now_ts = datetime.now(timezone.utc)
+                for inc in stale:
+                    inc.status     = "closed"
+                    inc.closed_at  = now_ts
+                    inc.updated_at = now_ts
+                    await db.flush()
+                    try:
+                        await write_audit(
+                            db, "incident", inc.id,
+                            action="status_change",
+                            actor="system",
+                            from_status="false_positive",
+                            to_status="closed",
+                            comment=f"Auto-closed: classified as false_positive for {FP_AUTO_CLOSE_DAYS}+ days without analyst review",
+                        )
+                    except Exception:
+                        pass  # audit failure must not block the batch
+                    closed_count += 1
+                if closed_count:
+                    await db.commit()
+                    log.info("fp_auto_close_complete", closed=closed_count,
+                             cutoff_days=FP_AUTO_CLOSE_DAYS)
+        except Exception as e:
+            log.error("fp_auto_close_error", error=str(e))
+        await asyncio.sleep(6 * 3600)
+
+
 # ── Auto-archive scheduler ────────────────────────────────────────────────────
-# Every 6 hours, hard-delete resolved / false_positive incidents that haven't
-# been updated in more than ARCHIVE_AFTER_DAYS days, and their child alerts.
-# This keeps the incidents table lean and queries fast without any manual action.
+# Every 6 hours, hard-delete CLOSED incidents that haven't been updated in more
+# than ARCHIVE_AFTER_DAYS days, plus any stale "resolved" incidents that never
+# went through the close step.  "false_positive" no longer lands here directly —
+# the FP auto-close scheduler above advances them to "closed" first.
 ARCHIVE_AFTER_DAYS = 30
 
 async def _auto_archive_scheduler():
@@ -116,7 +165,7 @@ async def _auto_archive_scheduler():
             async with AsyncSessionLocal() as db:
                 stale_ids = list((await db.execute(
                     select(Incident.id)
-                    .where(Incident.status.in_(["resolved", "false_positive"]))
+                    .where(Incident.status.in_(["closed", "resolved"]))
                     .where(Incident.updated_at < cutoff)
                 )).scalars().all())
                 if stale_ids:
@@ -199,6 +248,8 @@ async def lifespan(app: FastAPI):
     log.info("campaign_scheduler_started")
     asyncio.create_task(_iris_sync_scheduler())
     log.info("iris_sync_scheduler_started")
+    asyncio.create_task(_fp_auto_close_scheduler())
+    log.info("fp_auto_close_scheduler_started")
     asyncio.create_task(_auto_archive_scheduler())
     log.info("auto_archive_scheduler_started")
     asyncio.create_task(_feedback_adjustment_scheduler())
@@ -695,6 +746,54 @@ class StatusTransition(BaseModel):
     to_status: str
     comment:   str
     actor:     Optional[str] = "analyst"
+
+
+class BatchCloseReq(BaseModel):
+    comment: str = "Archived via analyst action"
+    actor:   Optional[str] = "analyst"
+
+
+@app.post("/incidents/batch-close")
+async def batch_close_incidents(req: BatchCloseReq, db: AsyncSession = Depends(get_db)):
+    """Soft-close all 'false_positive' and 'resolved' incidents in one operation.
+    Transitions each to 'closed' with an audit entry — does not delete any rows.
+    Returns counts for each source status.
+    """
+    from iris_connector import write_audit
+    targets = list((await db.execute(
+        select(Incident).where(Incident.status.in_(["false_positive", "resolved"]))
+    )).scalars().all())
+    if not targets:
+        return {"closed": 0, "from_fp": 0, "from_resolved": 0}
+
+    now_ts = datetime.now(timezone.utc)
+    from_fp = from_resolved = 0
+    for inc in targets:
+        prev = inc.status
+        inc.status     = "closed"
+        inc.closed_at  = now_ts
+        inc.updated_at = now_ts
+        await db.flush()
+        try:
+            await write_audit(
+                db, "incident", inc.id,
+                action="status_change",
+                actor=req.actor or "analyst",
+                from_status=prev,
+                to_status="closed",
+                comment=req.comment.strip(),
+            )
+        except Exception:
+            pass
+        if prev == "false_positive":
+            from_fp += 1
+        else:
+            from_resolved += 1
+
+    await db.commit()
+    total = from_fp + from_resolved
+    log.info("batch_close_complete", total=total, from_fp=from_fp, from_resolved=from_resolved)
+    return {"closed": total, "from_fp": from_fp, "from_resolved": from_resolved}
 
 
 @app.post("/incidents/{incident_id}/transition")

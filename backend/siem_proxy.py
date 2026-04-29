@@ -133,6 +133,20 @@ def siem_incidents_purge():
     return _proxy("/incidents", method="DELETE")
 
 
+@siem_bp.route("/incidents/batch-close", methods=["POST"])
+@require_siem_analyst
+def siem_incidents_batch_close():
+    """Soft-close all false_positive and resolved incidents → closed. Analyst+."""
+    return _proxy("/incidents/batch-close", method="POST")
+
+
+@siem_bp.route("/incidents/batch-close", methods=["OPTIONS"])
+def siem_incidents_batch_close_options():
+    from core.helpers import add_cors_headers
+    from flask import make_response
+    return add_cors_headers(make_response('', 204))
+
+
 @siem_bp.route("/incidents/<incident_id>", methods=["GET"])
 @require_siem_auth
 def siem_incident_detail(incident_id):

@@ -287,19 +287,31 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
           ))}
         </div>
 
-        {/* Agents */}
-        {agents.length > 0 && (
-          <>
-            <SectionLabel>AFFECTED HOSTS</SectionLabel>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {agents.map(a => (
-                <span key={a} style={{ background: "rgba(255,255,255,0.05)",
-                  color: "rgba(255,255,255,0.7)", fontSize: 11, fontFamily: "monospace",
-                  padding: "3px 10px", borderRadius: 2, border: "1px solid rgba(255,255,255,0.1)" }}>{a}</span>
-              ))}
-            </div>
-          </>
-        )}
+        {/* Agents / Cloud collector */}
+        {agents.length > 0 && (() => {
+          const isCloud = categories.includes("cloud");
+          return (
+            <>
+              <SectionLabel>{isCloud ? "CLOUD COLLECTOR AGENT" : "AFFECTED HOSTS"}</SectionLabel>
+              {isCloud && (
+                <div style={{ color: "rgba(77,158,255,0.8)", fontSize: 11, fontFamily: "monospace",
+                  marginBottom: 8, padding: "7px 10px",
+                  background: "rgba(77,158,255,0.06)", border: "1px solid rgba(77,158,255,0.18)",
+                  borderRadius: 3, lineHeight: 1.5 }}>
+                  ☁ Cloud-sourced alert — this is the Wazuh agent that <em>collected</em> the event,
+                  not the victim host. Check <strong>Affected Users</strong> for the actual identity.
+                </div>
+              )}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {agents.map(a => (
+                  <span key={a} style={{ background: "rgba(255,255,255,0.05)",
+                    color: "rgba(255,255,255,0.7)", fontSize: 11, fontFamily: "monospace",
+                    padding: "3px 10px", borderRadius: 2, border: "1px solid rgba(255,255,255,0.1)" }}>{a}</span>
+                ))}
+              </div>
+            </>
+          );
+        })()}
 
         {/* Source IPs */}
         {srcIps.length > 0 && (
@@ -996,7 +1008,9 @@ export function SiemIncidentsPage() {
   const [filters, setFilters]       = useState({ status: "", severity: "" });
   const [selected, setSelected]     = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
-  const [purgeConfirm, setPurgeConfirm] = useState(false); // show confirm bar
+  const [closeConfirm, setCloseConfirm] = useState(false); // close FP+resolved → closed
+  const [closing, setClosing]       = useState(false);
+  const [purgeConfirm, setPurgeConfirm] = useState(false); // purge closed from DB
   const [purging, setPurging]       = useState(false);
   const wsRef       = useRef(null);
   const wsDebounce  = useRef(null); // timer ref for WS-triggered refetch debounce
@@ -1049,9 +1063,21 @@ export function SiemIncidentsPage() {
     setSelected(prev => prev?.id === updated.id ? { ...prev, ...updated } : prev);
   };
 
+  // Step 1: soft-close — transitions false_positive + resolved → closed (no deletion)
+  const handleBatchClose = async () => {
+    setClosing(true);
+    const data = await siemFetch(siemApi.batchCloseIncidents("Archived by analyst — bulk close action"));
+    setClosing(false);
+    setCloseConfirm(false);
+    if (!data._error && !data._offline) {
+      await fetchIncidents();
+    }
+  };
+
+  // Step 2: hard-delete — removes only closed incidents from DB
   const handlePurge = async () => {
     setPurging(true);
-    const data = await siemFetch(siemApi.purgeIncidents("resolved,false_positive"));
+    const data = await siemFetch(siemApi.purgeIncidents("closed"));
     setPurging(false);
     setPurgeConfirm(false);
     if (!data._error && !data._offline) {
@@ -1166,26 +1192,56 @@ export function SiemIncidentsPage() {
               fontSize: 12, fontFamily: "monospace" }}>
             ↻ Refresh
           </button>
-          {/* Purge resolved / FP — shows confirm step before deleting */}
+          {/* Step 1: Close FP + Resolved → closed (soft, audit-logged, no deletion) */}
+          {!closeConfirm ? (
+            <button onClick={() => setCloseConfirm(true)}
+              title="Transitions all False Positive and Resolved incidents to Closed status. No data is deleted."
+              style={{ background: "rgba(245,197,24,0.07)", border: "1px solid rgba(245,197,24,0.3)",
+                color: "#f5c518", padding: "8px 16px", borderRadius: 4, cursor: "pointer",
+                fontSize: 12, fontFamily: "monospace" }}>
+              ✓ Archive FP &amp; Resolved
+            </button>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 8,
+              background: "rgba(245,197,24,0.07)", border: "1px solid rgba(245,197,24,0.35)",
+              borderRadius: 4, padding: "6px 12px" }}>
+              <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 11, fontFamily: "monospace" }}>
+                Move all FP &amp; Resolved → Closed?
+              </span>
+              <button onClick={handleBatchClose} disabled={closing}
+                style={{ background: "rgba(245,197,24,0.25)", border: "1px solid rgba(245,197,24,0.6)",
+                  color: "#f5c518", padding: "4px 12px", borderRadius: 3, cursor: "pointer",
+                  fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>
+                {closing ? "Closing…" : "Confirm"}
+              </button>
+              <button onClick={() => setCloseConfirm(false)}
+                style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)",
+                  cursor: "pointer", fontSize: 11, fontFamily: "monospace" }}>
+                Cancel
+              </button>
+            </div>
+          )}
+          {/* Step 2: Purge Closed — hard-deletes closed incidents from DB */}
           {!purgeConfirm ? (
             <button onClick={() => setPurgeConfirm(true)}
+              title="Permanently deletes Closed incidents from the database. This cannot be undone."
               style={{ background: "rgba(255,59,59,0.06)", border: "1px solid rgba(255,59,59,0.25)",
                 color: "rgba(255,100,100,0.8)", padding: "8px 16px", borderRadius: 4, cursor: "pointer",
                 fontSize: 12, fontFamily: "monospace" }}>
-              ⊘ Clear Resolved / FP
+              ⊘ Purge Closed
             </button>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 8,
               background: "rgba(255,59,59,0.08)", border: "1px solid rgba(255,59,59,0.35)",
               borderRadius: 4, padding: "6px 12px" }}>
               <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 11, fontFamily: "monospace" }}>
-                Delete all Resolved &amp; False Positive incidents?
+                Permanently delete all Closed incidents?
               </span>
               <button onClick={handlePurge} disabled={purging}
                 style={{ background: "rgba(255,59,59,0.3)", border: "1px solid rgba(255,59,59,0.6)",
                   color: "#ff6464", padding: "4px 12px", borderRadius: 3, cursor: "pointer",
                   fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>
-                {purging ? "Deleting…" : "Confirm"}
+                {purging ? "Deleting…" : "Confirm Delete"}
               </button>
               <button onClick={() => setPurgeConfirm(false)}
                 style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)",

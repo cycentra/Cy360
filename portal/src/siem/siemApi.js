@@ -116,6 +116,18 @@ export const siemApi = {
   },
 
   /**
+   * Soft-close all false_positive and resolved incidents → closed.
+   * Does NOT delete rows. Analyst role required.
+   */
+  batchCloseIncidents: (comment = "Archived via analyst action") =>
+    fetch(`${SIEM}/incidents/batch-close`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment }),
+    }),
+
+  /**
    * Create a WebSocket connection to the engine live feed.
    * Authenticated via same-origin cookie.
    * Returns a native WebSocket instance.

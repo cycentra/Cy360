@@ -1,3 +1,25 @@
+## v1.0.311 -- 2026-04-29
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.311 -- 2026-04-29
+
+### Improvements
+
+  - **Incident lifecycle clarity** — False Positive and Closed are now distinct steps in a clear two-stage flow: `false_positive` (classification verdict, still reviewable) → `closed` (terminal, confirmed noise). A new auto-close scheduler advances false_positive incidents to closed after 7 days with a full audit entry.
+  - **Archive scheduler** — The 30-day auto-archive now targets `closed` and `resolved` incidents (no longer `false_positive` directly), completing the FP → closed → deleted pipeline.
+  - **Incident toolbar — two-stage archive** — The former "Clear Resolved / FP" button (which hard-deleted rows) is replaced with two distinct actions:
+    - **Archive FP & Resolved** (yellow) — soft-close: transitions all `false_positive` and `resolved` incidents to `closed` with an audit trail. No data deleted.
+    - **Purge Closed** (red) — hard-delete: permanently removes only `closed` incidents from the database. Requires a separate confirm step.
+  - **Cloud incident host label** — Incidents sourced from cloud integrations (O365, Azure, AWS) now display "CLOUD COLLECTOR AGENT" instead of "AFFECTED HOSTS", with an inline note explaining that the agent shown is the Wazuh collector, not the victim host. Users are directed to "Affected Users" for victim identity.
+  - **New engine endpoint** — `POST /incidents/batch-close` performs the soft-close operation; proxied through Flask at `analyst+` RBAC level.
+
+---
+
 ## v1.0.310 -- 2026-04-28
 
 ### Improvements
