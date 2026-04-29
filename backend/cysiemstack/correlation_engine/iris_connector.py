@@ -383,11 +383,10 @@ async def write_audit(
 
 # ── Confidence-score-based status advancement ─────────────────────────────────
 #
-# Bands (configurable via ai_settings.json → iris.fpWatchZoneUpper / fpThreshold):
-#   fp ≥ watch_zone_upper (default 90)  →  false_positive  (auto-close, no IRIS ticket)
-#   fp ≥ fp_threshold (default 70)      →  held            (re-enrich, no IRIS ticket yet)
+# Bands (fpThreshold = user-configured threshold from Settings → CyIRIS slider):
+#   fp ≥ fp_threshold                   →  closed          (auto-dismissed, no IRIS ticket)
 #   fp ≥ 40 and < fp_threshold          →  investigating   (needs more data)
-#   fp < 40                             →  in_review       + create IRIS ticket if high/critical
+#   fp < 40 + enrichment complete       →  in_review       + IRIS ticket if high/critical
 
 async def advance_incident_status(
     db: AsyncSession,
@@ -407,55 +406,41 @@ async def advance_incident_status(
 
     Returns (new_status, iris_result)
     """
-    cfg             = _load_iris_config()
-    threshold       = cfg["fp_threshold"] if cfg else settings.iris_fp_threshold
-    watch_upper     = _get_watch_zone_upper()
+    cfg       = _load_iris_config()
+    threshold = cfg["fp_threshold"] if cfg else settings.iris_fp_threshold
 
     prev_status = incident.status
 
-    # ── Band 1: very likely FP → auto-close ──────────────────────────────────
-    if fp_score >= watch_upper:
-        if incident.status not in ("closed", "false_positive"):
-            incident.status               = "false_positive"
+    # ── Band 1: FP probability ≥ user-configured threshold → auto-close ──────
+    # fpThreshold (from Settings → CyIRIS slider) is the true auto-close bound.
+    # Incidents above this value are dismissed directly to "closed" — no IRIS
+    # ticket, no analyst review queue.
+    if fp_score >= threshold:
+        if incident.status not in ("closed",):
+            incident.status               = "closed"
             incident.closed_at            = datetime.now(timezone.utc)
             incident.updated_at           = datetime.now(timezone.utc)
             incident.false_positive_reason = (
-                f"Auto-closed: FP probability {fp_score:.1f} ≥ watch zone upper {watch_upper:.1f}"
+                f"Auto-closed: FP probability {fp_score:.1f} ≥ "
+                f"threshold {threshold:.1f}"
             )
             await db.flush()
             await write_audit(
                 db, "incident", incident.id,
-                action="auto_fp",
+                action="auto_close",
                 actor=actor,
                 from_status=prev_status,
-                to_status="false_positive",
+                to_status="closed",
                 comment=incident.false_positive_reason,
-                extra={"fp_score": fp_score, "watch_zone_upper": watch_upper},
+                extra={"fp_score": fp_score, "threshold": threshold},
             )
-            log.info("incident_advanced_auto_fp",
-                     id=incident.id, fp=fp_score, threshold=watch_upper)
-        return "false_positive", {}
+            log.info("incident_auto_closed",
+                     id=incident.id, fp=fp_score, threshold=threshold)
+        return "closed", {}
 
-    # ── Band 2: watch zone → held ─────────────────────────────────────────────
-    if fp_score >= threshold:
-        if incident.status not in ("closed", "false_positive", "held"):
-            incident.status     = "held"
-            incident.updated_at = datetime.now(timezone.utc)
-            await db.flush()
-            await write_audit(
-                db, "incident", incident.id,
-                action="status_change",
-                actor=actor,
-                from_status=prev_status,
-                to_status="held",
-                comment=f"Held for re-enrichment: FP probability {fp_score:.1f} in watch zone [{threshold:.1f}–{watch_upper:.1f}]",
-                extra={"fp_score": fp_score},
-            )
-        return "held", {}
-
-    # ── Band 3: moderate FP → keep investigating ──────────────────────────────
+    # ── Band 2: moderate FP → keep investigating ──────────────────────────────
     if fp_score >= 40.0 or not enriched:
-        if incident.status not in ("closed", "false_positive", "held", "in_review", "resolved"):
+        if incident.status not in ("closed", "false_positive", "in_review", "resolved"):
             new_s = "investigating"
             if incident.status != new_s:
                 incident.status     = new_s
@@ -472,7 +457,7 @@ async def advance_incident_status(
                 )
         return incident.status, {}
 
-    # ── Band 4: low FP + enrichment complete → in_review + IRIS ticket ───────
+    # ── Band 3: low FP + enrichment complete → in_review + IRIS ticket ───────
     iris_result = {}
     if incident.status not in ("closed", "false_positive", "resolved", "in_review"):
         incident.status     = "in_review"

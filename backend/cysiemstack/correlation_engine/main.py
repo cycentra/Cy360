@@ -237,6 +237,33 @@ async def lifespan(app: FastAPI):
     global ingestor_task, risk_sched_task
     await init_db()
     log.info("database_ready")
+
+    # ── One-time migration: upgrade legacy 'cloud' → specific cloud source ────
+    # Incidents ingested before the _CLOUD_SOURCE_MAP normaliser fix have
+    # categories=['cloud'].  Identify them by querying their linked alerts'
+    # rule groups and update the category to the specific service name.
+    try:
+        from models import AsyncSessionLocal as _ASL
+        from sqlalchemy import text as _text
+        async with _ASL() as _db:
+            await _db.execute(_text("""
+                UPDATE incidents i
+                SET categories = array_replace(categories, 'cloud', 'o365')
+                WHERE 'cloud' = ANY(categories)
+                  AND EXISTS (
+                      SELECT 1 FROM alerts a
+                      WHERE a.incident_id = i.id
+                        AND (
+                            a.full_alert->'rule'->'groups' ? 'office365'
+                            OR a.full_alert->'data'->>'integration' = 'office365'
+                        )
+                  )
+            """))
+            await _db.commit()
+            log.info("cloud_category_migration_complete")
+    except Exception as _e:
+        log.warning("cloud_category_migration_skipped", error=str(_e))
+    # ─────────────────────────────────────────────────────────────────────────
     ingestor_task   = asyncio.create_task(run_ingestor())
     log.info("ingestor_started")
     risk_sched_task = asyncio.create_task(_risk_scheduler())

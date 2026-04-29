@@ -172,8 +172,17 @@ def _extract_username(alert: dict) -> Optional[str]:
             else:
                 val = None
                 break
-        if val and isinstance(val, str) and val not in ('root', 'SYSTEM', ''):
+        # Note: 'root' is intentionally NOT excluded — root activity is
+        # security-relevant and must be tracked by UEBA and risk scoring.
+        if val and isinstance(val, str) and val not in ('SYSTEM', ''):
             return val.strip()
+
+    # Office 365 / Exchange Online — user identity in data.office365
+    o365 = data.get('office365') or {}
+    for key in ('UserId', 'MailboxOwnerUPN'):
+        v = o365.get(key, '')
+        if v and isinstance(v, str) and '@' in v:
+            return v.strip()
 
     # Check syscheck
     if alert.get('syscheck', {}).get('uname_after'):

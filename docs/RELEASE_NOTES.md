@@ -1,3 +1,25 @@
+## v1.0.319 -- 2026-04-29
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.319 -- 2026-04-29
+
+### Bug Fixes
+
+- **FP auto-close threshold now closes directly** — `advance_incident_status()` was promoting incidents to `false_positive` (still visible, reviewable) instead of `closed` when `fp_probability ≥ fpThreshold`. The UI labelled this "FALSE POSITIVE AUTO-CLOSE THRESHOLD" and described it as "auto-closed without raising a ticket", but the terminal `closed` state was only reached after 7 days via the FP scheduler. Fixed: Band 1 now uses `threshold` (fpThreshold from the UI slider) and sets `status = "closed"` immediately. The intermediate "held" watch-zone band is removed — it was never exposed in the UI and created confusion. (`iris_connector.py` `advance_incident_status()`)
+
+- **Entity Risk — Microsoft 365 now appears as a separate entity** — O365 alerts all arrived with `agent_id = "CY360-DEV"` (the Wazuh manager), so they were silently merged into the CY360-DEV host entity and never appeared as a distinct cloud service. Added `entity_type = 'cloud'` to the risk scorer: alerts are bucketed by `Alert.category` (e.g. `o365`) and tracked under a display name (e.g. "Microsoft 365"). The ingestor and the `recalculate_all()` scheduler both populate these new entities. (`risk_scorer.py`, `ingestor.py`)
+
+- **UEBA — `root` and O365 users now tracked** — Two sub-bugs: (1) `_extract_username()` explicitly excluded the string `'root'`, so all `root` activity on CY360-DEV produced no UEBA baseline. (2) O365 alerts carry the user identity in `data.office365.UserId` / `MailboxOwnerUPN` — paths not checked by the extractor. Fixed: removed `'root'` from the exclusion list; added O365 email extraction. (`normaliser.py` `_extract_username()`)
+
+- **Active Incidents — "☁ Cloud" upgraded to "☁ Microsoft 365"** — Incidents ingested before the `_CLOUD_SOURCE_MAP` normaliser fix (v1.0.312) have `categories = {cloud}`, displaying as "☁ Cloud" instead of "☁ Microsoft 365". Two-part fix: (1) Engine startup migration: UPDATE incidents whose linked alerts have `office365` rule groups, replacing `cloud` with `o365`. (2) `grouper.py` `merge_alert_into_incident()`: when a specific cloud-source alert (o365, azure, aws, gcp, github) merges into an incident with a legacy `cloud` category, the generic `cloud` entry is replaced by the specific source. (`main.py` lifespan migration, `grouper.py` `_merge_categories()`)
+
+---
+
 ## v1.0.318 -- 2026-04-29
 
 ### Improvements

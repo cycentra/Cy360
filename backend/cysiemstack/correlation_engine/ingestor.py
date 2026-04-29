@@ -21,7 +21,7 @@ from normaliser import normalise
 from grouper import group_alert
 from correlator import run_correlation
 from ueba import analyse_alert
-from risk_scorer import calculate_entity_risk, compute_fp_score
+from risk_scorer import calculate_entity_risk, compute_fp_score, CLOUD_ENTITY_NAMES
 from misp_enricher import enrich_incident
 from llm_enricher import enrich_incident as llm_enrich_incident
 from iris_connector import advance_incident_status, write_audit
@@ -160,6 +160,13 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                 if now_ts - _last_risk_calc.get(user_key, 0) >= _RISK_CALC_MIN_INTERVAL:
                     await calculate_entity_risk(db, alert["username"], alert["username"], "user")
                     _last_risk_calc[user_key] = now_ts
+            # Cloud service entities (o365, azure, aws, gcp, github)
+            cloud_name = CLOUD_ENTITY_NAMES.get(alert.get("category", ""))
+            if cloud_name:
+                cloud_key = f"cloud:{alert['category']}"
+                if now_ts - _last_risk_calc.get(cloud_key, 0) >= _RISK_CALC_MIN_INTERVAL:
+                    await calculate_entity_risk(db, alert["category"], cloud_name, "cloud")
+                    _last_risk_calc[cloud_key] = now_ts
 
             # 1b. New incident → set initial status to "investigating" + audit entry
             if created:
@@ -230,10 +237,6 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                 actor="system",
                 enriched=enriched,
             )
-            # Schedule re-enrichment for held incidents
-            if new_status == "held":
-                asyncio.create_task(_reenrich_held_incident(incident.id))
-
             await db.commit()
 
             # 8. Push live event to WebSocket clients
@@ -250,7 +253,7 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                 "misp_hits":         len(misp_result.get("ioc_hits", [])),
                 "llm_ready":         bool(llm_result),
                 "iris_case_id":      iris_result.get("iris_case_id"),
-                "iris_auto_closed":  new_status == "false_positive",
+                "iris_auto_closed":  new_status == "closed",
                 "fp_probability":    fp_score,
                 "agent_name":        alert.get("agent_name"),
                 "rule_desc":         alert.get("rule_desc"),

@@ -41,6 +41,21 @@ def _merge_unique(existing: list, new_val) -> list:
     return existing or []
 
 
+_SPECIFIC_CLOUD_SOURCES = frozenset({'o365', 'azure', 'aws', 'gcp', 'github'})
+
+def _merge_categories(existing: list, new_cat) -> list:
+    """Like _merge_unique but upgrades a legacy 'cloud' entry to the specific
+    source (o365, azure, aws, gcp, github) when a more specific alert merges in."""
+    if not new_cat:
+        return existing or []
+    cats = list(existing or [])
+    if new_cat in _SPECIFIC_CLOUD_SOURCES and 'cloud' in cats:
+        cats = [c for c in cats if c != 'cloud']
+    if new_cat not in cats:
+        cats.append(new_cat)
+    return cats
+
+
 # ── ID generation ──────────────────────────────────────────────────────────────
 
 async def _get_next_id(db: AsyncSession) -> str:
@@ -153,7 +168,7 @@ async def merge_alert_into_incident(
     incident.affected_agents = _merge_unique(incident.affected_agents or [], alert.get('agent_id'))
     incident.affected_users  = _merge_unique(incident.affected_users  or [], alert.get('username'))
     incident.src_ips         = _merge_unique(incident.src_ips         or [], alert.get('src_ip'))
-    incident.categories      = _merge_unique(incident.categories      or [], alert.get('category'))
+    incident.categories      = _merge_categories(incident.categories or [], alert.get('category'))
     incident.mitre_ids       = _merge_unique(incident.mitre_ids       or [], alert.get('mitre_id'))
     incident.mitre_tactics   = _merge_unique(incident.mitre_tactics   or [], alert.get('mitre_tactic'))
 

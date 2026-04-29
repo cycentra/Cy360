@@ -28,6 +28,16 @@ SEV_WEIGHTS = {'critical': 4, 'high': 3, 'medium': 2, 'low': 1}
 # Named constants for compute_fp_score() and _asset_score()
 DEFAULT_ASSET_TIER = 3          # treat unknown/None tier as dev/low
 
+# Cloud integration service entities — tracked as separate risk entities
+# entity_id = category string, entity_name = human-readable label
+CLOUD_ENTITY_NAMES: dict[str, str] = {
+    'o365':   'Microsoft 365',
+    'azure':  'Microsoft Azure',
+    'aws':    'AWS',
+    'gcp':    'Google Cloud',
+    'github': 'GitHub',
+}
+
 
 def _alert_severity_score(alerts: list, max_points: float = 35.0) -> float:
     """Log-scale aggregation: many medium alerts ≠ one critical."""
@@ -179,6 +189,14 @@ async def calculate_entity_risk(
                 Alert.timestamp >= cutoff,
             )
         )
+    elif entity_type == 'cloud':
+        # Cloud service entities — alerts are identified by category (e.g. 'o365')
+        alerts_q = await db.execute(
+            select(Alert).where(
+                Alert.category == entity_id,
+                Alert.timestamp >= cutoff,
+            )
+        )
     else:  # user
         alerts_q = await db.execute(
             select(Alert).where(
@@ -193,6 +211,14 @@ async def calculate_entity_risk(
         inc_q = await db.execute(
             select(Incident).where(
                 Incident.affected_agents.any(entity_id),
+                Incident.last_seen >= cutoff,
+            ).limit(20)
+        )
+    elif entity_type == 'cloud':
+        # Cloud entities — incidents where any category matches the cloud source
+        inc_q = await db.execute(
+            select(Incident).where(
+                Incident.categories.any(entity_id),
                 Incident.last_seen >= cutoff,
             ).limit(20)
         )
@@ -317,6 +343,19 @@ async def recalculate_all(db: AsyncSession) -> int:
         for (username,) in user_q.all():
             await calculate_entity_risk(db, username, username, 'user')
             count += 1
+
+    # All active cloud integration sources
+    cloud_q = await db.execute(
+        select(Alert.category)
+        .where(Alert.category.in_(CLOUD_ENTITY_NAMES.keys()), Alert.timestamp >= cutoff)
+        .distinct()
+        .limit(CAP - count)
+    )
+    for (cat,) in cloud_q.all():
+        await calculate_entity_risk(db, cat, CLOUD_ENTITY_NAMES[cat], 'cloud')
+        count += 1
+        if count >= CAP:
+            break
 
     await db.commit()
     log.info('risk_recalc_complete', entities=count)
