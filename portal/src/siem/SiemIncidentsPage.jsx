@@ -86,11 +86,18 @@ const CLOUD_CATEGORIES = {
   cloud:  "Cloud",   // legacy fallback for incidents ingested before this fix
 };
 
-// Return the cloud service label if any category is a cloud source, else null
+// Return the cloud service label if any category is a cloud source, else null.
+// Specific sources (o365, azure, aws, gcp, github) are checked before the
+// generic 'cloud' fallback so that incidents whose categories array contains
+// both a legacy 'cloud' entry and a specific 'o365' entry (written by newer
+// normaliser code) resolve to the specific name rather than the generic label.
+const _SPECIFIC_CLOUD_SOURCES = ['o365', 'azure', 'aws', 'gcp', 'github'];
 function getCloudSource(categories) {
-  for (const cat of (categories || [])) {
-    if (cat in CLOUD_CATEGORIES) return CLOUD_CATEGORIES[cat];
+  const cats = categories || [];
+  for (const s of _SPECIFIC_CLOUD_SOURCES) {
+    if (cats.includes(s)) return CLOUD_CATEGORIES[s];
   }
+  if (cats.includes('cloud')) return CLOUD_CATEGORIES.cloud;
   return null;
 }
 

@@ -242,7 +242,7 @@ def get_scan_by_id(scan_id):
 
 @asm_bp.route("/api/scans/reports")
 def list_pdf_reports():
-    """Return the last 5 generated PDF reports across all tenants."""
+    """Return the last 6 generated PDF reports across all tenants."""
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
 
@@ -250,7 +250,7 @@ def list_pdf_reports():
         glob.glob(str(ASM_REPORTS_DIR / "**" / "*.pdf"), recursive=True),
         key=os.path.getmtime,
         reverse=True,
-    )[:5]
+    )[:6]
 
     reports = []
     for p in all_pdfs:

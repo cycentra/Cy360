@@ -24,6 +24,7 @@ The output directory can be overridden with the env var:
 """
 from __future__ import annotations
 
+import glob
 import json
 import logging
 import os
@@ -40,6 +41,27 @@ _HERE = Path(__file__).resolve().parent
 _CY_ASM = _HERE.parent
 if str(_CY_ASM) not in sys.path:
     sys.path.insert(0, str(_CY_ASM))
+
+
+_REPORTS_BASE = Path("/var/log/cycentra/cy-asm/reports")
+_REPORT_LIMIT = 6
+
+
+def _prune_old_reports() -> None:
+    """Delete oldest PDFs so that no more than _REPORT_LIMIT files are retained."""
+    base = os.environ.get("CYCENTRA_REPORT_DIR", "").strip()
+    search_root = Path(base) if base else _REPORTS_BASE
+    all_pdfs = sorted(
+        glob.glob(str(search_root / "**" / "*.pdf"), recursive=True),
+        key=os.path.getmtime,
+        reverse=True,
+    )
+    for old_pdf in all_pdfs[_REPORT_LIMIT:]:
+        try:
+            os.remove(old_pdf)
+            logger.info(f"[Reports] Pruned old report: {old_pdf}")
+        except Exception as exc:
+            logger.warning(f"[Reports] Failed to prune {old_pdf}: {exc}")
 
 
 def _output_dir(tenant_id: str) -> Path:
@@ -100,6 +122,8 @@ def generate_all_reports(
     except Exception as e:
         logger.error(f"[Reports] ❌ Technical report failed: {type(e).__name__}: {e}")
         tech_path = ""
+
+    _prune_old_reports()
 
     return exec_path, tech_path
 

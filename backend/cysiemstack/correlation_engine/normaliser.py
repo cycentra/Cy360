@@ -121,11 +121,24 @@ _CLOUD_SOURCE_MAP: dict[str, str] = {
 
 
 def _classify_category(rule_id: int, groups: list) -> str:
-    """Map rule ID and groups to a high-level category string."""
+    """Map rule ID and groups to a high-level category string.
+
+    Cloud integration sources (office365, azure, aws, gcp, github) are checked
+    BEFORE generic auth/web/scan labels.  This prevents O365 sign-in failure
+    alerts — whose Wazuh rule groups include both 'office365' and
+    'authentication_failed' — from being mis-categorised as 'authentication'.
+    FIM and malware remain above cloud so e.g. an O365 malware-detection event
+    is still labelled 'malware'.
+    """
     if rule_id in FIM_RULE_IDS or 'syscheck' in groups:
         return 'fim'
     if rule_id in MALWARE_RULE_IDS or 'virus' in groups or 'malware' in groups:
         return 'malware'
+    # Cloud integration sources — must be checked before generic 'authentication'
+    # so that O365/Azure/AWS alert groups are not swallowed by the auth check.
+    for grp in groups:
+        if grp in _CLOUD_SOURCE_MAP:
+            return _CLOUD_SOURCE_MAP[grp]
     if rule_id in SSH_RULE_IDS or 'sshd' in groups or 'authentication' in groups:
         return 'authentication'
     if rule_id in AUTH_RULE_IDS or 'pam' in groups or 'sudo' in groups:
@@ -138,9 +151,6 @@ def _classify_category(rule_id: int, groups: list) -> str:
         return 'vulnerability'
     if 'network_scan' in groups or 'nmap' in groups:
         return 'scan'
-    for grp in groups:
-        if grp in _CLOUD_SOURCE_MAP:
-            return _CLOUD_SOURCE_MAP[grp]
     return 'system'
 
 
