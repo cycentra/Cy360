@@ -43,6 +43,10 @@ DEMO_MAX_DAYS  = 15
 DEMO_STATE     = Path("/opt/cycentra/.demo_start")
 LICENSE_PATH   = Path("/opt/cycentra/cycentra.lic")
 
+# v3 subscription types; v2 aliases: full→enterprise, trial→starter
+_V3_TYPES      = {"starter", "professional", "enterprise", "demo"}
+_V2_ALIAS      = {"full": "enterprise", "trial": "starter"}
+
 # ── Core validation ───────────────────────────────────────────────────────────
 
 def _verify_signature(payload_str: str, sig_b64: str) -> bool:
@@ -148,7 +152,12 @@ def validate(lic_path: Path = LICENSE_PATH) -> dict:
                 "features": [], "customer": payload.get("customer", "unknown"),
                 "message": "License signature is invalid — file may have been tampered"}
 
-    days = _days_remaining(payload["expires"])
+    expiry_str = payload.get("subscription_end") or payload.get("expires", "")
+    if not expiry_str:
+        return {"valid": False, "type": payload.get("type", "none"), "days_remaining": 0,
+                "features": [], "customer": payload.get("customer", "unknown"),
+                "message": "License file missing expiry date"}
+    days = _days_remaining(expiry_str)
 
     # For demo-type signed licenses: the expiry date is calculated from the
     # GENERATION date, not the installation date.  A demo .lic file generated
@@ -162,16 +171,29 @@ def validate(lic_path: Path = LICENSE_PATH) -> dict:
         if install_days > days:
             days = install_days
 
+    # ── v3 / v2 normalisation ────────────────────────────────────────────────
+    # v3 uses subscription_end; v2 uses expires. Support both.
+    expiry_date   = payload.get("subscription_end") or payload.get("expires", "")
+    # v3 uses max_users; v2 uses users. Support both.
+    max_users     = payload.get("max_users", payload.get("users", 0))
+    billing_cycle = payload.get("billing_cycle", "annual")
+    # Normalise type aliases (full → enterprise, trial → starter)
+    lic_type      = _V2_ALIAS.get(payload["type"], payload["type"])
+
     if days < 0:
-        return {"valid": False, "type": payload["type"], "days_remaining": 0,
+        return {"valid": False, "type": lic_type, "days_remaining": 0,
                 "features": payload.get("features", []),
                 "customer": payload["customer"],
-                "message": f"License expired on {payload['expires']}"}
+                "billing_cycle": billing_cycle, "max_users": max_users,
+                "subscription_end": expiry_date,
+                "message": f"License expired on {expiry_date}"}
 
-    return {"valid": True, "type": payload["type"], "days_remaining": days,
+    return {"valid": True, "type": lic_type, "days_remaining": days,
             "features": payload.get("features", []),
             "customer": payload["customer"],
-            "message": f"License valid — {days} day(s) remaining (expires {payload['expires']})"}
+            "billing_cycle": billing_cycle, "max_users": max_users,
+            "subscription_end": expiry_date,
+            "message": f"License valid — {days} day(s) remaining (expires {expiry_date})"}
 
 
 if __name__ == "__main__":
