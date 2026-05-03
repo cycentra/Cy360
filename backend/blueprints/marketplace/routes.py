@@ -51,7 +51,7 @@ _CUSTOM_CATALOG_FILE = "/opt/cycentra/marketplace_custom.json"
 
 _VALID_TYPES        = {"integration", "playbook"}
 _VALID_STATUSES     = {"draft", "submitted", "approved", "rejected"}
-_VALID_CONFIG_TYPES = {"o365", "gcloud", None}
+_VALID_CONFIG_TYPES = {"o365", "gcloud", "github", None}
 _ID_RE              = re.compile(r"^[a-z0-9][a-z0-9\-]{1,48}[a-z0-9]$")
 
 
@@ -534,7 +534,7 @@ def _validate_catalog_item(data, existing_id):
         return jsonify({"error": "description is required"}), 400
     config_type = data.get("config_type")
     if config_type not in _VALID_CONFIG_TYPES:
-        return jsonify({"error": "config_type must be o365, gcloud, or omitted"}), 400
+        return jsonify({"error": "config_type must be o365, gcloud, github, or omitted"}), 400
     return None
 
 

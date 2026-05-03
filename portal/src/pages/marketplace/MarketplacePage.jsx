@@ -191,6 +191,159 @@ function O365ConfigModal({ item, onClose, onSaved }) {
   );
 }
 
+// ── GitHub config modal ──────────────────────────────────────────────────────
+
+const GH_INTERVALS   = ["1m","5m","10m","15m","30m","1h","2h","6h","12h","24h"];
+const GH_EVENT_TYPES = [{id:"all",label:"All (web + git events)"},{id:"web",label:"Web events only"},{id:"git",label:"Git events only"}];
+const GH_PURPLE      = "#6e40c9";
+
+function GitHubConfigModal({ item, onClose, onSaved }) {
+  const [orgName,          setOrgName]          = useState("");
+  const [apiToken,         setApiToken]         = useState("");
+  const [interval,         setInterval]         = useState("1m");
+  const [timeDelay,        setTimeDelay]        = useState("1m");
+  const [curlMaxSize,      setCurlMaxSize]      = useState("1M");
+  const [onlyFuture,       setOnlyFuture]       = useState(true);
+  const [eventType,        setEventType]        = useState("all");
+  const [enabled,          setEnabled]          = useState(true);
+  const [saving,           setSaving]           = useState(false);
+  const [result,           setResult]           = useState(null);
+  const [hasExistingToken, setHasExistingToken] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/system/githubconfig`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => {
+        if (d.ok) {
+          if (d.org_name)    setOrgName(d.org_name);
+          if (d.interval)    setInterval(d.interval);
+          if (d.time_delay)  setTimeDelay(d.time_delay);
+          if (d.curl_max_size) setCurlMaxSize(d.curl_max_size);
+          if (d.event_type)  setEventType(d.event_type);
+          setOnlyFuture(d.only_future_events !== false);
+          setEnabled(d.enabled !== false);
+          setHasExistingToken(!!d.org_name && !d.org_name.startsWith("PLACEHOLDER"));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  function handleSave(e) {
+    e.preventDefault();
+    setResult(null);
+    setSaving(true);
+    fetch(`${API_BASE}/api/system/githubconfig`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ org_name: orgName, api_token: apiToken, interval, time_delay: timeDelay, curl_max_size: curlMaxSize, only_future_events: onlyFuture, event_type: eventType, enabled }),
+    })
+      .then(r => r.json().then(d => ({ ok: r.ok, data: d })))
+      .then(({ ok, data }) => {
+        setResult({ ok: ok && data.ok, msg: data.message || data.error || (ok ? "Saved" : "Error") });
+        if (ok && data.ok && onSaved) onSaved();
+      })
+      .catch(() => setResult({ ok: false, msg: "Network error" }))
+      .finally(() => setSaving(false));
+  }
+
+  const inp = { width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:4, padding:"9px 12px", color:"white", fontSize:13, fontFamily:"monospace", outline:"none", boxSizing:"border-box" };
+  const lbl = { color:"rgba(255,255,255,0.45)", fontSize:11, fontFamily:"monospace", letterSpacing:"0.8px", textTransform:"uppercase", marginBottom:6, display:"block" };
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.88)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:150, backdropFilter:"blur(6px)" }} onClick={onClose}>
+      <div style={{ background:"#0d0f14", border:`1px solid ${GH_PURPLE}40`, borderTop:`2px solid ${GH_PURPLE}`, borderRadius:8, padding:36, width:"min(560px,95vw)", maxHeight:"90vh", overflowY:"auto" }} onClick={e => e.stopPropagation()}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:24 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+            <span style={{ fontSize:34 }}>🐙</span>
+            <div>
+              <div style={{ color:"white", fontSize:19, fontWeight:700 }}>GitHub Audit Logs</div>
+              <div style={{ color:"rgba(255,255,255,0.35)", fontSize:11, fontFamily:"monospace", marginTop:3 }}>DevSecOps · Wazuh native github module</div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:"rgba(255,255,255,0.4)", cursor:"pointer", fontSize:22 }}>×</button>
+        </div>
+
+        <div style={{ color:"rgba(255,255,255,0.5)", fontSize:12, lineHeight:1.7, marginBottom:24 }}>
+          Configure the Wazuh native <code style={{ color:GH_PURPLE }}>github</code> module to ingest your organisation's audit logs into CySIEM.
+          Credentials are written into <code style={{ color:"rgba(255,255,255,0.6)" }}>/var/ossec/etc/ossec.conf</code> and
+          <strong style={{ color:"rgba(255,255,255,0.75)" }}> wazuh-manager is restarted automatically</strong>.
+        </div>
+
+        <form onSubmit={handleSave}>
+          <div style={{ background:`rgba(110,64,201,0.06)`, border:`1px solid rgba(110,64,201,0.2)`, borderRadius:6, padding:"18px 20px", marginBottom:20 }}>
+            <div style={{ color:"rgba(255,255,255,0.3)", fontSize:10, letterSpacing:"1.5px", fontFamily:"monospace", textTransform:"uppercase", marginBottom:16 }}>GitHub Credentials</div>
+            <div style={{ marginBottom:14 }}>
+              <label style={lbl}>Organisation Name</label>
+              <input value={orgName} onChange={e => setOrgName(e.target.value)} placeholder="your-github-org" required style={inp} />
+              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>The GitHub organisation slug (as it appears in github.com/&lt;org&gt;)</div>
+            </div>
+            <div>
+              <label style={lbl}>Personal Access Token (PAT)</label>
+              <input type="password" value={apiToken} onChange={e => setApiToken(e.target.value)} placeholder={hasExistingToken ? "Leave blank to keep existing token" : "ghp_xxxxxxxxxxxx"} required={!hasExistingToken} style={inp} autoComplete="new-password" />
+              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
+                {hasExistingToken ? "Token already configured — leave blank to keep unchanged" : "Requires read:audit_log scope. Write-only — never returned by the API."}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:20 }}>
+            <div>
+              <label style={lbl}>Poll Interval</label>
+              <select value={interval} onChange={e => setInterval(e.target.value)} style={{ ...inp, cursor:"pointer" }}>
+                {GH_INTERVALS.map(i => <option key={i} value={i}>{i}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={lbl}>Time Delay</label>
+              <select value={timeDelay} onChange={e => setTimeDelay(e.target.value)} style={{ ...inp, cursor:"pointer" }}>
+                {GH_INTERVALS.map(i => <option key={i} value={i}>{i}</option>)}
+              </select>
+              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>Scan delay behind current time</div>
+            </div>
+          </div>
+
+          <div style={{ marginBottom:20 }}>
+            <label style={lbl}>Event Type</label>
+            <select value={eventType} onChange={e => setEventType(e.target.value)} style={{ ...inp, cursor:"pointer" }}>
+              {GH_EVENT_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+            </select>
+          </div>
+
+          <div style={{ marginBottom:20 }}>
+            <label style={lbl}>Max API Response Size</label>
+            <input value={curlMaxSize} onChange={e => setCurlMaxSize(e.target.value)} placeholder="1M" style={inp} />
+            <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>Units: b/B · k/K · m/M · g/G (e.g. 1M, 512K)</div>
+          </div>
+
+          <div style={{ display:"flex", flexDirection:"column", gap:10, marginBottom:24 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              <input type="checkbox" id="ghEnabled" checked={enabled} onChange={e => setEnabled(e.target.checked)} style={{ accentColor:GH_PURPLE, width:15, height:15, cursor:"pointer" }} />
+              <label htmlFor="ghEnabled" style={{ color:"rgba(255,255,255,0.6)", fontSize:13, cursor:"pointer" }}>Enable integration</label>
+            </div>
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              <input type="checkbox" id="ghFuture" checked={onlyFuture} onChange={e => setOnlyFuture(e.target.checked)} style={{ accentColor:GH_PURPLE, width:15, height:15, cursor:"pointer" }} />
+              <label htmlFor="ghFuture" style={{ color:"rgba(255,255,255,0.6)", fontSize:13, cursor:"pointer" }}>Only future events (skip historical backfill)</label>
+            </div>
+          </div>
+
+          {result && (
+            <div style={{ background:result.ok?"rgba(0,229,160,0.08)":"rgba(255,59,59,0.08)", border:`1px solid ${result.ok?"rgba(0,229,160,0.25)":"rgba(255,59,59,0.25)"}`, borderRadius:4, padding:"10px 14px", fontSize:12, color:result.ok?"#00e5a0":"#ff8080", marginBottom:18 }}>
+              {result.ok ? "✓ " : "✗ "}{result.msg}
+            </div>
+          )}
+
+          <div style={{ display:"flex", gap:10 }}>
+            <button type="submit" disabled={saving} style={{ flex:1, background:saving?`rgba(110,64,201,0.4)`:GH_PURPLE, color:"white", border:"none", borderRadius:4, padding:"12px", fontFamily:"monospace", fontSize:12, fontWeight:700, cursor:saving?"not-allowed":"pointer", letterSpacing:"1px", textTransform:"uppercase" }}>
+              {saving ? "Applying…" : "Apply Configuration"}
+            </button>
+            <button type="button" onClick={onClose} style={{ padding:"12px 20px", background:"transparent", color:"rgba(255,255,255,0.4)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:4, fontFamily:"monospace", fontSize:12, cursor:"pointer" }}>Close</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // ── GCloud config modal ───────────────────────────────────────────────────────
 
 const GCP_INTERVALS  = ["1m","5m","10m","15m","30m","1h","2h","6h","12h","24h"];
@@ -1258,8 +1411,9 @@ export function MarketplacePage({ user }) {
       )}
 
       {/* ── Config / detail modals ── */}
-      {configModal?.config_type === "o365"   && <O365ConfigModal   item={configModal}     onClose={() => setConfigModal(null)} onSaved={() => { fetch(`${API_BASE}/api/marketplace/installed`,{credentials:"include"}).then(r=>r.json()).then(d=>{setInstalled(new Set(d.installed||[]));setConfigured(new Set(d.configured||[]));}).catch(()=>{}); }} />}
-      {configModal?.config_type === "gcloud" && <GCloudConfigModal item={configModal}     onClose={() => setConfigModal(null)} />}
+      {configModal?.config_type === "o365"    && <O365ConfigModal   item={configModal} onClose={() => setConfigModal(null)} onSaved={() => { fetch(`${API_BASE}/api/marketplace/installed`,{credentials:"include"}).then(r=>r.json()).then(d=>{setInstalled(new Set(d.installed||[]));setConfigured(new Set(d.configured||[]));}).catch(()=>{}); }} />}
+      {configModal?.config_type === "gcloud"  && <GCloudConfigModal item={configModal} onClose={() => setConfigModal(null)} />}
+      {configModal?.config_type === "github"  && <GitHubConfigModal item={configModal} onClose={() => setConfigModal(null)} onSaved={() => { fetch(`${API_BASE}/api/marketplace/installed`,{credentials:"include"}).then(r=>r.json()).then(d=>{setInstalled(new Set(d.installed||[]));setConfigured(new Set(d.configured||[]));}).catch(()=>{}); }} />}
       {detailModal                           && <PlaybookModal     item={detailModal}     onClose={() => setDetailModal(null)} />}
 
       {/* ── Admin: add / edit custom catalog item ── */}

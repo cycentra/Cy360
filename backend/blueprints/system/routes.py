@@ -3108,6 +3108,191 @@ def gcloudconfig_post():
     }))
 
 
+# ── GitHub Wazuh Integration ─────────────────────────────────────────────────
+
+_GITHUB_VALID_INTERVALS   = {"1m", "5m", "10m", "15m", "30m", "1h", "2h", "6h", "12h", "24h"}
+_GITHUB_VALID_EVENT_TYPES = {"all", "web", "git"}
+_GITHUB_CACHE             = Path("/opt/cycentra/github_config.json")
+
+
+@system_bp.route("/api/system/githubconfig", methods=["OPTIONS"])
+def githubconfig_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/githubconfig", methods=["GET"])
+def githubconfig_get():
+    """Return current GitHub Wazuh module config (api_token redacted)."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+
+    if not _OSSEC_CONF.exists():
+        return jsonify({"ok": False, "error": "ossec.conf not found — is CySIEM installed?"}), 404
+
+    try:
+        content = _OSSEC_CONF.read_text()
+    except PermissionError:
+        return jsonify({"ok": False, "error": "Permission denied reading ossec.conf"}), 403
+
+    module_match = re.search(r'<github>(.*?)</github>', content, re.DOTALL)
+    if not module_match:
+        return add_cors_headers(jsonify({
+            "ok":                 True,
+            "enabled":            False,
+            "interval":           "1m",
+            "time_delay":         "1m",
+            "curl_max_size":      "1M",
+            "only_future_events": True,
+            "event_type":         "all",
+            "org_name":           "",
+            "api_token":          "",
+        }))
+
+    block = module_match.group(1)
+
+    def _ex(tag):
+        m = re.search(rf"<{tag}>(.*?)</{tag}>", block)
+        return m.group(1).strip() if m else ""
+
+    return add_cors_headers(jsonify({
+        "ok":                 True,
+        "enabled":            _ex("enabled") != "no",
+        "interval":           _ex("interval") or "1m",
+        "time_delay":         _ex("time_delay") or "1m",
+        "curl_max_size":      _ex("curl_max_size") or "1M",
+        "only_future_events": _ex("only_future_events") != "no",
+        "event_type":         _ex("event_type") or "all",
+        "org_name":           _ex("org_name") if not _ex("org_name").startswith("PLACEHOLDER") else "",
+        "api_token":          "",   # write-only — never returned
+    }))
+
+
+@system_bp.route("/api/system/githubconfig", methods=["POST"])
+def githubconfig_post():
+    """Write GitHub credentials into the Wazuh ossec.conf <github> module block
+    and restart the wazuh-manager service.
+
+    Body (JSON):
+      org_name            – GitHub organisation name (required)
+      api_token           – GitHub PAT (omit to keep existing token)
+      interval            – poll interval (default '1m')
+      time_delay          – scan delay relative to current time (default '1m')
+      curl_max_size       – max API response size (default '1M')
+      only_future_events  – bool (default true)
+      event_type          – 'all' | 'web' | 'git' (default 'all')
+      enabled             – bool (default true)
+    """
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) != "admin":
+        return jsonify({"error": "Admin role required to configure integrations"}), 403
+
+    data               = request.get_json() or {}
+    org_name           = (data.get("org_name")       or "").strip()
+    api_token          = (data.get("api_token")      or "").strip()
+    interval           = (data.get("interval")       or "1m").strip()
+    time_delay         = (data.get("time_delay")     or "1m").strip()
+    curl_max_size      = (data.get("curl_max_size")  or "1M").strip()
+    only_future_events = bool(data.get("only_future_events", True))
+    event_type         = (data.get("event_type")     or "all").strip()
+    enabled            = bool(data.get("enabled", True))
+
+    if not org_name:
+        return jsonify({"ok": False, "error": "org_name is required"}), 400
+    if interval not in _GITHUB_VALID_INTERVALS:
+        return jsonify({"ok": False, "error": f"interval must be one of: {', '.join(sorted(_GITHUB_VALID_INTERVALS))}"}), 400
+    if event_type not in _GITHUB_VALID_EVENT_TYPES:
+        return jsonify({"ok": False, "error": f"event_type must be one of: {', '.join(sorted(_GITHUB_VALID_EVENT_TYPES))}"}), 400
+
+    if not _OSSEC_CONF.exists():
+        return jsonify({"ok": False, "error": "ossec.conf not found — is CySIEM installed?"}), 404
+
+    try:
+        content = _OSSEC_CONF.read_text()
+    except PermissionError:
+        return jsonify({"ok": False, "error": "Permission denied reading ossec.conf"}), 403
+
+    # If api_token omitted, preserve the value already in ossec.conf
+    if not api_token:
+        m = re.search(r"<api_token>(.*?)</api_token>", content)
+        existing_token = m.group(1).strip() if m else ""
+        if existing_token.startswith("PLACEHOLDER") or not existing_token:
+            return jsonify({"ok": False, "error": "api_token is required for the initial configuration"}), 400
+        api_token = existing_token
+
+    enabled_str     = "yes" if enabled else "no"
+    only_future_str = "yes" if only_future_events else "no"
+
+    new_block = (
+        f'<github>\n'
+        f'    <enabled>{enabled_str}</enabled>\n'
+        f'    <interval>{interval}</interval>\n'
+        f'    <time_delay>{time_delay}</time_delay>\n'
+        f'    <curl_max_size>{curl_max_size}</curl_max_size>\n'
+        f'    <only_future_events>{only_future_str}</only_future_events>\n'
+        f'    <api_auth>\n'
+        f'      <org_name>{org_name}</org_name>\n'
+        f'      <api_token>{api_token}</api_token>\n'
+        f'    </api_auth>\n'
+        f'    <api_parameters>\n'
+        f'      <event_type>{event_type}</event_type>\n'
+        f'    </api_parameters>\n'
+        f'  </github>'
+    )
+
+    updated, n_subs = re.subn(
+        r'<github>.*?</github>',
+        new_block,
+        content,
+        flags=re.DOTALL,
+    )
+    if n_subs == 0:
+        updated = content.replace(
+            "</ossec_config>",
+            f"\n  {new_block}\n</ossec_config>",
+        )
+
+    # Cache credentials for reapply after setup script re-runs
+    try:
+        _GITHUB_CACHE.write_text(json.dumps({
+            "org_name":           org_name,
+            "api_token":          api_token,
+            "interval":           interval,
+            "time_delay":         time_delay,
+            "curl_max_size":      curl_max_size,
+            "only_future_events": only_future_events,
+            "event_type":         event_type,
+            "enabled":            enabled,
+        }, indent=2))
+        _GITHUB_CACHE.chmod(0o600)
+    except OSError:
+        pass  # non-fatal
+
+    backup = Path(f"{_OSSEC_CONF}.githubak")
+    try:
+        shutil.copy2(str(_OSSEC_CONF), str(backup))
+        _OSSEC_CONF.write_text(updated)
+    except PermissionError:
+        return jsonify({"ok": False, "error": "Permission denied writing ossec.conf"}), 403
+    except OSError:
+        return jsonify({"ok": False, "error": "Failed to write ossec.conf — check server logs"}), 500
+
+    rc, _stdout, _stderr = _run_cmd("systemctl restart wazuh-manager")
+    if rc != 0:
+        return add_cors_headers(jsonify({
+            "ok":      False,
+            "written": True,
+            "error":   "Config saved but wazuh-manager restart failed — check server logs",
+        })), 207
+
+    return add_cors_headers(jsonify({
+        "ok":      True,
+        "enabled": enabled,
+        "message": "GitHub integration configured and wazuh-manager restarted successfully",
+    }))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Scheduled Tasks — GET /api/system/schedules  PUT /api/system/schedules
 # Manages cron entries for: docker-maintenance, asm-wordlist, asm-scan
