@@ -17,7 +17,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from reportlab.lib import colors
 from reportlab.lib.units import cm
-from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import (
     Image, KeepTogether, PageBreak, Paragraph, Spacer, Table, TableStyle,
 )
@@ -27,9 +26,8 @@ from .charts import (
     subdomain_bar, ssl_donut, email_score_bar, cvss_histogram,
 )
 from .pdf_base import (
-    BODY_W, C_BLUE, C_BORDER, C_DARK2, C_DARK3, C_GREEN, C_LIGHT, C_MID,
-    C_NAVY, C_ORANGE, C_RED, C_SKY, C_SUBTLE, C_TEAL, C_TEXT, C_YELLOW,
-    MARGIN, SEV_COLOR, STYLES, W,
+    BODY_W, C_BLUE, C_BORDER, C_GREEN, C_LIGHT, C_MID, C_NAVY, C_ORANGE,
+    C_RED, C_SKY, C_SUBTLE, C_TEXT, C_YELLOW, MARGIN, SEV_COLOR, STYLES, W,
     CyCentraDocTemplate, build_cover, compute_posture_score,
     extract_domain_scores, finding_table, img_from_bytes, metric_card,
     rule, section_header, severity_badge,
@@ -222,16 +220,14 @@ def _risk_breakdown(all_f: List[Dict]) -> List:
         t = finding_table(sev_rows,
                           [2.5*cm, 1.5*cm, 8*cm, 4.5*cm],
                           ["Severity", "Count", "Business Impact", "Remediation Timeline"])
-        # Colour severity cells with dark-theme badge style
+        # Colour severity cells
         for i, row_data in enumerate(sev_rows, 1):
-            raw_text = str(sev_rows[i-1][0])
-            sev_key  = [k for k in SEV_COLOR if k.lower() in raw_text.lower()]
+            sev_text = row_data[0].text if hasattr(row_data[0], 'text') else ""
+            sev_key  = [k for k in SEV_COLOR if k in str(sev_rows[i-1][0])]
             if sev_key:
-                col = SEV_COLOR[sev_key[0]]
                 t.setStyle(TableStyle([
-                    ("BACKGROUND", (0, i), (0, i), col),
+                    ("BACKGROUND", (0, i), (0, i), SEV_COLOR[sev_key[0]]),
                     ("TEXTCOLOR",  (0, i), (0, i), colors.white),
-                    ("FONTNAME",   (0, i), (0, i), "Helvetica-Bold"),
                 ]))
         story.append(t)
     return story
@@ -252,56 +248,23 @@ def _top_risks(all_f: List[Dict]) -> List:
         rec   = f.get("recommendation", "Review and remediate according to vendor guidance.")
         narrative = _get_narrative(vuln, sev)
 
-        sev_color = SEV_COLOR.get(sev, C_SKY)
-        # Dark card header row with severity colour accent
-        header_row = Table(
-            [[
-                Paragraph(f"<b>{i}. {vuln[:65]}</b>", STYLES["finding_title"]),
-                severity_badge(sev),
-                Paragraph(f"Risk: <b>{score}/10</b>", STYLES["body_small"]),
-            ]],
-            colWidths=[BODY_W - 4.5*cm, 2*cm, 2.2*cm],
-        )
-        header_row.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, -1), C_DARK2),
-            ("LINEBELOW",     (0, 0), (-1, 0),  1.5,  sev_color),
-            ("TOPPADDING",    (0, 0), (-1, -1),  6),
-            ("BOTTOMPADDING", (0, 0), (-1, -1),  6),
-            ("LEFTPADDING",   (0, 0), (-1, -1),  8),
-            ("RIGHTPADDING",  (0, 0), (-1, -1),  6),
-            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
-        ]))
-
-        # Body section inside a lightly bordered card
-        body_style = ParagraphStyle("fcard_body",
-            fontName="Helvetica", fontSize=8.5, textColor=C_TEXT,
-            leading=12, spaceAfter=3)
-        label_style = ParagraphStyle("fcard_label",
-            fontName="Helvetica-Bold", fontSize=8.5, textColor=C_SKY,
-            leading=12, spaceAfter=1)
-
-        body_content = Table([
-            [Paragraph("Business Risk:", label_style),
-             Paragraph(narrative, body_style)],
-            [Paragraph("Impact:", label_style),
-             Paragraph(_BUSINESS_IMPACT.get(sev, ""), body_style)],
-            [Paragraph("Recommended Action:", label_style),
-             Paragraph(rec, body_style)],
-            [Paragraph("Priority:", label_style),
-             Paragraph(_REMEDIATION_PRIORITY.get(sev, ""), body_style)],
-        ], colWidths=[3.5 * cm, BODY_W - 3.5 * cm])
-        body_content.setStyle(TableStyle([
-            ("BACKGROUND",    (0, 0), (-1, -1), C_LIGHT),
-            ("VALIGN",        (0, 0), (-1, -1), "TOP"),
-            ("TOPPADDING",    (0, 0), (-1, -1), 4),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ("LEFTPADDING",   (0, 0), (0, -1),  8),
-            ("LEFTPADDING",   (1, 0), (1, -1),  4),
-            ("RIGHTPADDING",  (0, 0), (-1, -1), 6),
-            ("LINEBELOW",     (0, -1), (-1, -1), 0.3, C_BORDER),
-        ]))
-
-        story.append(KeepTogether([header_row, body_content, Spacer(1, 6)]))
+        items = [
+            Table(
+                [[
+                    Paragraph(f"<b>{i}. {vuln[:60]}</b>", STYLES["finding_title"]),
+                    severity_badge(sev),
+                    Paragraph(f"Risk: {score}/10", STYLES["body_small"]),
+                ]],
+                colWidths=[BODY_W - 4.5*cm, 2*cm, 2.2*cm],
+            ),
+            Paragraph(f"<b>Business Risk:</b> {narrative}", STYLES["body"]),
+            Paragraph(f"<b>Impact:</b> {_BUSINESS_IMPACT.get(sev, '')}", STYLES["body"]),
+            Paragraph(f"<b>Recommended Action:</b> {rec}", STYLES["body"]),
+            Paragraph(f"<i>Module: {mod}  |  Priority: {_REMEDIATION_PRIORITY.get(sev,'')}</i>",
+                      STYLES["body_small"]),
+            rule(C_BORDER, space_before=4, space_after=4),
+        ]
+        story.append(KeepTogether(items))
 
     return story
 

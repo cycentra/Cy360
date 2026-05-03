@@ -27,9 +27,8 @@ from .charts import (
     ssl_donut, email_score_bar, subdomain_bar, posture_gauge,
 )
 from .pdf_base import (
-    BODY_W, C_BLUE, C_BORDER, C_DARK2, C_DARK3, C_GREEN, C_LIGHT, C_MID,
-    C_NAVY, C_ORANGE, C_RED, C_SKY, C_SUBTLE, C_TEAL, C_TEXT, C_YELLOW,
-    MARGIN, SEV_COLOR, STYLES, W,
+    BODY_W, C_BLUE, C_BORDER, C_GREEN, C_LIGHT, C_NAVY, C_ORANGE, C_RED,
+    C_SKY, C_SUBTLE, C_TEXT, C_YELLOW, MARGIN, SEV_COLOR, STYLES, W,
     CyCentraDocTemplate, build_cover, compute_posture_score,
     finding_table, img_from_bytes, metric_card, rule,
     section_header, severity_badge,
