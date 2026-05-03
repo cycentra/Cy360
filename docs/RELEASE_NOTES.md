@@ -1,8 +1,16 @@
 ## v1.0.330 -- 2026-05-03
 
-### Improvements
+### New Features
 
-  - Stability and performance improvements.
+  - **Audit Trail** — New dedicated Audit Trail section accessible from the sidebar (Actions > Audit Trail). Captures all user and system events with timestamps, categories, results, and contextual metadata. Includes a live search bar, multi-field filters (category, result, user/email, date range), paginated log table with expandable detail rows, and one-click CSV/JSON export. Events are automatically recorded for logins, logouts, document creation, config changes, scan triggers, scheduler job execution, and service lifecycle events. Logs are stored at `/var/log/cycentra/audit.log` and merged at query time with `/var/log/cycentra/auth.log` for unified visibility.
+
+    **API:** `GET /api/audit/logs`, `GET /api/audit/stats`, `GET /api/audit/export?format=csv|json`, `POST /api/audit/event`, `GET /api/audit/categories`
+
+    **How to use:** Navigate to the sidebar and click **Audit Trail** under Actions. Use the filter bar to narrow by category (authentication, configuration, scan, scheduler, document), result (success/failure), or time window. Click any row's expand arrow to see the full event metadata. Use the Export button to download logs as CSV or JSON for compliance reporting.
+
+  - **ASM PDF Report Modernization** — Completely redesigned PDF report output using the SecuPulse Security Business Review as a style reference. Reports now use a deep navy dark theme (`#0A1628` background) with teal (`#00E5A0`) and sky-blue (`#38BDF8`) accents throughout. Improvements include: modernized cover page with dot-grid decorative pattern, dual accent strips, and a security score box with grade pill (A–F); dark-theme metric cards with colored top-border accents; teal-ruled section headers; dark alternating rows in finding tables; updated posture gauge, severity pie chart, and module bar chart all rendered with matching dark palettes using matplotlib.
+
+    **How to use:** No configuration changes required. Generate ASM reports as usual via the web portal or API — all new reports will automatically use the modernized dark theme format. Previously generated reports are not affected.
 
 ---
 
