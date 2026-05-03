@@ -33,20 +33,23 @@ from reportlab.platypus import (
 from reportlab.platypus.flowables import Flowable
 
 # ── Colour constants (hex → ReportLab Color) ─────────────────────────────────
-C_NAVY    = colors.HexColor("#0B1F3A")
-C_BLUE    = colors.HexColor("#1E40FF")
-C_SKY     = colors.HexColor("#4FB6FF")
-C_TEAL    = colors.HexColor("#00C9C8")
-C_RED     = colors.HexColor("#E53E3E")
-C_ORANGE  = colors.HexColor("#F6AD55")
-C_YELLOW  = colors.HexColor("#ECC94B")
-C_GREEN   = colors.HexColor("#48BB78")
-C_PURPLE  = colors.HexColor("#805AD5")
-C_LIGHT   = colors.HexColor("#F7FAFC")
-C_MID     = colors.HexColor("#EBF4FF")
-C_BORDER  = colors.HexColor("#CBD5E0")
-C_TEXT    = colors.HexColor("#1A202C")
-C_SUBTLE  = colors.HexColor("#718096")
+# Modern dark-theme palette — inspired by SecuPulse-style reporting
+C_NAVY    = colors.HexColor("#0A1628")   # deep navy — primary dark bg
+C_DARK2   = colors.HexColor("#0E1E35")   # slightly lighter card bg
+C_DARK3   = colors.HexColor("#132847")   # section header bg
+C_BLUE    = colors.HexColor("#1A56DB")   # primary accent blue
+C_SKY     = colors.HexColor("#00C8FF")   # bright cyan accent
+C_TEAL    = colors.HexColor("#00E5A0")   # teal/green accent (CyCentra brand)
+C_RED     = colors.HexColor("#E53E3E")   # critical
+C_ORANGE  = colors.HexColor("#F97316")   # high
+C_YELLOW  = colors.HexColor("#F5A623")   # medium
+C_GREEN   = colors.HexColor("#22C55E")   # low / good
+C_PURPLE  = colors.HexColor("#8B5CF6")   # info / decorative
+C_LIGHT   = colors.HexColor("#0F1F38")   # card background (dark)
+C_MID     = colors.HexColor("#16284A")   # alternating row bg
+C_BORDER  = colors.HexColor("#1E3A5F")   # border colour (dark theme)
+C_TEXT    = colors.HexColor("#E2E8F0")   # primary text (near white)
+C_SUBTLE  = colors.HexColor("#7A9DBF")   # secondary text (steel blue-grey)
 
 SEV_COLOR = {
     "Critical": C_RED,
@@ -64,34 +67,34 @@ BODY_W = W - 2 * MARGIN
 # ── Style sheet ───────────────────────────────────────────────────────────────
 
 def build_styles() -> dict:
-    base = getSampleStyleSheet()
     s = {}
 
     def ps(name, **kw):
         return ParagraphStyle(name, **kw)
 
     s["cover_title"] = ps("cover_title",
-        fontName="Helvetica-Bold", fontSize=36, textColor=colors.white,
-        leading=42, alignment=TA_LEFT, spaceAfter=6)
+        fontName="Helvetica-Bold", fontSize=38, textColor=colors.white,
+        leading=44, alignment=TA_LEFT, spaceAfter=8)
 
     s["cover_sub"] = ps("cover_sub",
-        fontName="Helvetica", fontSize=14, textColor=C_SKY,
+        fontName="Helvetica", fontSize=14, textColor=C_TEAL,
         leading=18, alignment=TA_LEFT, spaceAfter=4)
 
     s["cover_meta"] = ps("cover_meta",
-        fontName="Helvetica", fontSize=10, textColor=colors.white,
+        fontName="Helvetica", fontSize=10, textColor=C_TEXT,
         leading=14, alignment=TA_LEFT)
 
+    # Content headings — light text for dark background
     s["h1"] = ps("h1",
-        fontName="Helvetica-Bold", fontSize=16, textColor=C_NAVY,
-        leading=20, spaceBefore=18, spaceAfter=6)
+        fontName="Helvetica-Bold", fontSize=15, textColor=C_TEAL,
+        leading=20, spaceBefore=20, spaceAfter=6)
 
     s["h2"] = ps("h2",
-        fontName="Helvetica-Bold", fontSize=12, textColor=C_BLUE,
+        fontName="Helvetica-Bold", fontSize=11.5, textColor=C_SKY,
         leading=16, spaceBefore=12, spaceAfter=4)
 
     s["h3"] = ps("h3",
-        fontName="Helvetica-Bold", fontSize=10, textColor=C_NAVY,
+        fontName="Helvetica-Bold", fontSize=9.5, textColor=C_TEXT,
         leading=14, spaceBefore=8, spaceAfter=3)
 
     s["body"] = ps("body",
@@ -105,10 +108,10 @@ def build_styles() -> dict:
     s["bullet"] = ps("bullet",
         fontName="Helvetica", fontSize=9, textColor=C_TEXT,
         leading=12, leftIndent=12, spaceAfter=2,
-        bulletIndent=0, bulletText="•")
+        bulletIndent=0, bulletText="▸")
 
     s["finding_title"] = ps("finding_title",
-        fontName="Helvetica-Bold", fontSize=9.5, textColor=C_NAVY,
+        fontName="Helvetica-Bold", fontSize=9.5, textColor=C_SKY,
         leading=13, spaceAfter=2)
 
     s["tag"] = ps("tag",
@@ -120,7 +123,7 @@ def build_styles() -> dict:
         alignment=TA_CENTER)
 
     s["toc"] = ps("toc",
-        fontName="Helvetica", fontSize=9.5, textColor=C_NAVY,
+        fontName="Helvetica", fontSize=9.5, textColor=C_TEXT,
         leading=14, spaceAfter=2)
 
     s["caption"] = ps("caption",
@@ -128,7 +131,7 @@ def build_styles() -> dict:
         alignment=TA_CENTER, spaceAfter=6)
 
     s["metric_num"] = ps("metric_num",
-        fontName="Helvetica-Bold", fontSize=28, textColor=C_NAVY,
+        fontName="Helvetica-Bold", fontSize=28, textColor=C_TEAL,
         alignment=TA_CENTER, leading=32)
 
     s["metric_label"] = ps("metric_label",
@@ -181,62 +184,67 @@ def severity_badge(sev: str) -> Table:
     return t
 
 
-def metric_card(value: str, label: str, color=C_NAVY) -> Table:
-    """KPI card for the executive summary strip."""
-    val_style = ParagraphStyle("mv", fontName="Helvetica-Bold", fontSize=24,
-                               textColor=color, alignment=TA_CENTER, leading=28)
-    lbl_style = ParagraphStyle("ml", fontName="Helvetica", fontSize=7.5,
+def metric_card(value: str, label: str, color=C_TEAL) -> Table:
+    """KPI card for the executive summary strip — dark theme."""
+    val_style = ParagraphStyle("mv", fontName="Helvetica-Bold", fontSize=26,
+                               textColor=color, alignment=TA_CENTER, leading=30)
+    lbl_style = ParagraphStyle("ml", fontName="Helvetica", fontSize=7,
                                textColor=C_SUBTLE, alignment=TA_CENTER, leading=10)
     t = Table([
         [Paragraph(str(value), val_style)],
         [Paragraph(label, lbl_style)],
     ], colWidths=[3.8 * cm], rowHeights=[1.1 * cm, 0.5 * cm])
     t.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), C_LIGHT),
-        ("BOX", (0, 0), (-1, -1), 0.5, C_BORDER),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (0, 0), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("LEFTPADDING", (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("BACKGROUND",    (0, 0), (-1, -1), C_DARK2),
+        ("BOX",           (0, 0), (-1, -1), 1.0, color),
+        ("LINEBELOW",     (0, 0), (-1, 0),  2.0, color),
+        ("ALIGN",         (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING",    (0, 0), (0, 0), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING",  (0, 0), (-1, -1), 4),
     ]))
     return t
 
 
 def section_header(title: str, subtitle: str = "") -> List:
+    """Modern dark-theme section header with teal accent bar."""
     items = [
-        rule(C_BLUE, thickness=2, space_before=10, space_after=2),
+        rule(C_TEAL, thickness=2.5, space_before=14, space_after=0),
         Paragraph(title, STYLES["h1"]),
     ]
     if subtitle:
         items.append(Paragraph(subtitle, STYLES["body_small"]))
-    items.append(rule(C_BORDER, thickness=0.5, space_before=0, space_after=10))
+    items.append(rule(C_BORDER, thickness=0.3, space_before=2, space_after=12))
     return items
 
 
 def finding_table(rows: List[List], col_widths: List[float],
                   header: List[str], zebra: bool = True) -> Table:
-    """Standard data table with branded header."""
+    """Dark-theme data table with teal/dark branded header."""
     data = [header] + rows
     t = Table(data, colWidths=col_widths, repeatRows=1)
     style = [
-        ("BACKGROUND", (0, 0), (-1, 0), C_NAVY),
-        ("TEXTCOLOR",  (0, 0), (-1, 0), colors.white),
+        # Header row
+        ("BACKGROUND", (0, 0), (-1, 0), C_DARK3),
+        ("TEXTCOLOR",  (0, 0), (-1, 0), C_TEAL),
         ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE",   (0, 0), (-1, 0), 8),
         ("ALIGN",      (0, 0), (-1, 0), "CENTER"),
+        ("LINEBELOW",  (0, 0), (-1, 0), 1.5, C_TEAL),
+        # Data rows
         ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
         ("FONTNAME",   (0, 1), (-1, -1), "Helvetica"),
         ("FONTSIZE",   (0, 1), (-1, -1), 7.5),
         ("TEXTCOLOR",  (0, 1), (-1, -1), C_TEXT),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1),
-         [C_LIGHT, colors.white] if zebra else [colors.white]),
-        ("GRID",       (0, 0), (-1, -1), 0.3, C_BORDER),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+         [C_LIGHT, C_MID] if zebra else [C_LIGHT]),
+        ("GRID",       (0, 0), (-1, -1), 0.25, C_BORDER),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
     ]
     t.setStyle(TableStyle(style))
     return t
@@ -271,32 +279,51 @@ class CyCentraDocTemplate(BaseDocTemplate):
         self.addPageTemplates([cover_tpl, content_tpl])
 
     def _no_header_footer(self, canvas, doc):
-        pass
+        canvas.saveState()
+        canvas.setFillColor(C_NAVY)
+        canvas.rect(0, 0, W, H, fill=1, stroke=0)
+        canvas.restoreState()
 
     def _draw_header_footer(self, canvas, doc):
         canvas.saveState()
-        # Header bar
+        # Dark page background
         canvas.setFillColor(C_NAVY)
-        canvas.rect(0, H - 1.1 * cm, W, 1.1 * cm, fill=1, stroke=0)
+        canvas.rect(0, 0, W, H, fill=1, stroke=0)
+        # ── Header bar (dark navy + teal accent) ──────────────────────────────
+        canvas.setFillColor(C_NAVY)
+        canvas.rect(0, H - 1.15 * cm, W, 1.15 * cm, fill=1, stroke=0)
+        # Teal left accent strip
+        canvas.setFillColor(C_TEAL)
+        canvas.rect(0, H - 1.15 * cm, 5 * mm, 1.15 * cm, fill=1, stroke=0)
+        # Sky blue right accent strip
         canvas.setFillColor(C_SKY)
-        canvas.rect(0, H - 1.1 * cm, 4 * mm, 1.1 * cm, fill=1, stroke=0)
-        canvas.setFillColor(colors.white)
+        canvas.rect(W - 5 * mm, H - 1.15 * cm, 5 * mm, 1.15 * cm, fill=1, stroke=0)
+
+        canvas.setFillColor(C_TEAL)
         canvas.setFont("Helvetica-Bold", 8.5)
-        canvas.drawString(MARGIN, H - 0.7 * cm, "CyCentra ASM")
+        canvas.drawString(MARGIN + 2 * mm, H - 0.72 * cm, "CyCentra ASM")
+        canvas.setFillColor(C_SUBTLE)
         canvas.setFont("Helvetica", 8)
-        canvas.drawCentredString(W / 2, H - 0.7 * cm,
-                                 f"{self.report_type} Report  |  {self.domain}")
-        canvas.drawRightString(W - MARGIN, H - 0.7 * cm,
+        canvas.drawCentredString(W / 2, H - 0.72 * cm,
+                                 f"{self.report_type} Report  ·  {self.domain}")
+        canvas.setFillColor(C_SKY)
+        canvas.setFont("Helvetica", 7.5)
+        canvas.drawRightString(W - MARGIN - 2 * mm, H - 0.72 * cm,
                                datetime.now().strftime("%d %b %Y"))
-        # Footer line
-        canvas.setStrokeColor(C_BORDER)
-        canvas.setLineWidth(0.5)
-        canvas.line(MARGIN, 1.4 * cm, W - MARGIN, 1.4 * cm)
+
+        # ── Footer (dark background + teal separator line) ────────────────────
+        canvas.setFillColor(C_NAVY)
+        canvas.rect(0, 0, W, 1.5 * cm, fill=1, stroke=0)
+        canvas.setStrokeColor(C_TEAL)
+        canvas.setLineWidth(0.8)
+        canvas.line(MARGIN, 1.42 * cm, W - MARGIN, 1.42 * cm)
         canvas.setFillColor(C_SUBTLE)
         canvas.setFont("Helvetica", 7)
-        canvas.drawString(MARGIN, 0.9 * cm,
+        canvas.drawString(MARGIN, 0.72 * cm,
                           f"CONFIDENTIAL  |  Scan ID: {self.scan_id}")
-        canvas.drawRightString(W - MARGIN, 0.9 * cm, f"Page {doc.page}")
+        canvas.setFillColor(C_TEAL)
+        canvas.setFont("Helvetica-Bold", 7)
+        canvas.drawRightString(W - MARGIN, 0.72 * cm, f"Page {doc.page}")
         canvas.restoreState()
 
 
@@ -346,34 +373,52 @@ def build_cover(report_type: str, domain: str, org: str,
 
         def draw(self):
             c = self.canv
-            # Full dark background
+            # ── Background: deep navy ────────────────────────────────────────
             c.setFillColor(C_NAVY)
             c.rect(0, 0, self.w, self.h, fill=1, stroke=0)
-            # Accent panel left strip
-            c.setFillColor(C_BLUE)
-            c.rect(0, 0, 6 * mm, self.h, fill=1, stroke=0)
-            # Diagonal accent top-right
-            c.setFillColor(colors.HexColor("#162d52"))
+
+            # Subtle diagonal gradient panel (top-right) — dark accent
+            c.setFillColor(colors.HexColor("#0E1E35"))
             p = c.beginPath()
             p.moveTo(self.w, self.h)
-            p.lineTo(self.w - 200, self.h)
-            p.lineTo(self.w, self.h - 200)
+            p.lineTo(self.w - 280, self.h)
+            p.lineTo(self.w, self.h - 280)
             p.close()
             c.drawPath(p, fill=1, stroke=0)
 
-            # ── Logo area ─────────────────────────────────────────────────────
-            logo_top_y   = self.h - 1.8 * cm   # top of logo zone
-            logo_height  = 1.4 * cm             # target height for the logo image
-            text_label_y = self.h - 3.7 * cm   # tagline below logo
+            # Bottom dark bar
+            c.setFillColor(colors.HexColor("#060e1c"))
+            c.rect(0, 0, self.w, 2.2 * cm, fill=1, stroke=0)
+
+            # Left teal accent strip
+            c.setFillColor(C_TEAL)
+            c.rect(0, 0, 7 * mm, self.h, fill=1, stroke=0)
+
+            # Secondary cyan thin strip
+            c.setFillColor(C_SKY)
+            c.rect(7 * mm, 0, 2 * mm, self.h, fill=1, stroke=0)
+
+            # Decorative dot-grid pattern (top-right corner)
+            c.setFillColor(colors.HexColor("#1A3060"))
+            dot_size, dot_gap = 2, 14
+            for xi in range(15):
+                for yi in range(12):
+                    cx = self.w - 240 + xi * dot_gap
+                    cy = self.h - 150 + yi * dot_gap
+                    if cx < self.w and cy < self.h:
+                        c.circle(cx, cy, dot_size / 2, fill=1, stroke=0)
+
+            # ── Logo / branding area ──────────────────────────────────────────
+            logo_top_y  = self.h - 1.8 * cm
+            logo_height = 1.4 * cm
+            branding_x  = 1.8 * cm
 
             if _logo_path:
                 try:
-                    # Load logo; convert ICO → PNG bytes if needed
                     if _logo_path.lower().endswith(".ico"):
                         from PIL import Image as PILImage
                         import io as _io
                         pil_img = PILImage.open(_logo_path)
-                        # Use the largest size in the ICO if available
                         if hasattr(pil_img, "sizes") and pil_img.sizes:
                             best = max(pil_img.sizes, key=lambda s: s[0])
                             pil_img.size = best
@@ -394,105 +439,120 @@ def build_cover(report_type: str, domain: str, org: str,
 
                     c.drawImage(
                         logo_src if _logo_path.lower().endswith(".ico") else _logo_path,
-                        2 * cm,
+                        branding_x,
                         logo_top_y - logo_height,
-                        width=logo_w,
-                        height=logo_height,
-                        mask="auto",
+                        width=logo_w, height=logo_height, mask="auto",
                     )
-                    # "CYCENTRA" wordmark next to logo
-                    wordmark_x = 2 * cm + logo_w + 0.35 * cm
-                    c.setFillColor(C_SKY)
-                    c.setFont("Helvetica-Bold", 28)
+                    wordmark_x = branding_x + logo_w + 0.4 * cm
+                    c.setFillColor(C_TEAL)
+                    c.setFont("Helvetica-Bold", 26)
                     c.drawString(wordmark_x, logo_top_y - 0.85 * cm, "CY")
                     c.setFillColor(colors.white)
-                    c.setFont("Helvetica", 28)
-                    c.drawString(wordmark_x + 34, logo_top_y - 0.85 * cm, "CENTRA")
+                    c.setFont("Helvetica", 26)
+                    c.drawString(wordmark_x + 32, logo_top_y - 0.85 * cm, "CENTRA")
                 except Exception:
-                    # Fall back to text-only branding on any logo load error
-                    c.setFillColor(C_SKY)
-                    c.setFont("Helvetica-Bold", 52)
-                    c.drawString(2 * cm, self.h - 3.2 * cm, "CY")
+                    c.setFillColor(C_TEAL)
+                    c.setFont("Helvetica-Bold", 48)
+                    c.drawString(branding_x, self.h - 3.2 * cm, "CY")
                     c.setFillColor(colors.white)
-                    c.setFont("Helvetica", 52)
-                    c.drawString(2 * cm + 62, self.h - 3.2 * cm, "CENTRA")
+                    c.setFont("Helvetica", 48)
+                    c.drawString(branding_x + 58, self.h - 3.2 * cm, "CENTRA")
             else:
-                # Text-only branding
-                c.setFillColor(C_SKY)
-                c.setFont("Helvetica-Bold", 52)
-                c.drawString(2 * cm, self.h - 3.2 * cm, "CY")
+                c.setFillColor(C_TEAL)
+                c.setFont("Helvetica-Bold", 48)
+                c.drawString(branding_x, self.h - 3.2 * cm, "CY")
                 c.setFillColor(colors.white)
-                c.setFont("Helvetica", 52)
-                c.drawString(2 * cm + 62, self.h - 3.2 * cm, "CENTRA")
+                c.setFont("Helvetica", 48)
+                c.drawString(branding_x + 58, self.h - 3.2 * cm, "CENTRA")
 
-            c.setFillColor(C_SKY)
-            c.setFont("Helvetica", 9)
-            c.drawString(2 * cm, text_label_y, "FROM SIGNALS TO STRENGTH")
+            # Tagline
+            c.setFillColor(C_SUBTLE)
+            c.setFont("Helvetica", 8)
+            c.drawString(branding_x, self.h - 3.7 * cm, "FROM SIGNALS TO STRENGTH")
 
-            # Horizontal divider
-            c.setStrokeColor(C_SKY)
-            c.setLineWidth(0.8)
-            c.line(2 * cm, self.h - 4.1 * cm, self.w - 2 * cm, self.h - 4.1 * cm)
+            # Horizontal divider — teal
+            c.setStrokeColor(C_TEAL)
+            c.setLineWidth(1.2)
+            c.line(branding_x, self.h - 4.0 * cm, self.w - branding_x, self.h - 4.0 * cm)
 
-            # Report type label
-            c.setFillColor(C_SKY)
-            c.setFont("Helvetica-Bold", 13)
-            c.drawString(2 * cm, self.h - 4.9 * cm,
-                         f"ATTACK SURFACE MANAGEMENT  |  {self.rt.upper()} REPORT")
+            # Report type pill label
+            c.setFillColor(C_DARK3)
+            pill_y = self.h - 4.9 * cm
+            c.roundRect(branding_x, pill_y - 0.3 * cm, 9.5 * cm, 0.65 * cm, 4,
+                        fill=1, stroke=0)
+            c.setFillColor(C_TEAL)
+            c.setFont("Helvetica-Bold", 9.5)
+            c.drawString(branding_x + 0.25 * cm, pill_y - 0.05 * cm,
+                         f"ATTACK SURFACE MANAGEMENT  ·  {self.rt.upper()} REPORT")
 
-            # Domain big
+            # Domain name — large, white
             c.setFillColor(colors.white)
-            c.setFont("Helvetica-Bold", 38)
-            c.drawString(2 * cm, self.h - 6.8 * cm, self.domain_)
+            c.setFont("Helvetica-Bold", 40)
+            c.drawString(branding_x, self.h - 6.9 * cm, self.domain_)
 
-            # Organisation
+            # Organisation + period
             c.setFillColor(C_SKY)
             c.setFont("Helvetica", 11)
-            c.drawString(2 * cm, self.h - 7.6 * cm, f"Organisation: {self.org_}")
+            c.drawString(branding_x, self.h - 7.65 * cm, f"Organisation: {self.org_}")
 
-            # Meta block
-            meta_y = self.h - 9.2 * cm
-            for label, val in [("Scan ID", self.scan_id_), ("Scan Date", self.scan_date_),
-                                ("Prepared By", "CyCentra ASM Engine")]:
-                c.setFillColor(C_SKY)
-                c.setFont("Helvetica-Bold", 8.5)
-                c.drawString(2 * cm, meta_y, label + ":")
-                c.setFillColor(colors.white)
-                c.setFont("Helvetica", 8.5)
-                c.drawString(5.5 * cm, meta_y, val)
+            # ── Meta info block ───────────────────────────────────────────────
+            meta_y = self.h - 9.1 * cm
+            for label_, val_ in [
+                ("Scan ID",     self.scan_id_),
+                ("Scan Date",   self.scan_date_),
+                ("Prepared By", "CyCentra ASM Engine"),
+            ]:
+                c.setFillColor(C_SUBTLE)
+                c.setFont("Helvetica-Bold", 8)
+                c.drawString(branding_x, meta_y, f"{label_}:")
+                c.setFillColor(C_TEXT)
+                c.setFont("Helvetica", 8)
+                c.drawString(branding_x + 3.5 * cm, meta_y, val_)
                 meta_y -= 0.55 * cm
 
-            # Score box
-            score_x, score_y = self.w - 6.5 * cm, self.h - 10 * cm
+            # ── Score box (right side) ────────────────────────────────────────
             grade_col = (
-                colors.HexColor("#E53E3E") if self.score_ < 30 else
-                colors.HexColor("#F6AD55") if self.score_ < 55 else
-                colors.HexColor("#ECC94B") if self.score_ < 75 else
-                colors.HexColor("#00C9C8") if self.score_ < 90 else
-                colors.HexColor("#48BB78")
+                C_RED    if self.score_ < 30 else
+                C_ORANGE if self.score_ < 55 else
+                C_YELLOW if self.score_ < 75 else
+                C_TEAL   if self.score_ < 90 else
+                C_GREEN
             )
-            c.setFillColor(colors.HexColor("#162d52"))
-            c.roundRect(score_x - 0.3 * cm, score_y - 1.8 * cm,
-                        4.5 * cm, 3.5 * cm, 8, fill=1, stroke=0)
+            box_x, box_y = self.w - 7 * cm, self.h - 9.8 * cm
+            box_w, box_h = 4.8 * cm, 4.0 * cm
+            # Shadow effect
+            c.setFillColor(colors.HexColor("#040c18"))
+            c.roundRect(box_x + 3, box_y - 3, box_w, box_h, 8, fill=1, stroke=0)
+            # Main box
+            c.setFillColor(C_DARK2)
+            c.roundRect(box_x, box_y, box_w, box_h, 8, fill=1, stroke=0)
+            # Coloured top border accent
             c.setFillColor(grade_col)
-            c.setFont("Helvetica-Bold", 48)
-            c.drawCentredString(score_x + 2 * cm, score_y - 0.3 * cm,
+            c.roundRect(box_x, box_y + box_h - 0.3 * cm, box_w, 0.3 * cm, 4,
+                        fill=1, stroke=0)
+            # Score number
+            c.setFillColor(grade_col)
+            c.setFont("Helvetica-Bold", 54)
+            c.drawCentredString(box_x + box_w / 2, box_y + box_h * 0.44,
                                 str(self.score_))
-            c.setFillColor(colors.white)
-            c.setFont("Helvetica-Bold", 9)
-            c.drawCentredString(score_x + 2 * cm, score_y - 0.85 * cm,
+            # Label
+            c.setFillColor(C_SUBTLE)
+            c.setFont("Helvetica-Bold", 7.5)
+            c.drawCentredString(box_x + box_w / 2, box_y + 0.7 * cm,
                                 "SECURITY POSTURE SCORE")
+            # Grade pill
             c.setFillColor(grade_col)
-            c.setFont("Helvetica-Bold", 14)
-            c.drawCentredString(score_x + 2 * cm, score_y - 1.4 * cm,
-                                f"Grade: {self.grade_}")
+            c.roundRect(box_x + box_w / 2 - 1.2 * cm, box_y + 0.15 * cm,
+                        2.4 * cm, 0.5 * cm, 4, fill=1, stroke=0)
+            c.setFillColor(C_NAVY)
+            c.setFont("Helvetica-Bold", 9)
+            c.drawCentredString(box_x + box_w / 2, box_y + 0.4 * cm,
+                                f"Grade  {self.grade_}")
 
-            # Bottom bar
-            c.setFillColor(colors.HexColor("#0d1b2e"))
-            c.rect(0, 0, self.w, 1.5 * cm, fill=1, stroke=0)
+            # ── Bottom confidentiality bar ─────────────────────────────────────
             c.setFillColor(C_SUBTLE)
             c.setFont("Helvetica", 7)
-            c.drawCentredString(self.w / 2, 0.55 * cm,
+            c.drawCentredString(self.w / 2, 0.72 * cm,
                                 "CONFIDENTIAL — FOR AUTHORISED RECIPIENTS ONLY")
 
         def wrap(self, aw, ah):

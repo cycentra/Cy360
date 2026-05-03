@@ -66,6 +66,7 @@ import { SystemSettingsPage } from './pages/settings/SystemSettingsPage.jsx';
 import { AssetModal }        from './pages/assets/AssetModal.jsx';
 import { ImportModal }       from './pages/assets/ImportModal.jsx';
 import { CyMindChatOverlay } from './components/CyMindChatOverlay.jsx';
+import { AuditTrailPage }   from './pages/audit/AuditTrailPage.jsx';
 
 // ── Scan History Dropdown ─────────────────────────────────────────────────────
 
@@ -341,6 +342,7 @@ export default function App() {
             {activeTab==="marketplace"    && <MarketplacePage user={user}/>}
             {activeTab==="platform"       && <PlatformPage installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
             {activeTab==="system-settings" && <SystemSettingsPage />}
+            {activeTab==="audit-trail"    && <AuditTrailPage />}
 
           </div>
           </PageErrorBoundary>

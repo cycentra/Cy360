@@ -142,6 +142,12 @@ def _run_command(command: str, log_path: str):
         return
     log.info("scheduler_command_start: %s", command)
     try:
+        from blueprints.audit.routes import record_event as _audit
+        _audit("scheduler_job_start", email="scheduler", resource=command[:120],
+               detail="Scheduled command started")
+    except Exception:
+        pass
+    try:
         Path(log_path).parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "a") as lf:
             lf.write(f"\n[{datetime.now(timezone.utc).isoformat()}] scheduler run: {command}\n")
@@ -149,8 +155,22 @@ def _run_command(command: str, log_path: str):
                 command, shell=True, stdout=lf, stderr=lf, timeout=3600,
             )
         log.info("scheduler_command_done: %s rc=%d", command, result.returncode)
+        try:
+            from blueprints.audit.routes import record_event as _audit
+            _audit("scheduler_job_success" if result.returncode == 0 else "scheduler_job_failed",
+                   email="scheduler", resource=command[:120],
+                   result="success" if result.returncode == 0 else "failure",
+                   detail=f"exit code {result.returncode}")
+        except Exception:
+            pass
     except Exception as e:
         log.error("scheduler_command_error: %s err=%s", command, e)
+        try:
+            from blueprints.audit.routes import record_event as _audit
+            _audit("scheduler_job_failed", email="scheduler", resource=command[:120],
+                   result="error", detail=str(e))
+        except Exception:
+            pass
 
 
 def _run_asm_scan(domain: str, scan_type: str, include_subdomains: bool, actor_uid: str):
@@ -176,8 +196,21 @@ def _run_asm_scan(domain: str, scan_type: str, include_subdomains: bool, actor_u
             start_new_session=True,
         )
         log.info("scheduler_scan_triggered domain=%s type=%s", domain, scan_type)
+        try:
+            from blueprints.audit.routes import record_event as _audit
+            _audit("scan_triggered", email=actor_uid, resource=domain,
+                   detail=f"Scheduled {scan_type} scan started",
+                   metadata={"scan_type": scan_type, "scheduled": True})
+        except Exception:
+            pass
     except Exception as e:
         log.error("scheduler_scan_launch_error: %s", e)
+        try:
+            from blueprints.audit.routes import record_event as _audit
+            _audit("scan_failed", email=actor_uid, resource=domain,
+                   result="error", detail=str(e), metadata={"scheduled": True})
+        except Exception:
+            pass
 
 
 def _add_to_apscheduler(sched, job: dict) -> None:

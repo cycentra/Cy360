@@ -17,21 +17,21 @@ import matplotlib.patches as mpatches
 import matplotlib.patheffects as pe
 import numpy as np
 
-# ── Brand palette ─────────────────────────────────────────────────────────────
-NAVY        = "#0B1F3A"
-BLUE        = "#1E40FF"
-SKY         = "#4FB6FF"
-TEAL        = "#00C9C8"
-RED         = "#E53E3E"
-ORANGE      = "#F6AD55"
-YELLOW      = "#F6E05E"
-GREEN       = "#48BB78"
-PURPLE      = "#805AD5"
-LIGHT_BG    = "#F7FAFC"
-MID_BG      = "#EBF4FF"
-GRID_COL    = "#CBD5E0"
-TEXT_DARK   = "#1A202C"
-TEXT_LIGHT  = "#718096"
+# ── Brand palette — dark theme (matches SecuPulse-inspired modern report) ─────
+NAVY        = "#0A1628"   # deep navy background
+BLUE        = "#1A56DB"   # primary accent blue
+SKY         = "#00C8FF"   # bright cyan
+TEAL        = "#00E5A0"   # CyCentra teal (primary brand)
+RED         = "#E53E3E"   # critical
+ORANGE      = "#F97316"   # high
+YELLOW      = "#F5A623"   # medium
+GREEN       = "#22C55E"   # low / good
+PURPLE      = "#8B5CF6"   # info
+LIGHT_BG    = "#0A1628"   # dark background for charts
+MID_BG      = "#0E1E35"   # slightly lighter
+GRID_COL    = "#1E3A5F"   # grid lines (subtle dark)
+TEXT_DARK   = "#E2E8F0"   # primary text (light on dark)
+TEXT_LIGHT  = "#7A9DBF"   # secondary text
 
 SEV_COLORS = {
     "Critical": RED,
@@ -53,16 +53,16 @@ def _fig_to_bytes(fig: plt.Figure, dpi: int = 150) -> io.BytesIO:
 # ── 1. Security Posture Gauge ─────────────────────────────────────────────────
 
 def posture_gauge(score: int, label: str = "Security Posture") -> io.BytesIO:
-    """Half-donut gauge 0-100 with colour zones."""
-    fig, ax = plt.subplots(figsize=(5, 3), facecolor=LIGHT_BG)
+    """Half-donut gauge 0-100 with colour zones — dark theme."""
+    fig, ax = plt.subplots(figsize=(5, 3.2), facecolor=LIGHT_BG)
     ax.set_facecolor(LIGHT_BG)
 
-    # Background arc
+    # Background arc (dark track)
     theta = np.linspace(np.pi, 0, 300)
-    r_out, r_in = 1.0, 0.62
+    r_out, r_in = 1.0, 0.58
     ax.fill_between(np.cos(theta) * r_out, np.sin(theta) * r_out,
                     np.cos(theta) * r_in,  np.sin(theta) * r_in,
-                    color=GRID_COL, zorder=1)
+                    color=GRID_COL, zorder=1, alpha=0.5)
 
     # Colour zones
     zones = [(0, 30, RED), (30, 55, ORANGE), (55, 75, YELLOW), (75, 90, TEAL), (90, 100, GREEN)]
@@ -72,25 +72,26 @@ def posture_gauge(score: int, label: str = "Security Posture") -> io.BytesIO:
         th = np.linspace(t0, t1, 60)
         ax.fill_between(np.cos(th) * r_out, np.sin(th) * r_out,
                         np.cos(th) * r_in,  np.sin(th) * r_in,
-                        color=col, zorder=2, alpha=0.85)
+                        color=col, zorder=2, alpha=0.92)
 
     # Needle
-    angle = np.pi * (1 - score / 100)
-    ax.plot([0, 0.78 * np.cos(angle)], [0, 0.78 * np.sin(angle)],
-            color=NAVY, lw=3, zorder=5)
-    ax.add_patch(plt.Circle((0, 0), 0.06, color=NAVY, zorder=6))
-
-    # Score text
     grade_col = RED if score < 30 else ORANGE if score < 55 else YELLOW if score < 75 else TEAL if score < 90 else GREEN
-    ax.text(0, -0.25, str(score), ha="center", va="center",
-            fontsize=34, fontweight="bold", color=grade_col)
-    ax.text(0, -0.52, label, ha="center", va="center",
-            fontsize=9, color=TEXT_LIGHT)
+    angle = np.pi * (1 - score / 100)
+    ax.plot([0, 0.76 * np.cos(angle)], [0, 0.76 * np.sin(angle)],
+            color=grade_col, lw=2.5, zorder=5, solid_capstyle="round")
+    ax.add_patch(plt.Circle((0, 0), 0.07, color=grade_col, zorder=6))
+    ax.add_patch(plt.Circle((0, 0), 0.035, color=LIGHT_BG, zorder=7))
 
-    ax.set_xlim(-1.15, 1.15)
-    ax.set_ylim(-0.65, 1.15)
+    # Score text — large in the centre
+    ax.text(0, -0.22, str(score), ha="center", va="center",
+            fontsize=36, fontweight="bold", color=grade_col)
+    ax.text(0, -0.50, label.upper(), ha="center", va="center",
+            fontsize=7.5, color=TEXT_LIGHT, fontfamily="monospace")
+
+    ax.set_xlim(-1.18, 1.18)
+    ax.set_ylim(-0.62, 1.18)
     ax.axis("off")
-    return _fig_to_bytes(fig, dpi=150)
+    return _fig_to_bytes(fig, dpi=160)
 
 
 # ── 2. Severity Pie Chart ─────────────────────────────────────────────────────
@@ -98,23 +99,25 @@ def posture_gauge(score: int, label: str = "Security Posture") -> io.BytesIO:
 def severity_pie(counts: Dict[str, int]) -> io.BytesIO:
     labels = [k for k, v in counts.items() if v > 0]
     values = [v for v in counts.values() if v > 0]
-    colors = [SEV_COLORS.get(l, SKY) for l in labels]
+    chart_colors = [SEV_COLORS.get(l, SKY) for l in labels]
 
     fig, ax = plt.subplots(figsize=(4.5, 3.5), facecolor=LIGHT_BG)
     ax.set_facecolor(LIGHT_BG)
     wedges, texts, autotexts = ax.pie(
-        values, labels=None, colors=colors,
+        values, labels=None, colors=chart_colors,
         autopct="%1.0f%%", startangle=140,
-        wedgeprops=dict(width=0.55, edgecolor="white", linewidth=2),
-        pctdistance=0.77, textprops=dict(fontsize=9, color=TEXT_DARK),
+        wedgeprops=dict(width=0.58, edgecolor=NAVY, linewidth=1.5),
+        pctdistance=0.77, textprops=dict(fontsize=9, color=TEXT_DARK, fontweight="bold"),
     )
     for at in autotexts:
         at.set_fontweight("bold")
-    ax.legend(wedges, [f"{l} ({v})" for l, v in zip(labels, values)],
-              loc="lower center", bbox_to_anchor=(0.5, -0.18), ncol=3,
+    legend = ax.legend(wedges, [f"{l} ({v})" for l, v in zip(labels, values)],
+              loc="lower center", bbox_to_anchor=(0.5, -0.16), ncol=3,
               fontsize=8, frameon=False)
-    ax.set_title("Findings by Severity", fontsize=10, fontweight="bold",
-                 color=NAVY, pad=8)
+    for text in legend.get_texts():
+        text.set_color(TEXT_DARK)
+    ax.set_title("FINDINGS BY SEVERITY", fontsize=9, fontweight="bold",
+                 color=TEXT_LIGHT, pad=8, fontfamily="monospace")
     return _fig_to_bytes(fig)
 
 
@@ -125,21 +128,31 @@ def module_bar(module_counts: Dict[str, int]) -> io.BytesIO:
         module_counts = {"No data": 0}
     modules = list(module_counts.keys())
     counts  = list(module_counts.values())
-    # Gradient colours
-    cols = [plt.cm.Blues(0.4 + 0.5 * i / max(len(modules) - 1, 1)) for i in range(len(modules))]
+    # Teal-to-cyan gradient on dark background
+    n = max(len(modules) - 1, 1)
+    cols = []
+    for i in range(len(modules)):
+        t = i / n
+        r = int(0x00 + t * (0x00 - 0x00))
+        g = int(0xE5 + t * (0xC8 - 0xE5))
+        b = int(0xA0 + t * (0xFF - 0xA0))
+        cols.append(f"#{r:02x}{g:02x}{b:02x}")
 
-    fig, ax = plt.subplots(figsize=(6, max(3, len(modules) * 0.45 + 0.8)), facecolor=LIGHT_BG)
+    fig, ax = plt.subplots(figsize=(6, max(3, len(modules) * 0.48 + 0.8)), facecolor=LIGHT_BG)
     ax.set_facecolor(LIGHT_BG)
-    bars = ax.barh(modules, counts, color=cols, edgecolor="white", linewidth=0.8, height=0.6)
+    bars = ax.barh(modules, counts, color=cols, edgecolor=NAVY, linewidth=0.8, height=0.62)
     for bar, val in zip(bars, counts):
-        ax.text(bar.get_width() + 0.1, bar.get_y() + bar.get_height() / 2,
-                str(val), va="center", fontsize=8, color=TEXT_DARK)
+        if val > 0:
+            ax.text(bar.get_width() + 0.08, bar.get_y() + bar.get_height() / 2,
+                    str(val), va="center", fontsize=8, color=TEXT_DARK, fontweight="bold")
     ax.set_xlabel("Issue Count", fontsize=8, color=TEXT_LIGHT)
-    ax.set_title("Issues by Module", fontsize=10, fontweight="bold", color=NAVY)
+    ax.set_title("ISSUES BY SCAN MODULE", fontsize=9, fontweight="bold",
+                 color=TEXT_LIGHT, fontfamily="monospace")
     ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.spines["bottom"].set_color(GRID_COL)
     ax.tick_params(labelsize=8, colors=TEXT_DARK)
     ax.xaxis.label.set_color(TEXT_LIGHT)
-    ax.grid(axis="x", color=GRID_COL, linewidth=0.5, linestyle="--")
+    ax.grid(axis="x", color=GRID_COL, linewidth=0.4, linestyle="--", alpha=0.5)
     ax.set_axisbelow(True)
     plt.tight_layout()
     return _fig_to_bytes(fig)

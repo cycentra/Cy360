@@ -104,7 +104,22 @@ def trigger_scan():
             start_new_session=True,
         )
     except Exception as e:
+        try:
+            from blueprints.audit.routes import record_event
+            record_event("scan_failed", email=uid, resource=domain,
+                         detail=str(e), result="error",
+                         metadata={"scan_type": scan_type})
+        except Exception:
+            pass
         return jsonify({"error": str(e)}), 500
+
+    try:
+        from blueprints.audit.routes import record_event
+        record_event("scan_triggered", email=uid, resource=domain,
+                     detail=f"{scan_type} scan started",
+                     metadata={"scan_type": scan_type, "include_subdomains": include_subdomains})
+    except Exception:
+        pass
 
     return jsonify({
         "status":              "started",
