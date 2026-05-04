@@ -149,6 +149,33 @@ MARKETPLACE_CATALOG_URL   = os.environ.get(
 # Defaults to the bootstrap account; override in .env for production.
 CYCENTRA_ADMIN_EMAIL = os.environ.get("CYCENTRA_ADMIN_EMAIL", "cyadmin@cycentra.com")
 
+# ── SMTP (email notifications) ────────────────────────────────────────────────
+# Used for SSO approval workflow — notifying admins of new sign-in requests and
+# users when their access is approved or rejected.
+# Config is stored in the cy_sso_config table (settable via /api/sso/smtp/config).
+# Fallback env vars allow bootstrap configuration before the DB UI is available.
+SMTP_HOST        = os.environ.get("SMTP_HOST",        "")
+SMTP_PORT        = int(os.environ.get("SMTP_PORT",    "587") or 587)
+SMTP_USER        = os.environ.get("SMTP_USER",        "")
+SMTP_PASSWORD    = os.environ.get("SMTP_PASSWORD",    "")
+SMTP_FROM        = os.environ.get("SMTP_FROM",        "")
+SMTP_ADMIN_EMAIL = os.environ.get("SMTP_ADMIN_EMAIL", CYCENTRA_ADMIN_EMAIL)
+SMTP_USE_TLS     = os.environ.get("SMTP_USE_TLS",     "true").lower() == "true"
+
+# ── SSO / OIDC provider settings ──────────────────────────────────────────────
+# These can be overridden at runtime via /api/sso/configure (stored in DB).
+# Env-var fallbacks are useful for automated deployments.
+SSO_ENABLED          = os.environ.get("SSO_ENABLED",          "false").lower() == "true"
+SSO_PROVIDER         = os.environ.get("SSO_PROVIDER",         "")        # google|microsoft|okta|keycloak|cycentra360|custom
+SSO_CLIENT_ID        = os.environ.get("SSO_CLIENT_ID",        "")
+SSO_CLIENT_SECRET    = os.environ.get("SSO_CLIENT_SECRET",    "")
+SSO_DISCOVERY_URL    = os.environ.get("SSO_DISCOVERY_URL",    "")
+SSO_REDIRECT_URI     = os.environ.get("SSO_REDIRECT_URI",     "")
+SSO_DEFAULT_ROLE     = os.environ.get("SSO_DEFAULT_ROLE",     "viewer")
+SSO_AUTO_PROVISION   = os.environ.get("SSO_AUTO_PROVISION",   "true").lower() == "true"
+SSO_REQUIRE_APPROVAL = os.environ.get("SSO_REQUIRE_APPROVAL", "false").lower() == "true"
+SSO_ALLOWED_DOMAINS  = os.environ.get("SSO_ALLOWED_DOMAINS",  "")        # comma-separated
+
 # ── CORS allowed origins ───────────────────────────────────────────────────────
 CORS_ALLOWED_ORIGINS = {
     FRONTEND_URL,

@@ -4,15 +4,51 @@
  * OAuth login screen — Google, Microsoft SSO and local (username/password) login.
  */
 
-import { useState } from "react";
-import { CYSCAN_URL } from '../../core/constants.js';
+import { useState, useEffect } from "react";
+import { CYSCAN_URL, API_BASE } from '../../core/constants.js';
 
 export function LoginPage() {
-  const [loading, setLoading]   = useState(null);
-  const [showLocal, setShowLocal] = useState(false);
+  const [loading, setLoading]       = useState(null);
+  const [showLocal, setShowLocal]   = useState(false);
   const [localEmail, setLocalEmail] = useState("");
   const [localPass, setLocalPass]   = useState("");
   const [localError, setLocalError] = useState("");
+
+  // ── Pending approval / auth-error state from URL params ──────────────────
+  const [pendingEmail, setPendingEmail]   = useState(null);  // non-null → approval-pending view
+  const [authErrMsg,   setAuthErrMsg]     = useState(null);  // non-null → error banner
+  const [ssoEnabled,   setSsoEnabled]     = useState(false); // generic OIDC button
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+
+    // sso_error=pending_approval  (from approval gate in oauth.py + sso/routes.py)
+    if (params.get("sso_error") === "pending_approval") {
+      setPendingEmail(decodeURIComponent(params.get("email") || ""));
+      // Clean the URL so a refresh doesn't re-trigger
+      window.history.replaceState({}, "", window.location.pathname);
+      return;
+    }
+
+    // auth=error&message=...
+    if (params.get("auth") === "error") {
+      const msg = params.get("message");
+      setAuthErrMsg(msg ? decodeURIComponent(msg) : "Authentication failed. Please try again.");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+
+    // Check if a generic OIDC provider is configured
+    fetch(`${API_BASE}/api/sso/providers`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => d?.sso_enabled && setSsoEnabled(true))
+      .catch(() => {});
+  }, []);
+
+  // handler for generic OIDC SSO
+  const handleGenericSSO = () => {
+    setLoading("sso");
+    window.location.href = `${CYSCAN_URL}/api/sso/redirect`;
+  };
 
   const handleSSO = (provider) => {
     setLoading(provider);
@@ -104,6 +140,34 @@ export function LoginPage() {
       {/* Right — auth */}
       <div style={{ flex: "1 1 45%", display: "flex", alignItems: "center", justifyContent: "center", padding: 40 }}>
         <div style={{ width: "100%", maxWidth: 380, animation: "fadeUp 0.6s ease 0.1s both" }}>
+          {/* ── Pending approval banner ── */}
+          {pendingEmail && (
+            <div style={{ marginBottom: 28, padding: "20px 22px", background: "rgba(255,217,61,0.06)", border: "1px solid rgba(255,217,61,0.3)", borderRadius: 8 }}>
+              <div style={{ color: "#ffd93d", fontFamily: "monospace", fontSize: 11, fontWeight: 700, letterSpacing: "1.5px", marginBottom: 10 }}>ACCESS REQUEST RECEIVED</div>
+              <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, lineHeight: 1.7, margin: 0 }}>
+                Your request for <strong style={{ color: "white" }}>{pendingEmail}</strong> is pending admin approval.
+              </p>
+              <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, marginTop: 8, lineHeight: 1.6 }}>
+                You will receive an email once your access is approved or rejected. Contact your administrator if this takes longer than expected.
+              </p>
+              <button
+                onClick={() => setPendingEmail(null)}
+                style={{ marginTop: 14, background: "none", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 4, color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace", padding: "6px 14px", cursor: "pointer" }}>
+                ← Back to Sign in
+              </button>
+            </div>
+          )}
+
+          {/* ── Auth error banner ── */}
+          {authErrMsg && !pendingEmail && (
+            <div style={{ marginBottom: 20, padding: "12px 16px", background: "rgba(255,59,59,0.07)", border: "1px solid rgba(255,59,59,0.25)", borderRadius: 6 }}>
+              <div style={{ color: "#ff3b3b", fontSize: 12, lineHeight: 1.6 }}>{authErrMsg}</div>
+              <button onClick={() => setAuthErrMsg(null)} style={{ marginTop: 8, background: "none", border: "none", color: "rgba(255,255,255,0.35)", fontSize: 11, cursor: "pointer" }}>Dismiss</button>
+            </div>
+          )}
+
+          {!pendingEmail && (
+          <>
           <div style={{ marginBottom: 32 }}>
             <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, letterSpacing: "2px", fontFamily: "monospace", marginBottom: 8 }}>SECURE ACCESS</div>
             <h2 style={{ color: "white", fontSize: 24, fontWeight: 700, marginBottom: 8 }}>Sign in to CyCentra</h2>
@@ -141,6 +205,20 @@ export function LoginPage() {
                 </svg>
                 Sign in with local account
               </button>
+
+              {/* Generic OIDC SSO button — shown only when configured */}
+              {ssoEnabled && (
+                <button onClick={handleGenericSSO} disabled={!!loading}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: "14px 24px", background: "rgba(0,229,160,0.04)", border: "1px solid rgba(0,229,160,0.25)", borderRadius: 6, color: "#00e5a0", fontSize: 14, fontWeight: 500, cursor: loading ? "default" : "pointer", transition: "all 0.2s", opacity: loading && loading !== "sso" ? 0.5 : 1 }}>
+                  {loading === "sso"
+                    ? <div style={{ width: 18, height: 18, border: "2px solid rgba(0,229,160,0.2)", borderTopColor: "#00e5a0", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+                    : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                      </svg>
+                  }
+                  {loading === "sso" ? "Redirecting…" : "Sign in with SSO"}
+                </button>
+              )}
             </div>
           ) : (
             /* ── Local login form ── */
@@ -185,6 +263,8 @@ export function LoginPage() {
             Single sign-on gateway · All modules share this session<br/>
             CySIEM · CyIRIS · CySOAR — one login to rule them all
           </div>
+          </>
+          )}
         </div>
       </div>
     </div>

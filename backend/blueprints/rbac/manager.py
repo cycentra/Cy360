@@ -46,16 +46,34 @@ rbac_bp = Blueprint("rbac", __name__)
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS cy_users (
-    email         TEXT PRIMARY KEY,
-    role          TEXT        NOT NULL DEFAULT 'viewer',
-    auth_type     TEXT        NOT NULL DEFAULT 'sso',
-    password_hash TEXT,
-    name          TEXT,
-    apps          TEXT,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    email                   TEXT PRIMARY KEY,
+    role                    TEXT        NOT NULL DEFAULT 'viewer',
+    auth_type               TEXT        NOT NULL DEFAULT 'sso',
+    password_hash           TEXT,
+    name                    TEXT,
+    apps                    TEXT,
+    -- SSO linkage (populated by SSO blueprint on first login)
+    sso_provider            TEXT,
+    sso_id                  TEXT,
+    -- Approval workflow
+    approval_status         TEXT        NOT NULL DEFAULT 'approved',
+    approval_requested_at   TIMESTAMPTZ,
+    approval_resolved_at    TIMESTAMPTZ,
+    rejection_reason        TEXT,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 """
+
+# Migration: add new columns to existing deployments (ALTER TABLE … ADD COLUMN IF NOT EXISTS)
+_MIGRATE_COLUMNS = [
+    "ALTER TABLE cy_users ADD COLUMN IF NOT EXISTS sso_provider           TEXT;",
+    "ALTER TABLE cy_users ADD COLUMN IF NOT EXISTS sso_id                 TEXT;",
+    "ALTER TABLE cy_users ADD COLUMN IF NOT EXISTS approval_status        TEXT NOT NULL DEFAULT 'approved';",
+    "ALTER TABLE cy_users ADD COLUMN IF NOT EXISTS approval_requested_at  TIMESTAMPTZ;",
+    "ALTER TABLE cy_users ADD COLUMN IF NOT EXISTS approval_resolved_at   TIMESTAMPTZ;",
+    "ALTER TABLE cy_users ADD COLUMN IF NOT EXISTS rejection_reason       TEXT;",
+]
 
 _UPSERT_USER = """
 INSERT INTO cy_users (email, role, auth_type, password_hash, name, apps, updated_at)
@@ -112,7 +130,7 @@ def _bootstrap_admin(cur) -> None:
 
 
 def _ensure_table() -> None:
-    """Create cy_users if missing and guarantee the default admin exists."""
+    """Create cy_users if missing, run column migrations, and guarantee the default admin."""
     global _db_ready
     if _db_ready:
         return
@@ -120,6 +138,12 @@ def _ensure_table() -> None:
         with _db() as conn:
             cur = conn.cursor()
             cur.execute(_CREATE_TABLE)
+            # Idempotent column additions for existing deployments
+            for stmt in _MIGRATE_COLUMNS:
+                try:
+                    cur.execute(stmt)
+                except Exception as m_exc:
+                    log.debug("Migration stmt skipped (%s): %s", stmt[:60], m_exc)
             _bootstrap_admin(cur)
         _db_ready = True
         log.info("cy_users table ready (CYCENTRA_DB_URL=%s)", CYCENTRA_DB_URL)
@@ -130,9 +154,17 @@ def _ensure_table() -> None:
 # ── Internal DB helpers ───────────────────────────────────────────────────────
 
 def _row_to_entry(row: tuple) -> dict:
-    """Convert a (role, auth_type, pw_hash, name, apps_json) row to an entry dict."""
-    role, auth_type, pw_hash, name, apps_json = row
-    entry: dict = {"role": role, "auth_type": auth_type}
+    """Convert a (role, auth_type, pw_hash, name, apps_json, sso_provider, sso_id,
+    approval_status, approval_requested_at, approval_resolved_at, rejection_reason) row."""
+    (role, auth_type, pw_hash, name, apps_json,
+     sso_provider, sso_id,
+     approval_status, approval_requested_at,
+     approval_resolved_at, rejection_reason) = row + (None,) * max(0, 11 - len(row))
+    entry: dict = {
+        "role": role,
+        "auth_type": auth_type,
+        "approval_status": approval_status or "approved",
+    }
     if pw_hash:
         entry["password_hash"] = pw_hash
     if name:
@@ -142,6 +174,14 @@ def _row_to_entry(row: tuple) -> dict:
             entry["apps"] = json.loads(apps_json)
         except Exception:
             pass
+    if sso_provider:
+        entry["sso_provider"] = sso_provider
+    if sso_id:
+        entry["sso_id"] = sso_id
+    if approval_requested_at:
+        entry["approval_requested_at"] = approval_requested_at.isoformat() if hasattr(approval_requested_at, "isoformat") else str(approval_requested_at)
+    if rejection_reason:
+        entry["rejection_reason"] = rejection_reason
     return entry
 
 
@@ -151,7 +191,10 @@ def _get_user(email: str) -> dict | None:
     with _db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT role, auth_type, password_hash, name, apps "
+            "SELECT role, auth_type, password_hash, name, apps, "
+            "       sso_provider, sso_id, "
+            "       approval_status, approval_requested_at, "
+            "       approval_resolved_at, rejection_reason "
             "FROM cy_users WHERE email = %s;", (email,)
         )
         row = cur.fetchone()
@@ -164,7 +207,10 @@ def _get_all_users() -> dict:
     with _db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT email, role, auth_type, password_hash, name, apps "
+            "SELECT email, role, auth_type, password_hash, name, apps, "
+            "       sso_provider, sso_id, "
+            "       approval_status, approval_requested_at, "
+            "       approval_resolved_at, rejection_reason "
             "FROM cy_users ORDER BY email;"
         )
         rows = cur.fetchall()

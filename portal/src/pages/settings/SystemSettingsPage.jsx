@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { API_BASE } from "../../core/constants.js";
+import { SSOTab } from "./SSOTab.jsx";
 
 // ── Shared style constants ────────────────────────────────────────────────────
 const CARD  = { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "20px 24px", marginBottom: 20 };
@@ -869,6 +870,7 @@ const TABS = [
   { id: "scheduler",    label: "Scheduler" },
   { id: "users",        label: "User Management" },
   { id: "backup",       label: "Backup & Restore" },
+  { id: "sso",          label: "SSO & Auth" },
 ];
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2624,6 +2626,7 @@ export function SystemSettingsPage() {
       {tab === "scheduler"    && <SchedulerTab />}
       {tab === "users"        && <UserManagementTab />}
       {tab === "backup"       && <BackupTab />}
+      {tab === "sso"          && <SSOTab />}
     </div>
   );
 }

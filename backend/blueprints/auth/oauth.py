@@ -97,6 +97,19 @@ def auth_google_callback():
             f"{FRONTEND_URL}?auth=error&message=Access+denied.+Your+account+is+not+registered."
         )
 
+    # ── Approval gate ────────────────────────────────────────────────────────
+    approval = _get_user(email).get("approval_status", "approved")
+    if approval == "pending":
+        auth_event("login", email, "portal", "pending", "provider=google")
+        return redirect(
+            f"{redirect_target}?sso_error=pending_approval&email={urllib.parse.quote(email)}"
+        )
+    if approval == "rejected":
+        auth_event("login", email, "portal", "denied", "provider=google rejected")
+        reason = _get_user(email).get("rejection_reason", "")
+        msg = urllib.parse.quote(f"Access denied — {reason}" if reason else "Access request was not approved.")
+        return redirect(f"{FRONTEND_URL}?auth=error&message={msg}")
+
     session["user_email"] = email
     session["user_name"]  = name
     session["user_uid"]   = uid
@@ -181,6 +194,19 @@ def auth_microsoft_callback():
         return redirect(
             f"{FRONTEND_URL}?auth=error&message=Access+denied.+Your+account+is+not+registered."
         )
+
+    # ── Approval gate ────────────────────────────────────────────────────────
+    approval = _get_user(email).get("approval_status", "approved")
+    if approval == "pending":
+        auth_event("login", email, "portal", "pending", "provider=microsoft")
+        return redirect(
+            f"{redirect_target}?sso_error=pending_approval&email={urllib.parse.quote(email)}"
+        )
+    if approval == "rejected":
+        auth_event("login", email, "portal", "denied", "provider=microsoft rejected")
+        reason = _get_user(email).get("rejection_reason", "")
+        msg = urllib.parse.quote(f"Access denied — {reason}" if reason else "Access request was not approved.")
+        return redirect(f"{FRONTEND_URL}?auth=error&message={msg}")
 
     session["user_email"] = email
     session["user_name"]  = name
