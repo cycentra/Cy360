@@ -132,7 +132,16 @@ def _send_sync(cfg: dict, to: str, subject: str, html: str) -> tuple:
         return True, None
 
     except smtplib.SMTPAuthenticationError as exc:
-        err = f"Authentication failed — check smtp_user / smtp_password"
+        raw = exc.smtp_error.decode(errors="replace").strip() if isinstance(exc.smtp_error, bytes) else str(exc)
+        if "5.7.9" in raw or "Application-specific password" in raw or "InvalidSecondFactor" in raw:
+            err = (
+                "Gmail requires an App Password — your regular Google password is rejected when "
+                "2-Step Verification is enabled. Generate one at "
+                "https://myaccount.google.com/apppasswords (select Mail + device) and paste the "
+                "16-character code as the SMTP password."
+            )
+        else:
+            err = f"Authentication failed — check smtp_user / smtp_password ({raw})"
         logger.warning("SMTP auth error to %s: %s", to, exc)
         return False, err
     except smtplib.SMTPException as exc:
