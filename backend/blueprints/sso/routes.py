@@ -67,7 +67,9 @@ _PROVIDER_DISCOVERY_URLS: dict = {
     "microsoft":   "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration",
     "okta":        "",   # tenant-specific — must be supplied
     "keycloak":    "",   # realm-specific  — must be supplied
-    "cycentra360": "",   # instance-specific — must be supplied
+    # CyCentra 360 OIDC IdP — route is at /oidc/.well-known/openid-configuration
+    # Works on both cyasm.<domain> and cy360.<domain> via /oidc/ nginx proxy
+    "cycentra360": f"{BASE_URL}/oidc/.well-known/openid-configuration",
     "custom":      "",
 }
 
@@ -103,7 +105,12 @@ def _ensure_sso_table() -> None:
             cur.execute(_CREATE_SSO_CONFIG)
         _SSO_TABLE_READY = True
     except Exception as exc:
-        logger.error("cy_sso_config table init failed: %s", exc)
+        err_str = str(exc)
+        # "duplicate key" means the table already exists (concurrent creation race) — treat as success
+        if "duplicate key" in err_str or "already exists" in err_str:
+            _SSO_TABLE_READY = True
+        else:
+            logger.error("cy_sso_config table init failed: %s", exc)
 
 
 def _sso_db_get_all() -> dict:

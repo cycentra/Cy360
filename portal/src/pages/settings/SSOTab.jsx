@@ -199,12 +199,21 @@ function SSOProviderCard({ onStatusMsg }) {
           <div style={LABEL}>OIDC Discovery URL</div>
           <input type="url" value={discoveryUrl} onChange={e => setDiscoveryUrl(e.target.value)}
             placeholder="https://…/.well-known/openid-configuration  (auto-filled for Google/Microsoft)" style={INPUT} />
+          <div style={{ color: "rgba(255,255,255,0.22)", fontSize: 10, fontFamily: "monospace", marginTop: 4, lineHeight: 1.6 }}>
+            This is your <strong style={{ color: "rgba(255,255,255,0.4)" }}>identity provider's</strong> URL, not this portal's URL.
+            {provider === "google"      && " Auto-filled for Google — leave blank."}
+            {provider === "microsoft"   && " Auto-filled for Microsoft / Azure AD — leave blank."}
+            {provider === "cycentra360" && ` Use: ${window.location.origin}/oidc/.well-known/openid-configuration`}
+            {provider === "okta"        && " Example: https://your-org.okta.com/.well-known/openid-configuration"}
+            {provider === "keycloak"    && " Example: https://keycloak.host/realms/your-realm/.well-known/openid-configuration"}
+            {provider === "custom"      && " Enter your IdP's OIDC discovery document URL."}
+          </div>
         </div>
         {/* Redirect URI */}
         <div style={{ gridColumn: "1 / -1" }}>
           <div style={LABEL}>Redirect URI (callback)</div>
           <input type="url" value={redirectUri} onChange={e => setRedirectUri(e.target.value)}
-            placeholder={`${window.location.origin.replace("://cy360.", "://cyasm.")}  →  /api/sso/callback`}
+            placeholder={`${window.location.origin}/api/sso/callback`}
             style={INPUT} />
           <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
             Register this URL in your IdP's allowed redirect URIs.
@@ -251,8 +260,8 @@ function SSOProviderCard({ onStatusMsg }) {
       {msg && <div style={msg.ok ? STATUS_OK : STATUS_ERR}>{msg.ok ? "✓" : "✗"} {msg.text}</div>}
 
       <div style={{ marginTop: 14, color: "rgba(255,255,255,0.18)", fontSize: 10, fontFamily: "monospace", lineHeight: 1.8 }}>
-        SSO login URL: <code style={{ color: "#00e5a0" }}>{`${window.location.origin.replace("://cy360.", "://cyasm.")}/api/sso/redirect`}</code><br/>
-        Callback URL: <code style={{ color: "#00e5a0" }}>{`${window.location.origin.replace("://cy360.", "://cyasm.")}/api/sso/callback`}</code>
+        SSO login URL: <code style={{ color: "#00e5a0" }}>{`${window.location.origin}/api/sso/redirect`}</code><br/>
+        Callback URL: <code style={{ color: "#00e5a0" }}>{`${window.location.origin}/api/sso/callback`}</code>
       </div>
     </div>
   );
@@ -268,6 +277,7 @@ function SMTPCard() {
   const [saving, setSaving] = useState(false);
   const [testing, setTest]  = useState(false);
   const [msg, setMsg]       = useState(null);
+  const [pwdSaved, setPwdSaved] = useState(false);
 
   const [host,       setHost]       = useState("");
   const [port,       setPort]       = useState("587");
@@ -290,6 +300,7 @@ function SMTPCard() {
         setFrom(d.smtp_from || "");
         setAdminEmail(d.smtp_admin_email || "");
         setUseTls(d.smtp_use_tls !== false);
+        setPwdSaved(!!d.smtp_password);  // "••••••••" = password is set
         // never pre-fill the password field
       })
       .catch(() => {});
@@ -314,7 +325,8 @@ function SMTPCard() {
         body: JSON.stringify(body),
       });
       const d = await r.json();
-      setMsg(d.ok ? { ok: true, text: "SMTP settings saved" } : { ok: false, text: d.error || "Save failed" });
+      if (d.ok) { setMsg({ ok: true, text: "SMTP settings saved" }); if (pass) { setPwdSaved(true); setPass(""); } }
+      else setMsg({ ok: false, text: d.error || "Save failed" });
     } catch (e) {
       setMsg({ ok: false, text: String(e) });
     } finally {
@@ -372,9 +384,13 @@ function SMTPCard() {
             placeholder="noreply@cycentra.com" style={INPUT} />
         </div>
         <div>
-          <div style={LABEL}>Password</div>
+          <div style={{ ...LABEL, display: "flex", alignItems: "center", gap: 6 }}>
+            Password
+            {pwdSaved && <span style={{ fontSize: 10, color: "#00e5a0", fontFamily: "monospace" }}>✓ Saved</span>}
+          </div>
           <input type="password" value={pass} onChange={e => setPass(e.target.value)}
-            placeholder="Leave blank to keep current" style={INPUT} />
+            placeholder={pwdSaved ? "•••••••• (leave blank to keep)" : "SMTP password or app password"}
+            style={INPUT} />
         </div>
         <div>
           <div style={LABEL}>From Address</div>

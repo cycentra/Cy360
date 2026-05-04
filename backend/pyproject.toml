@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cycentra-backend"
-version = "1.0.333"
+version = "1.0.334"
 description = "CyCentra 360 — Flask backend + CySIEMStack correlation engine"
 requires-python = ">=3.12"
 dynamic = ["dependencies"]
@@ -16,8 +16,9 @@ dependencies = {file = ["requirements.txt", "cysiemstack/correlation_engine/requ
 # Standalone .py files at the root of backend/ (not inside a package directory)
 # app.py is the Flask entry point
 # siem_proxy.py is the SIEM blueprint imported by app.py
+# smtp_service.py is the SMTP helper for the SSO approval workflow
 [tool.setuptools]
-py-modules = ["app", "siem_proxy"]
+py-modules = ["app", "siem_proxy", "smtp_service"]
 
 # Python packages (directories) to include in the wheel
 [tool.setuptools.packages.find]

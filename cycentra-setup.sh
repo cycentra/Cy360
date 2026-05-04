@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.333 -- 2026-05-04 21:46 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.334 -- 2026-05-04 23:01 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -2194,6 +2194,8 @@ server {
     location /api/  { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; proxy_read_timeout 180s; }
     location /auth/ { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; }
     location /oidc/ { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; }
+    # OIDC discovery doc — proxy /.well-known/ to Flask so cy360.<domain>/.well-known/openid-configuration works
+    location /.well-known/ { proxy_pass http://127.0.0.1:5252; proxy_set_header Host \$host; proxy_set_header X-Real-IP \$remote_addr; }
     # ── IAP: oauth2-proxy sign-in / callback / sign-out ─────────────────────
     location /oauth2/ {
         proxy_pass       http://127.0.0.1:4180;

@@ -170,7 +170,11 @@ SSO_PROVIDER         = os.environ.get("SSO_PROVIDER",         "")        # googl
 SSO_CLIENT_ID        = os.environ.get("SSO_CLIENT_ID",        "")
 SSO_CLIENT_SECRET    = os.environ.get("SSO_CLIENT_SECRET",    "")
 SSO_DISCOVERY_URL    = os.environ.get("SSO_DISCOVERY_URL",    "")
-SSO_REDIRECT_URI     = os.environ.get("SSO_REDIRECT_URI",     "")
+# Default callback lands on the portal vhost (cy360) because its nginx block
+# already proxies all /api/ requests to the Flask backend on port 5252.
+# cyasm.<domain>/api/sso/callback also works but requires users to register
+# a second redirect URI in their IdP.
+SSO_REDIRECT_URI     = os.environ.get("SSO_REDIRECT_URI",     f"{FRONTEND_URL}/api/sso/callback")
 SSO_DEFAULT_ROLE     = os.environ.get("SSO_DEFAULT_ROLE",     "viewer")
 SSO_AUTO_PROVISION   = os.environ.get("SSO_AUTO_PROVISION",   "true").lower() == "true"
 SSO_REQUIRE_APPROVAL = os.environ.get("SSO_REQUIRE_APPROVAL", "false").lower() == "true"
