@@ -85,6 +85,20 @@ function SSOProviderCard({ onStatusMsg }) {
 
   useEffect(() => { load(); }, []);
 
+  // Auto-fill and lock fields when "CyCentra 360 IdP" is selected.
+  // The client_id must always be "cy360sso" (the registered OIDC client for this
+  // flow).  The redirect_uri is the portal's own SSO callback.  The discovery URL
+  // is auto-filled by the backend, but we clear the field so the hint is visible.
+  // The client_secret is provisioned server-side from CY360SSO_OIDC_SECRET — leave
+  // blank and the backend will inject it automatically.
+  useEffect(() => {
+    if (provider === "cycentra360") {
+      setClientId("cy360sso");
+      setRedirectUri(`${window.location.origin}/api/sso/callback`);
+      setDiscoveryUrl("");  // backend will auto-fill from BASE_URL
+    }
+  }, [provider]);
+
   const handleSave = async () => {
     setSaving(true); setMsg(null);
     try {
@@ -186,24 +200,32 @@ function SSOProviderCard({ onStatusMsg }) {
         <div>
           <div style={LABEL}>Client ID</div>
           <input type="text" value={clientId} onChange={e => setClientId(e.target.value)}
-            placeholder="OAuth client_id from your IdP" style={INPUT} />
+            placeholder="OAuth client_id from your IdP"
+            readOnly={provider === "cycentra360"}
+            style={{ ...INPUT, ...(provider === "cycentra360" ? { opacity: 0.6, cursor: "default" } : {}) }} />
+          {provider === "cycentra360" && (
+            <div style={{ color: "rgba(0,229,160,0.55)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
+              Fixed to <code>cy360sso</code> — the registered OIDC client for CyCentra 360 self-authentication.
+            </div>
+          )}
         </div>
         {/* Client Secret */}
         <div>
           <div style={LABEL}>Client Secret</div>
           <input type="password" value={clientSecret} onChange={e => setClientSecret(e.target.value)}
-            placeholder="Leave blank to keep current value" style={INPUT} />
+            placeholder={provider === "cycentra360" ? "Auto-provisioned from server config — leave blank" : "Leave blank to keep current value"}
+            style={INPUT} />
         </div>
         {/* Discovery URL */}
         <div style={{ gridColumn: "1 / -1" }}>
           <div style={LABEL}>OIDC Discovery URL</div>
           <input type="url" value={discoveryUrl} onChange={e => setDiscoveryUrl(e.target.value)}
-            placeholder="https://…/.well-known/openid-configuration  (auto-filled for Google/Microsoft)" style={INPUT} />
+            placeholder="https://…/.well-known/openid-configuration  (auto-filled for Google/Microsoft/CyCentra360)" style={INPUT} />
           <div style={{ color: "rgba(255,255,255,0.22)", fontSize: 10, fontFamily: "monospace", marginTop: 4, lineHeight: 1.6 }}>
             This is your <strong style={{ color: "rgba(255,255,255,0.4)" }}>identity provider's</strong> URL, not this portal's URL.
             {provider === "google"      && " Auto-filled for Google — leave blank."}
             {provider === "microsoft"   && " Auto-filled for Microsoft / Azure AD — leave blank."}
-            {provider === "cycentra360" && ` Use: ${window.location.origin}/oidc/.well-known/openid-configuration`}
+            {provider === "cycentra360" && " Auto-filled to the CyCentra OIDC endpoint — leave blank."}
             {provider === "okta"        && " Example: https://your-org.okta.com/.well-known/openid-configuration"}
             {provider === "keycloak"    && " Example: https://keycloak.host/realms/your-realm/.well-known/openid-configuration"}
             {provider === "custom"      && " Enter your IdP's OIDC discovery document URL."}
@@ -214,9 +236,13 @@ function SSOProviderCard({ onStatusMsg }) {
           <div style={LABEL}>Redirect URI (callback)</div>
           <input type="url" value={redirectUri} onChange={e => setRedirectUri(e.target.value)}
             placeholder={`${window.location.origin}/api/sso/callback`}
-            style={INPUT} />
+            readOnly={provider === "cycentra360"}
+            style={{ ...INPUT, ...(provider === "cycentra360" ? { opacity: 0.6, cursor: "default" } : {}) }} />
           <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
-            Register this URL in your IdP's allowed redirect URIs.
+            {provider === "cycentra360"
+              ? "Fixed to the portal's SSO callback — already registered in the CyCentra 360 OIDC provider."
+              : "Register this URL in your IdP's allowed redirect URIs."
+            }
           </div>
         </div>
         {/* Allowed domains */}

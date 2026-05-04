@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.335 -- 2026-05-04 23:29 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.336 -- 2026-05-04 23:40 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1115,6 +1115,12 @@ PATCHEOF
         info "Added CYSIEM_OIDC_SECRET to .env"
     fi
 
+    # Add CY360SSO_OIDC_SECRET if missing (portal self-IdP SSO client)
+    if ! grep -q "^CY360SSO_OIDC_SECRET=" "$_env" 2>/dev/null; then
+        echo "CY360SSO_OIDC_SECRET=$(openssl rand -hex 32)" >> "$_env"
+        info "Added CY360SSO_OIDC_SECRET to .env"
+    fi
+
     # Add IAP oauth2-proxy secrets if missing (introduced with IAP switch)
     if ! grep -q "^OAUTH2PROXY_SECRET=" "$_env" 2>/dev/null; then
         _new_oauth2_secret=$(openssl rand -hex 32)
@@ -1190,6 +1196,7 @@ ENVEOF
 CYIRIS_OIDC_SECRET=${CYIRIS_OIDC_SECRET}
 CYSOAR_OIDC_SECRET=${CYSOAR_OIDC_SECRET}
 CYSIEM_OIDC_SECRET=${CYSIEM_OIDC_SECRET}
+CY360SSO_OIDC_SECRET=${CY360SSO_OIDC_SECRET}
 
 # ── IAP oauth2-proxy ────────────────────────────────────────────────────────────
 # oauth2-proxy uses OIDC against cyasm.DOMAIN. It is the single SSO gate for

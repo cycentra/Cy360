@@ -598,6 +598,18 @@ def sso_configure():
     require_approval = bool(data.get("require_approval", False))
     allowed_domains  = data.get("allowed_domains", "").strip()
 
+    # ── cycentra360 self-IdP: enforce the registered OIDC client and redirect URI
+    # so that a misconfigured or outdated DB entry can never produce an
+    # "unknown_client" error from the OIDC provider.  Set these before the
+    # required-field validation so the admin doesn't have to enter them manually.
+    if provider == "cycentra360":
+        from core.config import CY360SSO_OIDC_SECRET as _cy360_secret
+        from core.config import FRONTEND_URL as _fe_url
+        client_id    = "cy360sso"
+        redirect_uri = f"{_fe_url}/api/sso/callback"
+        if not client_secret and _cy360_secret:
+            client_secret = _cy360_secret
+
     if not provider or not client_id:
         return jsonify({"error": "provider and client_id are required"}), 400
     if default_role not in VALID_ROLES:
