@@ -776,8 +776,8 @@ function UserManagementTab() {
         <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
           User Management
         </div>
-        <button onClick={reloadUsers} style={{ marginLeft: "auto", background: "none", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", borderRadius: 4, padding: "3px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer" }}>
-          ↻ Refresh
+        <button onClick={reloadUsers} style={{ marginLeft: "auto", background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.4)", color: "#00e5a0", borderRadius: 4, padding: "4px 12px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700, letterSpacing: "0.8px" }}>
+          ↻ REFRESH
         </button>
       </div>
 
@@ -830,8 +830,8 @@ function UserManagementTab() {
       {/* User table */}
       <div style={{ ...CARD, padding: 0, overflow: "hidden", marginBottom: 20 }}>
         {/* Table header */}
-        <div style={{ display: "grid", gridTemplateColumns: "140px 1fr 55px 90px 130px auto", gap: 0, padding: "8px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)" }}>
-          {["Name", "Email", "Auth", "Status", "Role", ""].map(h => (
+        <div style={{ display: "grid", gridTemplateColumns: "120px minmax(0,1fr) 58px 90px 110px 175px", gap: 0, padding: "8px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)" }}>
+          {["Name", "Email", "Auth", "Status", "Role", "Actions"].map(h => (
             <span key={h} style={{ ...LABEL, marginBottom: 0, fontSize: 9 }}>{h}</span>
           ))}
         </div>
@@ -852,13 +852,13 @@ function UserManagementTab() {
 
           return (
             <div key={email}>
-              <div style={{ display: "grid", gridTemplateColumns: "140px 1fr 55px 90px 130px auto", gap: 0, padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", alignItems: "center", background: rowBg }}>
+              <div style={{ display: "grid", gridTemplateColumns: "120px minmax(0,1fr) 58px 90px 110px 175px", gap: 0, padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", alignItems: "center", background: rowBg }}>
                 {/* Name */}
                 <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 6 }} title={displayName}>
                   {displayName || <span style={{ color: "rgba(255,255,255,0.2)" }}>—</span>}
                 </span>
                 {/* Email */}
-                <span style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, fontFamily: "monospace", wordBreak: "break-all", paddingRight: 10 }}>{email}</span>
+                <span style={{ color: "rgba(255,255,255,0.75)", fontSize: 11, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 10 }} title={email}>{email}</span>
                 {/* Auth badge */}
                 <span>
                   <span style={{ fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "0.5px", padding: "2px 5px", borderRadius: 3,
@@ -883,7 +883,7 @@ function UserManagementTab() {
                   {VALID_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
                 </select>
                 {/* Actions */}
-                <div style={{ display: "flex", gap: 4, marginLeft: 8, flexWrap: "nowrap" }}>
+                <div style={{ display: "flex", gap: 4, flexWrap: "nowrap", alignItems: "center" }}>
                   {isPending ? (
                     <>
                       <button
@@ -1034,9 +1034,8 @@ const TABS = [
   { id: "integrations", label: "Integrations" },
   { id: "env",          label: "Environment Config" },
   { id: "scheduler",    label: "Scheduler" },
-  { id: "users",        label: "User Management" },
+  { id: "users",        label: "Users & Auth" },
   { id: "backup",       label: "Backup & Restore" },
-  { id: "sso",          label: "SSO & Auth" },
 ];
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2790,9 +2789,8 @@ export function SystemSettingsPage() {
       {tab === "integrations" && <IntegrationsTab />}
       {tab === "env"          && <EnvConfigTab />}
       {tab === "scheduler"    && <SchedulerTab />}
-      {tab === "users"        && <UserManagementTab />}
+      {tab === "users"        && <><UserManagementTab /><SSOTab /></>}
       {tab === "backup"       && <BackupTab />}
-      {tab === "sso"          && <SSOTab />}
     </div>
   );
 }
