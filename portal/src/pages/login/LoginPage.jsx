@@ -57,12 +57,13 @@ export function LoginPage() {
 
   const handleSSO = (provider) => {
     setLoading(provider);
-    // google / microsoft → direct OAuth route; everything else → generic OIDC redirect
-    if (provider === "google" || provider === "microsoft") {
-      window.location.href = `${CYSCAN_URL}/auth/${provider}?redirect=${encodeURIComponent(window.location.origin)}`;
-    } else {
-      window.location.href = `${CYSCAN_URL}/api/sso/redirect`;
-    }
+    // Always use the admin-configured OIDC flow (/api/sso/redirect → /api/sso/callback).
+    // The redirect_uri registered in the IdP app MUST be FRONTEND_URL/api/sso/callback —
+    // which is exactly what sso_redirect() sends. The direct /auth/google and
+    // /auth/microsoft routes use separate hardcoded credentials and a different
+    // redirect_uri (BASE_URL/auth/<provider>/callback), causing redirect_uri_mismatch
+    // when the admin has configured their own OAuth app through the SSO settings.
+    window.location.href = `${CYSCAN_URL}/api/sso/redirect`;
   };
 
   const handleLocalLogin = async (e) => {
