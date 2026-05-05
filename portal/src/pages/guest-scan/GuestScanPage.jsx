@@ -84,14 +84,14 @@ function RiskDonut({ assets = [] }) {
   );
 }
 
-function LockedWidget({ title, accent = "#00e5a0" }) {
+function LockedWidget({ title, accent = "#00e5a0", preview = null }) {
   return (
     <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
       borderTop: `2px solid ${accent}40`, borderRadius: 5, padding: "18px 22px", position: "relative", overflow: "hidden" }}>
       <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, letterSpacing: "1.5px",
         textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>{title}</div>
-      {/* Blurred placeholder rows */}
-      {[80, 60, 70, 50].map((w, i) => (
+      {/* Blurred placeholder rows — use custom preview or generic bars */}
+      {preview || [80, 60, 70, 50].map((w, i) => (
         <div key={i} style={{ height: 12, width: `${w}%`, background: "rgba(255,255,255,0.05)",
           borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>
       ))}
@@ -105,6 +105,163 @@ function LockedWidget({ title, accent = "#00e5a0" }) {
         </svg>
         <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace",
           marginTop: 6, letterSpacing: "1px" }}>FULL ACCESS REQUIRED</div>
+      </div>
+    </div>
+  );
+}
+
+// ── Partial-data widgets ───────────────────────────────────────────────────────
+
+function SslWidget({ assets = [] }) {
+  const sslFindings = assets.flatMap(a =>
+    (a.vulnerabilities || []).filter(v =>
+      /ssl|tls|cert|crypto|cipher|https/i.test(v.title || "") ||
+      /ssl|tls|cert|crypto|cipher/i.test(v.category || "")
+    )
+  );
+  const critical = sslFindings.filter(v => v.severity?.toLowerCase() === "critical").length;
+  const high     = sslFindings.filter(v => v.severity?.toLowerCase() === "high").length;
+  const medium   = sslFindings.filter(v => v.severity?.toLowerCase() === "medium").length;
+  const total    = sslFindings.length;
+  return (
+    <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
+      borderTop: "2px solid #f5c518", borderRadius: 5, padding: "18px 22px" }}>
+      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
+        textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>
+        SSL / Crypto Health
+      </div>
+      {total === 0 ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00e5a0" strokeWidth="2.5">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            <span style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace" }}>No SSL issues detected</span>
+          </div>
+          <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace",
+            padding: "6px 8px", background: "rgba(0,229,160,0.05)", borderRadius: 3 }}>
+            Certificate chain & cipher depth requires full access
+          </div>
+        </div>
+      ) : (
+        <div>
+          <div style={{ color: "#f5c518", fontSize: 28, fontWeight: 800,
+            fontFamily: "'Space Mono',monospace", lineHeight: 1, marginBottom: 4 }}>{total}</div>
+          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginBottom: 12 }}>SSL / TLS issues found</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            {[{ label: "Critical", val: critical, color: "#ff3b3b" },
+              { label: "High",     val: high,     color: "#ff8c00" },
+              { label: "Medium",   val: medium,   color: "#f5c518" }].filter(r => r.val > 0).map(r => (
+              <div key={r.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 11 }}>{r.label}</span>
+                <span style={{ color: r.color, fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{r.val}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 10, padding: "5px 8px", background: "rgba(245,197,24,0.07)",
+            borderRadius: 3, color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+            Certificate & cipher details require full access
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EmailSecurityWidget({ assets = [] }) {
+  const emailFindings = assets.flatMap(a =>
+    (a.vulnerabilities || []).filter(v =>
+      /spf|dkim|dmarc|email|smtp|mx |phishing|spoofing/i.test(v.title || "") ||
+      /email|mail/i.test(v.category || "")
+    )
+  );
+  const hasSpfIssue   = emailFindings.some(v => /spf/i.test(v.title || ""));
+  const hasDkimIssue  = emailFindings.some(v => /dkim/i.test(v.title || ""));
+  const hasDmarcIssue = emailFindings.some(v => /dmarc/i.test(v.title || ""));
+  const total = emailFindings.length;
+
+  const rows = [
+    { label: "SPF",   ok: !hasSpfIssue   },
+    { label: "DKIM",  ok: !hasDkimIssue  },
+    { label: "DMARC", ok: !hasDmarcIssue },
+  ];
+  return (
+    <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
+      borderTop: "2px solid #b06eff", borderRadius: 5, padding: "18px 22px" }}>
+      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
+        textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>
+        Email Security
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 9, marginBottom: 10 }}>
+        {rows.map(r => (
+          <div key={r.label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>{r.label}</span>
+            {r.ok
+              ? <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace", display: "flex", alignItems: "center", gap: 4 }}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#00e5a0" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  Pass
+                </span>
+              : <span style={{ color: "#ff8c00", fontSize: 11, fontFamily: "monospace", display: "flex", alignItems: "center", gap: 4 }}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#ff8c00" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  Issue
+                </span>
+            }
+          </div>
+        ))}
+      </div>
+      {total > 0 && (
+        <div style={{ color: "#b06eff", fontFamily: "monospace", fontSize: 11 }}>
+          {total} email finding{total !== 1 ? "s" : ""} detected
+        </div>
+      )}
+      <div style={{ marginTop: 8, padding: "5px 8px", background: "rgba(176,110,255,0.07)",
+        borderRadius: 3, color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+        Anti-spoofing & threat intel require full access
+      </div>
+    </div>
+  );
+}
+
+function AssetBreakdownWidget({ assets = [] }) {
+  const byType = {};
+  assets.forEach(a => {
+    const t = a.type || "Other";
+    byType[t] = (byType[t] || 0) + 1;
+  });
+  const topTypes = Object.entries(byType).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const typeColors = { Subdomain: "#4d9eff", IP: "#00e5a0", Web: "#f5c518", SSL: "#b06eff", Other: "rgba(255,255,255,0.3)" };
+  return (
+    <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
+      borderTop: "2px solid #4d9eff", borderRadius: 5, padding: "18px 22px" }}>
+      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
+        textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>
+        Asset Breakdown
+      </div>
+      {topTypes.length === 0 ? (
+        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12 }}>No assets found</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+          {topTypes.map(([type, count]) => {
+            const pct = Math.round((count / assets.length) * 100);
+            const color = typeColors[type] || typeColors.Other;
+            return (
+              <div key={type}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11 }}>{type}</span>
+                  <span style={{ color, fontFamily: "monospace", fontSize: 11, fontWeight: 700 }}>{count}</span>
+                </div>
+                <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2 }}>
+                  <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 2,
+                    transition: "width 0.6s ease" }}/>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div style={{ marginTop: 10, padding: "5px 8px", background: "rgba(77,158,255,0.07)",
+        borderRadius: 3, color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+        Cloud infra & ownership data require full access
       </div>
     </div>
   );
@@ -185,7 +342,7 @@ function GuestDashboard({ data, onRescan }) {
           ))}
         </div>
 
-        {/* Row 1: Risk donut + 2 locked widgets */}
+        {/* Row 1: Risk donut + SSL (partial) + Email security (partial) */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
           <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
             borderTop: "2px solid #ff3b3b", borderRadius: 5, padding: "18px 22px" }}>
@@ -195,15 +352,47 @@ function GuestDashboard({ data, onRescan }) {
             </div>
             <RiskDonut assets={assets}/>
           </div>
-          <LockedWidget title="SSL / Crypto Health" accent="#f5c518"/>
-          <LockedWidget title="Infrastructure & Cloud" accent="#4d9eff"/>
+          <SslWidget assets={assets}/>
+          <EmailSecurityWidget assets={assets}/>
         </div>
 
-        {/* Row 2: 3 locked widgets */}
+        {/* Row 2: Asset breakdown (partial) + 2 locked widgets */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
+          <AssetBreakdownWidget assets={assets}/>
+          <LockedWidget title="Web Security" accent="#ff8c00"
+            preview={[
+              <div key="p1" style={{ height: 12, width: "85%", background: "rgba(255,140,0,0.12)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+              <div key="p2" style={{ height: 12, width: "60%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+              <div key="p3" style={{ height: 12, width: "70%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+            ]}/>
+          <LockedWidget title="Brand & External Exposure" accent="#ff3b3b"
+            preview={[
+              <div key="p1" style={{ height: 12, width: "75%", background: "rgba(255,59,59,0.12)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+              <div key="p2" style={{ height: 12, width: "55%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+              <div key="p3" style={{ height: 12, width: "65%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+            ]}/>
+        </div>
+
+        {/* Row 3: 3 showcase locked widgets */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 24 }}>
-          <LockedWidget title="Email Security" accent="#b06eff"/>
-          <LockedWidget title="Web Security" accent="#ff8c00"/>
-          <LockedWidget title="Brand & External Exposure" accent="#ff3b3b"/>
+          <LockedWidget title="Dark Web Monitoring" accent="#ff3b3b"
+            preview={[
+              <div key="p1" style={{ height: 12, width: "70%", background: "rgba(255,59,59,0.1)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+              <div key="p2" style={{ height: 12, width: "50%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+              <div key="p3" style={{ height: 8, width: "90%", background: "rgba(255,255,255,0.04)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+            ]}/>
+          <LockedWidget title="Supply Chain Risk" accent="#4d9eff"
+            preview={[
+              <div key="p1" style={{ height: 12, width: "80%", background: "rgba(77,158,255,0.1)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+              <div key="p2" style={{ height: 12, width: "60%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+              <div key="p3" style={{ height: 8, width: "75%", background: "rgba(255,255,255,0.04)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+            ]}/>
+          <LockedWidget title="AI Risk Score" accent="#b06eff"
+            preview={[
+              <div key="p1" style={{ height: 12, width: "65%", background: "rgba(176,110,255,0.12)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+              <div key="p2" style={{ height: 12, width: "80%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+              <div key="p3" style={{ height: 8, width: "55%", background: "rgba(255,255,255,0.04)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+            ]}/>
         </div>
 
         {/* CTA banner */}
@@ -220,7 +409,7 @@ function GuestDashboard({ data, onRescan }) {
               Brand exposure monitoring, and AI-powered remediation guidance — in real time.
             </div>
           </div>
-          <a href="https://cycentra.com/contact" target="_blank" rel="noreferrer"
+          <a href="https://cycentra.com/#contact" target="_blank" rel="noreferrer"
             style={{ display: "inline-block", background: "#00e5a0", color: "#0d0f14",
               fontFamily: "'Space Mono',monospace", fontWeight: 700, fontSize: 13, letterSpacing: "1px",
               padding: "14px 28px", borderRadius: 4, textDecoration: "none", whiteSpace: "nowrap",
