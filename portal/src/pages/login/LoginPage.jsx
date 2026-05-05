@@ -24,7 +24,8 @@ export function LoginPage() {
   // ── Pending approval / auth-error state from URL params ──────────────────
   const [pendingEmail, setPendingEmail]   = useState(null);  // non-null → approval-pending view
   const [authErrMsg,   setAuthErrMsg]     = useState(null);  // non-null → error banner
-  const [ssoEnabled,   setSsoEnabled]     = useState(false); // generic OIDC button
+  // providerCfg: { enabled: bool, provider_id: string, provider_name: string, configured: bool }
+  const [providerCfg,  setProviderCfg]    = useState(null);  // null = loading
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -34,7 +35,6 @@ export function LoginPage() {
       setPendingEmail(decodeURIComponent(params.get("email") || ""));
       // Clean the URL so a refresh doesn't re-trigger
       window.history.replaceState({}, "", window.location.pathname);
-      return;
     }
 
     // auth=error&message=...
@@ -44,22 +44,25 @@ export function LoginPage() {
       window.history.replaceState({}, "", window.location.pathname);
     }
 
-    // Check if a generic OIDC provider is configured
+    // Fetch which SSO provider the admin has configured
     fetch(`${API_BASE}/api/sso/providers`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
-      .then(d => d?.sso_enabled && setSsoEnabled(true))
-      .catch(() => {});
+      .then(d => setProviderCfg({
+        enabled:       !!(d?.sso_enabled && d?.configured),
+        provider_id:   d?.provider_id   || "",
+        provider_name: d?.provider_name || "",
+      }))
+      .catch(() => setProviderCfg({ enabled: false, provider_id: "", provider_name: "" }));
   }, []);
-
-  // handler for generic OIDC SSO
-  const handleGenericSSO = () => {
-    setLoading("sso");
-    window.location.href = `${CYSCAN_URL}/api/sso/redirect`;
-  };
 
   const handleSSO = (provider) => {
     setLoading(provider);
-    window.location.href = `${CYSCAN_URL}/auth/${provider}?redirect=${encodeURIComponent(window.location.origin)}`;
+    // google / microsoft → direct OAuth route; everything else → generic OIDC redirect
+    if (provider === "google" || provider === "microsoft") {
+      window.location.href = `${CYSCAN_URL}/auth/${provider}?redirect=${encodeURIComponent(window.location.origin)}`;
+    } else {
+      window.location.href = `${CYSCAN_URL}/api/sso/redirect`;
+    }
   };
 
   const handleLocalLogin = async (e) => {
@@ -209,27 +212,53 @@ export function LoginPage() {
           </div>
 
           {!showLocal ? (
-            /* ── SSO buttons ── */
+            /* ── SSO buttons — rendered based on admin-configured provider ── */
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <button onClick={() => handleSSO("google")} disabled={!!loading}
-                style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: "14px 24px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "white", fontSize: 14, fontWeight: 500, cursor: loading ? "default" : "pointer", transition: "all 0.2s", opacity: loading === "microsoft" ? 0.5 : 1 }}>
-                {loading === "google"
-                  ? <div style={{ width: 18, height: 18, border: "2px solid rgba(255,255,255,0.2)", borderTopColor: "#4285f4", borderRadius: "50%", animation: "spin 0.8s linear infinite" }}/>
-                  : <svg width="18" height="18" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
-                }
-                {loading === "google" ? "Connecting…" : "Continue with Google"}
-              </button>
 
-              <button onClick={() => handleSSO("microsoft")} disabled={!!loading}
-                style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: "14px 24px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "white", fontSize: 14, fontWeight: 500, cursor: loading ? "default" : "pointer", transition: "all 0.2s", opacity: loading === "google" ? 0.5 : 1 }}>
-                {loading === "microsoft"
-                  ? <div style={{ width: 18, height: 18, border: "2px solid rgba(255,255,255,0.2)", borderTopColor: "#00b4f0", borderRadius: "50%", animation: "spin 0.8s linear infinite" }}/>
-                  : <svg width="18" height="18" viewBox="0 0 21 21"><rect x="1" y="1" width="9" height="9" fill="#F25022"/><rect x="11" y="1" width="9" height="9" fill="#7FBA00"/><rect x="1" y="11" width="9" height="9" fill="#00A4EF"/><rect x="11" y="11" width="9" height="9" fill="#FFB900"/></svg>
-                }
-                {loading === "microsoft" ? "Connecting…" : "Continue with Microsoft"}
-              </button>
+              {/* Skeleton shimmer while providers are loading */}
+              {providerCfg === null && (
+                <div style={{ height: 52, borderRadius: 6, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", animation: "pulse 1.5s ease-in-out infinite" }} />
+              )}
 
-              {/* Local auth toggle */}
+              {/* Google — shown only when admin configured provider=google */}
+              {providerCfg?.enabled && providerCfg.provider_id === "google" && (
+                <button onClick={() => handleSSO("google")} disabled={!!loading}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: "14px 24px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "white", fontSize: 14, fontWeight: 500, cursor: loading ? "default" : "pointer", transition: "all 0.2s" }}>
+                  {loading === "google"
+                    ? <div style={{ width: 18, height: 18, border: "2px solid rgba(255,255,255,0.2)", borderTopColor: "#4285f4", borderRadius: "50%", animation: "spin 0.8s linear infinite" }}/>
+                    : <svg width="18" height="18" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+                  }
+                  {loading === "google" ? "Connecting…" : "Continue with Google"}
+                </button>
+              )}
+
+              {/* Microsoft — shown only when admin configured provider=microsoft */}
+              {providerCfg?.enabled && providerCfg.provider_id === "microsoft" && (
+                <button onClick={() => handleSSO("microsoft")} disabled={!!loading}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: "14px 24px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "white", fontSize: 14, fontWeight: 500, cursor: loading ? "default" : "pointer", transition: "all 0.2s" }}>
+                  {loading === "microsoft"
+                    ? <div style={{ width: 18, height: 18, border: "2px solid rgba(255,255,255,0.2)", borderTopColor: "#00b4f0", borderRadius: "50%", animation: "spin 0.8s linear infinite" }}/>
+                    : <svg width="18" height="18" viewBox="0 0 21 21"><rect x="1" y="1" width="9" height="9" fill="#F25022"/><rect x="11" y="1" width="9" height="9" fill="#7FBA00"/><rect x="1" y="11" width="9" height="9" fill="#00A4EF"/><rect x="11" y="11" width="9" height="9" fill="#FFB900"/></svg>
+                  }
+                  {loading === "microsoft" ? "Connecting…" : "Continue with Microsoft"}
+                </button>
+              )}
+
+              {/* Generic OIDC — any provider that isn't google or microsoft */}
+              {providerCfg?.enabled && providerCfg.provider_id !== "google" && providerCfg.provider_id !== "microsoft" && (
+                <button onClick={() => handleSSO(providerCfg.provider_id)} disabled={!!loading}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: "14px 24px", background: "rgba(0,229,160,0.04)", border: "1px solid rgba(0,229,160,0.25)", borderRadius: 6, color: "#00e5a0", fontSize: 14, fontWeight: 500, cursor: loading ? "default" : "pointer", transition: "all 0.2s" }}>
+                  {loading === providerCfg.provider_id
+                    ? <div style={{ width: 18, height: 18, border: "2px solid rgba(0,229,160,0.2)", borderTopColor: "#00e5a0", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+                    : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                      </svg>
+                  }
+                  {loading === providerCfg.provider_id ? "Redirecting…" : `Sign in with ${providerCfg.provider_name || "SSO"}`}
+                </button>
+              )}
+
+              {/* Local auth toggle — always shown */}
               <button onClick={() => setShowLocal(true)} disabled={!!loading}
                 style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: "14px 24px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, color: "rgba(255,255,255,0.6)", fontSize: 14, fontWeight: 500, cursor: loading ? "default" : "pointer", transition: "all 0.2s" }}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -237,20 +266,6 @@ export function LoginPage() {
                 </svg>
                 Sign in with local account
               </button>
-
-              {/* Generic OIDC SSO button — shown only when configured */}
-              {ssoEnabled && (
-                <button onClick={handleGenericSSO} disabled={!!loading}
-                  style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: "14px 24px", background: "rgba(0,229,160,0.04)", border: "1px solid rgba(0,229,160,0.25)", borderRadius: 6, color: "#00e5a0", fontSize: 14, fontWeight: 500, cursor: loading ? "default" : "pointer", transition: "all 0.2s", opacity: loading && loading !== "sso" ? 0.5 : 1 }}>
-                  {loading === "sso"
-                    ? <div style={{ width: 18, height: 18, border: "2px solid rgba(0,229,160,0.2)", borderTopColor: "#00e5a0", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
-                    : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                      </svg>
-                  }
-                  {loading === "sso" ? "Redirecting…" : "Sign in with SSO"}
-                </button>
-              )}
             </div>
           ) : showRequestAccess ? (
             /* ── Request access form / confirmation ── */
