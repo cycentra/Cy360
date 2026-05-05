@@ -379,10 +379,27 @@ def sso_redirect():
         return redirect(f"{FRONTEND_URL}?auth=error&message=SSO+not+enabled")
 
     client_id     = cfg.get("sso_client_id", "")
-    discovery_url = cfg.get("sso_discovery_url", "")
-    redirect_uri  = cfg.get("sso_redirect_uri", "")
+    provider      = cfg.get("sso_provider", "")
 
-    if not client_id or not discovery_url or not redirect_uri:
+    # ── Self-heal: enforce canonical values regardless of what is stored in DB.
+    # DB values can become stale (e.g. wrong discovery URL, old /api/v1/ path).
+    # For google/microsoft the discovery URL is fixed and cannot be wrong.
+    # For all providers the redirect_uri must always be our Flask callback route.
+    builtin_discovery = _PROVIDER_DISCOVERY_URLS.get(provider, "")
+    if builtin_discovery:
+        # Known provider — always use the authoritative discovery URL.
+        discovery_url = builtin_discovery
+    else:
+        discovery_url = cfg.get("sso_discovery_url", "")
+
+    # Canonical callback route — never trust the DB value here.
+    # Stale entries like /api/v1/auth/sso/callback would break token exchange.
+    redirect_uri = f"{FRONTEND_URL}/api/sso/callback"
+
+    if provider == "cycentra360":
+        client_id = "cy360sso"
+
+    if not client_id or not discovery_url:
         return redirect(f"{FRONTEND_URL}?auth=error&message=SSO+not+fully+configured")
 
     try:
@@ -452,8 +469,12 @@ def sso_callback():
     cfg             = _get_sso_cfg()
     client_id       = cfg.get("sso_client_id", "")
     client_secret   = cfg.get("sso_client_secret", "")
-    redirect_uri    = cfg.get("sso_redirect_uri", "")
     provider_id     = cfg.get("sso_provider", "custom")
+    # Always use the canonical callback route — never the DB value.
+    # This must match exactly what sso_redirect() sends to the IdP.
+    redirect_uri    = f"{FRONTEND_URL}/api/sso/callback"
+    if provider_id == "cycentra360":
+        client_id = "cy360sso"
     auto_provision  = cfg.get("sso_auto_provision", "true").lower() == "true"
     default_role    = cfg.get("sso_default_role", "viewer")
     require_approval = cfg.get("sso_require_approval", "false").lower() == "true"
@@ -598,15 +619,15 @@ def sso_configure():
     require_approval = bool(data.get("require_approval", False))
     allowed_domains  = data.get("allowed_domains", "").strip()
 
-    # ── cycentra360 self-IdP: enforce the registered OIDC client and redirect URI
-    # so that a misconfigured or outdated DB entry can never produce an
-    # "unknown_client" error from the OIDC provider.  Set these before the
-    # required-field validation so the admin doesn't have to enter them manually.
+    # ── Enforce canonical values per provider before any validation.
+    # This prevents misconfigured or stale DB entries from persisting.
+
+    # redirect_uri: ALWAYS the canonical Flask callback — never user-supplied.
+    redirect_uri = f"{FRONTEND_URL}/api/sso/callback"
+
     if provider == "cycentra360":
         from core.config import CY360SSO_OIDC_SECRET as _cy360_secret
-        from core.config import FRONTEND_URL as _fe_url
         client_id    = "cy360sso"
-        redirect_uri = f"{_fe_url}/api/sso/callback"
         if not client_secret and _cy360_secret:
             client_secret = _cy360_secret
 
@@ -615,13 +636,13 @@ def sso_configure():
     if default_role not in VALID_ROLES:
         return jsonify({"error": f"default_role must be one of {sorted(VALID_ROLES)}"}), 400
 
-    # Auto-fill known discovery URLs
-    if ".well-known" not in discovery_url:
-        builtin = _PROVIDER_DISCOVERY_URLS.get(provider, "")
-        if builtin:
-            discovery_url = builtin
-        elif not discovery_url:
-            return jsonify({"error": "discovery_url is required for this provider"}), 400
+    # Discovery URL: for google/microsoft ALWAYS use the canonical builtin URL
+    # regardless of what the admin submitted (prevents cy360/wrong URL from sticking).
+    builtin = _PROVIDER_DISCOVERY_URLS.get(provider, "")
+    if builtin:
+        discovery_url = builtin
+    elif not discovery_url or ".well-known" not in discovery_url:
+        return jsonify({"error": "discovery_url is required for this provider"}), 400
 
     # Probe before saving
     try:
@@ -650,6 +671,36 @@ def sso_configure():
                f"provider={provider} require_approval={require_approval}")
     logger.info("SSO configured by %s: provider=%s", caller, provider)
     return jsonify({"ok": True, "provider": provider})
+
+
+@sso_bp.route("/api/sso/config")
+def sso_config_get():
+    """Return current non-secret SSO config for the settings form.
+    Exposes client_id, provider, discovery_url, redirect_uri etc. but NEVER client_secret.
+    """
+    caller = session.get("user_email")
+    if not caller:
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role as _gur
+    if _gur(caller) != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+
+    cfg = _get_sso_cfg()
+    provider = cfg.get("sso_provider", "")
+
+    # Return canonical redirect_uri (never the potentially stale DB value)
+    return jsonify({
+        "sso_enabled":        cfg.get("sso_enabled", "false") == "true",
+        "provider":           provider,
+        "client_id":          cfg.get("sso_client_id", ""),
+        "discovery_url":      cfg.get("sso_discovery_url", ""),
+        "redirect_uri":       f"{FRONTEND_URL}/api/sso/callback",
+        "default_role":       cfg.get("sso_default_role", "viewer"),
+        "auto_provision":     cfg.get("sso_auto_provision", "true") == "true",
+        "require_approval":   cfg.get("sso_require_approval", "false") == "true",
+        "allowed_domains":    cfg.get("sso_allowed_domains", ""),
+        "secret_configured":  bool(cfg.get("sso_client_secret", "")),
+    })
 
 
 @sso_bp.route("/api/sso/disable", methods=["POST"])

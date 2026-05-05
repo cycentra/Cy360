@@ -92,7 +92,6 @@ _ACCESS_TOKENS: dict = {}
 
 # ── Discovery & JWKS ─────────────────────────────────────────────────────────
 
-@oidc_bp.route("/.well-known/openid-configuration")
 @oidc_bp.route("/oidc/.well-known/openid-configuration")
 def oidc_discovery():
     return jsonify({

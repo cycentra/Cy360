@@ -1,3 +1,25 @@
+## v1.0.338 -- 2026-05-05
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.338 -- 2026-05-05
+
+### Bug Fixes
+
+  - **SSO login broken: `unknown_client` error** — Fixed six interconnected root causes that broke the SSO login flow introduced in v1.0.331–v1.0.337:
+    1. `sso_redirect()` now self-heals: for Google/Microsoft, the OIDC discovery URL is always overridden to the authoritative provider URL regardless of what is stored in the DB. The redirect URI is always forced to the canonical `/api/sso/callback` path — stale DB entries like the old `/api/v1/auth/sso/callback` path (CyMind format) can no longer cause token-exchange failures.
+    2. `sso_configure()` now enforces correct values on save: Google/Microsoft always get their canonical discovery URLs; the redirect URI is always written as `{FRONTEND_URL}/api/sso/callback`.
+    3. `sso_callback()` now uses the canonical redirect URI (matching what `sso_redirect()` sent to the IdP) instead of the DB value — prevents redirect_uri mismatch errors.
+    4. Removed bare `/.well-known/openid-configuration` Flask route (without `/oidc/` prefix) from the OIDC provider blueprint. This route caused `cy360.cycentra.com/.well-known/...` to return CyCentra's own OIDC discovery doc, making it appear to be a valid Google IdP endpoint when an admin accidentally stored that URL.
+    5. Added `GET /api/sso/config` endpoint (admin-only) returning the full non-secret current SSO configuration so the settings form can pre-populate all fields on re-open.
+    6. Updated `SSOTab.jsx` to load from `/api/sso/config` on mount — `client_id`, `redirect_uri`, `default_role`, `auto_provision`, `require_approval`, `allowed_domains` are now pre-populated. The redirect URI field is now always read-only (it is fixed to `/api/sso/callback`). A badge shows when a secret is already stored.
+
+---
+
 ## v1.0.337 -- 2026-05-05
 
 ### Improvements

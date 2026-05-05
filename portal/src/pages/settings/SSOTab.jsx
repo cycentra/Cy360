@@ -63,18 +63,30 @@ function SSOProviderCard({ onStatusMsg }) {
   const [autoProvision,  setAutoProvision]  = useState(true);
   const [requireApproval, setRequireApproval] = useState(false);
   const [allowedDomains, setAllowedDomains] = useState("");
+  const [secretConfigured, setSecretConfigured] = useState(false);
 
   const load = () => {
-    fetch(`${API_BASE}/api/sso/providers`, { credentials: "include" })
+    // /api/sso/config (admin) — returns full editable config for pre-populating the form.
+    // Falls back to /api/sso/providers (public) for non-admins / unauthenticated.
+    fetch(`${API_BASE}/api/sso/config`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
       .then(d => {
-        if (!d) return;
-        setCfg(d);
-        if (d.provider_id) {
-          setProvider(d.provider_id);
-          setDiscoveryUrl(d.discovery_url || "");
-        }
+        if (!d || d.error) return;
+        if (d.provider)         setProvider(d.provider);
+        if (d.client_id)        setClientId(d.client_id);
+        if (d.discovery_url)    setDiscoveryUrl(d.discovery_url);
+        if (d.redirect_uri)     setRedirectUri(d.redirect_uri);
+        if (d.default_role)     setDefaultRole(d.default_role);
+        if (d.auto_provision   !== undefined) setAutoProvision(d.auto_provision);
+        if (d.require_approval !== undefined) setRequireApproval(d.require_approval);
+        if (d.allowed_domains  !== undefined) setAllowedDomains(d.allowed_domains);
+        if (d.secret_configured !== undefined) setSecretConfigured(d.secret_configured);
       })
+      .catch(() => {});
+
+    fetch(`${API_BASE}/api/sso/providers`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setCfg(d); })
       .catch(() => {});
 
     fetch(`${API_BASE}/api/sso/status`, { credentials: "include" })
@@ -213,8 +225,13 @@ function SSOProviderCard({ onStatusMsg }) {
         <div>
           <div style={LABEL}>Client Secret</div>
           <input type="password" value={clientSecret} onChange={e => setClientSecret(e.target.value)}
-            placeholder={provider === "cycentra360" ? "Auto-provisioned from server config — leave blank" : "Leave blank to keep current value"}
+            placeholder={provider === "cycentra360" ? "Auto-provisioned from server config — leave blank" : secretConfigured ? "•••••••• (stored — leave blank to keep)" : "Paste your IdP client secret"}
             style={INPUT} />
+          {secretConfigured && provider !== "cycentra360" && (
+            <div style={{ color: "rgba(0,229,160,0.5)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
+              ✓ A secret is stored. Leave blank to keep it, or paste a new value to replace.
+            </div>
+          )}
         </div>
         {/* Discovery URL */}
         <div style={{ gridColumn: "1 / -1" }}>
@@ -236,12 +253,12 @@ function SSOProviderCard({ onStatusMsg }) {
           <div style={LABEL}>Redirect URI (callback)</div>
           <input type="url" value={redirectUri} onChange={e => setRedirectUri(e.target.value)}
             placeholder={`${window.location.origin}/api/sso/callback`}
-            readOnly={provider === "cycentra360"}
-            style={{ ...INPUT, ...(provider === "cycentra360" ? { opacity: 0.6, cursor: "default" } : {}) }} />
+            readOnly
+            style={{ ...INPUT, opacity: 0.6, cursor: "default" }} />
           <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
             {provider === "cycentra360"
-              ? "Fixed to the portal's SSO callback — already registered in the CyCentra 360 OIDC provider."
-              : "Register this URL in your IdP's allowed redirect URIs."
+              ? "Fixed to the portal’s SSO callback — already registered in the CyCentra 360 OIDC provider."
+              : "Register this exact URL as an authorised redirect URI in your IdP application settings."
             }
           </div>
         </div>
