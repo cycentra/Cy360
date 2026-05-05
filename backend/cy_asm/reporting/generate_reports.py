@@ -132,11 +132,16 @@ def generate_all_reports(
 def hook_into_scan(portal_payload: Dict[str, Any],
                    tenant_id: str,
                    domain: str,
-                   timestamp: int) -> None:
+                   timestamp: int) -> Tuple[str, str]:
     """
     Drop-in hook called from cycentra_scan.py main() after portal_file is saved.
     Never raises — report failure must never block scan output.
+
+    Returns
+    -------
+    (executive_path, technical_path) — empty string for each report that failed.
     """
+    exec_p, tech_p = "", ""
     try:
         exec_p, tech_p = generate_all_reports(portal_payload, tenant_id, domain, timestamp)
         if exec_p:
@@ -145,6 +150,7 @@ def hook_into_scan(portal_payload: Dict[str, Any],
             logger.info(f"[Reports] Technical → {tech_p}")
     except Exception as e:
         logger.error(f"[Reports] Report generation hook failed (scan unaffected): {e}")
+    return exec_p, tech_p
 
 
 # ── Standalone CLI ────────────────────────────────────────────────────────────

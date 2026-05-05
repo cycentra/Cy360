@@ -36,8 +36,45 @@ from google.genai import types
 
 logger = setup_logging()
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# SCAN PROFILES
+# EMAIL NOTIFICATION HELPER
+# Called after PDF reports are generated. Lazily imports smtp_service from the
+# parent backend/ directory (same pattern as the lazy core.helpers imports).
+# Never raises — a mail failure must never affect scan results.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _notify_by_email(
+    notify_email: str,
+    domain: str,
+    scan_type: str,
+    summary_counts: dict,
+    exec_path: str,
+    tech_path: str,
+    scan_id: str,
+) -> None:
+    """Send scan completion email synchronously. Called from main() after PDF generation."""
+    if not notify_email:
+        return
+    try:
+        import sys as _sys
+        _backend_dir = str(Path(__file__).resolve().parent.parent)
+        if _backend_dir not in _sys.path:
+            _sys.path.insert(0, _backend_dir)
+        from smtp_service import send_asm_report_email  # noqa: PLC0415
+        send_asm_report_email(
+            to=notify_email,
+            domain=domain,
+            scan_type=scan_type,
+            summary_counts=summary_counts,
+            exec_pdf_path=exec_path,
+            tech_pdf_path=tech_path,
+            scan_id=scan_id,
+        )
+    except Exception as _email_err:
+        logger.warning(f"⚠️ [Email] Scan completion email failed: {_email_err}")
+
+
 # Each profile controls which sequential modules run and whether AI enrichment
 # is executed at the end. DNS Reconnaissance is always run as a baseline.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1059,11 +1096,34 @@ def main():
         logger.info(f"✅ Portal JSON saved → {portal_file}")
 
         # ── Generate PDF Reports (Executive + Technical) ─────────────────────
+        exec_pdf_path, tech_pdf_path = "", ""
         try:
             from reporting.generate_reports import hook_into_scan
-            hook_into_scan(portal_payload, final_tenant_id, domain, timestamp)
+            exec_pdf_path, tech_pdf_path = hook_into_scan(portal_payload, final_tenant_id, domain, timestamp)
         except Exception as _rpt_err:
             logger.warning(f"⚠️ [Reports] PDF generation failed (scan unaffected): {_rpt_err}")
+
+        # ── Email notification on scan completion ─────────────────────────────
+        _notify_email = os.environ.get("CYCENTRA_NOTIFY_EMAIL", "").strip()
+        if _notify_email:
+            _sev_counts = {
+                "critical": sum(1 for f in final_vulns if str(f.get("severity", "")).lower() == "critical"),
+                "high":     sum(1 for f in final_vulns if str(f.get("severity", "")).lower() == "high"),
+                "medium":   sum(1 for f in final_vulns if str(f.get("severity", "")).lower() == "medium"),
+                "low":      sum(1 for f in final_vulns if str(f.get("severity", "")).lower() == "low"),
+                "total":    len(final_vulns),
+            }
+            _scan_id = portal_payload.get("meta", {}).get("scan_id", f"ASM-{timestamp}")
+            logger.info(f"📧 [Email] Sending scan report to {_notify_email}...")
+            _notify_by_email(
+                notify_email=_notify_email,
+                domain=domain,
+                scan_type=scan_type,
+                summary_counts=_sev_counts,
+                exec_path=exec_pdf_path,
+                tech_path=tech_pdf_path,
+                scan_id=_scan_id,
+            )
 
     except Exception as e:
         logger.error(f"❌ Failed to save portal JSON: {e}")
@@ -1078,6 +1138,7 @@ def main():
         f"   Reports     : {report_file}\n"
         f"              : {portal_file}\n"
         f"   PDF Reports : /var/log/cycentra/cy-asm/reports/{final_tenant_id}/\n"
+        f"   Email Sent  : {os.environ.get('CYCENTRA_NOTIFY_EMAIL', 'none')}\n"
         f"{'='*60}"
     )
     logger.info("✅ Portal JSON saved — scan complete")

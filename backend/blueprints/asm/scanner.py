@@ -12,6 +12,7 @@ Routes:
 
 import glob
 import os
+import re
 import subprocess
 import sys
 import time
@@ -54,6 +55,8 @@ def scan_options():
 # ── Trigger scan ──────────────────────────────────────────────────────────────
 
 _VALID_SCAN_TYPES = {"standard", "deep", "passive"}
+# RFC-5322 simplified — good enough for a UI input guard (not a deliverability check)
+_EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]+\.[^@\s]{2,}$")
 
 
 @asm_bp.route("/api/scan/trigger", methods=["POST"])
@@ -63,6 +66,7 @@ def trigger_scan():
     uid       = data.get("uid", "anonymous")
     scan_type          = data.get("scan_type", "standard").strip().lower()
     include_subdomains = bool(data.get("include_subdomains", True))
+    notify_email       = data.get("notify_email", "").strip()
 
     if not domain or "." not in domain:
         return jsonify({"error": "Invalid domain"}), 400
@@ -70,6 +74,10 @@ def trigger_scan():
     # Reject unrecognised scan types rather than silently defaulting
     if scan_type not in _VALID_SCAN_TYPES:
         return jsonify({"error": f"Invalid scan_type '{scan_type}'. Must be one of: standard, deep, passive"}), 400
+
+    # Validate notify_email if provided — reject obviously malformed addresses
+    if notify_email and not _EMAIL_RE.match(notify_email):
+        return jsonify({"error": "Invalid notify_email address"}), 400
 
     user_dir = SCANS_DIR / uid
     user_dir.mkdir(parents=True, exist_ok=True)
@@ -91,9 +99,11 @@ def trigger_scan():
         pass  # non-fatal — log init failure
 
     env = os.environ.copy()
-    env["CYCENTRA_OUTPUT_DIR"]        = str(user_dir)
-    env["CYCENTRA_USER_ID"]           = uid
+    env["CYCENTRA_OUTPUT_DIR"]         = str(user_dir)
+    env["CYCENTRA_USER_ID"]            = uid
     env["CYCENTRA_INCLUDE_SUBDOMAINS"] = "true" if include_subdomains else "false"
+    if notify_email:
+        env["CYCENTRA_NOTIFY_EMAIL"]   = notify_email
 
     try:
         subprocess.Popen(
@@ -117,7 +127,11 @@ def trigger_scan():
         from blueprints.audit.routes import record_event
         record_event("scan_triggered", email=uid, resource=domain,
                      detail=f"{scan_type} scan started",
-                     metadata={"scan_type": scan_type, "include_subdomains": include_subdomains})
+                     metadata={
+                         "scan_type": scan_type,
+                         "include_subdomains": include_subdomains,
+                         "notify_email": notify_email or None,
+                     })
     except Exception:
         pass
 
@@ -127,6 +141,7 @@ def trigger_scan():
         "uid":                 uid,
         "scan_type":           scan_type,
         "include_subdomains":  include_subdomains,
+        "notify_email":        notify_email or None,
     })
 
 

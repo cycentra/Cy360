@@ -21,6 +21,7 @@ Env-var fallbacks (see core/config.py) are used when DB config is absent.
 import logging
 import smtplib
 import ssl
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -289,3 +290,291 @@ def send_test_email(to: str) -> tuple:
     html = _BASE_STYLE.format(body=body)
     cfg = get_smtp_config()
     return _send_sync(cfg, to, "CyCentra 360 — SMTP Test", html)
+
+
+# ── Attachment-capable send ───────────────────────────────────────────────────
+
+def _send_with_attachments_sync(
+    cfg: dict,
+    to: str,
+    subject: str,
+    html: str,
+    attachments: list,          # list of (file_path: str, display_name: str)
+) -> tuple:
+    """
+    Synchronous SMTP send with optional file attachments.
+    attachments: list of (absolute_file_path, filename_for_recipient) tuples.
+    Returns (True, None) on success or (False, "error message") on failure.
+    """
+    host = cfg.get("smtp_host", "").strip()
+    if not host or not to:
+        logger.debug("SMTP not configured — skipping email to %s", to)
+        return False, "SMTP host or recipient not set"
+
+    from_addr = (cfg.get("smtp_from") or cfg.get("smtp_user") or "cycentra@noreply.local").strip()
+    port      = int(cfg.get("smtp_port", 587) or 587)
+    use_tls   = cfg.get("smtp_use_tls", True)
+    user      = cfg.get("smtp_user", "")
+    password  = cfg.get("smtp_password", "")
+
+    # outer=mixed carries both the html body and file attachments
+    outer = MIMEMultipart("mixed")
+    outer["Subject"] = subject
+    outer["From"]    = from_addr
+    outer["To"]      = to
+
+    inner = MIMEMultipart("alternative")
+    inner.attach(MIMEText(html, "html"))
+    outer.attach(inner)
+
+    attached_count = 0
+    for file_path, display_name in (attachments or []):
+        try:
+            with open(file_path, "rb") as fh:
+                part = MIMEApplication(fh.read(), Name=display_name)
+            part["Content-Disposition"] = f'attachment; filename="{display_name}"'
+            outer.attach(part)
+            attached_count += 1
+        except Exception as attach_err:
+            logger.warning("SMTP: could not attach %s — %s", file_path, attach_err)
+
+    try:
+        if port == 465:
+            ctx = ssl.create_default_context()
+            with smtplib.SMTP_SSL(host, port, context=ctx, timeout=20) as s:
+                s.ehlo()
+                if user and password:
+                    s.login(user, password)
+                s.sendmail(from_addr, to, outer.as_string())
+        elif use_tls:
+            ctx = ssl.create_default_context()
+            with smtplib.SMTP(host, port, timeout=20) as s:
+                s.ehlo()
+                s.starttls(context=ctx)
+                s.ehlo()
+                if user and password:
+                    s.login(user, password)
+                s.sendmail(from_addr, to, outer.as_string())
+        else:
+            with smtplib.SMTP(host, port, timeout=20) as s:
+                s.ehlo()
+                if user and password:
+                    s.login(user, password)
+                s.sendmail(from_addr, to, outer.as_string())
+
+        logger.info("SMTP sent '%s' (%d attachment(s)) to %s", subject, attached_count, to)
+        return True, None
+
+    except smtplib.SMTPAuthenticationError as exc:
+        raw = exc.smtp_error.decode(errors="replace").strip() if isinstance(exc.smtp_error, bytes) else str(exc)
+        if "5.7.9" in raw or "Application-specific password" in raw or "InvalidSecondFactor" in raw:
+            err = (
+                "Gmail requires an App Password — your regular Google password is rejected when "
+                "2-Step Verification is enabled. Generate one at "
+                "https://myaccount.google.com/apppasswords (select Mail + device) and paste the "
+                "16-character code as the SMTP password."
+            )
+        else:
+            err = f"Authentication failed — check smtp_user / smtp_password ({raw})"
+        logger.warning("SMTP auth error to %s: %s", to, exc)
+        return False, err
+    except smtplib.SMTPException as exc:
+        logger.warning("SMTP error sending to %s: %s", to, exc)
+        return False, str(exc)
+    except Exception as exc:
+        logger.warning("SMTP send failed to %s: %s", to, exc)
+        return False, str(exc)
+
+
+# ── ASM scan completion notification ─────────────────────────────────────────
+
+def send_asm_report_email(
+    to: str,
+    domain: str,
+    scan_type: str,
+    summary_counts: dict,
+    exec_pdf_path: str,
+    tech_pdf_path: str,
+    scan_id: str,
+) -> None:
+    """
+    Send an ASM scan completion notification with PDF reports attached.
+
+    Designed to be called synchronously from the cycentra_scan.py subprocess
+    (after the scan is complete and PDFs have been written to disk).
+    All errors are swallowed — a mail failure must never crash the scan.
+
+    Parameters
+    ----------
+    to              Recipient address supplied by the analyst at scan initiation
+    domain          Target domain that was scanned
+    scan_type       One of: passive / standard / deep
+    summary_counts  {"critical": N, "high": N, "medium": N, "low": N, "total": N}
+    exec_pdf_path   Absolute path to the executive PDF (empty string if unavailable)
+    tech_pdf_path   Absolute path to the technical PDF (empty string if unavailable)
+    scan_id         Scan identifier, e.g. "ASM-1746440000"
+    """
+    import os as _os
+    from datetime import datetime as _dt
+
+    try:
+        cfg = get_smtp_config()
+        if not cfg.get("smtp_host"):
+            logger.debug("SMTP not configured — skipping ASM report email to %s", to)
+            return
+
+        critical = int(summary_counts.get("critical", 0))
+        high     = int(summary_counts.get("high",     0))
+        medium   = int(summary_counts.get("medium",   0))
+        low      = int(summary_counts.get("low",      0))
+        total    = int(summary_counts.get("total",    critical + high + medium + low))
+
+        # Overall risk posture drives headline colour
+        if critical > 0:
+            posture_color = "#ff4444"
+            posture_label = "Critical Risk Detected"
+        elif high > 0:
+            posture_color = "#ff8c00"
+            posture_label = "High Risk Detected"
+        elif medium > 0:
+            posture_color = "#f5c518"
+            posture_label = "Medium Risk Detected"
+        else:
+            posture_color = "#00e5a0"
+            posture_label = "Low Risk"
+
+        scan_date       = _dt.now().strftime("%B %d, %Y at %H:%M UTC")
+        scan_type_label = scan_type.title()
+        portal_url      = f"{FRONTEND_URL}/#/asm"
+
+        # Build attachment list — skip paths that are empty or don't exist on disk
+        attachments = []
+        attachment_rows = ""
+        for pdf_path, label in [
+            (exec_pdf_path, "Executive Report"),
+            (tech_pdf_path, "Technical Report"),
+        ]:
+            if pdf_path and _os.path.isfile(pdf_path):
+                fname = _os.path.basename(pdf_path)
+                attachments.append((pdf_path, fname))
+                attachment_rows += (
+                    f'<tr><td style="color:#8b949e;padding:4px 0;font-size:13px">{label}</td>'
+                    f'<td style="color:#e6edf3;font-size:13px;font-family:monospace">{fname}</td></tr>'
+                )
+
+        if attachment_rows:
+            attachment_block = f"""
+              <div style="background:#0f1923;border:1px solid #21262d;border-radius:6px;
+                          padding:14px 18px;margin:20px 0">
+                <p style="color:#8b949e;font-size:12px;font-weight:600;
+                           text-transform:uppercase;letter-spacing:0.8px;margin:0 0 10px 0">
+                  Attached Reports
+                </p>
+                <table style="border-collapse:collapse;width:100%">
+                  {attachment_rows}
+                </table>
+              </div>"""
+        else:
+            attachment_block = (
+                '<p style="color:#484f58;font-size:12px;margin-top:8px">'
+                "PDF reports could not be attached — check the scan engine logs.</p>"
+            )
+
+        body = f"""
+          <h2 style="color:{posture_color};margin-top:0;font-size:21px;font-weight:700">
+            ASM Scan Complete
+          </h2>
+          <p style="color:#8b949e;font-size:13px;margin:0 0 4px 0">
+            Risk Posture: <strong style="color:{posture_color}">{posture_label}</strong>
+          </p>
+          <p style="color:#8b949e;font-size:13px;margin:0 0 20px 0">
+            The <strong style="color:#e6edf3">{scan_type_label}</strong> attack surface scan
+            for <strong style="color:#00e5a0">{domain}</strong> has completed.
+          </p>
+
+          <!-- Scan meta -->
+          <table style="background:#0f1923;border:1px solid #21262d;border-radius:6px;
+                        padding:14px 18px;width:100%;border-collapse:collapse;margin-bottom:20px">
+            <tr>
+              <td style="color:#8b949e;padding:5px 0;width:130px;font-size:13px">Domain</td>
+              <td style="color:#e6edf3;font-size:13px;font-weight:600">{domain}</td>
+            </tr>
+            <tr>
+              <td style="color:#8b949e;padding:5px 0;font-size:13px">Scan Type</td>
+              <td style="color:#e6edf3;font-size:13px">{scan_type_label}</td>
+            </tr>
+            <tr>
+              <td style="color:#8b949e;padding:5px 0;font-size:13px">Scan ID</td>
+              <td style="color:#e6edf3;font-size:13px;font-family:monospace">{scan_id}</td>
+            </tr>
+            <tr>
+              <td style="color:#8b949e;padding:5px 0;font-size:13px">Completed</td>
+              <td style="color:#e6edf3;font-size:13px">{scan_date}</td>
+            </tr>
+          </table>
+
+          <!-- Severity pills (table-based for broad email client support) -->
+          <p style="color:#e6edf3;font-size:13px;font-weight:600;margin:0 0 10px 0">
+            Findings — {total} total
+          </p>
+          <table style="border-collapse:collapse;margin-bottom:20px">
+            <tr>
+              <td style="padding-right:8px">
+                <table style="background:rgba(255,68,68,0.12);border:1px solid rgba(255,68,68,0.35);
+                              border-radius:5px;padding:10px 18px;min-width:70px;
+                              border-collapse:collapse;text-align:center">
+                  <tr><td style="color:#ff4444;font-size:22px;font-weight:700;
+                                  line-height:1;white-space:nowrap">{critical}</td></tr>
+                  <tr><td style="color:#ff4444;font-size:11px;padding-top:3px">Critical</td></tr>
+                </table>
+              </td>
+              <td style="padding-right:8px">
+                <table style="background:rgba(255,140,0,0.12);border:1px solid rgba(255,140,0,0.35);
+                              border-radius:5px;padding:10px 18px;min-width:70px;
+                              border-collapse:collapse;text-align:center">
+                  <tr><td style="color:#ff8c00;font-size:22px;font-weight:700;
+                                  line-height:1;white-space:nowrap">{high}</td></tr>
+                  <tr><td style="color:#ff8c00;font-size:11px;padding-top:3px">High</td></tr>
+                </table>
+              </td>
+              <td style="padding-right:8px">
+                <table style="background:rgba(245,197,24,0.12);border:1px solid rgba(245,197,24,0.35);
+                              border-radius:5px;padding:10px 18px;min-width:70px;
+                              border-collapse:collapse;text-align:center">
+                  <tr><td style="color:#f5c518;font-size:22px;font-weight:700;
+                                  line-height:1;white-space:nowrap">{medium}</td></tr>
+                  <tr><td style="color:#f5c518;font-size:11px;padding-top:3px">Medium</td></tr>
+                </table>
+              </td>
+              <td>
+                <table style="background:rgba(0,229,160,0.08);border:1px solid rgba(0,229,160,0.2);
+                              border-radius:5px;padding:10px 18px;min-width:70px;
+                              border-collapse:collapse;text-align:center">
+                  <tr><td style="color:#00e5a0;font-size:22px;font-weight:700;
+                                  line-height:1;white-space:nowrap">{low}</td></tr>
+                  <tr><td style="color:#00e5a0;font-size:11px;padding-top:3px">Low</td></tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+
+          {attachment_block}
+
+          <a href="{portal_url}"
+             style="display:inline-block;background:#00e5a0;color:#0d1117;
+                    padding:11px 26px;border-radius:5px;text-decoration:none;
+                    font-weight:700;font-size:13px;margin-top:4px">
+            View in CyCentra 360 →
+          </a>
+        """
+
+        html    = _BASE_STYLE.format(body=body)
+        subject = f"CyCentra 360 — ASM Scan Complete: {domain} [{posture_label}]"
+        ok, err = _send_with_attachments_sync(cfg, to, subject, html, attachments)
+        if not ok:
+            logger.warning("ASM report email to %s failed: %s", to, err)
+        else:
+            logger.info("ASM report email sent to %s for domain %s", to, domain)
+
+    except Exception as exc:
+        logger.warning("send_asm_report_email exception (to=%s domain=%s): %s", to, domain, exc)
