@@ -9,7 +9,8 @@
  */
 
 import { useState, useEffect, useRef } from "react";
-import { API_BASE } from "../../core/constants.js";
+import { API_BASE, CYSCAN_URL } from "../../core/constants.js";
+import { getSavedUser } from "../../core/auth.js";
 import { SSOTab } from "./SSOTab.jsx";
 
 // ── Shared style constants ────────────────────────────────────────────────────
@@ -567,28 +568,30 @@ function UserManagementTab() {
   };
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/auth/verify`, { credentials: "include" })
-      .then(r => r.json())
-      .then(d => {
-        const role = d.role || "viewer";
-        setAuthRole(role);
-        if (role === "admin") {
-          return fetch(`${API_BASE}/api/rbac/users`, { credentials: "include" })
-            .then(r2 => r2.json())
-            .then(d2 => setUsers(d2 || {}));
-        }
-      })
-      .catch(e => { setAuthErr(String(e)); setAuthRole("viewer"); })
-      .finally(() => setLoading(false));
+    // Get role from the saved user in localStorage (set during login flow).
+    // This avoids a same-origin /api/auth/verify call that can fail if the
+    // cy360 nginx config doesn't proxy /api/ to Flask (older server configs).
+    const saved = getSavedUser();
+    const role = saved?.role || "viewer";
+    setAuthRole(role);
+    if (role === "admin") {
+      fetch(`${CYSCAN_URL}/api/rbac/users`, { credentials: "include" })
+        .then(r => r.json())
+        .then(d => setUsers(d || {}))
+        .catch(e => setAuthErr(String(e)))
+        .finally(() => setLoading(false));
+    } else {
+      setLoading(false);
+    }
   }, []);
 
   const reloadUsers = () =>
-    fetch(`${API_BASE}/api/rbac/users`, { credentials: "include" })
+    fetch(`${CYSCAN_URL}/api/rbac/users`, { credentials: "include" })
       .then(r => r.json())
       .then(d => setUsers(d || {}));
 
   const handleRoleChange = async (email, role) => {
-    const r = await fetch(`${API_BASE}/api/rbac/users`, {
+    const r = await fetch(`${CYSCAN_URL}/api/rbac/users`, {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, role }),
@@ -604,7 +607,7 @@ function UserManagementTab() {
 
   const handleDelete = async (email) => {
     if (!window.confirm(`Remove ${email} from RBAC? They will revert to the 'viewer' default.`)) return;
-    const r = await fetch(`${API_BASE}/api/rbac/users/${encodeURIComponent(email)}`, {
+    const r = await fetch(`${CYSCAN_URL}/api/rbac/users/${encodeURIComponent(email)}`, {
       method: "DELETE", credentials: "include",
     });
     if (r.ok) {
@@ -629,7 +632,7 @@ function UserManagementTab() {
     setAdding(true);
     const payload = { email: trimmed, role: newRole, auth_type: newAuthType };
     if (newAuthType === "local") payload.password = newPassword;
-    const r = await fetch(`${API_BASE}/api/rbac/users`, {
+    const r = await fetch(`${CYSCAN_URL}/api/rbac/users`, {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -654,7 +657,7 @@ function UserManagementTab() {
       return;
     }
     setResetLoading(true);
-    const r = await fetch(`${API_BASE}/api/rbac/users/${encodeURIComponent(email)}/reset-password`, {
+    const r = await fetch(`${CYSCAN_URL}/api/rbac/users/${encodeURIComponent(email)}/reset-password`, {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password: resetPw }),

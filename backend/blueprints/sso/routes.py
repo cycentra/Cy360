@@ -729,20 +729,36 @@ def sso_pending():
     return jsonify({"pending": _get_pending_users()})
 
 
-@sso_bp.route("/api/sso/approve/<path:email>", methods=["POST"])
+@sso_bp.route("/api/sso/approve/<path:email>", methods=["GET", "POST"])
 def sso_approve(email: str):
+    """Approve a pending SSO user.
+    POST: used by the portal UI (returns JSON).
+    GET:  used by one-click email links (requires active admin session, then redirects to portal).
+    """
     caller = session.get("user_email")
+    is_get = request.method == "GET"
+
     if not caller:
+        if is_get:
+            return redirect(f"{FRONTEND_URL}?auth=error&message=Please+log+in+as+admin+to+approve+SSO+requests")
         return jsonify({"error": "Authentication required"}), 401
+
     from blueprints.rbac.manager import get_user_role as _gur
     if _gur(caller) != "admin":
+        if is_get:
+            return redirect(f"{FRONTEND_URL}?auth=error&message=Admin+role+required+to+approve+SSO+requests")
         return jsonify({"error": "Admin role required"}), 403
 
     email = email.strip().lower()
     user  = _get_user_full(email)
     if not user:
+        if is_get:
+            return redirect(f"{FRONTEND_URL}?auth=error&message=SSO+user+not+found")
         return jsonify({"error": "User not found"}), 404
     if user.get("approval_status") != "pending":
+        if is_get:
+            status = user.get('approval_status', 'unknown')
+            return redirect(f"{FRONTEND_URL}?auth=error&message=User+already+{status}")
         return jsonify({"error": f"User is not pending (current: {user.get('approval_status')})"}), 400
 
     _set_approval(email, "approved")
@@ -755,19 +771,38 @@ def sso_approve(email: str):
     except Exception as exc:
         logger.warning("Could not send approval email to %s: %s", email, exc)
 
+    if is_get:
+        return redirect(f"{FRONTEND_URL}?sso_approved={urllib.parse.quote(email)}")
     return jsonify({"ok": True, "email": email, "approval_status": "approved"})
 
 
-@sso_bp.route("/api/sso/reject/<path:email>", methods=["POST"])
+@sso_bp.route("/api/sso/reject/<path:email>", methods=["GET", "POST"])
 def sso_reject(email: str):
+    """Reject a pending SSO user.
+    POST: used by the portal UI (returns JSON).
+    GET:  used by one-click email links — redirects to portal asking for a reason,
+          since a rejection reason cannot be passed via a simple GET link.
+    """
     caller = session.get("user_email")
+    is_get = request.method == "GET"
+
     if not caller:
+        if is_get:
+            return redirect(f"{FRONTEND_URL}?auth=error&message=Please+log+in+as+admin+to+manage+SSO+requests")
         return jsonify({"error": "Authentication required"}), 401
+
     from blueprints.rbac.manager import get_user_role as _gur
     if _gur(caller) != "admin":
+        if is_get:
+            return redirect(f"{FRONTEND_URL}?auth=error&message=Admin+role+required+to+reject+SSO+requests")
         return jsonify({"error": "Admin role required"}), 403
 
     email  = email.strip().lower()
+    # GET from email link: redirect to portal with the pending email pre-selected
+    # so the admin can reject with a reason from the UI.
+    if is_get:
+        return redirect(f"{FRONTEND_URL}?sso_reject={urllib.parse.quote(email)}")
+
     data   = request.get_json(silent=True) or {}
     reason = data.get("reason", "").strip()
 
@@ -851,8 +886,8 @@ def _notify_admin_pending(user_email: str, user_name: str, provider: str) -> Non
             if not admin_email:
                 logger.debug("No smtp_admin_email configured — skipping approval notification")
                 return
-            approve_url = f"{BASE_URL}/api/sso/approve/{urllib.parse.quote(user_email)}"
-            reject_url  = f"{BASE_URL}/api/sso/reject/{urllib.parse.quote(user_email)}"
+            approve_url = f"{FRONTEND_URL}/api/sso/approve/{urllib.parse.quote(user_email)}"
+            reject_url  = f"{FRONTEND_URL}/api/sso/reject/{urllib.parse.quote(user_email)}"
             send_approval_request(admin_email, user_email, user_name,
                                   provider, approve_url, reject_url)
         except Exception as exc:
