@@ -578,9 +578,16 @@ function UserManagementTab() {
 
   const reloadUsers = () =>
     fetch(`${CYSCAN_URL}/api/rbac/users`, { credentials: "include" })
-      .then(r => r.json())
-      .then(d => setUsers(d || {}))
-      .catch(() => {});
+      .then(r => {
+        if (!r.ok) throw new Error(`Server returned ${r.status}`);
+        return r.json();
+      })
+      .then(d => {
+        if (d && d.error) throw new Error(d.error);
+        setUsers(d || {});
+        setAuthErr(null);
+      })
+      .catch(e => setAuthErr(String(e)));
 
   useEffect(() => {
     const saved = getSavedUser();
@@ -588,8 +595,14 @@ function UserManagementTab() {
     setAuthRole(role);
     if (role === "admin") {
       fetch(`${CYSCAN_URL}/api/rbac/users`, { credentials: "include" })
-        .then(r => r.json())
-        .then(d => setUsers(d || {}))
+        .then(r => {
+          if (!r.ok) throw new Error(`Server returned ${r.status} — check backend logs`);
+          return r.json();
+        })
+        .then(d => {
+          if (d && d.error) throw new Error(d.error);
+          setUsers(d || {});
+        })
         .catch(e => setAuthErr(String(e)))
         .finally(() => setLoading(false));
     } else {
@@ -637,6 +650,20 @@ function UserManagementTab() {
       showMsg(true, `Approved ${email} — they can now log in`);
     } else {
       showMsg(false, d.error || "Approval failed");
+    }
+  };
+
+  const handleRevoke = async (email) => {
+    if (!window.confirm(`Revoke approval for ${email}? They will be blocked until re-approved.`)) return;
+    const r = await fetch(`${CYSCAN_URL}/api/sso/revoke/${encodeURIComponent(email)}`, {
+      method: "POST", credentials: "include",
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) {
+      setUsers(prev => ({ ...prev, [email]: { ...prev[email], approval_status: "pending" } }));
+      showMsg(true, `Revoked approval for ${email} — they will be blocked on next login`);
+    } else {
+      showMsg(false, d.error || "Revoke failed");
     }
   };
 
@@ -754,6 +781,14 @@ function UserManagementTab() {
         </button>
       </div>
 
+      {/* API error banner (shown to admins when backend call fails) */}
+      {authErr && (
+        <div style={{ background: "rgba(255,59,59,0.08)", border: "1px solid rgba(255,59,59,0.3)", borderRadius: 6, padding: "10px 14px", marginBottom: 14, color: "#ff6b6b", fontSize: 11, fontFamily: "monospace" }}>
+          ⚠ Could not load users: {authErr}
+          <button onClick={reloadUsers} style={{ marginLeft: 12, background: "none", border: "1px solid rgba(255,59,59,0.4)", color: "#ff6b6b", borderRadius: 3, padding: "2px 8px", fontSize: 10, cursor: "pointer", fontFamily: "monospace" }}>Retry</button>
+        </div>
+      )}
+
       {/* Stats row */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
         {[
@@ -867,6 +902,16 @@ function UserManagementTab() {
                     </>
                   ) : (
                     <>
+                      {/* Revoke approval for non-local (SSO) approved users */}
+                      {!isLocal && status === "approved" && (
+                        <button
+                          onClick={() => handleRevoke(email)}
+                          style={{ background: "rgba(255,165,0,0.06)", border: "1px solid rgba(255,165,0,0.25)", color: "#ffa500", borderRadius: 3, padding: "4px 8px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700, letterSpacing: "0.5px", whiteSpace: "nowrap" }}
+                          title="Set this user back to pending — they will be blocked on next login"
+                        >
+                          REVOKE
+                        </button>
+                      )}
                       {isLocal && (
                         <button
                           onClick={() => { setResetFor(resetFor === email ? null : email); setResetPw(""); }}

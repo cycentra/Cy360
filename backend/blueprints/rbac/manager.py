@@ -214,7 +214,7 @@ def _get_all_users() -> dict:
             "FROM cy_users ORDER BY email;"
         )
         rows = cur.fetchall()
-    return {email: _row_to_entry(rest) for email, *rest in rows}
+    return {email: _row_to_entry(tuple(rest)) for email, *rest in rows}
 
 
 def _upsert_user(email: str, role: str, auth_type: str = "sso",

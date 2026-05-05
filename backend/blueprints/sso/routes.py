@@ -14,6 +14,7 @@ Routes (all under /api/sso/):
   GET  /api/sso/pending             → admin: list users pending approval
   POST /api/sso/approve/<email>     → admin: approve a pending user
   POST /api/sso/reject/<email>      → admin: reject a pending user
+  POST /api/sso/revoke/<email>      → admin: revoke approval (set back to pending)
 
   GET  /api/sso/smtp/config         → admin: get current SMTP settings
   POST /api/sso/smtp/config         → admin: save SMTP settings
@@ -29,6 +30,8 @@ Approval workflow:
   3. Admin receives an email with approve/reject links (if SMTP is configured).
   4. Admin approves/rejects via /api/sso/approve|reject or the Settings UI.
   5. On approval, the user receives an email and can sign in normally.
+  Note: Users provisioned as "approved" before require_approval was enabled can be
+  retroactively gated using /api/sso/revoke/<email>.
 """
 
 import hashlib
@@ -821,6 +824,40 @@ def sso_reject(email: str):
         logger.warning("Could not send rejection email to %s: %s", email, exc)
 
     return jsonify({"ok": True, "email": email, "approval_status": "rejected"})
+
+
+@sso_bp.route("/api/sso/revoke/<path:email>", methods=["OPTIONS"])
+def sso_revoke_options(email: str):
+    return add_cors_headers(make_response('', 204))
+
+
+@sso_bp.route("/api/sso/revoke/<path:email>", methods=["POST"])
+def sso_revoke(email: str):
+    """Revoke approval for an already-approved SSO user — sets status back to 'pending'.
+    This handles the case where require_approval was enabled AFTER a user was auto-approved.
+    The user will be blocked on their next login attempt.
+    """
+    caller = session.get("user_email")
+    if not caller:
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role as _gur
+    if _gur(caller) != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+
+    email = email.strip().lower()
+    user = _get_user_full(email)
+    if not user:
+        return jsonify({"error": f"User {email!r} not found"}), 404
+
+    if user.get("auth_type") == "local":
+        return jsonify({"error": "Cannot revoke approval for local accounts"}), 400
+
+    if user.get("approval_status") == "pending":
+        return jsonify({"error": "User is already pending approval"}), 400
+
+    _set_approval(email, "pending")
+    auth_event("sso_revoke", caller, "portal", "success", f"revoked approval for {email}")
+    return jsonify({"ok": True, "email": email, "approval_status": "pending"})
 
 
 # ── SMTP configuration ────────────────────────────────────────────────────────
