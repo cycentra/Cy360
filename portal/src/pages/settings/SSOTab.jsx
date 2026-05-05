@@ -9,8 +9,19 @@
  *  3. Pending users approval table
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { API_BASE } from "../../core/constants.js";
+
+// Known OIDC discovery URL defaults per built-in provider.
+// Auto-applied when the admin switches provider — not on initial load.
+const DISCOVERY_DEFAULTS = {
+  google:      "https://accounts.google.com/.well-known/openid-configuration",
+  microsoft:   "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration",
+  okta:        "",   // tenant-specific — must be supplied manually
+  keycloak:    "",   // realm-specific — must be supplied manually
+  cycentra360: "",   // auto-filled by the backend from BASE_URL
+  custom:      "",   // fully manual
+};
 
 // ── Shared style constants (copied from SystemSettingsPage to stay self-contained) ──
 const CARD  = { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "20px 24px", marginBottom: 20 };
@@ -65,6 +76,10 @@ function SSOProviderCard({ onStatusMsg }) {
   const [allowedDomains, setAllowedDomains] = useState("");
   const [secretConfigured, setSecretConfigured] = useState(false);
 
+  // Tracks whether the provider was changed interactively by the user.
+  // Prevents auto-fill from overwriting server-loaded values on first render.
+  const userChangedProvider = useRef(false);
+
   const load = () => {
     // /api/sso/config (admin) — returns full editable config for pre-populating the form.
     // Falls back to /api/sso/providers (public) for non-admins / unauthenticated.
@@ -97,17 +112,19 @@ function SSOProviderCard({ onStatusMsg }) {
 
   useEffect(() => { load(); }, []);
 
-  // Auto-fill and lock fields when "CyCentra 360 IdP" is selected.
-  // The client_id must always be "cy360sso" (the registered OIDC client for this
-  // flow).  The redirect_uri is the portal's own SSO callback.  The discovery URL
-  // is auto-filled by the backend, but we clear the field so the hint is visible.
-  // The client_secret is provisioned server-side from CY360SSO_OIDC_SECRET — leave
-  // blank and the backend will inject it automatically.
+  // When the admin manually switches provider, auto-fill known discovery URLs
+  // and reset the redirect URI to the default callback.  This effect is skipped
+  // on the initial render so it does not overwrite values loaded from the server.
   useEffect(() => {
+    if (!userChangedProvider.current) return;
+
+    // Apply per-provider defaults
+    setDiscoveryUrl(DISCOVERY_DEFAULTS[provider] ?? "");
+    setRedirectUri(`${window.location.origin}/api/sso/callback`);
+
     if (provider === "cycentra360") {
       setClientId("cy360sso");
-      setRedirectUri(`${window.location.origin}/api/sso/callback`);
-      setDiscoveryUrl("");  // backend will auto-fill from BASE_URL
+      // discovery URL and client_secret are provisioned server-side — leave blank
     }
   }, [provider]);
 
@@ -174,7 +191,10 @@ function SSOProviderCard({ onStatusMsg }) {
   return (
     <div style={CARD}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-        <div style={LABEL}>SSO Provider (OIDC / OAuth2)</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 16, lineHeight: 1 }}>🔐</span>
+          <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>SSO Provider (OIDC / OAuth2)</div>
+        </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {ssoEnabled && (
             <span style={{ background: "rgba(0,229,160,0.08)", color: "#00e5a0", border: "1px solid rgba(0,229,160,0.3)", borderRadius: 4, padding: "2px 8px", fontSize: 10, fontFamily: "monospace" }}>
@@ -193,7 +213,7 @@ function SSOProviderCard({ onStatusMsg }) {
         {/* Provider selector */}
         <div>
           <div style={LABEL}>Provider</div>
-          <select value={provider} onChange={e => setProvider(e.target.value)} style={{ ...INPUT, cursor: "pointer" }}>
+          <select value={provider} onChange={e => { userChangedProvider.current = true; setProvider(e.target.value); }} style={{ ...INPUT, cursor: "pointer" }}>
             {BUILTIN_PROVIDERS.map(p => (
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}
@@ -253,12 +273,12 @@ function SSOProviderCard({ onStatusMsg }) {
           <div style={LABEL}>Redirect URI (callback)</div>
           <input type="url" value={redirectUri} onChange={e => setRedirectUri(e.target.value)}
             placeholder={`${window.location.origin}/api/sso/callback`}
-            readOnly
-            style={{ ...INPUT, opacity: 0.6, cursor: "default" }} />
+            readOnly={provider === "cycentra360"}
+            style={{ ...INPUT, ...(provider === "cycentra360" ? { opacity: 0.6, cursor: "default" } : {}) }} />
           <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
             {provider === "cycentra360"
-              ? "Fixed to the portal’s SSO callback — already registered in the CyCentra 360 OIDC provider."
-              : "Register this exact URL as an authorised redirect URI in your IdP application settings."
+              ? "Fixed to the portal's SSO callback — already registered in the CyCentra 360 OIDC provider."
+              : "Edit if your IdP requires a custom callback URL. Register this exact value as an authorised redirect URI in your IdP application settings."
             }
           </div>
         </div>
@@ -397,7 +417,10 @@ function SMTPCard() {
   return (
     <div style={CARD}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={LABEL}>SMTP / Email Notifications</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 16, lineHeight: 1 }}>✉️</span>
+          <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>SMTP / Email Notifications</div>
+        </div>
         {cfg?.smtp_host && (
           <span style={{ background: "rgba(0,229,160,0.08)", color: "#00e5a0", border: "1px solid rgba(0,229,160,0.25)", borderRadius: 4, padding: "2px 8px", fontSize: 10, fontFamily: "monospace" }}>
             CONFIGURED — {cfg.smtp_host}
