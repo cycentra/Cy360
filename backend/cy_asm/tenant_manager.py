@@ -1,3 +1,4 @@
+import re
 import requests
 import sys
 
@@ -11,9 +12,9 @@ def get_wazuh_tenants():
     endpoint = f"{INDEXER_URL}/_plugins/_security/api/tenants"
     try:
         response = requests.get(
-            endpoint, 
-            auth=(INDEXER_USER, INDEXER_PASS), 
-            verify=False # Set to True if you have valid SSL certs
+            endpoint,
+            auth=(INDEXER_USER, INDEXER_PASS),
+            verify=False  # Set to True if you have valid SSL certs
         )
         if response.status_code == 200:
             # Returns a dictionary where keys are tenant names
@@ -24,11 +25,26 @@ def get_wazuh_tenants():
         return []
 
 def validate_tenant(input_tenant):
-    """Checks if tenant exists; otherwise returns the 'holding' tenant name."""
+    """Return a filesystem-safe tenant identifier for this input.
+
+    Priority:
+    1. If the tenant already exists in Wazuh, return it unchanged.
+    2. Otherwise sanitize the input (lowercase, replace unsafe chars with '_')
+       so every SSO user gets their own isolated namespace.
+
+    Never returns the shared "guests" holding area for authenticated users —
+    that would allow one user's reports and NDJSON data to bleed into another
+    user's directory.  The "guest" namespace (no trailing 's') is reserved
+    exclusively for unauthenticated/guest_* scans and is set directly by
+    the scan orchestrator rather than going through this function.
+    """
     existing_tenants = get_wazuh_tenants()
-    
+
     if input_tenant in existing_tenants:
         return input_tenant
-    else:
-        # This is your 'Holding Area' for new/unrecognized requests
-        return "guests"
+
+    # Sanitize for filesystem safety — keep alphanumerics, dots, @, hyphens.
+    # E.g. "user@example.com" → "user@example.com" (unchanged, all chars are safe)
+    #      "User Name"        → "user_name"
+    safe = re.sub(r"[^a-z0-9._@-]", "_", input_tenant.strip().lower())[:80]
+    return safe or "unknown"

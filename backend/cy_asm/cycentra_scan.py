@@ -1050,47 +1050,54 @@ def main():
     report_file = reports_base / "asm_scan.json"
     portal_file = portal_base / f"scan_{domain}_{timestamp}.json"
 
-    # --- 1. NDJSON REPORT (For Wazuh) ---
-    logger.info("💾 Saving NDJSON report...")
-    try:
-        with open(report_file, "a") as f:
-            # Scan summary line
-            f.write(json.dumps({
-                "type": "scan_summary", "tenant_id": final_tenant_id, "domain": domain,
-                "total_issues": result['total_issues'], "summary": result['summary'],
-                "timestamp": datetime.now().isoformat()
-            }) + "\n")
+    # --- 1. NDJSON REPORT (For Wazuh / SIEM ingest) ---
+    # Guest scans are anonymous and must NOT be written to asm_scan.json.
+    # The SIEM collector reads this file and should only receive data from
+    # authenticated SSO users.  Silently skip for guests so no guest data
+    # ever leaks into the SIEM feed.
+    if is_guest:
+        logger.info("⏭️  [NDJSON] Skipped — guest scan is excluded from SIEM feed.")
+    else:
+        logger.info("💾 Saving NDJSON report...")
+        try:
+            with open(report_file, "a") as f:
+                # Scan summary line
+                f.write(json.dumps({
+                    "type": "scan_summary", "tenant_id": final_tenant_id, "domain": domain,
+                    "total_issues": result['total_issues'], "summary": result['summary'],
+                    "timestamp": datetime.now().isoformat()
+                }) + "\n")
 
-            # Loop through every module
-            for mod_name, mod_data in result['results'].items():
-                if not isinstance(mod_data, dict):
-                    continue
+                # Loop through every module
+                for mod_name, mod_data in result['results'].items():
+                    if not isinstance(mod_data, dict):
+                        continue
 
-                findings = mod_data.get('results', {})
-                if isinstance(findings, dict):
-                    for key, val in findings.items():
-                        if val:
+                    findings = mod_data.get('results', {})
+                    if isinstance(findings, dict):
+                        for key, val in findings.items():
+                            if val:
+                                f.write(json.dumps({
+                                    "type": f"{mod_name}_{key}", "tenant_id": final_tenant_id,
+                                    "domain": domain, "data": val
+                                }) + "\n")
+                    elif isinstance(findings, list):
+                        for item in findings:
                             f.write(json.dumps({
-                                "type": f"{mod_name}_{key}", "tenant_id": final_tenant_id,
-                                "domain": domain, "data": val
+                                "type": f"{mod_name}_item", "tenant_id": final_tenant_id,
+                                "domain": domain, "value": item
                             }) + "\n")
-                elif isinstance(findings, list):
-                    for item in findings:
+
+                    for issue in mod_data.get('issues', []):
                         f.write(json.dumps({
-                            "type": f"{mod_name}_item", "tenant_id": final_tenant_id,
-                            "domain": domain, "value": item
+                            "type": "vulnerability", "tenant_id": final_tenant_id,
+                            "domain": domain, "module": mod_name, "finding": issue
                         }) + "\n")
 
-                for issue in mod_data.get('issues', []):
-                    f.write(json.dumps({
-                        "type": "vulnerability", "tenant_id": final_tenant_id,
-                        "domain": domain, "module": mod_name, "finding": issue
-                    }) + "\n")
+            logger.info(f"✅ NDJSON report saved → {report_file}")
 
-        logger.info(f"✅ NDJSON report saved → {report_file}")
-
-    except Exception as e:
-        logger.error(f"❌ Failed to save NDJSON: {e}")
+        except Exception as e:
+            logger.error(f"❌ Failed to save NDJSON: {e}")
 
     # --- 2. PORTAL JSON ---
     logger.info("[Portal JSON] Saving...")
