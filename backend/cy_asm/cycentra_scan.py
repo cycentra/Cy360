@@ -80,25 +80,34 @@ def _notify_by_email(
 # ─────────────────────────────────────────────────────────────────────────────
 SCAN_PROFILES = {
     "passive": {
-        "run_subdomains":   False,
-        "modules":          ["email_sec", "whois", "osint", "dark_web"],
-        "run_vuln_scanner": False,
-        "ai_enrichment":    False,
+        "run_subdomains":      False,
+        "modules":             ["email_sec", "whois", "osint", "dark_web"],
+        "run_vuln_scanner":    False,
+        "ai_enrichment":       False,
+        "ai_enrichment_limit": 0,
     },
     "standard": {
-        "run_subdomains":   True,
-        "modules":          ["web", "crypto", "email_sec", "cloud", "whois", "osint"],
-        "run_vuln_scanner": True,
-        "ai_enrichment":    False,
-    },
-    "deep": {
-        "run_subdomains":   True,
-        "modules":          [
+        # Full module suite — same breadth as Deep but AI analysis is capped at 10
+        # top findings with high-level recommendations. Modules beyond the top 10
+        # trigger an upsell notice directing users to a Deep scan or PDF report.
+        "run_subdomains":      True,
+        "modules":             [
             "web", "crypto", "email_sec", "cloud", "whois", "osint",
             "dark_web", "supply_chain", "social_eng", "mobile_api",
         ],
-        "run_vuln_scanner": True,
-        "ai_enrichment":    True,
+        "run_vuln_scanner":    True,
+        "ai_enrichment":       True,
+        "ai_enrichment_limit": 10,   # top-10 findings, high-level recommendations
+    },
+    "deep": {
+        "run_subdomains":      True,
+        "modules":             [
+            "web", "crypto", "email_sec", "cloud", "whois", "osint",
+            "dark_web", "supply_chain", "social_eng", "mobile_api",
+        ],
+        "run_vuln_scanner":    True,
+        "ai_enrichment":       True,
+        "ai_enrichment_limit": None,  # unlimited findings, in-depth recommendations
     },
 }
 
@@ -518,38 +527,81 @@ async def store_to_cymind_memory(findings: list, domain: str, provider: str) -> 
         logger.warning(f"⚠️ [CyMind Memory] store_to_cymind_memory failed: {e}")
 
 
-async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> tuple[List[Dict[str, Any]], str]:
-    """Tries CyMind first, then Google Gemini, then local Ollama. Returns (findings, provider_name)."""
+async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str, scan_type: str = "deep") -> tuple[List[Dict[str, Any]], str]:
+    """Tries CyMind first, then Google Gemini, then local Ollama. Returns (findings, provider_name).
 
+    Standard scan: returns at most 10 findings with high-level recommendations.
+    Deep scan: returns full analysis with in-depth, step-by-step technical recommendations.
+    """
+    _is_standard = scan_type == "standard"
+
+    # Build context payload — standard trims list fields; deep includes all modules
+    _raw_sc = full_results.get('supply_chain', {}).get('results', [])
     context_payload = {
-        "dns": full_results.get('dns', {}).get('results', {}).get('records', {}),
-        "email": full_results.get('email_sec', {}).get('results', {}),
+        "dns":          full_results.get('dns',       {}).get('results', {}).get('records', {}),
+        "email":        full_results.get('email_sec', {}).get('results', {}),
         "web": {
             "headers": full_results.get('web', {}).get('results', {}).get('http_analysis', {}).get('http_headers', []),
-            "tech": full_results.get('web', {}).get('results', {}).get('fingerprints', {}),
-            "ssl": full_results.get('web', {}).get('results', {}).get('ssl', {}).get('cert_info', {})
+            "tech":    full_results.get('web', {}).get('results', {}).get('fingerprints', {}),
+            "ssl":     full_results.get('web', {}).get('results', {}).get('ssl', {}).get('cert_info', {}),
         },
-        "cloud": full_results.get('cloud', {}).get('results', {}),
-        "supply_chain": full_results.get('supply_chain', {}).get('results', []),
-        "crypto": full_results.get('crypto', {}).get('results', {})
+        "cloud":        full_results.get('cloud', {}).get('results', {}),
+        "supply_chain": (_raw_sc[:10] if isinstance(_raw_sc, list) else _raw_sc) if _is_standard else _raw_sc,
+        "crypto":       full_results.get('crypto',    {}).get('results', {}),
+        "dark_web":     full_results.get('dark_web',  {}).get('results', {}),
     }
+    if not _is_standard:
+        context_payload["social_eng"] = full_results.get('social_eng', {}).get('results', {})
+        context_payload["mobile_api"] = full_results.get('mobile_api', {}).get('results', {})
 
-    prompt = f"""
-    As a Senior Security Architect, analyze this ASM data for {domain}.
+    if _is_standard:
+        prompt = f"""
+    Analyze the top security risks for {domain} from the ASM scan data below.
 
-    CRITICAL ANALYSIS POINTS:
-    1. SUPPLY CHAIN: Check if third-party scripts (JS) pose a 'Magecart' or 'Data Leak' risk.
-    2. CLOUD: Identify if the infrastructure is split across providers (AWS/GCP/Azure) and if that increases the attack surface.
-    3. CRYPTO: Evaluate SSL strength and Post-Quantum readiness.
-    4. CORRELATION: Does a DNS record point to a Cloud provider that isn't properly configured?
+    SCOPE: Standard scan — return AT MOST 10 findings with HIGH-LEVEL recommendations only.
+    Focus on the most critical and actionable risks. Keep descriptions concise (2-3 sentences).
+    Recommendations must be 1-2 sentences of plain-English guidance — no deep technical steps.
+
+    ANALYSIS AREAS:
+    1. SUPPLY CHAIN: Third-party script risks (Magecart / data leakage)
+    2. CLOUD: Multi-provider infrastructure and misconfiguration exposure
+    3. CRYPTO: Overall SSL/TLS posture and obvious weaknesses
+    4. EMAIL: SPF / DKIM / DMARC gaps enabling phishing
+    5. DARK WEB: Any breach or credential leak indicators
 
     DATA:
     {json.dumps(context_payload)}
 
-    Return a JSON LIST of objects. Each object MUST include:
-    "vulnerability", "severity", "risk_score" (1-10), "description", "recommendation", and "module".
+    Return a JSON LIST of AT MOST 10 objects each with:
+    "vulnerability", "severity", "risk_score" (1-10), "description", "recommendation", "module".
+    Return ONLY the raw JSON list — no markdown, no explanation.
+    """
+    else:
+        prompt = f"""
+    As a Senior Security Architect, perform an in-depth attack surface analysis for {domain}.
 
-    Return ONLY the raw JSON list, no markdown, no explanation.
+    SCOPE: Deep scan — provide comprehensive findings with detailed technical remediation steps.
+    For each finding include: root cause, attack vector, business impact, and step-by-step remediation.
+
+    CRITICAL ANALYSIS POINTS:
+    1. SUPPLY CHAIN: Magecart / data leak risk from third-party JS; CDN integrity policy gaps
+    2. CLOUD: Multi-provider footprint, public resource exposure, metadata API accessibility
+    3. CRYPTO: TLS version support, cipher suite weaknesses, PQC hybrid group support (X25519Kyber768, P256-Kyber768)
+    4. CORRELATION: DNS records pointing to misconfigured cloud assets (subdomain takeover risk)
+    5. DARK WEB: Credential leaks, breach indicators, paste site mentions
+    6. SOCIAL ENGINEERING: Typosquatting domains, lookalike infrastructure, phishing kit indicators
+    7. MOBILE & API: Exposed API endpoints, mobile app metadata leakage
+
+    DATA:
+    {json.dumps(context_payload)}
+
+    Return a JSON LIST of objects each with:
+    "vulnerability", "severity", "risk_score" (1-10),
+    "description" (detailed technical context: what was found, attack vector, business impact),
+    "recommendation" (specific step-by-step remediation: tool names, config changes, priority, estimated effort),
+    "module".
+    Include CVEs where applicable. Provide full technical depth.
+    Return ONLY the raw JSON list — no markdown, no explanation.
     """
 
     # ── ATTEMPT 1: CyMind (on-premise, authenticated, preferred) ─────────────
@@ -598,22 +650,35 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str) -> 
 
     ollama_payload = _trim_payload(context_payload, max_chars=3000)
 
-    prompt_ollama = f"""
-    As a Senior Security Architect, analyze this ASM data for {domain}.
-
-    CRITICAL ANALYSIS POINTS:
-    1. SUPPLY CHAIN: Check if third-party scripts (JS) pose a 'Magecart' or 'Data Leak' risk.
-    2. CLOUD: Identify if the infrastructure is split across providers and increases attack surface.
-    3. CRYPTO: Evaluate SSL strength and Post-Quantum readiness.
-    4. CORRELATION: Does a DNS record point to a misconfigured Cloud provider?
+    if _is_standard:
+        prompt_ollama = f"""
+    Analyze the top security risks for {domain}. Standard scan — return AT MOST 10 findings.
+    High-level only: 2-3 sentence descriptions, 1-2 sentence recommendations (no deep technical steps).
+    AREAS: Supply chain JS risk, cloud misconfiguration, SSL/TLS posture, email authentication gaps, dark web indicators.
 
     DATA:
     {json.dumps(ollama_payload)}
 
-    Return a JSON LIST of objects. Each MUST include:
+    Return a JSON LIST of AT MOST 10 objects each with:
     "vulnerability", "severity", "risk_score" (1-10), "description", "recommendation", "module".
+    Return ONLY the raw JSON list — no markdown, no explanation.
+    """
+    else:
+        prompt_ollama = f"""
+    As a Senior Security Architect, perform an in-depth attack surface analysis for {domain}.
+    Provide comprehensive findings with detailed technical remediation steps.
+    AREAS: Supply chain JS risk (Magecart), cloud exposure, TLS/cipher weaknesses, DNS correlation,
+    dark web leaks, social engineering indicators, mobile/API endpoint exposure.
 
-    Return ONLY the raw JSON list, no markdown, no explanation.
+    DATA:
+    {json.dumps(ollama_payload)}
+
+    Return a JSON LIST of objects each with:
+    "vulnerability", "severity", "risk_score" (1-10),
+    "description" (technical context, attack vector, business impact),
+    "recommendation" (specific step-by-step remediation with tool names and priority),
+    "module".
+    Return ONLY the raw JSON list — no markdown, no explanation.
     """
 
     try:
@@ -889,12 +954,21 @@ def main():
     # Read include_subdomains from env var (set by scanner.py) or default True
     include_subdomains = os.environ.get("CYCENTRA_INCLUDE_SUBDOMAINS", "true").strip().lower() != "false"
 
+    # Guest flag: set by scanner.py for any uid beginning with "guest_".
+    # Guest scans are stateless — shared storage, no history or state persistence.
+    is_guest = os.environ.get("CYCENTRA_IS_GUEST", "false").strip().lower() == "true"
+
     # Execute Scan
     result = asyncio.run(run_full_scan(domain, final_tenant_id, scan_type, include_subdomains))
 
     # ── Persist subdomain state for next scan comparison ─────────────────────
     enriched_sub_entries = result["results"].get("subdomains", {}).get("results", [])
-    _save_subdomain_state(final_tenant_id, domain, enriched_sub_entries)
+    # Guest scans are stateless — skip state save to avoid polluting the shared
+    # guest directory with history files from unrelated external scan requests.
+    if not is_guest:
+        _save_subdomain_state(final_tenant_id, domain, enriched_sub_entries)
+    else:
+        logger.info("⏭️  [State] Subdomain state save skipped — guest scan.")
 
     # ── MISP IOC Lookup (runs BEFORE AI enrichment, never blocks scan) ────────
     _all_scan_ips: list = []
@@ -916,23 +990,59 @@ def main():
         logger.debug(f"[MISP] No IPs collected from DNS/subdomains for {domain} — IOC lookup skipped.")
     # ─────────────────────────────────────────────────────────────────────────
 
-    # AI Enrichment — only for Deep scan; skipped for Standard and Passive
+    # AI Enrichment — Deep and Standard scans; Passive is always skipped
     profile = SCAN_PROFILES[scan_type]
     if profile["ai_enrichment"]:
-        logger.info(f"🤖 Starting AI enrichment for {domain}...")
-        enriched_issues, ai_provider_used = asyncio.run(enrich_findings_with_ai(result['results'], domain))
+        ai_limit = profile.get("ai_enrichment_limit")
+        _limit_note = f" (top {ai_limit}, high-level)" if ai_limit else " (full depth)"
+        logger.info(f"🤖 Starting AI enrichment for {domain}{_limit_note}...")
+        enriched_issues, ai_provider_used = asyncio.run(
+            enrich_findings_with_ai(result['results'], domain, scan_type)
+        )
+        # Standard scan: enforce the 10-finding cap and append an upsell notice
+        # when more raw issues were found than the AI covered.
+        if ai_limit is not None:
+            raw_finding_count = len(result.get("all_issues", []))
+            if len(enriched_issues) > ai_limit:
+                enriched_issues = enriched_issues[:ai_limit]
+            if raw_finding_count > ai_limit:
+                overflow = raw_finding_count - ai_limit
+                enriched_issues.append({
+                    "vulnerability":  "Additional Findings Require Deep Scan",
+                    "severity":       "info",
+                    "risk_score":     1,
+                    "description":    (
+                        f"{overflow} additional finding(s) were detected across {domain} but are not "
+                        f"included in the Standard scan AI analysis (limited to the top {ai_limit} findings). "
+                        f"These may include dark web credential exposure, supply chain risks, social "
+                        f"engineering indicators, and mobile/API vulnerabilities requiring deeper investigation."
+                    ),
+                    "recommendation": (
+                        "Generate a detailed PDF report from the Reports section for a full breakdown, "
+                        "or run a Deep scan for comprehensive AI-enriched analysis of all findings with "
+                        "in-depth technical remediation steps. "
+                        "Contact the CyCentra team for a full assessment: support@cycentra.com."
+                    ),
+                    "module": "Standard Scan Limit",
+                })
     else:
         logger.info(f"⏭️  AI enrichment skipped — {scan_type} scan profile.")
         enriched_issues, ai_provider_used = [], f"Skipped ({scan_type} scan)"
     timestamp = int(time.time())
 
-    # --- FOLDER SETUP ---
-    # If app.py passed a per-user output dir via env var, use it for the portal JSON.
-    # Falls back to the tenant-based path when run manually from CLI.
+    # ── FOLDER SETUP ───
+    # Guest scans use shared fixed paths; authenticated users get per-uid isolation.
+    # CYCENTRA_OUTPUT_DIR (set by scanner.py) already points to the correct scans path —
+    # we only need to override the reports path here.
     output_dir_override = os.environ.get("CYCENTRA_OUTPUT_DIR", "").strip()
 
-    reports_base = Path("/var/log/cycentra/cy-asm/reports") / final_tenant_id
-    portal_base  = Path(output_dir_override) if output_dir_override else Path("/var/log/cycentra/cy-asm/scans") / final_tenant_id
+    if is_guest:
+        reports_base = Path("/var/log/cycentra/cy-asm/reports/guest")
+        # portal_base comes from CYCENTRA_OUTPUT_DIR which scanner.py set to scans/guest
+        portal_base  = Path(output_dir_override) if output_dir_override else Path("/var/log/cycentra/cy-asm/scans/guest")
+    else:
+        reports_base = Path("/var/log/cycentra/cy-asm/reports") / final_tenant_id
+        portal_base  = Path(output_dir_override) if output_dir_override else Path("/var/log/cycentra/cy-asm/scans") / final_tenant_id
 
     for p in [reports_base, portal_base]:
         p.mkdir(parents=True, exist_ok=True)

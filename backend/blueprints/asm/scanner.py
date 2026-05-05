@@ -79,7 +79,10 @@ def trigger_scan():
     if notify_email and not _EMAIL_RE.match(notify_email):
         return jsonify({"error": "Invalid notify_email address"}), 400
 
-    user_dir = SCANS_DIR / uid
+    # Guest users share a common directory — no per-session isolation or state history.
+    # Authenticated users get their own isolated sub-directory.
+    is_guest = uid.startswith("guest_")
+    user_dir = SCANS_DIR / "guest" if is_guest else SCANS_DIR / uid
     user_dir.mkdir(parents=True, exist_ok=True)
     ASM_LOGS.mkdir(parents=True, exist_ok=True)
 
@@ -102,6 +105,7 @@ def trigger_scan():
     env["CYCENTRA_OUTPUT_DIR"]         = str(user_dir)
     env["CYCENTRA_USER_ID"]            = uid
     env["CYCENTRA_INCLUDE_SUBDOMAINS"] = "true" if include_subdomains else "false"
+    env["CYCENTRA_IS_GUEST"]           = "true" if is_guest else "false"
     if notify_email:
         env["CYCENTRA_NOTIFY_EMAIL"]   = notify_email
 
@@ -194,8 +198,14 @@ def scan_status():
 
 @asm_bp.route("/api/scans/latest")
 def get_latest_scan():
-    uid       = request.args.get("uid", "")
-    search    = SCANS_DIR / uid / "scan_*.json" if uid else SCANS_DIR / "**" / "scan_*.json"
+    uid = request.args.get("uid", "")
+    # Guest UIDs share the common guest directory — never look in a uid-named folder
+    if uid.startswith("guest_"):
+        search = SCANS_DIR / "guest" / "scan_*.json"
+    elif uid:
+        search = SCANS_DIR / uid / "scan_*.json"
+    else:
+        search = SCANS_DIR / "**" / "scan_*.json"
     all_files = glob.glob(str(search), recursive=True)
 
     if not all_files:

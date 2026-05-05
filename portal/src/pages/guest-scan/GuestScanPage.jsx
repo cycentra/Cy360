@@ -22,7 +22,10 @@ function genGuestUid() {
 const MODULES = [
   "DNS Reconnaissance", "Subdomain Enumeration", "Web Analysis",
   "Crypto & SSL Audit", "Email Security Check", "WHOIS & History",
-  "OSINT Gathering", "Cloud Infrastructure", "Generating Report",
+  "OSINT Gathering", "Cloud Infrastructure",
+  "Dark Web Monitoring", "Supply Chain Analysis",
+  "Social Engineering Intel", "Mobile & API Checks",
+  "AI Risk Enrichment", "Generating Report",
 ];
 
 const RISK_CONFIG = {
@@ -463,7 +466,7 @@ export function GuestScanPage() {
               <div>
                 <div style={{ color: "#00e5a0", fontSize: 13, fontWeight: 600 }}>Standard (Recommended)</div>
                 <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginTop: 2 }}>
-                  DNS, Web, Crypto, Email, OSINT — ~45s
+                  DNS, Web, Crypto, Email, Cloud, Dark Web, Supply Chain, Social Eng, Mobile/API + AI overview — ~45s
                 </div>
               </div>
             </div>
@@ -481,7 +484,7 @@ export function GuestScanPage() {
                     background: "rgba(255,255,255,0.05)", padding: "1px 6px", borderRadius: 2 }}>PAID</span>
                 </div>
                 <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, marginTop: 2 }}>
-                  Full suite + AI enrichment — ~90s
+                  Full suite + unlimited AI with in-depth technical remediation — ~90s
                 </div>
               </div>
             </div>
