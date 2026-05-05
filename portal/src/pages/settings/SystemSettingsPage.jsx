@@ -543,34 +543,46 @@ const ROLE_APPS_MAP = {
   cyiris:  ["cyiris"],
   cysoar:  ["cysoar"],
 };
-// RFC 5322 simplified: requires local@domain.tld structure
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Approval status badge styles
+const STATUS_STYLE = {
+  approved: { bg: "rgba(0,229,160,0.1)",  color: "#00e5a0", border: "rgba(0,229,160,0.3)",  label: "APPROVED" },
+  pending:  { bg: "rgba(255,165,0,0.12)", color: "#ffa500", border: "rgba(255,165,0,0.35)", label: "PENDING"  },
+  rejected: { bg: "rgba(255,59,59,0.1)",  color: "#ff6b6b", border: "rgba(255,59,59,0.3)",  label: "REJECTED" },
+};
+
 function UserManagementTab() {
-  const [authRole,  setAuthRole]  = useState(null);   // null = loading
+  const [authRole,  setAuthRole]  = useState(null);
   const [authErr,   setAuthErr]   = useState(null);
   const [users,     setUsers]     = useState({});
   const [loading,   setLoading]   = useState(true);
   const [msg,       setMsg]       = useState(null);
+  const [filter,    setFilter]    = useState("all"); // all | approved | pending | rejected | local
   const [newEmail,    setNewEmail]    = useState("");
   const [newRole,     setNewRole]     = useState("viewer");
   const [newAuthType, setNewAuthType] = useState("sso");
   const [newPassword, setNewPassword] = useState("");
   const [adding,      setAdding]      = useState(false);
-  // Password-reset state
-  const [resetFor,     setResetFor]     = useState(null);   // email being reset
+  const [resetFor,     setResetFor]     = useState(null);
   const [resetPw,      setResetPw]      = useState("");
   const [resetLoading, setResetLoading] = useState(false);
+  const [approving,    setApproving]    = useState(null); // email being approved
+  const [rejectFor,    setRejectFor]    = useState(null); // email open for rejection
+  const [rejectReason, setRejectReason] = useState("");
 
   const showMsg = (ok, text) => {
     setMsg({ ok, text });
-    setTimeout(() => setMsg(null), 4000);
+    setTimeout(() => setMsg(null), 5000);
   };
 
+  const reloadUsers = () =>
+    fetch(`${CYSCAN_URL}/api/rbac/users`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => setUsers(d || {}))
+      .catch(() => {});
+
   useEffect(() => {
-    // Get role from the saved user in localStorage (set during login flow).
-    // This avoids a same-origin /api/auth/verify call that can fail if the
-    // cy360 nginx config doesn't proxy /api/ to Flask (older server configs).
     const saved = getSavedUser();
     const role = saved?.role || "viewer";
     setAuthRole(role);
@@ -584,11 +596,6 @@ function UserManagementTab() {
       setLoading(false);
     }
   }, []);
-
-  const reloadUsers = () =>
-    fetch(`${CYSCAN_URL}/api/rbac/users`, { credentials: "include" })
-      .then(r => r.json())
-      .then(d => setUsers(d || {}));
 
   const handleRoleChange = async (email, role) => {
     const r = await fetch(`${CYSCAN_URL}/api/rbac/users`, {
@@ -606,7 +613,7 @@ function UserManagementTab() {
   };
 
   const handleDelete = async (email) => {
-    if (!window.confirm(`Remove ${email} from RBAC? They will revert to the 'viewer' default.`)) return;
+    if (!window.confirm(`Remove ${email}? They will no longer be able to log in.`)) return;
     const r = await fetch(`${CYSCAN_URL}/api/rbac/users/${encodeURIComponent(email)}`, {
       method: "DELETE", credentials: "include",
     });
@@ -618,17 +625,43 @@ function UserManagementTab() {
     }
   };
 
+  const handleApprove = async (email) => {
+    setApproving(email);
+    const r = await fetch(`${CYSCAN_URL}/api/sso/approve/${encodeURIComponent(email)}`, {
+      method: "POST", credentials: "include",
+    });
+    const d = await r.json().catch(() => ({}));
+    setApproving(null);
+    if (r.ok) {
+      setUsers(prev => ({ ...prev, [email]: { ...prev[email], approval_status: "approved" } }));
+      showMsg(true, `Approved ${email} — they can now log in`);
+    } else {
+      showMsg(false, d.error || "Approval failed");
+    }
+  };
+
+  const handleReject = async (email) => {
+    setRejectFor(null);
+    const r = await fetch(`${CYSCAN_URL}/api/sso/reject/${encodeURIComponent(email)}`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: rejectReason }),
+    });
+    const d = await r.json().catch(() => ({}));
+    setRejectReason("");
+    if (r.ok) {
+      setUsers(prev => ({ ...prev, [email]: { ...prev[email], approval_status: "rejected", rejection_reason: rejectReason } }));
+      showMsg(true, `Rejected ${email}`);
+    } else {
+      showMsg(false, d.error || "Rejection failed");
+    }
+  };
+
   const handleAdd = async () => {
     const trimmed = newEmail.trim().toLowerCase();
     if (!trimmed) return;
-    if (!EMAIL_RE.test(trimmed)) {
-      showMsg(false, "Invalid email address format");
-      return;
-    }
-    if (newAuthType === "local" && !newPassword.trim()) {
-      showMsg(false, "Password is required for local accounts");
-      return;
-    }
+    if (!EMAIL_RE.test(trimmed)) { showMsg(false, "Invalid email address format"); return; }
+    if (newAuthType === "local" && !newPassword.trim()) { showMsg(false, "Password is required for local accounts"); return; }
     setAdding(true);
     const payload = { email: trimmed, role: newRole, auth_type: newAuthType };
     if (newAuthType === "local") payload.password = newPassword;
@@ -640,10 +673,7 @@ function UserManagementTab() {
     const d = await r.json().catch(() => ({}));
     if (r.ok) {
       await reloadUsers();
-      setNewEmail("");
-      setNewRole("viewer");
-      setNewAuthType("sso");
-      setNewPassword("");
+      setNewEmail(""); setNewRole("viewer"); setNewAuthType("sso"); setNewPassword("");
       showMsg(true, `Added ${trimmed} as ${newRole} (${newAuthType})`);
     } else {
       showMsg(false, d.error || "Add failed");
@@ -652,10 +682,7 @@ function UserManagementTab() {
   };
 
   const handleResetPassword = async (email) => {
-    if (resetPw.trim().length < 8) {
-      showMsg(false, "Password must be at least 8 characters");
-      return;
-    }
+    if (resetPw.trim().length < 8) { showMsg(false, "Password must be at least 8 characters"); return; }
     setResetLoading(true);
     const r = await fetch(`${CYSCAN_URL}/api/rbac/users/${encodeURIComponent(email)}/reset-password`, {
       method: "POST", credentials: "include",
@@ -664,52 +691,83 @@ function UserManagementTab() {
     });
     const d = await r.json().catch(() => ({}));
     setResetLoading(false);
-    if (r.ok) {
-      setResetFor(null);
-      setResetPw("");
-      showMsg(true, `Password updated for ${email}`);
-    } else {
-      showMsg(false, d.error || "Password reset failed");
-    }
+    if (r.ok) { setResetFor(null); setResetPw(""); showMsg(true, `Password updated for ${email}`); }
+    else showMsg(false, d.error || "Password reset failed");
   };
 
-  if (loading) {
-    return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
-  }
+  if (loading) return (
+    <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12, padding: 20 }}>Loading…</div>
+  );
 
-  if (authRole !== "admin") {
-    return (
-      <div style={{ ...CARD, textAlign: "center", padding: "48px 24px" }}>
-        <div style={{ fontSize: 32, marginBottom: 12 }}>🔒</div>
-        <div style={{ color: "rgba(255,255,255,0.7)", fontFamily: "monospace", fontSize: 14, marginBottom: 6 }}>
-          Admin access required
-        </div>
-        {authErr ? (
-          <div style={{ color: "#ff6b6b", fontFamily: "monospace", fontSize: 12 }}>
-            Could not verify session: {authErr}
-          </div>
-        ) : (
-          <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>
-            Only administrators can manage user roles.
-          </div>
-        )}
-      </div>
-    );
-  }
+  if (authRole !== "admin") return (
+    <div style={{ ...CARD, textAlign: "center", padding: "48px 24px" }}>
+      <div style={{ fontSize: 32, marginBottom: 12 }}>🔒</div>
+      <div style={{ color: "rgba(255,255,255,0.7)", fontFamily: "monospace", fontSize: 14, marginBottom: 6 }}>Admin access required</div>
+      {authErr
+        ? <div style={{ color: "#ff6b6b", fontFamily: "monospace", fontSize: 12 }}>Could not verify session: {authErr}</div>
+        : <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Only administrators can manage user roles.</div>
+      }
+    </div>
+  );
 
-  const entries = Object.entries(users).sort(([a], [b]) => a.localeCompare(b));
+  // ── Stats ───────────────────────────────────────────────────────────────────
+  const allEntries = Object.entries(users);
+  const totalCount    = allEntries.length;
+  const pendingCount  = allEntries.filter(([, e]) => (e.approval_status || "approved") === "pending").length;
+  const approvedCount = allEntries.filter(([, e]) => (e.approval_status || "approved") === "approved").length;
+  const localCount    = allEntries.filter(([, e]) => e.auth_type === "local").length;
+  const ssoCount      = allEntries.filter(([, e]) => e.auth_type !== "local").length;
+  const roleCounts    = VALID_ROLES.reduce((acc, r) => {
+    acc[r] = allEntries.filter(([, e]) => e.role === r).length;
+    return acc;
+  }, {});
+
+  // ── Filter ──────────────────────────────────────────────────────────────────
+  const filtered = allEntries
+    .filter(([, e]) => {
+      const status = e.approval_status || "approved";
+      if (filter === "pending")  return status === "pending";
+      if (filter === "approved") return status === "approved";
+      if (filter === "rejected") return status === "rejected";
+      if (filter === "local")    return e.auth_type === "local";
+      return true;
+    })
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  const FILTER_TABS = [
+    { id: "all",      label: `All (${totalCount})` },
+    { id: "approved", label: `Approved (${approvedCount})` },
+    { id: "pending",  label: `Pending (${pendingCount})`, highlight: pendingCount > 0 },
+    { id: "local",    label: `Local (${localCount})` },
+  ];
 
   return (
-    <div style={{ maxWidth: 820 }}>
+    <div style={{ maxWidth: 900 }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
         <span style={{ fontSize: 18 }}>👤</span>
         <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
           User Management
         </div>
+        <button onClick={reloadUsers} style={{ marginLeft: "auto", background: "none", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", borderRadius: 4, padding: "3px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer" }}>
+          ↻ Refresh
+        </button>
       </div>
-      <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, marginBottom: 20, lineHeight: 1.6 }}>
-        Manage user roles and portal access. Changes take effect on the user's next request.
+
+      {/* Stats row */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+        {[
+          { label: "Total users",     value: totalCount,    color: "rgba(255,255,255,0.6)" },
+          { label: "SSO",             value: ssoCount,      color: "#4d9eff" },
+          { label: "Local",           value: localCount,    color: "#00e5a0" },
+          { label: "Pending approval",value: pendingCount,  color: pendingCount > 0 ? "#ffa500" : "rgba(255,255,255,0.3)" },
+          ...VALID_ROLES.filter(r => roleCounts[r] > 0).map(r => ({ label: r, value: roleCounts[r], color: "rgba(255,255,255,0.35)" })),
+        ].map(stat => (
+          <div key={stat.label} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "8px 14px", display: "flex", flexDirection: "column", alignItems: "center", minWidth: 80 }}>
+            <span style={{ color: stat.color, fontSize: 20, fontWeight: 700, fontFamily: "monospace" }}>{stat.value}</span>
+            <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace", textTransform: "uppercase", letterSpacing: "0.8px", marginTop: 2 }}>{stat.label}</span>
+          </div>
+        ))}
       </div>
 
       {msg && (
@@ -718,93 +776,164 @@ function UserManagementTab() {
         </div>
       )}
 
+      {/* Filter tabs */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 12 }}>
+        {FILTER_TABS.map(f => (
+          <button
+            key={f.id}
+            onClick={() => setFilter(f.id)}
+            style={{
+              background: filter === f.id ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.03)",
+              border: `1px solid ${filter === f.id ? "rgba(0,229,160,0.4)" : "rgba(255,255,255,0.08)"}`,
+              color: filter === f.id ? "#00e5a0" : (f.highlight ? "#ffa500" : "rgba(255,255,255,0.4)"),
+              borderRadius: 4, padding: "5px 12px", fontSize: 11, fontFamily: "monospace", cursor: "pointer", fontWeight: filter === f.id ? 700 : 400,
+            }}
+          >{f.label}</button>
+        ))}
+      </div>
+
       {/* User table */}
       <div style={{ ...CARD, padding: 0, overflow: "hidden", marginBottom: 20 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 60px 140px 1fr 170px", gap: 0, padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)" }}>
-          <span style={{ ...LABEL, marginBottom: 0 }}>Email</span>
-          <span style={{ ...LABEL, marginBottom: 0 }}>Auth</span>
-          <span style={{ ...LABEL, marginBottom: 0 }}>Role</span>
-          <span style={{ ...LABEL, marginBottom: 0 }}>Apps</span>
-          <span />
+        {/* Table header */}
+        <div style={{ display: "grid", gridTemplateColumns: "140px 1fr 55px 90px 130px auto", gap: 0, padding: "8px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)" }}>
+          {["Name", "Email", "Auth", "Status", "Role", ""].map(h => (
+            <span key={h} style={{ ...LABEL, marginBottom: 0, fontSize: 9 }}>{h}</span>
+          ))}
         </div>
-        {entries.length === 0 ? (
-          <div style={{ padding: "20px 16px", color: "rgba(255,255,255,0.2)", fontFamily: "monospace", fontSize: 12 }}>
-            No users configured. Add one below.
+
+        {filtered.length === 0 ? (
+          <div style={{ padding: "24px 16px", color: "rgba(255,255,255,0.2)", fontFamily: "monospace", fontSize: 12 }}>
+            {filter === "all" ? "No users yet. Add one below." : `No ${filter} users.`}
           </div>
-        ) : (
-          entries.map(([email, entry]) => {
-            const role     = entry.role || "viewer";
-            const authType = entry.auth_type || "sso";
-            const isLocal  = authType === "local";
-            const apps     = entry.apps || ROLE_APPS_MAP[role] || [];
-            return (
-              <div key={email}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 60px 140px 1fr 170px", gap: 0, padding: "10px 16px", borderBottom: resetFor === email ? "none" : "1px solid rgba(255,255,255,0.04)", alignItems: "center" }}>
-                  <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 12, fontFamily: "monospace", wordBreak: "break-all", paddingRight: 8 }}>{email}</span>
-                  <span>
-                    <span style={{
-                      fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "0.5px",
-                      padding: "2px 6px", borderRadius: 3,
-                      background: isLocal ? "rgba(0,229,160,0.1)" : "rgba(77,158,255,0.1)",
-                      color: isLocal ? "#00e5a0" : "#4d9eff",
-                      border: `1px solid ${isLocal ? "rgba(0,229,160,0.3)" : "rgba(77,158,255,0.3)"}`,
-                    }}>
-                      {isLocal ? "LOCAL" : "SSO"}
-                    </span>
-                  </span>
-                  <select
-                    value={role}
-                    onChange={e => handleRoleChange(email, e.target.value)}
-                    style={{ ...INPUT, padding: "4px 8px", fontSize: 11, width: "100%" }}
-                  >
-                    {VALID_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-                  </select>
-                  <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace", paddingLeft: 12 }}>
-                    {apps.join(", ") || "—"}
-                  </span>
-                  <div style={{ display: "flex", gap: 4, marginLeft: 8 }}>
-                    {isLocal && (
+        ) : filtered.map(([email, entry]) => {
+          const role       = entry.role || "viewer";
+          const authType   = entry.auth_type || "sso";
+          const isLocal    = authType === "local";
+          const status     = entry.approval_status || "approved";
+          const statusCfg  = STATUS_STYLE[status] || STATUS_STYLE.approved;
+          const displayName = entry.name || "";
+          const isPending  = status === "pending";
+          const rowBg      = isPending ? "rgba(255,165,0,0.03)" : "transparent";
+
+          return (
+            <div key={email}>
+              <div style={{ display: "grid", gridTemplateColumns: "140px 1fr 55px 90px 130px auto", gap: 0, padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", alignItems: "center", background: rowBg }}>
+                {/* Name */}
+                <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 6 }} title={displayName}>
+                  {displayName || <span style={{ color: "rgba(255,255,255,0.2)" }}>—</span>}
+                </span>
+                {/* Email */}
+                <span style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, fontFamily: "monospace", wordBreak: "break-all", paddingRight: 10 }}>{email}</span>
+                {/* Auth badge */}
+                <span>
+                  <span style={{ fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "0.5px", padding: "2px 5px", borderRadius: 3,
+                    background: isLocal ? "rgba(0,229,160,0.1)" : "rgba(77,158,255,0.1)",
+                    color:      isLocal ? "#00e5a0" : "#4d9eff",
+                    border: `1px solid ${isLocal ? "rgba(0,229,160,0.3)" : "rgba(77,158,255,0.3)"}`,
+                  }}>{isLocal ? "LOCAL" : "SSO"}</span>
+                </span>
+                {/* Approval status badge */}
+                <span>
+                  <span style={{ fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "0.5px", padding: "2px 6px", borderRadius: 3,
+                    background: statusCfg.bg, color: statusCfg.color, border: `1px solid ${statusCfg.border}`,
+                  }}>{statusCfg.label}</span>
+                </span>
+                {/* Role selector */}
+                <select
+                  value={role}
+                  onChange={e => handleRoleChange(email, e.target.value)}
+                  disabled={isPending}
+                  style={{ ...INPUT, padding: "4px 8px", fontSize: 11, width: "100%", opacity: isPending ? 0.45 : 1 }}
+                >
+                  {VALID_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+                {/* Actions */}
+                <div style={{ display: "flex", gap: 4, marginLeft: 8, flexWrap: "nowrap" }}>
+                  {isPending ? (
+                    <>
                       <button
-                        onClick={() => { setResetFor(resetFor === email ? null : email); setResetPw(""); }}
-                        style={{ background: resetFor === email ? "rgba(255,165,0,0.15)" : "rgba(255,165,0,0.06)", border: `1px solid rgba(255,165,0,${resetFor === email ? "0.5" : "0.25"})`, color: "#ffa500", borderRadius: 3, padding: "4px 8px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700, letterSpacing: "0.5px", whiteSpace: "nowrap" }}
+                        onClick={() => handleApprove(email)}
+                        disabled={approving === email}
+                        style={{ background: "rgba(0,229,160,0.12)", border: "1px solid rgba(0,229,160,0.4)", color: "#00e5a0", borderRadius: 3, padding: "4px 8px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700, letterSpacing: "0.5px", opacity: approving === email ? 0.5 : 1 }}
                       >
-                        {resetFor === email ? "✕ CANCEL" : "RESET PW"}
+                        {approving === email ? "…" : "✓ APPROVE"}
                       </button>
-                    )}
+                      <button
+                        onClick={() => { setRejectFor(rejectFor === email ? null : email); setRejectReason(""); }}
+                        style={{ background: "rgba(255,59,59,0.08)", border: "1px solid rgba(255,59,59,0.3)", color: "#ff6b6b", borderRadius: 3, padding: "4px 8px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700, letterSpacing: "0.5px" }}
+                      >
+                        {rejectFor === email ? "✕" : "✗ REJECT"}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {isLocal && (
+                        <button
+                          onClick={() => { setResetFor(resetFor === email ? null : email); setResetPw(""); }}
+                          style={{ background: resetFor === email ? "rgba(255,165,0,0.15)" : "rgba(255,165,0,0.06)", border: `1px solid rgba(255,165,0,${resetFor === email ? "0.5" : "0.25"})`, color: "#ffa500", borderRadius: 3, padding: "4px 8px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700, letterSpacing: "0.5px", whiteSpace: "nowrap" }}
+                        >
+                          {resetFor === email ? "✕ CANCEL" : "RESET PW"}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDelete(email)}
+                        style={{ background: "rgba(255,59,59,0.08)", border: "1px solid rgba(255,59,59,0.3)", color: "#ff6b6b", borderRadius: 3, padding: "4px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700, letterSpacing: "0.5px" }}
+                      >
+                        DELETE
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Reject reason form */}
+              {rejectFor === email && (
+                <div style={{ padding: "10px 16px 14px", borderBottom: "1px solid rgba(255,255,255,0.04)", background: "rgba(255,59,59,0.03)" }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input
+                      placeholder="Rejection reason (optional)"
+                      value={rejectReason}
+                      onChange={e => setRejectReason(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && handleReject(email)}
+                      style={{ ...INPUT, flex: 1 }}
+                      autoFocus
+                    />
                     <button
-                      onClick={() => handleDelete(email)}
-                      style={{ background: "rgba(255,59,59,0.08)", border: "1px solid rgba(255,59,59,0.3)", color: "#ff6b6b", borderRadius: 3, padding: "4px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700, letterSpacing: "0.5px" }}
+                      onClick={() => handleReject(email)}
+                      style={{ background: "rgba(255,59,59,0.12)", color: "#ff6b6b", border: "1px solid rgba(255,59,59,0.4)", borderRadius: 3, padding: "8px 14px", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px", whiteSpace: "nowrap" }}
                     >
-                      DELETE
+                      Confirm Reject
                     </button>
                   </div>
                 </div>
-                {resetFor === email && (
-                  <div style={{ padding: "10px 16px 14px", borderBottom: "1px solid rgba(255,255,255,0.04)", background: "rgba(255,165,0,0.03)" }}>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <input
-                        type="password"
-                        placeholder="New password (min 8 characters)"
-                        value={resetPw}
-                        onChange={e => setResetPw(e.target.value)}
-                        onKeyDown={e => e.key === "Enter" && handleResetPassword(email)}
-                        style={{ ...INPUT, flex: 1 }}
-                        autoComplete="new-password"
-                      />
-                      <button
-                        onClick={() => handleResetPassword(email)}
-                        disabled={resetLoading || resetPw.trim().length < 8}
-                        style={{ background: "rgba(255,165,0,0.12)", color: "#ffa500", border: "1px solid rgba(255,165,0,0.4)", borderRadius: 3, padding: "8px 14px", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px", opacity: resetLoading || resetPw.trim().length < 8 ? 0.5 : 1, whiteSpace: "nowrap" }}
-                      >
-                        {resetLoading ? "Saving…" : "Set Password"}
-                      </button>
-                    </div>
+              )}
+
+              {/* Password reset form */}
+              {resetFor === email && (
+                <div style={{ padding: "10px 16px 14px", borderBottom: "1px solid rgba(255,255,255,0.04)", background: "rgba(255,165,0,0.03)" }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input
+                      type="password"
+                      placeholder="New password (min 8 characters)"
+                      value={resetPw}
+                      onChange={e => setResetPw(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && handleResetPassword(email)}
+                      style={{ ...INPUT, flex: 1 }}
+                      autoComplete="new-password"
+                    />
+                    <button
+                      onClick={() => handleResetPassword(email)}
+                      disabled={resetLoading || resetPw.trim().length < 8}
+                      style={{ background: "rgba(255,165,0,0.12)", color: "#ffa500", border: "1px solid rgba(255,165,0,0.4)", borderRadius: 3, padding: "8px 14px", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px", opacity: resetLoading || resetPw.trim().length < 8 ? 0.5 : 1, whiteSpace: "nowrap" }}
+                    >
+                      {resetLoading ? "Saving…" : "Set Password"}
+                    </button>
                   </div>
-                )}
-              </div>
-            );
-          })
-        )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* Add user form */}
@@ -819,26 +948,14 @@ function UserManagementTab() {
             onKeyDown={e => e.key === "Enter" && handleAdd()}
             style={{ ...INPUT, flex: 1, minWidth: 220 }}
           />
-          <select
-            value={newRole}
-            onChange={e => setNewRole(e.target.value)}
-            style={{ ...INPUT, width: "auto", padding: "8px 12px", flex: "0 0 auto" }}
-          >
+          <select value={newRole} onChange={e => setNewRole(e.target.value)} style={{ ...INPUT, width: "auto", padding: "8px 12px", flex: "0 0 auto" }}>
             {VALID_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
           </select>
-          <select
-            value={newAuthType}
-            onChange={e => { setNewAuthType(e.target.value); setNewPassword(""); }}
-            style={{ ...INPUT, width: "auto", padding: "8px 12px", flex: "0 0 auto" }}
-          >
+          <select value={newAuthType} onChange={e => { setNewAuthType(e.target.value); setNewPassword(""); }} style={{ ...INPUT, width: "auto", padding: "8px 12px", flex: "0 0 auto" }}>
             <option value="sso">SSO</option>
             <option value="local">Local</option>
           </select>
-          <button
-            onClick={handleAdd}
-            disabled={adding || !newEmail.trim()}
-            style={{ ...BTN(), opacity: adding || !newEmail.trim() ? 0.5 : 1, flexShrink: 0 }}
-          >
+          <button onClick={handleAdd} disabled={adding || !newEmail.trim()} style={{ ...BTN(), opacity: adding || !newEmail.trim() ? 0.5 : 1, flexShrink: 0 }}>
             {adding ? "Adding…" : "Add User"}
           </button>
         </div>
@@ -851,6 +968,7 @@ function UserManagementTab() {
               onChange={e => setNewPassword(e.target.value)}
               onKeyDown={e => e.key === "Enter" && handleAdd()}
               style={{ ...INPUT, flex: 1, minWidth: 220 }}
+              autoComplete="new-password"
             />
             <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, fontFamily: "monospace" }}>
               Required for local accounts — stored as bcrypt hash
