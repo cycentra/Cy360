@@ -1,6 +1,7 @@
 #!/opt/cycentra/backend/venv/bin/python3
 import asyncio
 import json
+import re
 import sys
 import time
 import os
@@ -193,6 +194,113 @@ def _annotate_subdomains(enriched_subs: list, prev_state: dict) -> list:
 
         annotated.append({**e, "is_new": is_new, "change": change})
     return annotated
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Asset lifecycle state management ─────────────────────────────────────────
+#
+# Asset states (new | baseline | under_review | ignored | dropped) are stored
+# per-user in /opt/cycentra/asm_states/{uid}/asset_states.json so that each
+# SSO user sees only their own asset history.
+#
+# Auto-transition rules (performed by the scan engine, not the user):
+#   - New asset (no prior record)           → state = "new"
+#   - Baseline asset not found in this scan → state = "dropped"
+#   - All other transitions require explicit user action via the API.
+
+_ASM_STATES_BASE = Path("/opt/cycentra/asm_states")
+
+
+def _uid_to_safe(uid: str) -> str:
+    return re.sub(r"[^a-z0-9._@-]", "_", uid.strip().lower())[:80] or "unknown"
+
+
+def _load_asm_asset_states(uid: str) -> dict:
+    """Load per-user ASM asset state store.  Returns fresh schema on first use."""
+    path = _ASM_STATES_BASE / _uid_to_safe(uid) / "asset_states.json"
+    if path.exists():
+        try:
+            data = json.loads(path.read_text())
+            if isinstance(data, dict) and "assets" in data:
+                return data
+        except Exception:
+            pass
+    return {"version": 1, "baseline": None, "assets": {}}
+
+
+def _save_asm_asset_states(uid: str, data: dict) -> None:
+    path = _ASM_STATES_BASE / _uid_to_safe(uid) / "asset_states.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2))
+
+
+def _apply_asset_states(
+    uid: str,
+    primary_domain: str,
+    subdomain_entries: list,
+    is_guest: bool,
+) -> tuple[dict, dict]:
+    """Compute asset states for all hosts discovered in this scan.
+
+    Returns:
+        state_by_host  — {hostname: state_string}   (injected into portal JSON)
+        updated_store  — full state store to be saved after portal JSON is written
+                         (empty dict when is_guest=True; guests are never persisted)
+
+    State rules:
+    - First time seeing a host (no record) → "new"
+    - Existing record → preserve current state (do not overwrite user decisions)
+    - Baseline host not found in this scan → auto-transition to "dropped"
+    - Guest scans: all hosts get ephemeral "new"; nothing is persisted
+    """
+    if is_guest:
+        state_by_host = {primary_domain: "new"}
+        for e in subdomain_entries:
+            sub = e["subdomain"] if isinstance(e, dict) else e
+            state_by_host[sub] = "new"
+        return state_by_host, {}
+
+    store         = _load_asm_asset_states(uid)
+    assets        = store.setdefault("assets", {})
+    baseline_cfg  = store.get("baseline") or {}
+    baseline_set  = set(baseline_cfg.get("assets", []))
+    now           = datetime.now().isoformat()
+
+    # Build set of all hosts discovered in this scan
+    detected: set = {primary_domain}
+    for e in subdomain_entries:
+        sub = e["subdomain"] if isinstance(e, dict) else e
+        detected.add(sub)
+
+    state_by_host: dict = {}
+    for host in detected:
+        entry = assets.get(host)
+        if entry is None:
+            assets[host] = {"state": "new", "first_seen": now, "last_seen": now, "audit_log": []}
+            state_by_host[host] = "new"
+        else:
+            # Preserve the user-set state; only refresh last_seen
+            assets[host]["last_seen"] = now
+            state_by_host[host] = entry.get("state", "new")
+
+    # Auto-drop: baseline hosts not detected in this scan → "dropped"
+    for host in baseline_set:
+        if host not in detected:
+            entry = assets.get(host, {})
+            if entry.get("state") == "baseline":
+                entry["state"] = "dropped"
+                entry["audit_log"] = entry.get("audit_log", []) + [{
+                    "action":      "auto_dropped",
+                    "from_state":  "baseline",
+                    "to_state":    "dropped",
+                    "reason":      "Asset not detected in latest scan",
+                    "scan_domain": primary_domain,
+                    "created_at":  now,
+                }]
+                assets[host] = entry
+                logger.info(f"🔻 [AssetState] {host} auto-dropped (not detected in scan of {primary_domain})")
+
+    store["assets"] = assets
+    return state_by_host, store
 # ─────────────────────────────────────────────────────────────────────────────
 
 # --- AI SETTINGS: dynamic read from /opt/cycentra/ai_settings.json ---
@@ -1182,6 +1290,25 @@ def main():
         hist_subs  = [e for e in enriched_sub_entries if isinstance(e, dict) and not e.get("live")]
         new_subs   = [e for e in enriched_sub_entries if isinstance(e, dict) and e.get("is_new")]
 
+        # ── Asset state computation ──────────────────────────────────────────
+        # Compute and persist per-user asset lifecycle states.
+        # Must happen before building portal_payload so we can inject asset_state.
+        try:
+            state_by_host, updated_store = _apply_asset_states(
+                uid=final_tenant_id,
+                primary_domain=domain,
+                subdomain_entries=enriched_sub_entries,
+                is_guest=is_guest,
+            )
+            # Annotate each subdomain entry with its current asset state
+            for e in enriched_sub_entries:
+                if isinstance(e, dict):
+                    e["asset_state"] = state_by_host.get(e.get("subdomain", ""), "new")
+        except Exception as _state_err:
+            logger.warning(f"⚠️ [AssetState] State computation failed (scan unaffected): {_state_err}")
+            state_by_host  = {}
+            updated_store  = {}
+
         portal_payload = {
             "meta": {
                 "last_scan": datetime.now().isoformat(),
@@ -1200,6 +1327,7 @@ def main():
             "assets": [{
                 "id":              f"{domain}-{timestamp}",
                 "host":            domain,
+                "asset_state":     state_by_host.get(domain, "new"),
                 "risk_score":      ai_score,
                 "summary":         summary_text,
                 "vulnerabilities": final_vulns,
@@ -1211,6 +1339,16 @@ def main():
             json.dump(portal_payload, pf, indent=2)
 
         logger.info(f"✅ Portal JSON saved → {portal_file}")
+
+        # ── Persist asset states after portal JSON is written ────────────────
+        # Save outside the portal_payload block so a JSON write error doesn't
+        # prevent the state store update (and vice-versa).
+        if updated_store and not is_guest:
+            try:
+                _save_asm_asset_states(final_tenant_id, updated_store)
+                logger.info(f"✅ [AssetState] State store updated → {len(updated_store.get('assets', {}))} assets")
+            except Exception as _save_err:
+                logger.warning(f"⚠️ [AssetState] Failed to save state store: {_save_err}")
 
         # ── Generate PDF Reports (Executive + Technical) ─────────────────────
         exec_pdf_path, tech_pdf_path = "", ""

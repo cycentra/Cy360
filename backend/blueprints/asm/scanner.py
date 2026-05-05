@@ -570,27 +570,47 @@ def asm_escalate_to_iris():
 
 # ── ASM finding / asset status management ─────────────────────────────────────
 #
-# Finding and asset statuses are stored in a lightweight JSON file because ASM
-# scan output files are immutable historic artifacts.  The status overlay is
-# keyed by a stable finding_id (constructed by the frontend as
-# "<asset>:<vulnerability>:<module>" slugified) or by asset hostname.
+# TWO SEPARATE TRACKING SYSTEMS:
 #
-# Status lifecycle:
-#   open  →  investigating  →  in_review  →  resolved / false_positive
+# 1. FINDING STATUS (vulnerabilities) — ticket workflow, stored globally.
+#    Lifecycle: open → investigating → in_review → resolved / false_positive
+#    Keyed by a stable finding_id ("<asset>:<vuln>:<module>" slug).
 #
-# All transitions require a non-empty audit comment from the analyst.
+# 2. ASSET STATE (hosts / subdomains) — ASM lifecycle, stored PER USER.
+#    Lifecycle: new → baseline / under_review / ignored
+#               baseline → dropped (auto when not detected in latest scan)
+#               dropped  → new / baseline (user re-activates)
+#    Keyed by hostname.  State is never overwritten by a rescan unless the
+#    auto-drop rule fires (baseline asset gone missing).
 
-_ASM_STATUSES_FILE = Path("/opt/cycentra/asm_statuses.json")
-_ASSET_STATUSES_FILE = Path("/opt/cycentra/asset_statuses.json")
+_ASM_STATUSES_FILE  = Path("/opt/cycentra/asm_statuses.json")
+_ASM_STATES_BASE    = Path("/opt/cycentra/asm_states")   # per-user subdirs live here
+
+# ── Finding workflow transition table ─────────────────────────────────────────
 
 _ASM_ALLOWED_TRANSITIONS = {
-    "open":          {"investigating", "in_review", "resolved", "false_positive"},
-    "investigating": {"in_review", "resolved", "false_positive"},
-    "in_review":     {"resolved", "false_positive", "investigating"},
-    "resolved":      {"investigating"},
-    "false_positive":{"investigating"},
+    "open":           {"investigating", "in_review", "resolved", "false_positive"},
+    "investigating":  {"in_review", "resolved", "false_positive"},
+    "in_review":      {"resolved", "false_positive", "investigating"},
+    "resolved":       {"investigating"},
+    "false_positive": {"investigating"},
 }
 
+# ── Asset lifecycle transition table ─────────────────────────────────────────
+#
+# User-initiated transitions only.  The scan engine may also fire the
+# auto-drop rule (baseline → dropped) but no other automatic transitions exist.
+
+_ASSET_ALLOWED_TRANSITIONS = {
+    "new":          {"baseline", "under_review", "ignored"},
+    "baseline":     {"under_review", "ignored"},
+    "under_review": {"baseline", "ignored", "new"},
+    "ignored":      {"new", "baseline"},
+    "dropped":      {"new", "baseline"},
+}
+
+
+# ── Shared helpers ────────────────────────────────────────────────────────────
 
 def _load_status_file(path: Path) -> dict:
     if path.exists():
@@ -608,6 +628,33 @@ def _save_status_file(path: Path, data: dict) -> None:
     path.write_text(_j.dumps(data, indent=2))
 
 
+def _asset_states_path(uid: str) -> Path:
+    """Return the per-user asset state store path."""
+    safe = re.sub(r"[^a-z0-9._@-]", "_", uid.strip().lower())[:80] or "unknown"
+    return _ASM_STATES_BASE / safe / "asset_states.json"
+
+
+def _load_asset_states(uid: str) -> dict:
+    """Load the asset state store for a user.  Returns a fresh schema on first use."""
+    path = _asset_states_path(uid)
+    if path.exists():
+        try:
+            import json as _j
+            data = _j.loads(path.read_text())
+            if isinstance(data, dict) and "assets" in data:
+                return data
+        except Exception:
+            pass
+    return {"version": 1, "baseline": None, "assets": {}}
+
+
+def _save_asset_states(uid: str, data: dict) -> None:
+    import json as _j
+    path = _asset_states_path(uid)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_j.dumps(data, indent=2))
+
+
 # ── Preflight handlers ────────────────────────────────────────────────────────
 
 @asm_bp.route("/api/asm/findings/<path:finding_id>/status", methods=["OPTIONS"])
@@ -615,8 +662,13 @@ def asm_finding_status_options(finding_id):
     return add_cors_headers(make_response('', 204))
 
 
-@asm_bp.route("/api/asm/assets/<path:asset_id>/status", methods=["OPTIONS"])
-def asm_asset_status_options(asset_id):
+@asm_bp.route("/api/asm/assets/<path:asset_id>/state", methods=["OPTIONS"])
+def asm_asset_state_options(asset_id):
+    return add_cors_headers(make_response('', 204))
+
+
+@asm_bp.route("/api/asm/baseline", methods=["OPTIONS"])
+def asm_baseline_options():
     return add_cors_headers(make_response('', 204))
 
 
@@ -624,12 +676,13 @@ def asm_asset_status_options(asset_id):
 
 @asm_bp.route("/api/asm/statuses")
 def asm_get_all_statuses():
-    """Return combined status map for findings and assets."""
+    """Return combined finding status map and asset state map for the current user."""
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
+    uid = session["user_email"].strip()
     return jsonify({
-        "findings": _load_status_file(_ASM_STATUSES_FILE),
-        "assets":   _load_status_file(_ASSET_STATUSES_FILE),
+        "findings":     _load_status_file(_ASM_STATUSES_FILE),
+        "asset_states": _load_asset_states(uid),
     })
 
 
@@ -653,14 +706,14 @@ def asm_finding_transition(finding_id):
     if not comment:
         return jsonify({"error": "Audit comment is required for status transitions."}), 422
 
-    data      = _load_status_file(_ASM_STATUSES_FILE)
-    entry     = data.get(finding_id, {"status": "open", "audit_log": []})
+    data        = _load_status_file(_ASM_STATUSES_FILE)
+    entry       = data.get(finding_id, {"status": "open", "audit_log": []})
     from_status = entry.get("status", "open")
 
     allowed = _ASM_ALLOWED_TRANSITIONS.get(from_status, set())
     if to_status not in allowed:
         return jsonify({
-            "error": f"Transition '{from_status}' → '{to_status}' is not allowed.",
+            "error":   f"Transition '{from_status}' → '{to_status}' is not allowed.",
             "allowed": sorted(allowed),
         }), 422
 
@@ -700,58 +753,74 @@ def asm_finding_audit(finding_id):
     return jsonify(entry.get("audit_log", []))
 
 
-# ── POST /api/asm/assets/<id>/status ──────────────────────────────────────────
+# ── POST /api/asm/assets/<id>/state — user-initiated asset state transition ────
 
-@asm_bp.route("/api/asm/assets/<path:asset_id>/status", methods=["POST"])
+@asm_bp.route("/api/asm/assets/<path:asset_id>/state", methods=["POST"])
 def asm_asset_transition(asset_id):
-    """Transition an asset status with a mandatory audit comment."""
+    """Transition an asset to a new lifecycle state with a mandatory audit comment.
+
+    Valid states: new | baseline | under_review | ignored | dropped
+    All transitions require an explicit user action and a non-empty comment.
+
+    Auto-transition (baseline → dropped) is performed by the scan engine and
+    does not go through this endpoint.
+    """
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
     from blueprints.rbac.manager import get_user_role
     if get_user_role(session["user_email"]) not in ("admin", "analyst"):
         return jsonify({"error": "Analyst or admin role required"}), 403
 
-    body = request.get_json(silent=True) or {}
-    to_status = (body.get("to_status") or "").strip()
-    comment   = (body.get("comment")   or "").strip()
+    body     = request.get_json(silent=True) or {}
+    to_state = (body.get("to_state") or "").strip()
+    comment  = (body.get("comment")  or "").strip()
 
-    if not to_status:
-        return jsonify({"error": "to_status is required"}), 422
-    if not comment:
-        return jsonify({"error": "Audit comment is required for status transitions."}), 422
-
-    data      = _load_status_file(_ASSET_STATUSES_FILE)
-    entry     = data.get(asset_id, {"status": "open", "audit_log": []})
-    from_status = entry.get("status", "open")
-
-    allowed = _ASM_ALLOWED_TRANSITIONS.get(from_status, set())
-    if to_status not in allowed:
+    if not to_state:
+        return jsonify({"error": "to_state is required"}), 422
+    if to_state not in _ASSET_ALLOWED_TRANSITIONS:
         return jsonify({
-            "error": f"Transition '{from_status}' → '{to_status}' is not allowed.",
+            "error":  f"Unknown state '{to_state}'.",
+            "valid":  sorted(_ASSET_ALLOWED_TRANSITIONS),
+        }), 422
+    if not comment:
+        return jsonify({"error": "Audit comment is required for state transitions."}), 422
+
+    uid        = session["user_email"].strip()
+    store      = _load_asset_states(uid)
+    assets     = store.setdefault("assets", {})
+    entry      = assets.get(asset_id, {"state": "new", "first_seen": None, "audit_log": []})
+    from_state = entry.get("state", "new")
+
+    allowed = _ASSET_ALLOWED_TRANSITIONS.get(from_state, set())
+    if to_state not in allowed:
+        return jsonify({
+            "error":   f"Transition '{from_state}' → '{to_state}' is not allowed.",
             "allowed": sorted(allowed),
         }), 422
 
     from datetime import timezone as _tz
     ts = datetime.now(_tz.utc).isoformat()
-    entry["status"] = to_status
+    entry["state"] = to_state
+    entry.setdefault("first_seen", ts)
     entry["audit_log"] = entry.get("audit_log", []) + [{
-        "action":      "status_change",
-        "from_status": from_status,
-        "to_status":   to_status,
-        "comment":     comment,
-        "actor":       session["user_email"],
-        "created_at":  ts,
+        "action":     "state_change",
+        "from_state": from_state,
+        "to_state":   to_state,
+        "comment":    comment,
+        "actor":      uid,
+        "created_at": ts,
     }]
-    data[asset_id] = entry
-    _save_status_file(_ASSET_STATUSES_FILE, data)
+    assets[asset_id] = entry
+    store["assets"]  = assets
+    _save_asset_states(uid, store)
 
     return jsonify({
-        "asset_id":    asset_id,
-        "status":      to_status,
-        "from_status": from_status,
-        "comment":     comment,
-        "actor":       session["user_email"],
-        "created_at":  ts,
+        "asset_id":   asset_id,
+        "state":      to_state,
+        "from_state": from_state,
+        "comment":    comment,
+        "actor":      uid,
+        "created_at": ts,
     })
 
 
@@ -759,15 +828,170 @@ def asm_asset_transition(asset_id):
 
 @asm_bp.route("/api/asm/assets/<path:asset_id>/audit")
 def asm_asset_audit(asset_id):
-    """Return the audit trail for an asset."""
+    """Return the state audit trail for an asset."""
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
-    data  = _load_status_file(_ASSET_STATUSES_FILE)
-    entry = data.get(asset_id, {})
+    uid   = session["user_email"].strip()
+    store = _load_asset_states(uid)
+    entry = store.get("assets", {}).get(asset_id, {})
     return jsonify(entry.get("audit_log", []))
 
 
-# ── POST /api/asm/auto-status — bulk confidence-score suggestions ─────────────
+# ── GET /api/asm/asset-states — full asset state map for current user ─────────
+
+@asm_bp.route("/api/asm/asset-states")
+def asm_get_asset_states():
+    """Return the full asset state map (all hosts) for the session user."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    uid   = session["user_email"].strip()
+    store = _load_asset_states(uid)
+    return jsonify(store)
+
+
+# ── GET /api/asm/baseline ─────────────────────────────────────────────────────
+
+@asm_bp.route("/api/asm/baseline")
+def asm_get_baseline():
+    """Return the current baseline definition for the session user."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    uid   = session["user_email"].strip()
+    store = _load_asset_states(uid)
+    return jsonify(store.get("baseline") or {"assets": [], "set_at": None, "set_by": None})
+
+
+# ── POST /api/asm/baseline — promote assets to baseline ──────────────────────
+
+@asm_bp.route("/api/asm/baseline", methods=["POST"])
+def asm_set_baseline():
+    """Promote a list of asset IDs to the baseline.
+
+    Body: { "assets": ["example.com", "www.example.com", ...], "comment": "..." }
+
+    Replaces the current baseline with the supplied list.  Each asset listed
+    is transitioned to the 'baseline' state; assets previously in the baseline
+    but omitted from the new list are transitioned to 'new'.
+    """
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
+        return jsonify({"error": "Analyst or admin role required"}), 403
+
+    body          = request.get_json(silent=True) or {}
+    new_baseline  = body.get("assets") or []
+    comment       = (body.get("comment") or "").strip()
+
+    if not isinstance(new_baseline, list):
+        return jsonify({"error": "assets must be a list of hostnames"}), 422
+    if not comment:
+        return jsonify({"error": "A comment describing the baseline is required."}), 422
+
+    uid   = session["user_email"].strip()
+    store = _load_asset_states(uid)
+    assets = store.setdefault("assets", {})
+
+    from datetime import timezone as _tz
+    ts = datetime.now(_tz.utc).isoformat()
+
+    old_baseline_set = set((store.get("baseline") or {}).get("assets", []))
+    new_baseline_set = set(new_baseline)
+
+    # Transition assets entering the baseline → 'baseline'
+    for host in new_baseline_set:
+        entry      = assets.get(host, {"state": "new", "first_seen": ts, "audit_log": []})
+        from_state = entry.get("state", "new")
+        if from_state != "baseline":
+            entry["state"] = "baseline"
+            entry.setdefault("first_seen", ts)
+            entry["audit_log"] = entry.get("audit_log", []) + [{
+                "action":     "state_change",
+                "from_state": from_state,
+                "to_state":   "baseline",
+                "comment":    comment,
+                "actor":      uid,
+                "created_at": ts,
+            }]
+        assets[host] = entry
+
+    # Assets removed from the baseline → revert to 'new'
+    for host in old_baseline_set - new_baseline_set:
+        entry      = assets.get(host, {"state": "baseline", "first_seen": ts, "audit_log": []})
+        from_state = entry.get("state", "baseline")
+        entry["state"] = "new"
+        entry["audit_log"] = entry.get("audit_log", []) + [{
+            "action":     "state_change",
+            "from_state": from_state,
+            "to_state":   "new",
+            "comment":    f"Removed from baseline: {comment}",
+            "actor":      uid,
+            "created_at": ts,
+        }]
+        assets[host] = entry
+
+    store["baseline"] = {
+        "assets":   sorted(new_baseline_set),
+        "set_at":   ts,
+        "set_by":   uid,
+        "comment":  comment,
+    }
+    store["assets"] = assets
+    _save_asset_states(uid, store)
+
+    return jsonify({
+        "baseline": store["baseline"],
+        "promoted": len(new_baseline_set - old_baseline_set),
+        "removed":  len(old_baseline_set - new_baseline_set),
+    })
+
+
+# ── DELETE /api/asm/baseline/assets/<id> — remove one asset from baseline ─────
+
+@asm_bp.route("/api/asm/baseline/assets/<path:asset_id>", methods=["DELETE"])
+def asm_remove_from_baseline(asset_id):
+    """Remove a single asset from the baseline, reverting it to 'new'."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
+        return jsonify({"error": "Analyst or admin role required"}), 403
+
+    uid   = session["user_email"].strip()
+    store = _load_asset_states(uid)
+    assets        = store.setdefault("assets", {})
+    baseline_cfg  = store.get("baseline") or {}
+    baseline_list = list(baseline_cfg.get("assets", []))
+
+    if asset_id not in baseline_list:
+        return jsonify({"error": "Asset is not in the current baseline"}), 404
+
+    from datetime import timezone as _tz
+    ts = datetime.now(_tz.utc).isoformat()
+
+    baseline_list.remove(asset_id)
+    baseline_cfg["assets"] = baseline_list
+    store["baseline"] = baseline_cfg
+
+    entry      = assets.get(asset_id, {"state": "baseline", "first_seen": ts, "audit_log": []})
+    from_state = entry.get("state", "baseline")
+    entry["state"] = "new"
+    entry["audit_log"] = entry.get("audit_log", []) + [{
+        "action":     "state_change",
+        "from_state": from_state,
+        "to_state":   "new",
+        "comment":    "Removed from baseline",
+        "actor":      uid,
+        "created_at": ts,
+    }]
+    assets[asset_id] = entry
+    store["assets"]  = assets
+    _save_asset_states(uid, store)
+
+    return jsonify({"asset_id": asset_id, "state": "new", "removed_from_baseline": True})
+
+
+# ── POST /api/asm/auto-status — bulk confidence-score suggestions (findings) ───
 
 @asm_bp.route("/api/asm/auto-status", methods=["OPTIONS"])
 def asm_auto_status_options():
@@ -776,11 +1000,10 @@ def asm_auto_status_options():
 
 @asm_bp.route("/api/asm/auto-status", methods=["POST"])
 def asm_auto_status():
-    """Return automated status-transition suggestions based on confidence scores.
+    """Return automated finding-status transition suggestions based on confidence scores.
 
-    Mirrors the State Transition Matrix in the frontend computeAutoStatus():
-      open          → investigating : confidence ≥ 75  OR cvss ≥ 7.0  OR epss_pct ≥ 60
-      investigating → in_review     : cvss ≥ 9.0       OR epss_pct ≥ 75  OR risk_score ≥ 8
+    This applies to vulnerability *findings* (not assets).
+    State machine: open → investigating → in_review
 
     Read-only — does NOT write any state.
     Accepts:
@@ -819,10 +1042,10 @@ def asm_auto_status():
 
         if to:
             suggestions.append({
-                "id":       f.get("id"),
-                "current":  cur,
+                "id":        f.get("id"),
+                "current":   cur,
                 "suggested": to,
-                "reason":   reason,
+                "reason":    reason,
             })
 
     return jsonify({"suggestions": suggestions, "total": len(suggestions)})
