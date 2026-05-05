@@ -14,6 +14,13 @@ export function LoginPage() {
   const [localPass, setLocalPass]   = useState("");
   const [localError, setLocalError] = useState("");
 
+  // ── Access request form state ──────────────────────────────────────────
+  const [showRequestAccess, setShowRequestAccess] = useState(false);
+  const [reqEmail,   setReqEmail]   = useState("");
+  const [reqName,    setReqName]    = useState("");
+  const [reqErr,     setReqErr]     = useState("");
+  const [reqSuccess, setReqSuccess] = useState(false);
+
   // ── Pending approval / auth-error state from URL params ──────────────────
   const [pendingEmail, setPendingEmail]   = useState(null);  // non-null → approval-pending view
   const [authErrMsg,   setAuthErrMsg]     = useState(null);  // non-null → error banner
@@ -86,6 +93,31 @@ export function LoginPage() {
       window.location.href = `${window.location.origin}?${params.toString()}`;
     } catch {
       setLocalError("Network error — please try again");
+      setLoading(null);
+    }
+  };
+
+  const handleRequestAccess = async (e) => {
+    e.preventDefault();
+    setReqErr("");
+    setLoading("request");
+    try {
+      const resp = await fetch(`${CYSCAN_URL}/api/auth/request-access`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: reqEmail, name: reqName }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setReqErr(data.error || "Request failed");
+        setLoading(null);
+        return;
+      }
+      setReqSuccess(true);
+      setLoading(null);
+    } catch {
+      setReqErr("Network error — please try again");
       setLoading(null);
     }
   };
@@ -220,6 +252,51 @@ export function LoginPage() {
                 </button>
               )}
             </div>
+          ) : showRequestAccess ? (
+            /* ── Request access form / confirmation ── */
+            reqSuccess ? (
+              <div style={{ padding: "20px 22px", background: "rgba(0,229,160,0.04)", border: "1px solid rgba(0,229,160,0.2)", borderRadius: 8 }}>
+                <div style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 11, fontWeight: 700, letterSpacing: "1.5px", marginBottom: 10 }}>REQUEST SUBMITTED</div>
+                <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, lineHeight: 1.7, margin: 0 }}>
+                  Your access request for <strong style={{ color: "white" }}>{reqEmail}</strong> has been sent to the administrator.
+                </p>
+                <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, marginTop: 8, lineHeight: 1.6 }}>
+                  You will be notified by email once your account is approved.
+                </p>
+                <button onClick={() => { setShowRequestAccess(false); setReqSuccess(false); setReqEmail(""); setReqName(""); setShowLocal(false); }}
+                  style={{ marginTop: 14, background: "none", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 4, color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace", padding: "6px 14px", cursor: "pointer" }}>
+                  ← Back to Sign in
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleRequestAccess} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, letterSpacing: "2px", fontFamily: "monospace", marginBottom: 6 }}>LOCAL ACCOUNT</div>
+                  <div style={{ color: "white", fontSize: 18, fontWeight: 700 }}>Request Access</div>
+                  <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, marginTop: 4 }}>The administrator will review and approve your request.</div>
+                </div>
+                <input type="text" placeholder="Full name" value={reqName} onChange={e => setReqName(e.target.value)}
+                  required autoFocus
+                  style={{ padding: "12px 16px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "white", fontSize: 14, outline: "none" }}
+                />
+                <input type="email" placeholder="Email address" value={reqEmail} onChange={e => setReqEmail(e.target.value)}
+                  required
+                  style={{ padding: "12px 16px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "white", fontSize: 14, outline: "none" }}
+                />
+                {reqErr && (
+                  <div style={{ color: "#ff5e5e", fontSize: 12, padding: "8px 12px", background: "rgba(255,94,94,0.08)", borderRadius: 4 }}>{reqErr}</div>
+                )}
+                <button type="submit" disabled={!!loading}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, padding: "14px 24px", background: "rgba(0,229,160,0.12)", border: "1px solid rgba(0,229,160,0.3)", borderRadius: 6, color: "#00e5a0", fontSize: 14, fontWeight: 600, cursor: loading ? "default" : "pointer", transition: "all 0.2s" }}>
+                  {loading === "request" ? <div style={{ width: 18, height: 18, border: "2px solid rgba(0,229,160,0.2)", borderTopColor: "#00e5a0", borderRadius: "50%", animation: "spin 0.8s linear infinite" }}/> : null}
+                  {loading === "request" ? "Submitting…" : "Submit Request"}
+                </button>
+                <button type="button" onClick={() => { setShowRequestAccess(false); setReqErr(""); }} disabled={!!loading}
+                  style={{ background: "none", border: "none", color: "rgba(255,255,255,0.3)", fontSize: 12, cursor: "pointer", textAlign: "center", padding: "4px 0" }}>
+                  ← Back to Sign in
+                </button>
+              </form>
+            )
           ) : (
             /* ── Local login form ── */
             <form onSubmit={handleLocalLogin} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -255,6 +332,10 @@ export function LoginPage() {
               <button type="button" onClick={() => { setShowLocal(false); setLocalError(""); }} disabled={!!loading}
                 style={{ background: "none", border: "none", color: "rgba(255,255,255,0.3)", fontSize: 12, cursor: "pointer", textAlign: "center", padding: "4px 0" }}>
                 ← Back to SSO options
+              </button>
+              <button type="button" onClick={() => { setShowRequestAccess(true); setLocalError(""); }} disabled={!!loading}
+                style={{ background: "none", border: "none", color: "rgba(0,229,160,0.45)", fontSize: 12, cursor: loading ? "default" : "pointer", textAlign: "center", padding: "4px 0" }}>
+                No account? Request access →
               </button>
             </form>
           )}

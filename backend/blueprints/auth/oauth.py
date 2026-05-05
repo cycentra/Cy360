@@ -26,10 +26,29 @@ from core.config import (
     FRONTEND_URL, BASE_URL,
 )
 from core.helpers import enc, auth_event
-from blueprints.rbac.manager import get_user_role, get_user_apps, _get_user
+from blueprints.rbac.manager import get_user_role, get_user_apps, _get_user, _db, _ensure_table
 from core.config import AUTH_LOG_FILE
 
 auth_bp = Blueprint("auth", __name__)
+
+
+# ── Local pending account helper ──────────────────────────────────────────────
+
+def _provision_local_pending(email: str, name: str) -> None:
+    """Insert (or reset a rejected) local account to pending — no password, awaiting admin approval."""
+    _ensure_table()
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO cy_users
+                (email, role, auth_type, name, approval_status, approval_requested_at, updated_at)
+            VALUES (%s, 'viewer', 'local', %s, 'pending', NOW(), NOW())
+            ON CONFLICT (email) DO UPDATE SET
+                approval_status       = 'pending',
+                approval_requested_at = NOW(),
+                rejection_reason      = NULL,
+                updated_at            = NOW();
+        """, (email, name))
 
 
 # ── Google OAuth ──────────────────────────────────────────────────────────────
@@ -92,13 +111,27 @@ def auth_google_callback():
     avatar = ''.join([w[0].upper() for w in name.split()[:2]])
 
     if not _get_user(email):
-        auth_event("login", email, "portal", "denied", "not in allowlist")
-        return redirect(
-            f"{FRONTEND_URL}?auth=error&message=Access+denied.+Your+account+is+not+registered."
-        )
+        # Auto-provision via the same policy as the generic OIDC SSO flow.
+        from blueprints.sso.routes import _get_sso_cfg, _provision_user, _notify_admin_pending
+        cfg = _get_sso_cfg()
+        if cfg.get("sso_auto_provision", "true").lower() != "true":
+            auth_event("login", email, "portal", "denied", "not in allowlist provider=google")
+            return redirect(
+                f"{FRONTEND_URL}?auth=error&message=Access+denied.+Contact+your+administrator."
+            )
+        require_approval = cfg.get("sso_require_approval", "false").lower() == "true"
+        approval_status  = "pending" if require_approval else "approved"
+        _provision_user(email, name, cfg.get("sso_default_role", "viewer"),
+                        "google", uid, approval_status)
+        if require_approval:
+            _notify_admin_pending(email, name, "google")
+        auth_event("login", email, "portal",
+                   "pending" if require_approval else "provisioned",
+                   "provider=google auto-provisioned")
 
     # ── Approval gate ────────────────────────────────────────────────────────
-    approval = _get_user(email).get("approval_status", "approved")
+    user_entry = _get_user(email)
+    approval = user_entry.get("approval_status", "approved") if user_entry else "approved"
     if approval == "pending":
         auth_event("login", email, "portal", "pending", "provider=google")
         return redirect(
@@ -106,7 +139,7 @@ def auth_google_callback():
         )
     if approval == "rejected":
         auth_event("login", email, "portal", "denied", "provider=google rejected")
-        reason = _get_user(email).get("rejection_reason", "")
+        reason = user_entry.get("rejection_reason", "") if user_entry else ""
         msg = urllib.parse.quote(f"Access denied — {reason}" if reason else "Access request was not approved.")
         return redirect(f"{FRONTEND_URL}?auth=error&message={msg}")
 
@@ -190,13 +223,27 @@ def auth_microsoft_callback():
     avatar = ''.join([w[0].upper() for w in name.split()[:2]])
 
     if not _get_user(email):
-        auth_event("login", email, "portal", "denied", "not in allowlist")
-        return redirect(
-            f"{FRONTEND_URL}?auth=error&message=Access+denied.+Your+account+is+not+registered."
-        )
+        # Auto-provision via the same policy as the generic OIDC SSO flow.
+        from blueprints.sso.routes import _get_sso_cfg, _provision_user, _notify_admin_pending
+        cfg = _get_sso_cfg()
+        if cfg.get("sso_auto_provision", "true").lower() != "true":
+            auth_event("login", email, "portal", "denied", "not in allowlist provider=microsoft")
+            return redirect(
+                f"{FRONTEND_URL}?auth=error&message=Access+denied.+Contact+your+administrator."
+            )
+        require_approval = cfg.get("sso_require_approval", "false").lower() == "true"
+        approval_status  = "pending" if require_approval else "approved"
+        _provision_user(email, name, cfg.get("sso_default_role", "viewer"),
+                        "microsoft", uid, approval_status)
+        if require_approval:
+            _notify_admin_pending(email, name, "microsoft")
+        auth_event("login", email, "portal",
+                   "pending" if require_approval else "provisioned",
+                   "provider=microsoft auto-provisioned")
 
     # ── Approval gate ────────────────────────────────────────────────────────
-    approval = _get_user(email).get("approval_status", "approved")
+    user_entry = _get_user(email)
+    approval = user_entry.get("approval_status", "approved") if user_entry else "approved"
     if approval == "pending":
         auth_event("login", email, "portal", "pending", "provider=microsoft")
         return redirect(
@@ -204,7 +251,7 @@ def auth_microsoft_callback():
         )
     if approval == "rejected":
         auth_event("login", email, "portal", "denied", "provider=microsoft rejected")
-        reason = _get_user(email).get("rejection_reason", "")
+        reason = user_entry.get("rejection_reason", "") if user_entry else ""
         msg = urllib.parse.quote(f"Access denied — {reason}" if reason else "Access request was not approved.")
         return redirect(f"{FRONTEND_URL}?auth=error&message={msg}")
 
@@ -238,6 +285,16 @@ def auth_verify():
     email = session.get("user_email")
     if not email:
         return jsonify({"error": "Not authenticated"}), 401
+    # Real-time DB check — immediate revocation when an admin deletes or revokes a user.
+    # This runs on every proxied API request (nginx auth_request gate).
+    user = _get_user(email)
+    if not user:
+        session.clear()
+        return jsonify({"error": "Account not found"}), 401
+    approval = user.get("approval_status", "approved")
+    if approval in ("pending", "rejected"):
+        session.clear()
+        return jsonify({"error": "Access suspended"}), 401
     return jsonify({
         "email": email,
         "name":  session.get("user_name", ""),
@@ -329,3 +386,41 @@ def auth_local():
         "role":     get_user_role(email),
         "apps":     get_user_apps(email),
     }), 200
+
+
+# ── Self-registration (local accounts — request access) ───────────────────────
+
+@auth_bp.route("/api/auth/request-access", methods=["OPTIONS"])
+def request_access_options():
+    return make_response('', 204)
+
+
+@auth_bp.route("/api/auth/request-access", methods=["POST"])
+def request_access():
+    """
+    Self-registration for local accounts.
+    Creates a pending user record (no password) and notifies the admin via SMTP.
+    Access is granted only after an admin approves via User Management.
+    """
+    data  = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    name  = (data.get("name") or "").strip()
+
+    if not email or "@" not in email:
+        return jsonify({"error": "Valid email address required"}), 400
+
+    existing = _get_user(email)
+    if existing:
+        status = existing.get("approval_status", "approved")
+        if status == "pending":
+            return jsonify({"error": "An access request for this email is already pending."}), 409
+        if status == "approved":
+            return jsonify({"error": "An account already exists. Please sign in."}), 409
+        # rejected — allow re-request (will reset to pending)
+
+    display_name = name or email.split("@")[0].replace(".", " ").title()
+    _provision_local_pending(email, display_name)
+    from blueprints.sso.routes import _notify_admin_pending as _notify
+    _notify(email, display_name, "local")
+    auth_event("register", email, "portal", "pending", "provider=local request-access")
+    return jsonify({"ok": True}), 200
