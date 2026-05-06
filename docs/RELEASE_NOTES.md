@@ -1,3 +1,11 @@
+## v1.0.364 -- 2026-05-06
+
+### New Features
+
+  - add missing benchmark blueprint routes.py — resolves startup ModuleNotFoundError
+
+---
+
 ## v1.0.363 -- 2026-05-06
 
 ### New Features

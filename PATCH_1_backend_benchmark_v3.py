@@ -1,4 +1,41 @@
 """
+PATCH 1 of 3 — CyCentra 360 Benchmark Intelligence Engine  (v3 — FINAL)
+=========================================================================
+File to create: backend/blueprints/benchmark/routes.py
+
+CHANGES vs. v2
+--------------
+1. BANDS AUTO-UPDATE
+   Monthly APScheduler job fetches ENISA ECSF JSON and updates
+   /opt/cycentra/benchmark_bands_cache.json.  The route layer reads
+   the cache first; bundled static values are the fallback.
+   Activated by setting BENCHMARK_AUTO_UPDATE=true in the env.
+
+2. THREAT INTEL — MISP DIRECT
+   Uses get_misp_config() from core.helpers (existing single source of truth).
+   Queries MISP REST API directly:
+     GET /feeds              → enabled feed count
+     POST /attributes/statistics → attribute counts by type
+   Falls back gracefully when MISP is disabled or unreachable.
+
+3. VULN MANAGEMENT — ENTERPRISE GRADE
+   Three real data sources combined:
+     a) Wazuh vulnerability detector via internal Wazuh API
+        (GET /vulnerability/{agent_id} for each active agent)
+     b) SCA policy pass rate via internal Wazuh API
+        (GET /sca/{agent_id}/checks)
+     c) CyIRIS mean time to remediate via PostgreSQL Incident table
+        (closed_at - first_seen grouped by severity)
+   Final score = weighted blend of the three sub-scores.
+
+All three changes use only data sources that already exist in the platform.
+No new dependencies, no new database tables.
+"""
+
+import pathlib
+
+ROUTES_PY = '''\
+"""
 blueprints/benchmark/routes.py
 ================================
 CyCentra 360 — Security Posture Benchmark Intelligence Engine  (v3)
@@ -314,8 +351,8 @@ def _collect_compliance_score() -> dict:
         cur  = conn.cursor()
         cur.execute("""
             SELECT
-                COUNT(*) FILTER (WHERE status = 'compliant')     AS compliant,
-                COUNT(*) FILTER (WHERE status = 'partial')       AS partial,
+                COUNT(*) FILTER (WHERE status = \'compliant\')     AS compliant,
+                COUNT(*) FILTER (WHERE status = \'partial\')       AS partial,
                 COUNT(*)                                            AS total
             FROM cy_compliance_controls
         """)
@@ -512,8 +549,8 @@ def _collect_iris_mttr_subscore() -> tuple[Optional[float], str]:
             FROM incidents
             WHERE closed_at IS NOT NULL
               AND first_seen IS NOT NULL
-              AND closed_at  > NOW() - INTERVAL '90 days'
-              AND severity   IN ('critical', 'high', 'medium')
+              AND closed_at  > NOW() - INTERVAL \'90 days\'
+              AND severity   IN (\'critical\', \'high\', \'medium\')
             GROUP BY severity
         """)
         rows = cur.fetchall()
@@ -856,7 +893,7 @@ def _percentile(cspi: Optional[int], bands: list) -> tuple:
 
 def _fetch_enisa_bands() -> Optional[dict]:
     """
-    Fetch maturity / scores from ENISA's publicly available NIS2 NCA reports.
+    Fetch maturity / scores from ENISA\'s publicly available NIS2 NCA reports.
 
     ENISA does not (yet) publish machine-readable percentile band JSON, so
     this function polls the ENISA ECSF (European Cybersecurity Skills Framework)
@@ -992,3 +1029,24 @@ def put_config():
 @_require_auth
 def get_industries():
     return jsonify({"industries": _load_industry_cohorts(), "default": "general"})
+'''
+
+
+def main():
+    out  = pathlib.Path("backend/blueprints/benchmark/routes.py")
+    init = out.parent / "__init__.py"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if not init.exists():
+        init.touch()
+        print(f"  created  {init}")
+    out.write_text(ROUTES_PY)
+    print(f"  created  {out}")
+    print()
+    print("Next steps:")
+    print("  1. Apply PATCH_3_wiring.py to wire into app.py, App.jsx, navConfig.jsx")
+    print("  2. To enable auto-update: add BENCHMARK_AUTO_UPDATE=true to /opt/cycentra/.env")
+    print("  3. To enable Wazuh vuln scoring: add WAZUH_API_PASSWORD=<wazuh-wui-pass> to env")
+
+
+if __name__ == "__main__":
+    main()
