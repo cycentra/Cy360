@@ -507,8 +507,16 @@ def build_cover(report_type: str, domain: str, org: str,
 
 # ── Score Helpers ─────────────────────────────────────────────────────────────
 # Single source of truth: cy_asm/posture_score.py
-# Relative import works from all callers (cycentra_scan.py, Flask, CLI).
-from ..posture_score import compute_posture_score
+# Uses try/except import chain because pdf_base.py is loaded in two different
+# sys.path contexts:
+#   - via cycentra_scan.py / generate_reports.py: sys.path has backend/cy_asm/
+#     so posture_score is importable directly as 'posture_score'
+#   - via Flask benchmark blueprint: sys.path has backend/
+#     so it is importable as 'cy_asm.posture_score'
+try:
+    from posture_score import compute_posture_score          # cycentra_scan context
+except ImportError:
+    from cy_asm.posture_score import compute_posture_score   # Flask context
 
 def extract_domain_scores(results: Dict[str, Any]) -> Dict[str, float]:
     """Derive per-domain scores for the radar chart (0-100, higher = better)."""
