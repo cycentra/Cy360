@@ -2,14 +2,14 @@ name: Build & Publish — CyCentra 360
 
 on:
   push:
-    branches: [main]
+    #branches: [main]
     tags: ['v*.*.*']
   workflow_dispatch:
 
 # Prevents the "5 instances" issue. 
 # Only one run per commit (SHA) will execute at a time.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
