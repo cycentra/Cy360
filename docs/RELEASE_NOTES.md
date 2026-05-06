@@ -1,3 +1,11 @@
+## v1.0.380 -- 2026-05-06
+
+### Bug Fixes
+
+  - SyntaxError in system/routes.py — MISP try block outside updates dict
+
+---
+
 ## v1.0.379 -- 2026-05-06
 
 ### Bug Fixes
