@@ -188,6 +188,9 @@ def _sync_misp_to_siem_env(misp: dict) -> None:
     updates = {
         "MISP_MODE":    mode,
         "MISP_ENABLED": enabled,
+        "MISP_URL":     eff_url,
+        "MISP_API_KEY": eff_key,
+    }
 
     # Also write url + apiKey into ai_settings.json so benchmark can read them.
     # _sync_misp_to_siem_env() writes cysiemstack.env (for the engine process).
@@ -204,9 +207,6 @@ def _sync_misp_to_siem_env(misp: dict) -> None:
         _ai.write_text(_j.dumps(_d, indent=4))
     except Exception as _e:
         log.warning("[system] MISP ai_settings sync failed: %s", _e)
-        "MISP_URL":     eff_url,
-        "MISP_API_KEY": eff_key,
-    }
 
     try:
         lines = env_path.read_text().splitlines() if env_path.exists() else []
