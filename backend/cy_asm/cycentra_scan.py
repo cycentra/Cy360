@@ -595,15 +595,18 @@ async def store_to_cymind_memory(findings: list, domain: str, provider: str) -> 
             for i, finding in enumerate(findings):
                 severity_raw = str(finding.get("severity", "medium")).lower()
                 severity = severity_raw if severity_raw in ("low", "medium", "high", "critical") else "medium"
-                incident_id = f"ASM-{domain}-{finding.get('module', 'UNKNOWN')}-{i}".upper()[:60]
+                incident_id = re.sub(
+                    r'[^A-Z0-9._-]', '_',
+                    f"ASM-{domain}-{finding.get('module', 'UNKNOWN')}-{i}".upper()
+                )[:60]
 
                 payload = {
                     "incident_id":   incident_id,
-                    "alert_type":    finding.get("vulnerability", finding.get("module", "ASM Finding")),
+                    "alert_type":    str(finding.get("vulnerability", finding.get("module", "ASM Finding")) or "ASM Finding")[:200],
                     "severity":      severity,
                     "source_ip":     domain,
-                    "description":   finding.get("description", ""),
-                    "analyst_notes": finding.get("recommendation", ""),
+                    "description":   str(finding.get("description", "") or ""),
+                    "analyst_notes": str(finding.get("recommendation", "") or ""),
                     "outcome":       "open",
                     "resolution":    None,
                     "tags":          ["asm", domain, finding.get("module", "").lower(), provider.lower()],

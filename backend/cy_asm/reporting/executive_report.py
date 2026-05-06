@@ -63,7 +63,7 @@ _CRITICAL_NARRATIVES = {
 }
 
 def _get_narrative(vuln: str, sev: str) -> str:
-    v = vuln.lower()
+    v = str(vuln).lower()
     if any(k in v for k in ("ssl", "tls", "cert", "crypto")):
         return _CRITICAL_NARRATIVES["ssl"]
     if any(k in v for k in ("secret", "key", "token", "credential", "password")):
@@ -241,11 +241,11 @@ def _top_risks(all_f: List[Dict]) -> List:
     sorted_f = sorted(all_f, key=lambda x: x.get("risk_score", 0), reverse=True)[:10]
 
     for i, f in enumerate(sorted_f, 1):
-        sev   = f.get("severity", "Medium")
-        vuln  = f.get("vulnerability", "Unknown Finding")
+        sev   = str(f.get("severity", "Medium"))
+        vuln  = str(f.get("vulnerability", "Unknown Finding") or "Unknown Finding")
         score = f.get("risk_score", 5)
-        mod   = f.get("module", "scan")
-        rec   = f.get("recommendation", "Review and remediate according to vendor guidance.")
+        mod   = str(f.get("module", "scan") or "scan")
+        rec   = str(f.get("recommendation", "Review and remediate according to vendor guidance.") or "Review and remediate according to vendor guidance.")
         narrative = _get_narrative(vuln, sev)
 
         items = [
@@ -392,13 +392,13 @@ def _recommendations_section(all_f: List[Dict]) -> List:
 
     immediate = []
     for f in crit_f[:5]:
-        immediate.append(f"Remediate: <b>{f.get('vulnerability','')[:50]}</b> — {f.get('recommendation','')[:120]}")
+        immediate.append(f"Remediate: <b>{str(f.get('vulnerability','') or '')[:50]}</b> — {str(f.get('recommendation','') or '')[:120]}")
     if not immediate:
         immediate.append("No critical findings — maintain current controls and schedule regular scans.")
 
     short_term = []
     for f in high_f[:5]:
-        short_term.append(f"Address: <b>{f.get('vulnerability','')[:50]}</b> — {f.get('recommendation','')[:120]}")
+        short_term.append(f"Address: <b>{str(f.get('vulnerability','') or '')[:50]}</b> — {str(f.get('recommendation','') or '')[:120]}")
     if not short_term:
         short_term.append("No high-severity findings — review medium findings for risk-based prioritisation.")
 
