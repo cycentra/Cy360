@@ -1603,7 +1603,7 @@ def cymind_enable():
         AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         AI_SETTINGS_FILE.write_text(json.dumps(_ai, indent=2))
     except Exception as _e:
-        logger.warning("cymind_enable: failed to auto-configure AI provider: %s", _e)
+        current_app.logger.warning("cymind_enable: failed to auto-configure AI provider: %s", _e)
 
     return jsonify({
         "ok": True,
@@ -2532,7 +2532,7 @@ def mcp_keys_post():
     }
     keys.append(entry)
     _write_mcp_api_keys(keys)
-    logger.info("mcp_api_key_generated name=%s by=%s", name, session["user_email"])
+    current_app.logger.info("mcp_api_key_generated name=%s by=%s", name, session["user_email"])
     return jsonify({"ok": True, "key": new_key, "id": entry["id"], "name": name})
 
 
@@ -2555,7 +2555,7 @@ def mcp_key_revoke(key_id):
     if len(updated) == len(keys):
         return jsonify({"error": "Key not found"}), 404
     _write_mcp_api_keys(updated)
-    logger.info("mcp_api_key_revoked id=%s by=%s", key_id, session["user_email"])
+    current_app.logger.info("mcp_api_key_revoked id=%s by=%s", key_id, session["user_email"])
     return jsonify({"ok": True})
 
 
