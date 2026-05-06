@@ -292,24 +292,98 @@ def _collect_asm_score() -> dict:
 # ── 2. SIEM ───────────────────────────────────────────────────────────────────
 
 def _collect_siem_score() -> dict:
-    """Internal detection posture from the correlation engine /risk/summary."""
+    """
+    Internal detection posture score (0-100).
+
+    Queries the two endpoints that actually exist in the correlation engine
+    (verified against main.py and used by system/routes.py and MCP tools):
+
+      GET /stats       → total_alerts_24h, open_incidents, critical_alerts,
+                         active_agents
+      GET /risk-scores → entity list with level: low | medium | high | critical
+
+    Formula — start at 100, deduct for active threats:
+      critical_alerts (24h) : -3 each, cap -30
+      open incidents        : -2 each, cap -20
+      critical risk entities: -5 each, cap -25
+      high risk entities    : -2 each, cap -10
+    Clamp 0-100.
+    """
     try:
-        r = _req.get(f"{_SIEM_ENGINE}/risk/summary", timeout=_SIEM_TIMEOUT)
-        if r.status_code != 200:
-            return {"score": None, "stale": False, "detail": "Engine unreachable"}
-        d          = r.json()
-        mean_risk  = float(d.get("mean_risk", 50))
-        critical_n = int(d.get("critical", 0))
-        health     = max(0, min(100, round(100 - mean_risk - (critical_n * 2))))
+        # ── /stats ────────────────────────────────────────────────────────────
+        r_stats = _req.get(f"{_SIEM_ENGINE}/stats", timeout=_SIEM_TIMEOUT)
+        if r_stats.status_code != 200:
+            return {"score": None, "stale": False,
+                    "detail": f"Engine returned HTTP {r_stats.status_code}"}
+        stats = r_stats.json()
+
+        critical_alerts = int(stats.get("critical_alerts",    0))
+        open_incidents  = int(stats.get("open_incidents",     0))
+        active_agents   = int(stats.get("active_agents",      0))
+        alerts_24h      = int(stats.get("total_alerts_24h",   0))
+
+        # ── /risk-scores ──────────────────────────────────────────────────────
+        critical_entities = 0
+        high_entities     = 0
+        try:
+            r_risk = _req.get(
+                f"{_SIEM_ENGINE}/risk-scores",
+                params={"limit": 100},
+                timeout=_SIEM_TIMEOUT,
+            )
+            if r_risk.status_code == 200:
+                entities = r_risk.json()
+                if not isinstance(entities, list):
+                    # Some versions wrap in {"items": [...]}
+                    entities = (entities.get("items")
+                                or entities.get("data")
+                                or [])
+                critical_entities = sum(
+                    1 for e in entities
+                    if str(e.get("level", "")).lower() == "critical"
+                )
+                high_entities = sum(
+                    1 for e in entities
+                    if str(e.get("level", "")).lower() == "high"
+                )
+        except Exception:
+            pass  # risk-scores unavailable — still score from /stats alone
+
+        # ── Compute health score ───────────────────────────────────────────────
+        score = 100
+        score -= min(critical_alerts   * 3,  30)
+        score -= min(open_incidents    * 2,  20)
+        score -= min(critical_entities * 5,  25)
+        score -= min(high_entities     * 2,  10)
+        score  = max(0, min(100, score))
+
+        detail_parts = []
+        if alerts_24h:
+            detail_parts.append(f"{alerts_24h} alerts (24h)")
+        if open_incidents:
+            detail_parts.append(f"{open_incidents} open incidents")
+        if critical_entities or high_entities:
+            detail_parts.append(
+                f"{critical_entities} critical / {high_entities} high risk entities"
+            )
+        if active_agents:
+            detail_parts.append(f"{active_agents} active agents")
+        if not detail_parts:
+            detail_parts.append("Engine healthy — no active threats")
+
         return {
-            "score":  health,
-            "stale":  False,
-            "detail": (f"Entities: {d.get('total_entities','?')} · "
-                       f"Mean risk: {mean_risk:.0f} · Critical: {critical_n}"),
+            "score":            score,
+            "stale":            False,
+            "detail":           " · ".join(detail_parts),
+            "active_agents":    active_agents,
+            "open_incidents":   open_incidents,
+            "critical_alerts":  critical_alerts,
         }
+
     except _req.exceptions.ConnectionError:
         return {"score": None, "stale": False, "detail": "Correlation engine offline"}
     except Exception as exc:
+        log.warning("[benchmark] SIEM score error: %s", exc)
         return {"score": None, "stale": False, "detail": str(exc)}
 
 
