@@ -1,3 +1,11 @@
+## v1.0.378 -- 2026-05-06
+
+### Bug Fixes
+
+  - threat intel reads MISP from ai_settings.json, fix pathlib reference
+
+---
+
 ## v1.0.377 -- 2026-05-06
 
 ### Improvements
