@@ -188,6 +188,22 @@ def _sync_misp_to_siem_env(misp: dict) -> None:
     updates = {
         "MISP_MODE":    mode,
         "MISP_ENABLED": enabled,
+
+    # Also write url + apiKey into ai_settings.json so benchmark can read them.
+    # _sync_misp_to_siem_env() writes cysiemstack.env (for the engine process).
+    # ai_settings.json is what the Flask benchmark blueprint reads.
+    try:
+        import json as _j
+        _ai = pathlib.Path("/opt/cycentra/ai_settings.json")
+        _d  = _j.loads(_ai.read_text()) if _ai.exists() else {}
+        _d["misp"] = {
+            "mode":   misp.get("mode", "disabled"),
+            "url":    misp.get("url", ""),
+            "apiKey": misp.get("apiKey", ""),
+        }
+        _ai.write_text(_j.dumps(_d, indent=4))
+    except Exception as _e:
+        log.warning("[system] MISP ai_settings sync failed: %s", _e)
         "MISP_URL":     eff_url,
         "MISP_API_KEY": eff_key,
     }

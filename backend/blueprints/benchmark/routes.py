@@ -744,36 +744,74 @@ def _collect_vuln_score() -> dict:
 
 # ── 5. Threat Intelligence — direct MISP API ──────────────────────────────────
 
+def _read_cysiemstack_env() -> dict:
+    """Parse /opt/cycentra/cysiemstack.env → key/value dict. Mirrors iris_connector pattern."""
+    env: dict = {}
+    env_file = Path("/opt/cycentra/cysiemstack.env")
+    if not env_file.exists():
+        return env
+    try:
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            env[k.strip()] = v.strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return env
+
+
 def _read_misp_config() -> dict | None:
     """
-    Read MISP credentials from /opt/cycentra/ai_settings.json.
+    Resolve MISP credentials using a three-level fallback chain.
+    Mirrors iris_connector._load_iris_config() pattern.
 
-    This is the single authoritative source for MISP config in the Flask
-    backend context — same approach used by iris_connector.py.
-    The cysiemstack.env equivalents are written for the engine process only
-    and are not available in os.environ inside the Flask process.
+    Priority (first source with both url AND apiKey wins):
+      1. /opt/cycentra/ai_settings.json  → misp.url / misp.apiKey
+      2. /opt/cycentra/cysiemstack.env   → MISP_URL / MISP_API_KEY
+      3. os.environ                      → MISP_URL / MISP_API_KEY
 
-    Returns a dict with keys: url, apiKey, mode
-    Returns None if MISP is disabled or credentials are missing.
+    Returns dict(url, apiKey, mode) or None if disabled/unconfigured.
     """
-    _AI_SETTINGS = pathlib.Path("/opt/cycentra/ai_settings.json")
+    import os as _os
+    url     = ""
+    api_key = ""
+    mode    = "disabled"
+
+    # Source 1: ai_settings.json
+    ai_file = Path("/opt/cycentra/ai_settings.json")
     try:
-        raw    = _AI_SETTINGS.read_text() if _AI_SETTINGS.exists() else "{}"
-        stored = json.loads(raw)
+        if ai_file.exists():
+            stored  = json.loads(ai_file.read_text())
+            misp    = stored.get("misp") or {}
+            mode    = str(misp.get("mode", "disabled")).lower()
+            url     = str(misp.get("url",    "")).strip().rstrip("/")
+            api_key = str(misp.get("apiKey", "")).strip()
     except Exception as exc:
         log.warning("[benchmark] ai_settings.json read error: %s", exc)
-        return None
 
-    misp = stored.get("misp") or {}
-    mode = str(misp.get("mode", "disabled")).lower()
-
-    if mode == "disabled" or not misp:
-        return None
-
-    url     = str(misp.get("url", "")).strip().rstrip("/")
-    api_key = str(misp.get("apiKey", "")).strip()
-
+    # Source 2: cysiemstack.env
     if not url or not api_key:
+        siem_env = _read_cysiemstack_env()
+        url      = url      or siem_env.get("MISP_URL",     "").strip().rstrip("/")
+        api_key  = api_key  or siem_env.get("MISP_API_KEY", "").strip()
+        if not mode or mode == "disabled":
+            mode = siem_env.get("MISP_MODE", "local").lower()
+        if siem_env.get("MISP_ENABLED", "true").lower() == "false":
+            return None
+
+    # Source 3: os.environ
+    if not url or not api_key:
+        url     = url     or _os.environ.get("MISP_URL",     "").strip().rstrip("/")
+        api_key = api_key or _os.environ.get("MISP_API_KEY", "").strip()
+        if not mode or mode == "disabled":
+            mode = _os.environ.get("MISP_MODE", "local").lower()
+
+    if mode == "disabled":
+        return None
+    if not url or not api_key:
+        log.debug("[benchmark] MISP url/apiKey not found in any config source")
         return None
 
     return {"url": url, "apiKey": api_key, "mode": mode}
