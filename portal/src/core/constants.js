@@ -60,11 +60,18 @@ export const RISK_CONFIG = {
 };
 
 export const STATUS_CONFIG = {
-  "new":          { color: "#00e5a0", label: "NEW"          },
-  "baseline":     { color: "#4d9eff", label: "BASELINE"     },
-  "under_review": { color: "#f5c518", label: "UNDER REVIEW" },
-  "ignored":      { color: "#888888", label: "IGNORED"      },
-  "dropped":      { color: "#ff8c00", label: "DROPPED"      },
+  // ── Asset lifecycle states ────────────────────────────────────────────────
+  "new":            { color: "#00e5a0", label: "NEW"           },
+  "baseline":       { color: "#4d9eff", label: "BASELINE"      },
+  "under_review":   { color: "#f5c518", label: "UNDER REVIEW"  },
+  "ignored":        { color: "#888888", label: "IGNORED"       },
+  "dropped":        { color: "#ff8c00", label: "DROPPED"       },
+  // ── Finding lifecycle states ──────────────────────────────────────────────
+  "open":           { color: "#00e5a0", label: "OPEN"          },
+  "investigating":  { color: "#f5c518", label: "INVESTIGATING" },
+  "in_review":      { color: "#4d9eff", label: "IN REVIEW"     },
+  "resolved":       { color: "#888888", label: "RESOLVED"      },
+  "false_positive": { color: "#ff8c00", label: "FALSE POSITIVE"},
 };
 
 // Ordered lifecycle steps for display
@@ -78,9 +85,16 @@ export const STATUS_LIFECYCLE = [
 
 // Analyst-available transitions from each asset state (mirrors backend _ASSET_ALLOWED_TRANSITIONS)
 export const STATUS_TRANSITIONS = {
-  "new":          ["baseline", "under_review", "ignored"],
-  "baseline":     ["under_review", "ignored"],
-  "under_review": ["baseline", "ignored", "new"],
-  "ignored":      ["new", "baseline"],
-  "dropped":      ["new", "baseline"],
+  // ── Asset states ──────────────────────────────────────────────────────────
+  "new":            ["baseline", "under_review", "ignored"],
+  "baseline":       ["under_review", "ignored"],
+  "under_review":   ["baseline", "ignored", "new"],
+  "ignored":        ["new", "baseline"],
+  "dropped":        ["new", "baseline"],
+  // ── Finding states ────────────────────────────────────────────────────────
+  "open":           ["investigating", "resolved", "false_positive"],
+  "investigating":  ["in_review", "resolved", "false_positive"],
+  "in_review":      ["resolved", "false_positive", "open"],
+  "resolved":       ["open"],
+  "false_positive": ["open"],
 };

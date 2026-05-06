@@ -886,7 +886,11 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
 
         {pagedAssets.map((a, i) => {
           const _aEntry  = assetStatuses[a.host];
-          const curStat  = _aEntry || a.asset_state || "new";
+          // Use analyst-set state first; fall back to scanner's asset_state;
+          // for "persisted" (existing) assets with no explicit state, use "baseline"
+          // so the State column matches what the filter pills already imply.
+          const curStat  = _aEntry || a.asset_state ||
+                           (a.change === "persisted" ? "baseline" : "new");
           const isActive = activeAsset?.host === a.host;
           const _new     = isNew(a);
           const _dropped = isDropped(a);
