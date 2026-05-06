@@ -17,7 +17,7 @@ function Badge({ risk }) {
 
 // Single active-state indicator (dot + label, no dropdown)
 function StatusBadge({ status }) {
-  const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.open;
+  const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.new;
   return (
     <span style={{ color: cfg.color, fontSize: "10px", fontWeight: 700, letterSpacing: "1.5px",
       fontFamily: "monospace", display: "flex", alignItems: "center", gap: 5 }}>
@@ -36,10 +36,10 @@ function AssetStatusPanel({ asset, status, onClose, onStatusChange }) {
   const [txErr,     setTxErr]     = useState("");
   const [txBusy,    setTxBusy]    = useState(false);
 
-  const rawStat  = status || asset.status || "open";
-  const curStat  = (typeof rawStat === "object" ? rawStat?.status : rawStat) || "open";
+  const rawStat  = status || asset.asset_state || "new";
+  const curStat  = (typeof rawStat === "object" ? rawStat?.state : rawStat) || "new";
   const targets  = STATUS_TRANSITIONS[curStat] || [];
-  const statCfg  = STATUS_CONFIG[curStat] || STATUS_CONFIG.open;
+  const statCfg  = STATUS_CONFIG[curStat] || STATUS_CONFIG.new;
   const assetId  = asset.host;
 
   const startTx  = (t) => { setTxTarget(t); setTxComment(""); setTxErr(""); };
@@ -49,10 +49,10 @@ function AssetStatusPanel({ asset, status, onClose, onStatusChange }) {
     if (!txComment.trim()) { setTxErr("A comment is required."); return; }
     setTxBusy(true);
     try {
-      const r = await fetch(`/api/asm/assets/${encodeURIComponent(assetId)}/status`, {
+      const r = await fetch(`/api/asm/assets/${encodeURIComponent(assetId)}/state`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to_status: txTarget, comment: txComment }),
+        body: JSON.stringify({ to_state: txTarget, comment: txComment }),
       });
       if (!r.ok) {
         const b = await r.json().catch(() => ({}));
@@ -84,7 +84,7 @@ function AssetStatusPanel({ asset, status, onClose, onStatusChange }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
-              letterSpacing: "1.5px", marginBottom: 4 }}>UPDATE STATUS</div>
+              letterSpacing: "1.5px", marginBottom: 4 }}>UPDATE ASSET STATE</div>
             <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 13,
               fontFamily: "monospace", fontWeight: 700 }}>{asset.host}</div>
           </div>
@@ -189,13 +189,10 @@ function computeAssetAutoStatus(asset, curStat) {
   const critCount = vulns.filter(v => v.severity === "Critical").length;
   const highCount = vulns.filter(v => v.severity === "High").length;
   const conf      = computeAssetConfidence(asset);
-  if (curStat === "open") {
+  // Suggest under_review for new assets with high-risk findings
+  if (curStat === "new") {
     if (asset.risk === "critical" || critCount > 0 || conf >= 75)
-      return { to: "investigating", reason: `Risk ${(asset.risk || "—").toUpperCase()}  •  ${critCount} Critical  •  ${highCount} High  •  Confidence ${conf}` };
-  }
-  if (curStat === "investigating") {
-    if (critCount >= 3 || highCount >= 5 || conf >= 90)
-      return { to: "in_review", reason: `${critCount} Critical  •  ${highCount} High findings require escalation` };
+      return { to: "under_review", reason: `Risk ${(asset.risk || "—").toUpperCase()}  •  ${critCount} Critical  •  ${highCount} High  •  Confidence ${conf}` };
   }
   return null;
 }
@@ -241,10 +238,10 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
 
   const a        = asset;
   const riskCfg  = RISK_CONFIG[a.risk] || RISK_CONFIG.low;
-  // status prop can be plain string or full {status, audit_log} object
-  const rawStat  = status || a.status || "open";
-  const curStat  = (typeof rawStat === "object" ? rawStat?.status : rawStat) || "open";
-  const statCfg  = STATUS_CONFIG[curStat] || STATUS_CONFIG.open;
+  // status prop is a plain state string (e.g. "baseline") from AssetsPage.assetStatuses
+  const rawStat  = status || a.asset_state || "new";
+  const curStat  = (typeof rawStat === "object" ? rawStat?.state : rawStat) || "new";
+  const statCfg  = STATUS_CONFIG[curStat] || STATUS_CONFIG.new;
   const prevAudit = typeof rawStat === "object" ? (rawStat?.audit_log || []) : [];
 
   const vulns     = a.vulnerabilities || [];
@@ -256,10 +253,10 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
     if (!autoSug) return;
     setAutoBusy(true); setAutoErr("");
     try {
-      const r = await fetch(`/api/asm/assets/${encodeURIComponent(a.host)}/status`, {
+      const r = await fetch(`/api/asm/assets/${encodeURIComponent(a.host)}/state`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to_status: autoSug.to, comment: `Auto-applied — ${autoSug.reason}` }),
+        body: JSON.stringify({ to_state: autoSug.to, comment: `Auto-applied — ${autoSug.reason}` }),
       });
       if (!r.ok) { const b = await r.json().catch(() => ({})); setAutoErr(b.error || `HTTP ${r.status}`); }
       else { onStatusChange(a.host, autoSug.to); }
@@ -319,7 +316,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                 fontSize: 9, fontFamily: "monospace", fontWeight: 700,
                 padding: "4px 9px", borderRadius: 3, cursor: "pointer",
                 letterSpacing: "0.8px",
-              }}>UPDATE STATUS</button>
+            }}>UPDATE STATE</button>
               <button onClick={onClose} style={{
                 background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
                 color: "rgba(255,255,255,0.5)", width: 28, height: 28, borderRadius: 4,
@@ -337,7 +334,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
           <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.08)",
             borderRadius: 5, padding: "14px 16px" }}>
             <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace",
-              letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 10 }}>Status Lifecycle</div>
+              letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 10 }}>Asset State</div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: autoSug ? 10 : 0 }}>
               <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>Current:</span>
               <span style={{ background: `${statCfg.color}18`, color: statCfg.color,
@@ -651,8 +648,8 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {[...prevAudit].reverse().map((e, i) => {
-                  const fc = STATUS_CONFIG[e.from_status] || { color: "#888", label: e.from_status };
-                  const tc = STATUS_CONFIG[e.to_status]   || { color: "#888", label: e.to_status };
+                  const fc = STATUS_CONFIG[e.from_state] || { color: "#888", label: e.from_state };
+                  const tc = STATUS_CONFIG[e.to_state]   || { color: "#888", label: e.to_state };
                   return (
                     <div key={i} style={{ borderLeft: `2px solid ${tc.color}40`, paddingLeft: 10 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -678,7 +675,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-const GRID_COLS = "90px 1fr 105px 130px 110px 72px 84px 110px 24px";
+const GRID_COLS = "90px 1fr 105px 130px 110px 72px 110px 24px";
 
 export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
   const [assetStatuses,   setAssetStatuses]   = useState({});
@@ -692,7 +689,7 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
   useEffect(() => {
     fetch("/api/asm/statuses", { credentials: "include" })
       .then(r => r.ok ? r.json() : {})
-      .then(d => setAssetStatuses(d.assets || {}))
+      .then(d => setAssetStatuses(d.asset_states || {}))
       .catch(() => {});
   }, []);
 
@@ -734,7 +731,7 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
       case "ports":     return (a.ports || []).length;
       case "findings":  return (a.vulnerabilities || []).length;
       case "discovery": return (a.change || "").toLowerCase();
-      case "status":    return ((typeof assetStatuses[a.host] === "object" ? assetStatuses[a.host]?.status : assetStatuses[a.host]) || a.status || "open").toLowerCase();
+      case "status":    return (assetStatuses[a.host] || a.asset_state || "new").toLowerCase();
       default: return 0;
     }
   };
@@ -858,7 +855,7 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
         {/* Column header */}
         {(() => {
           const COL_KEY = { "Risk": "risk", "Host": "host", "IP": "ip", "Type": "type",
-            "Ports": "ports", "Findings": "findings", "Discovery": "discovery", "Status": "status", "": null };
+            "Ports": "ports", "Findings": "findings", "State": "status", "": null };
           return (
             <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, padding: "10px 20px",
               borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.01)" }}>
@@ -889,7 +886,7 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
 
         {pagedAssets.map((a, i) => {
           const _aEntry  = assetStatuses[a.host];
-          const curStat  = (typeof _aEntry === "object" ? _aEntry?.status : _aEntry) || a.status || "open";
+          const curStat  = _aEntry || a.asset_state || "new";
           const isActive = activeAsset?.host === a.host;
           const _new     = isNew(a);
           const _dropped = isDropped(a);
@@ -927,25 +924,6 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
               <span style={{ color: (a.vulnerabilities?.length || 0) > 0 ? "#ff3b3b" : "rgba(255,255,255,0.25)", fontFamily: "monospace", fontSize: 12, fontWeight: (a.vulnerabilities?.length || 0) > 0 ? 700 : 400 }}>
                 {(a.vulnerabilities?.length || 0) > 0 ? `▲ ${a.vulnerabilities.length}` : "—"}
               </span>
-
-              {/* Discovery badge */}
-              {_new ? (
-                <span style={{ background: "rgba(0,229,160,0.1)", color: "#00e5a0",
-                  border: "1px solid rgba(0,229,160,0.3)", fontSize: 9, fontWeight: 700,
-                  fontFamily: "monospace", letterSpacing: "1px",
-                  padding: "2px 7px", borderRadius: 2, whiteSpace: "nowrap" }}>● NEW</span>
-              ) : _dropped ? (
-                <span style={{ background: "rgba(255,140,0,0.1)", color: "#ff8c00",
-                  border: "1px solid rgba(255,140,0,0.35)", fontSize: 9, fontWeight: 700,
-                  fontFamily: "monospace", letterSpacing: "1px",
-                  padding: "2px 7px", borderRadius: 2, whiteSpace: "nowrap" }}>▼ DROPPED</span>
-              ) : isExisting(a) ? (
-                <span style={{ color: "rgba(77,158,255,0.55)", fontSize: 9,
-                  fontFamily: "monospace", letterSpacing: "0.8px" }}>EXISTING</span>
-              ) : (
-                <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 9,
-                  fontFamily: "monospace", letterSpacing: "0.5px" }}>BASELINE</span>
-              )}
 
               <StatusBadge status={curStat} />
               <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, textAlign: "center" }}>↗</span>

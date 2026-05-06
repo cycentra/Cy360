@@ -15,6 +15,27 @@ import { SSOTab } from "./SSOTab.jsx";
 
 // ── Shared style constants ────────────────────────────────────────────────────
 const CARD  = { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "20px 24px", marginBottom: 20 };
+
+// ── Collapsible section wrapper (collapsed by default) ───────────────────────
+function CollapsibleSection({ icon, title, badge, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ ...CARD, padding: 0, marginBottom: 20 }}>
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 24px", cursor: "pointer", userSelect: "none", borderBottom: open ? "1px solid rgba(255,255,255,0.06)" : "none" }}
+      >
+        {icon && <span style={{ fontSize: 18 }}>{icon}</span>}
+        <div style={{ flex: 1, color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
+          {title}
+        </div>
+        {badge}
+        <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 13, fontFamily: "monospace", lineHeight: 1, marginLeft: 8 }}>{open ? "▲" : "▼"}</span>
+      </div>
+      {open && <div style={{ padding: "20px 24px" }}>{children}</div>}
+    </div>
+  );
+}
 const LABEL = { color: "rgba(255,255,255,0.35)", fontSize: 10, letterSpacing: "1.5px", fontFamily: "monospace", textTransform: "uppercase", marginBottom: 6 };
 const INPUT = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, color: "white", fontFamily: "monospace", fontSize: 12, padding: "8px 12px", width: "100%", outline: "none", boxSizing: "border-box" };
 const BTN   = (color="#00e5a0") => ({ background: `rgba(${color === "#00e5a0" ? "0,229,160" : "77,158,255"},0.1)`, color, border: `1px solid ${color}40`, padding: "8px 18px", borderRadius: 4, fontFamily: "monospace", fontSize: 11, fontWeight: 700, letterSpacing: "1px", cursor: "pointer", textTransform: "uppercase" });
@@ -2789,7 +2810,14 @@ export function SystemSettingsPage() {
       {tab === "integrations" && <IntegrationsTab />}
       {tab === "env"          && <EnvConfigTab />}
       {tab === "scheduler"    && <SchedulerTab />}
-      {tab === "users"        && <><UserManagementTab /><SSOTab /></>}
+      {tab === "users"        && (
+        <>
+          <CollapsibleSection icon="👤" title="User Management">
+            <UserManagementTab />
+          </CollapsibleSection>
+          <SSOTab />
+        </>
+      )}
       {tab === "backup"       && <BackupTab />}
     </div>
   );

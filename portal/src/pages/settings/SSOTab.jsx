@@ -58,6 +58,7 @@ const BUILTIN_PROVIDERS = [
 // ════════════════════════════════════════════════════════════════════════════
 
 function SSOProviderCard({ onStatusMsg }) {
+  const [open, setOpen]       = useState(false);
   const [cfg, setCfg]         = useState(null);
   const [status, setStatus]   = useState(null);   // { ok, ...} from /api/sso/status
   const [saving, setSaving]   = useState(false);
@@ -190,24 +191,29 @@ function SSOProviderCard({ onStatusMsg }) {
 
   return (
     <div style={CARD}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+      {/* Collapsible header — collapsed by default */}
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: open ? 16 : 0 }}
+      >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 16, lineHeight: 1 }}>🔐</span>
           <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>SSO Provider (OIDC / OAuth2)</div>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {ssoEnabled && (
-            <span style={{ background: "rgba(0,229,160,0.08)", color: "#00e5a0", border: "1px solid rgba(0,229,160,0.3)", borderRadius: 4, padding: "2px 8px", fontSize: 10, fontFamily: "monospace" }}>
+            <span style={{ background: "rgba(0,229,160,0.08)", color: "#00e5a0", border: "1px solid rgba(0,229,160,0.3)", borderRadius: 4, padding: "2px 6px", fontSize: 9, fontFamily: "monospace", marginLeft: 4 }}>
               ENABLED — {cfg?.provider_name || cfg?.provider_id}
             </span>
           )}
           {status && (
-            <span style={{ background: status.ok ? "rgba(0,229,160,0.06)" : "rgba(255,59,59,0.06)", color: status.ok ? "#00e5a0" : "#ff3b3b", border: `1px solid ${status.ok ? "rgba(0,229,160,0.2)" : "rgba(255,59,59,0.2)"}`, borderRadius: 4, padding: "2px 8px", fontSize: 10, fontFamily: "monospace" }}>
+            <span style={{ background: status.ok ? "rgba(0,229,160,0.06)" : "rgba(255,59,59,0.06)", color: status.ok ? "#00e5a0" : "#ff3b3b", border: `1px solid ${status.ok ? "rgba(0,229,160,0.2)" : "rgba(255,59,59,0.2)"}`, borderRadius: 4, padding: "2px 6px", fontSize: 9, fontFamily: "monospace", marginLeft: 4 }}>
               {status.ok ? "● CONNECTED" : "✗ UNREACHABLE"}
             </span>
           )}
         </div>
+        <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 13, fontFamily: "monospace", lineHeight: 1 }}>{open ? "▲" : "▼"}</span>
       </div>
+
+      {open && (<>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
         {/* Provider selector */}
@@ -326,6 +332,7 @@ function SSOProviderCard({ onStatusMsg }) {
         SSO login URL: <code style={{ color: "#00e5a0" }}>{`${window.location.origin}/api/sso/redirect`}</code><br/>
         Callback URL: <code style={{ color: "#00e5a0" }}>{`${window.location.origin}/api/sso/callback`}</code>
       </div>
+      </>)}
     </div>
   );
 }
@@ -336,6 +343,7 @@ function SSOProviderCard({ onStatusMsg }) {
 // ════════════════════════════════════════════════════════════════════════════
 
 function SMTPCard() {
+  const [open, setOpen]     = useState(false);
   const [cfg, setCfg]       = useState(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTest]  = useState(false);
@@ -416,18 +424,24 @@ function SMTPCard() {
 
   return (
     <div style={CARD}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+      {/* Collapsible header — collapsed by default */}
+      <div
+        onClick={() => setOpen(o => !o)}
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: open ? 16 : 0 }}
+      >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 16, lineHeight: 1 }}>✉️</span>
           <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>SMTP / Email Notifications</div>
+          {cfg?.smtp_host && (
+            <span style={{ background: "rgba(0,229,160,0.08)", color: "#00e5a0", border: "1px solid rgba(0,229,160,0.25)", borderRadius: 4, padding: "2px 6px", fontSize: 9, fontFamily: "monospace", marginLeft: 4 }}>
+              CONFIGURED — {cfg.smtp_host}
+            </span>
+          )}
         </div>
-        {cfg?.smtp_host && (
-          <span style={{ background: "rgba(0,229,160,0.08)", color: "#00e5a0", border: "1px solid rgba(0,229,160,0.25)", borderRadius: 4, padding: "2px 8px", fontSize: 10, fontFamily: "monospace" }}>
-            CONFIGURED — {cfg.smtp_host}
-          </span>
-        )}
+        <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 13, fontFamily: "monospace", lineHeight: 1 }}>{open ? "▲" : "▼"}</span>
       </div>
 
+      {open && (<>
       <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, marginBottom: 16, lineHeight: 1.6 }}>
         When SMTP is configured and "Require approval" is enabled, new SSO users receive a
         hold email and the admin receives an approve / reject email with one-click links.
@@ -489,6 +503,7 @@ function SMTPCard() {
       </div>
 
       {msg && <div style={msg.ok ? STATUS_OK : STATUS_ERR}>{msg.ok ? "✓" : "✗"} {msg.text}</div>}
+      </>)}
     </div>
   );
 }

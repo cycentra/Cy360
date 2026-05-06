@@ -113,7 +113,7 @@ export function useAppState() {
           if (adapted) {
             setData(adapted);
             setSelectedScanId(adapted.meta?.scan_id || null);
-            setAssets(prev => _mergeStatuses(adapted.assets, prev));
+            setAssets(_mergeStatuses(adapted.assets));
           }
         }
       })
@@ -136,41 +136,10 @@ export function useAppState() {
 
   // ── Action handlers ─────────────────────────────────────────────────────────
 
-  const _STATUS_KEY = "cycentra_asset_statuses";
-
-  function _saveStatuses(updatedAssets) {
-    try {
-      const map = {};
-      updatedAssets.forEach(a => {
-        if (a.host && a.status && a.status !== "open") map[a.host] = a.status;
-      });
-      // Cap at 500 entries to prevent unbounded localStorage growth
-      const entries = Object.entries(map);
-      const capped  = entries.length > 500
-        ? Object.fromEntries(entries.slice(entries.length - 500))
-        : map;
-      localStorage.setItem(_STATUS_KEY, JSON.stringify(capped));
-    } catch {}
-  }
-
-  function _loadStatusMap() {
-    try {
-      const s = localStorage.getItem(_STATUS_KEY);
-      return s ? JSON.parse(s) : {};
-    } catch { return {}; }
-  }
-
-  function _mergeStatuses(newAssets, prevAssets) {
-    const savedMap = _loadStatusMap();
-    const liveMap  = {};
-    (prevAssets || []).forEach(a => {
-      if (a.host && a.status && a.status !== "open") liveMap[a.host] = a.status;
-    });
-    const statusMap = { ...savedMap, ...liveMap };
-    if (!Object.keys(statusMap).length) return newAssets;
-    return newAssets.map(a =>
-      statusMap[a.host] ? { ...a, status: statusMap[a.host] } : a
-    );
+  function _mergeStatuses(newAssets) {
+    // Asset states are now server-side (loaded per user from /api/asm/asset-states).
+    // The scan JSON already carries asset_state for each asset. No localStorage merge needed.
+    return newAssets;
   }
 
   // Load a specific historical scan by scan_id
@@ -188,7 +157,7 @@ export function useAppState() {
         if (adapted) {
           setData(adapted);
           setSelectedScanId(scanId);
-          setAssets(prev => _mergeStatuses(adapted.assets, prev));
+          setAssets(_mergeStatuses(adapted.assets));
         }
       }
     } catch {}
@@ -198,16 +167,12 @@ export function useAppState() {
     const adapted = adaptCyCentraJSON(raw);
     if (adapted) {
       setData(adapted);
-      setAssets(prev => _mergeStatuses(adapted.assets, prev));
+      setAssets(_mergeStatuses(adapted.assets));
     }
   }
 
-  function handleStatusChange(id, status) {
-    setAssets(prev => {
-      const updated = prev.map(a => a.id === id ? { ...a, status } : a);
-      _saveStatuses(updated);
-      return updated;
-    });
+  function handleStatusChange(id, state) {
+    setAssets(prev => prev.map(a => a.id === id ? { ...a, asset_state: state } : a));
   }
 
   function handleInstallModule(moduleId, config) {
@@ -252,7 +217,7 @@ export function useAppState() {
     if (adapted) {
       setData(adapted);
       setSelectedScanId(adapted.meta?.scan_id || null);
-      setAssets(prev => _mergeStatuses(adapted.assets, prev));
+      setAssets(_mergeStatuses(adapted.assets));
       setActiveTab("dashboard");
       // Refresh history list so new scan appears in dropdown
       if (user) _fetchHistory(user.id || "");
@@ -264,7 +229,7 @@ export function useAppState() {
     total:       assets.length,
     critical:    assets.filter(a => a.risk === "critical").length,
     high:        assets.filter(a => a.risk === "high").length,
-    open:        assets.filter(a => a.status === "open").length,
+    open:        assets.filter(a => a.asset_state === "new").length,
     totalVulns:  assets.reduce((acc, a) => acc + (a.vulnerabilities?.length || 0), 0),
     exposedPaths:assets.reduce((acc, a) => acc + (a.exposed_paths?.length  || 0), 0),
   };

@@ -60,31 +60,27 @@ export const RISK_CONFIG = {
 };
 
 export const STATUS_CONFIG = {
-  "open":           { color: "#ff3b3b", label: "OPEN"           },
-  "investigating":  { color: "#ff8c00", label: "INVESTIGATING"  },
-  "in_review":      { color: "#f5c518", label: "IN REVIEW"      },
-  "in-review":      { color: "#f5c518", label: "IN REVIEW"      },
-  "held":           { color: "#b36bff", label: "HELD"           },
-  "resolved":       { color: "#00e5a0", label: "RESOLVED"       },
-  "false_positive": { color: "#888888", label: "FALSE POSITIVE" },
-  "closed":         { color: "#555555", label: "CLOSED"         },
+  "new":          { color: "#00e5a0", label: "NEW"          },
+  "baseline":     { color: "#4d9eff", label: "BASELINE"     },
+  "under_review": { color: "#f5c518", label: "UNDER REVIEW" },
+  "ignored":      { color: "#888888", label: "IGNORED"      },
+  "dropped":      { color: "#ff8c00", label: "DROPPED"      },
 };
 
 // Ordered lifecycle steps for display
 export const STATUS_LIFECYCLE = [
-  { key: "investigating",  label: "Investigating",  color: "#ff8c00" },
-  { key: "in_review",      label: "In Review",      color: "#f5c518" },
-  { key: "resolved",       label: "Resolved",       color: "#00e5a0" },
-  { key: "false_positive", label: "False Positive", color: "#888888" },
+  { key: "new",          label: "New",          color: "#00e5a0" },
+  { key: "baseline",     label: "Baseline",     color: "#4d9eff" },
+  { key: "under_review", label: "Under Review", color: "#f5c518" },
+  { key: "ignored",      label: "Ignored",      color: "#888888" },
+  { key: "dropped",      label: "Dropped",      color: "#ff8c00" },
 ];
 
-// Analyst-available transitions from each status
+// Analyst-available transitions from each asset state (mirrors backend _ASSET_ALLOWED_TRANSITIONS)
 export const STATUS_TRANSITIONS = {
-  "open":           ["investigating", "in_review", "resolved", "false_positive", "closed"],
-  "investigating":  ["in_review", "resolved", "false_positive", "closed"],
-  "in_review":      ["resolved", "false_positive", "closed", "investigating"],
-  "held":           ["investigating", "in_review", "resolved", "false_positive", "closed"],
-  "resolved":       ["investigating", "in_review", "closed"],
-  "false_positive": ["investigating", "closed"],
-  "closed":         ["investigating"],
+  "new":          ["baseline", "under_review", "ignored"],
+  "baseline":     ["under_review", "ignored"],
+  "under_review": ["baseline", "ignored", "new"],
+  "ignored":      ["new", "baseline"],
+  "dropped":      ["new", "baseline"],
 };
