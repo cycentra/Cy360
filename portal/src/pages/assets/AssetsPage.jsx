@@ -689,7 +689,11 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
   useEffect(() => {
     fetch("/api/asm/statuses", { credentials: "include" })
       .then(r => r.ok ? r.json() : {})
-      .then(d => setAssetStatuses(d.asset_states || {}))
+      .then(d => {
+        // Backend returns asset_states as { version, baseline, assets: { host: {state,...} } }
+        const raw = d.asset_states || {};
+        setAssetStatuses(raw.assets || raw);
+      })
       .catch(() => {});
   }, []);
 
@@ -699,20 +703,29 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
   const openDrawer  = (a, e) => { e.stopPropagation(); setActiveAsset(a); };
   const closeDrawer = () => setActiveAsset(null);
 
-  // Discovery predicates — driven by the `change` field written by the scan engine
-  const isNew      = a => a.is_new === true || a.change === "new" || a.change === "appeared";
-  const isDropped  = a => a.change === "disappeared";
-  const isExisting = a => a.change === "persisted";
-  // "baseline" = first ever scan, no prior state to diff against
+  // Resolve the analyst-set lifecycle state for any asset.
+  // assetStatuses entries can be a string (from handleStatusChange) or
+  // an object { state, audit_log, ... } (loaded from /api/asm/statuses).
+  const getResolvedState = (a) => {
+    const entry = assetStatuses[a.host];
+    if (typeof entry === "object" && entry !== null) return entry.state || a.asset_state || "new";
+    return entry || a.asset_state || (a.change === "persisted" ? "baseline" : "new");
+  };
+
+  // Discovery predicates for alert banners (scanner-driven, not analyst state)
+  const isNew     = a => a.is_new === true || a.change === "new" || a.change === "appeared";
+  const isDropped = a => a.change === "disappeared";
 
   const newCount      = assets.filter(isNew).length;
   const droppedCount  = assets.filter(isDropped).length;
-  const existingCount = assets.filter(isExisting).length;
 
-  const filteredAssets = discoveryFilter === "new"      ? assets.filter(isNew)
-                       : discoveryFilter === "dropped"  ? assets.filter(isDropped)
-                       : discoveryFilter === "existing" ? assets.filter(isExisting)
-                       : assets;
+  // State counts (analyst lifecycle states — used for filter pills)
+  const stateCounts = Object.fromEntries(
+    ["new", "baseline", "under_review", "ignored", "dropped"].map(k => [k, assets.filter(a => getResolvedState(a) === k).length])
+  );
+
+  // Filter by analyst lifecycle state (discoveryFilter holds state key or null)
+  const filteredAssets = discoveryFilter ? assets.filter(a => getResolvedState(a) === discoveryFilter) : assets;
 
   const toggleFilter = key => { setDiscoveryFilter(f => f === key ? null : key); setCurrentPage(1); };
 
@@ -731,7 +744,7 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
       case "ports":     return (a.ports || []).length;
       case "findings":  return (a.vulnerabilities || []).length;
       case "discovery": return (a.change || "").toLowerCase();
-      case "status":    return (assetStatuses[a.host] || a.asset_state || "new").toLowerCase();
+      case "status":    return getResolvedState(a).toLowerCase();
       default: return 0;
     }
   };
@@ -826,10 +839,12 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
         <div style={{ display: "flex", gap: 6, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginRight: 4 }}>FILTER:</span>
           {[
-            { key: null,       label: `ALL  ${assets.length}`,      color: "#ffffff" },
-            { key: "new",      label: `NEW  ${newCount}`,           color: "#00e5a0" },
-            { key: "dropped",  label: `DROPPED  ${droppedCount}`,   color: "#ff8c00" },
-            { key: "existing", label: `EXISTING  ${existingCount}`, color: "#4d9eff" },
+            { key: null,           label: `ALL  ${assets.length}`,                       color: "#ffffff" },
+            { key: "new",          label: `NEW  ${stateCounts.new}`,                     color: "#00e5a0" },
+            { key: "baseline",     label: `BASELINE  ${stateCounts.baseline}`,           color: "#4d9eff" },
+            { key: "under_review", label: `UNDER REVIEW  ${stateCounts.under_review}`,   color: "#f5c518" },
+            { key: "ignored",      label: `IGNORED  ${stateCounts.ignored}`,             color: "#888888" },
+            { key: "dropped",      label: `DROPPED  ${stateCounts.dropped}`,             color: "#ff8c00" },
           ].map(({ key, label, color }) => (
             <button key={String(key)} onClick={() => toggleFilter(key)} style={{
               background: discoveryFilter === key ? `${color}20` : "rgba(255,255,255,0.06)",
@@ -885,12 +900,7 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
         )}
 
         {pagedAssets.map((a, i) => {
-          const _aEntry  = assetStatuses[a.host];
-          // Use analyst-set state first; fall back to scanner's asset_state;
-          // for "persisted" (existing) assets with no explicit state, use "baseline"
-          // so the State column matches what the filter pills already imply.
-          const curStat  = _aEntry || a.asset_state ||
-                           (a.change === "persisted" ? "baseline" : "new");
+          const curStat  = getResolvedState(a);
           const isActive = activeAsset?.host === a.host;
           const _new     = isNew(a);
           const _dropped = isDropped(a);

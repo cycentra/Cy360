@@ -52,7 +52,7 @@ const ENV_TARGETS = [
 // License status + upload card
 // ════════════════════════════════════════════════════════════════════════════
 
-function LicenseCard() {
+function LicenseCard({ noCard = false }) {
   const [info,      setInfo]      = useState(null);
   const [loading,   setLoading]   = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -95,7 +95,7 @@ function LicenseCard() {
   const daysColor  = daysLeft <= 5 ? "#ff3b3b" : daysLeft <= 15 ? "#ffd93d" : "#00e5a0";
 
   return (
-    <div style={CARD}>
+    <div style={noCard ? {} : CARD}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
         <div style={LABEL}>License</div>
         {!loading && info && (
@@ -300,9 +300,7 @@ function UpdatesTab() {
         </div>
       )}
 
-      {/* Current version + latest available */}
-      <div style={CARD}>
-        <div style={LABEL}>Current Version</div>
+      <CollapsibleSection icon="🔄" title="Current Version">
         <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
           <span style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 22, fontWeight: 700 }}>
             {versionData?.version || "—"}
@@ -321,13 +319,13 @@ function UpdatesTab() {
             </span>
           )}
         </div>
-      </div>
+      </CollapsibleSection>
 
-      {/* License status + upload */}
-      <LicenseCard />
+      <CollapsibleSection icon="🔑" title="License">
+        <LicenseCard noCard />
+      </CollapsibleSection>
 
-      {/* Action buttons */}
-      <div style={CARD}>
+      <CollapsibleSection icon="⚡" title="Update / Upgrade">
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
 
           {/* Run Update */}
@@ -395,11 +393,9 @@ function UpdatesTab() {
             ))}
           </div>
         )}
-      </div>
+      </CollapsibleSection>
 
-      {/* Release notes */}
-      <div style={CARD}>
-        <div style={LABEL}>Recent Release Notes</div>
+      <CollapsibleSection icon="📋" title="Release Notes">
         {!versionData?.release_notes?.length && (
           <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 12, fontFamily: "monospace" }}>
             No release notes found.
@@ -416,7 +412,7 @@ function UpdatesTab() {
             </pre>
           </div>
         ))}
-      </div>
+      </CollapsibleSection>
     </div>
   );
 }
@@ -2298,7 +2294,7 @@ const SCAN_TYPES = [
   { value: "deep",     label: "Deep — Exhaustive scan including dark web & supply chain"  },
 ];
 
-function SchedulerTask({ taskId, task, onChange, baseDomain, timezone }) {
+function SchedulerTask({ taskId, task, onChange, baseDomain, timezone, noHeader = false }) {
   const accent = task.enabled ? "#00e5a0" : "rgba(255,255,255,0.25)";
   const showTime = task.frequency !== "minute";
 
@@ -2331,28 +2327,53 @@ function SchedulerTask({ taskId, task, onChange, baseDomain, timezone }) {
   return (
     <div style={{ background: "rgba(255,255,255,0.025)", border: `1px solid ${accent}25`, borderLeft: `3px solid ${accent}`, borderRadius: 5, padding: "18px 20px", marginBottom: 14 }}>
       {/* Header row */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-        <div>
-          <div style={{ color: "white", fontWeight: 700, fontSize: 14 }}>{task.label}</div>
-          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginTop: 3 }}>{task.desc}</div>
-          {taskId === "asm_wordlist" && task._available === false && (
-            <div style={{ color: "#ffd93d", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
-              ⚠ update_wordlist.py not found on server — install cy-asm package first
+      {!noHeader && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+          <div>
+            <div style={{ color: "white", fontWeight: 700, fontSize: 14 }}>{task.label}</div>
+            <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginTop: 3 }}>{task.desc}</div>
+            {taskId === "asm_wordlist" && task._available === false && (
+              <div style={{ color: "#ffd93d", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
+                ⚠ update_wordlist.py not found on server — install cy-asm package first
+              </div>
+            )}
+          </div>
+          {/* Enable toggle */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
+              {task.enabled ? "ENABLED" : "DISABLED"}
+            </span>
+            <div
+              onClick={() => onChange(taskId, "enabled", !task.enabled)}
+              style={{ width: 36, height: 20, borderRadius: 10, background: task.enabled ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.1)", border: `1px solid ${task.enabled ? "rgba(0,229,160,0.5)" : "rgba(255,255,255,0.15)"}`, cursor: "pointer", position: "relative", transition: "background 0.2s" }}>
+              <div style={{ position: "absolute", top: 2, left: task.enabled ? 17 : 2, width: 14, height: 14, borderRadius: "50%", background: task.enabled ? "#00e5a0" : "rgba(255,255,255,0.35)", transition: "left 0.2s" }}/>
             </div>
-          )}
-        </div>
-        {/* Enable toggle */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
-            {task.enabled ? "ENABLED" : "DISABLED"}
-          </span>
-          <div
-            onClick={() => onChange(taskId, "enabled", !task.enabled)}
-            style={{ width: 36, height: 20, borderRadius: 10, background: task.enabled ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.1)", border: `1px solid ${task.enabled ? "rgba(0,229,160,0.5)" : "rgba(255,255,255,0.15)"}`, cursor: "pointer", position: "relative", transition: "background 0.2s" }}>
-            <div style={{ position: "absolute", top: 2, left: task.enabled ? 17 : 2, width: 14, height: 14, borderRadius: "50%", background: task.enabled ? "#00e5a0" : "rgba(255,255,255,0.35)", transition: "left 0.2s" }}/>
           </div>
         </div>
-      </div>
+      )}
+      {noHeader && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+          <div>
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, lineHeight: 1.6 }}>{task.desc}</div>
+            {taskId === "asm_wordlist" && task._available === false && (
+              <div style={{ color: "#ffd93d", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
+                ⚠ update_wordlist.py not found on server — install cy-asm package first
+              </div>
+            )}
+          </div>
+          {/* Enable toggle */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
+              {task.enabled ? "ENABLED" : "DISABLED"}
+            </span>
+            <div
+              onClick={() => onChange(taskId, "enabled", !task.enabled)}
+              style={{ width: 36, height: 20, borderRadius: 10, background: task.enabled ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.1)", border: `1px solid ${task.enabled ? "rgba(0,229,160,0.5)" : "rgba(255,255,255,0.15)"}`, cursor: "pointer", position: "relative", transition: "background 0.2s" }}>
+              <div style={{ position: "absolute", top: 2, left: task.enabled ? 17 : 2, width: 14, height: 14, borderRadius: "50%", background: task.enabled ? "#00e5a0" : "rgba(255,255,255,0.35)", transition: "left 0.2s" }}/>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Config row */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
@@ -2535,6 +2556,7 @@ function SchedulerTab() {
   if (!schedules) return <div style={{ color: "#ff3b3b", fontFamily: "monospace", fontSize: 12 }}>Failed to load schedules.</div>;
 
   const taskOrder = ["docker_maintenance", "asm_wordlist", "asm_scan", "backup"];
+  const TASK_ICONS = { docker_maintenance: "🐳", asm_wordlist: "📝", asm_scan: "🔍", backup: "💾" };
 
   return (
     <div style={{ maxWidth: 860 }}>
@@ -2560,7 +2582,18 @@ function SchedulerTab() {
       </div>
 
       {taskOrder.map(id => schedules[id] && (
-        <SchedulerTask key={id} taskId={id} task={schedules[id]} onChange={handleChange} baseDomain={baseDomain} timezone={timezone} />
+        <CollapsibleSection
+          key={id}
+          icon={TASK_ICONS[id] || "⏱"}
+          title={schedules[id].label || id}
+          badge={
+            <span style={{ background: schedules[id].enabled ? "rgba(0,229,160,0.08)" : "rgba(255,255,255,0.04)", color: schedules[id].enabled ? "#00e5a0" : "rgba(255,255,255,0.3)", border: `1px solid ${schedules[id].enabled ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.08)"}`, borderRadius: 4, padding: "2px 8px", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px" }}>
+              {schedules[id].enabled ? "ENABLED" : "DISABLED"}
+            </span>
+          }
+        >
+          <SchedulerTask taskId={id} task={schedules[id]} onChange={handleChange} baseDomain={baseDomain} timezone={timezone} noHeader />
+        </CollapsibleSection>
       ))}
 
       <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 8 }}>

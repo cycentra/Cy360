@@ -19,3 +19,8 @@ urllib3==2.6.3
 python-whois==0.8.0
 google-genai
 APScheduler>=3.10.0
+# PDF report generation (Executive + Technical ASM reports)
+reportlab>=4.0
+matplotlib>=3.7
+numpy>=1.24
+Pillow>=10.0

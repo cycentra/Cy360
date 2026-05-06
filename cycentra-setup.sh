@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.358 -- 2026-05-06 01:27 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.359 -- 2026-05-06 01:57 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -510,6 +510,24 @@ fi  # end INFRA block
 # re-run the detection here so the variable is always bound before the APP BLOCK.
 _PIP_BSP=""
 pip3 install --break-system-packages --dry-run pip 2>&1 | grep -q "no such option" || _PIP_BSP="--break-system-packages"
+
+# ── Python reporting prerequisites (all modes — needed for PDF report generation) ─
+_PY_REPORT_PKGS=(reportlab matplotlib numpy pillow)
+declare -A _PY_IMPORT_MAP=([reportlab]=reportlab [matplotlib]=matplotlib [numpy]=numpy [pillow]=PIL)
+_PY_MISSING=()
+for _pkg in "${_PY_REPORT_PKGS[@]}"; do
+    _import="${_PY_IMPORT_MAP[$_pkg]:-${_pkg,,}}"
+    python3 -c "import $_import" 2>/dev/null || _PY_MISSING+=("$_pkg")
+done
+if [[ ${#_PY_MISSING[@]} -eq 0 ]]; then
+    success "Python reporting packages already installed — skipping"
+else
+    info "Installing Python reporting packages: ${_PY_MISSING[*]} ..."
+    PIP_ROOT_USER_ACTION=ignore pip3 install "${_PY_MISSING[@]}" \
+        ${_PIP_BSP} -q \
+        && success "Installed: ${_PY_MISSING[*]}" \
+        || { error "Failed to install Python reporting packages"; ERRORS+=("pip reporting prereqs failed"); }
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # APP BLOCK — runs in all modes
