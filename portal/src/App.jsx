@@ -65,8 +65,9 @@ import { SystemSettingsPage } from './pages/settings/SystemSettingsPage.jsx';
 import { AssetModal }        from './pages/assets/AssetModal.jsx';
 import { ImportModal }       from './pages/assets/ImportModal.jsx';
 import { CyMindChatOverlay } from './components/CyMindChatOverlay.jsx';
-import { AuditTrailPage }   from './pages/audit/AuditTrailPage.jsx';
-import { BenchmarkPage }    from './pages/benchmark/BenchmarkPage.jsx';
+import { AuditTrailPage }         from './pages/audit/AuditTrailPage.jsx';
+import { BenchmarkPage }          from './pages/benchmark/BenchmarkPage.jsx';
+import { PlatformExtensionsPage } from './pages/platform-extensions/index.jsx';
 
 // ── Scan History Dropdown ─────────────────────────────────────────────────────
 
@@ -340,9 +341,10 @@ export default function App() {
             {activeTab==="siem-risk"      && <SiemRiskScoresPage/>}
             {activeTab==="siem-ueba"      && <SiemUebaPage/>}
             {activeTab==="marketplace"    && <MarketplacePage user={user} installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
-            {activeTab==="benchmark"       && <BenchmarkPage />}
-            {activeTab==="system-settings" && <SystemSettingsPage />}
-            {activeTab==="audit-trail"    && <AuditTrailPage />}
+            {activeTab==="benchmark"            && <BenchmarkPage />}
+            {activeTab==="system-settings"     && <SystemSettingsPage />}
+            {activeTab==="audit-trail"         && <AuditTrailPage />}
+            {activeTab==="platform-extensions" && <PlatformExtensionsPage installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
 
           </div>
           </PageErrorBoundary>

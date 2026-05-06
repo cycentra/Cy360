@@ -1517,9 +1517,6 @@ export function MarketplacePage({ user, installedModules = {}, onInstall, onUnin
 
   return (
     <div>
-      {/* ── Platform Extensions (CyIRIS / CySOAR) ── */}
-      <AddonModulesSection installedModules={installedModules} onInstall={onInstall} onUninstall={onUninstall} />
-
       {/* ── Header ── */}
       <div style={{ marginBottom:28 }}>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:8, flexWrap:"wrap" }}>

@@ -68,6 +68,19 @@ export function buildNavSections({ installedModules = {}, data = null }) {
       ],
     },
     {
+      section: "MARKETPLACE",
+      items: [
+        { id: "marketplace", label: "Marketplace", icon: SvgMkt, accent: "#4d9eff" },
+      ],
+    },
+    {
+      section: "PLATFORM CONFIGURATION",
+      items: [
+        { id: "system-settings",      label: "System Settings",       icon: SvgGear,  accent: "#00e5a0" },
+        { id: "platform-extensions",  label: "Platform Extensions",   icon: SvgMods,  accent: "#b06eff" },
+      ],
+    },
+    {
       section: "OPERATIONS",
       items: [
         { id: "audit-trail", label: "Audit Trail", icon: SvgAudit, accent: "#b06eff" },
@@ -88,18 +101,6 @@ export function buildNavSections({ installedModules = {}, data = null }) {
             externalUrl: mod?.embeddedPath || getModuleUrl(id),
           };
         }),
-      ],
-    },
-    {
-      section: "MARKETPLACE",
-      items: [
-        { id: "marketplace", label: "Marketplace", icon: SvgMkt, accent: "#4d9eff" },
-      ],
-    },
-    {
-      section: "PLATFORM CONFIGURATION",
-      items: [
-        { id: "system-settings", label: "System Settings", icon: SvgGear, accent: "#00e5a0" },
       ],
     },
   ];

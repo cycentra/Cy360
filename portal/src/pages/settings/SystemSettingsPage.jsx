@@ -1047,12 +1047,11 @@ function UserManagementTab() {
 // ════════════════════════════════════════════════════════════════════════════
 
 const TABS = [
-  { id: "updates",      label: "Updates & Version" },
-  { id: "integrations", label: "Integrations" },
-  { id: "env",          label: "Environment Config" },
-  { id: "scheduler",    label: "Scheduler" },
-  { id: "users",        label: "Users & Auth" },
-  { id: "backup",       label: "Backup & Restore" },
+  { id: "updates",   label: "Updates & Version" },
+  { id: "env",       label: "Environment Config" },
+  { id: "scheduler", label: "Scheduler" },
+  { id: "users",     label: "Users & Auth" },
+  { id: "backup",    label: "Backup & Restore" },
 ];
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2839,9 +2838,8 @@ export function SystemSettingsPage() {
         ))}
       </div>
 
-      {tab === "updates"      && <UpdatesTab />}
-      {tab === "integrations" && <IntegrationsTab />}
-      {tab === "env"          && <EnvConfigTab />}
+      {tab === "updates"   && <UpdatesTab />}
+      {tab === "env"       && <EnvConfigTab />}
       {tab === "scheduler"    && <SchedulerTab />}
       {tab === "users"        && (
         <>
