@@ -1,3 +1,11 @@
+## v1.0.379 -- 2026-05-06
+
+### Bug Fixes
+
+  - MISP config fallback chain (ai_settings → cysiemstack.env → env) + sync on save
+
+---
+
 ## v1.0.378 -- 2026-05-06
 
 ### Bug Fixes
