@@ -67,6 +67,7 @@ import { AssetModal }        from './pages/assets/AssetModal.jsx';
 import { ImportModal }       from './pages/assets/ImportModal.jsx';
 import { CyMindChatOverlay } from './components/CyMindChatOverlay.jsx';
 import { AuditTrailPage }   from './pages/audit/AuditTrailPage.jsx';
+import { BenchmarkPage }    from './pages/benchmark/BenchmarkPage.jsx';
 
 // ── Scan History Dropdown ─────────────────────────────────────────────────────
 
@@ -341,6 +342,7 @@ export default function App() {
             {activeTab==="siem-ueba"      && <SiemUebaPage/>}
             {activeTab==="marketplace"    && <MarketplacePage user={user}/>}
             {activeTab==="platform"       && <PlatformPage installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
+            {activeTab==="benchmark"       && <BenchmarkPage />}
             {activeTab==="system-settings" && <SystemSettingsPage />}
             {activeTab==="audit-trail"    && <AuditTrailPage />}
 
