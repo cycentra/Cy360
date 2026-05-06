@@ -1,3 +1,14 @@
+## v1.0.363 -- 2026-05-06
+
+### Bug Fixes
+
+  - **[HOTFIX] Backend crash on startup — `ModuleNotFoundError: No module named 'blueprints.benchmark.routes'`.**
+    The Benchmark Intelligence Engine wiring patch (PATCH_3) was applied to `app.py` — adding the `benchmark_bp` import and registration — but the blueprint source file (`PATCH_1`) was placed in the wrong directory (`backend/backend/blueprints/benchmark/routes.py`) instead of the correct location (`backend/blueprints/benchmark/routes.py`).
+    Flask could not import the module on startup, causing an immediate exit (status=1) and an infinite systemd restart loop (140+ restarts observed).
+    Fixed by moving `routes.py` to the correct package path. The `__init__.py` was already in place.
+
+---
+
 ## v1.0.362 -- 2026-05-06
 
 ### Improvements
