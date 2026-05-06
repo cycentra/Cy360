@@ -417,7 +417,7 @@ function UnifiedModuleCard({ mod, installedModules, platformStatus, onInstall, o
 
   return (
     <>
-      <div style={{ background: "rgba(255,255,255,0.025)", border: `1px solid ${mod.color}20`, borderLeft: `3px solid ${mod.color}`, borderRadius: 6, overflow: "hidden", marginBottom: 0 }}>
+      <div style={{ background: "rgba(255,255,255,0.025)", border: `1px solid ${mod.color}20`, borderLeft: `3px solid ${mod.color}`, borderRadius: 6, overflow: "hidden", marginBottom: 0, height: "100%", display: "flex", flexDirection: "column" }}>
         {/* ── Card body ──────────────────────────────────────────────── */}
         <div style={{ padding: "20px 22px" }}>
           {/* Header row */}
@@ -611,7 +611,7 @@ function MispSection() {
   ];
 
   return (
-    <div style={{ ...CARD, borderLeft: "3px solid rgba(255,100,100,0.5)" }}>
+    <div style={{ ...CARD, borderLeft: "3px solid rgba(255,100,100,0.5)", marginBottom: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
         <span style={{ fontSize: 20 }}>🔴</span>
         <div style={{ color: "rgba(255,100,100,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
@@ -873,7 +873,7 @@ function CyMindSection() {
   const isEnabled = cfg.enabled && cfg.hasChatKey && cfg.hasKey;
 
   return (
-    <div style={{ ...CARD, borderLeft: "3px solid rgba(0,229,160,0.5)" }}>
+    <div style={{ ...CARD, borderLeft: "3px solid rgba(0,229,160,0.5)", marginBottom: 0 }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
         <span style={{ fontSize: 20 }}>🧠</span>
@@ -1076,9 +1076,9 @@ export function PlatformExtensionsPage({ installedModules = {}, onInstall, onUni
   const addonModules = Object.values(PLATFORM_MODULES).filter(m => m.tier === "addon");
 
   return (
-    <div>
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 100px)" }}>
       {/* Page header */}
-      <div style={{ marginBottom: 32 }}>
+      <div style={{ marginBottom: 24 }}>
         <div style={{ color: "white", fontSize: 22, fontWeight: 700, fontFamily: "monospace", marginBottom: 4 }}>
           Platform Extensions
         </div>
@@ -1088,9 +1088,9 @@ export function PlatformExtensionsPage({ installedModules = {}, onInstall, onUni
       </div>
 
       {/* ── Section 1: Platform Add-on Modules ─────────────────────────────── */}
-      <div style={{ marginBottom: 48 }}>
+      <div style={{ marginBottom: 28 }}>
         <SectionLabel icon="🧩" title="Platform Add-on Modules" badge="INSTALLABLE" />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 16, alignItems: "stretch" }}>
           {addonModules.map(mod => (
             <UnifiedModuleCard
               key={mod.id}
@@ -1104,14 +1104,13 @@ export function PlatformExtensionsPage({ installedModules = {}, onInstall, onUni
         </div>
       </div>
 
-      {/* Divider */}
-      <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", marginBottom: 40 }} />
-
-      {/* ── Section 2: SIEM Integrations ───────────────────────────────────── */}
-      <div>
+      {/* ── Section 2: SIEM Integrations — side-by-side, fills remaining height ── */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
         <SectionLabel icon="🔌" title="SIEM Integrations" />
-        <MispSection />
-        <CyMindSection />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, flex: 1, alignItems: "stretch" }}>
+          <MispSection />
+          <CyMindSection />
+        </div>
       </div>
     </div>
   );
