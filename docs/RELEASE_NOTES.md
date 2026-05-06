@@ -1,5 +1,13 @@
 ## v1.0.363 -- 2026-05-06
 
+### New Features
+
+  - add missing benchmark blueprint routes.py — resolves startup ModuleNotFoundError
+
+---
+
+## v1.0.363 -- 2026-05-06
+
 ### Bug Fixes
 
   - **[HOTFIX] Backend crash on startup — `ModuleNotFoundError: No module named 'blueprints.benchmark.routes'`.**
