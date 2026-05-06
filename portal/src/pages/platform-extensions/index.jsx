@@ -728,13 +728,6 @@ function CyMindSection() {
   const [showAdvanced,setShowAdvanced]= useState(false);
   const [newKey,      setNewKey]      = useState(null);
   const [chatKeyInput,setChatKeyInput]= useState("");
-  const [mcpKeys,       setMcpKeys]       = useState([]);
-  const [mcpKeysEp,     setMcpKeysEp]     = useState("");
-  const [mcpKeysLoading,setMcpKeysLoading]= useState(false);
-  const [newKeyName,    setNewKeyName]    = useState("");
-  const [newKeyDesc,    setNewKeyDesc]    = useState("");
-  const [genKeyResult,  setGenKeyResult]  = useState(null);
-  const [mcpKeyMsg,     setMcpKeyMsg]     = useState(null);
 
   const fetchCfg = () => {
     setLoading(true);
@@ -744,17 +737,8 @@ function CyMindSection() {
       .catch(() => setLoading(false));
   };
 
-  const fetchMcpKeys = () => {
-    setMcpKeysLoading(true);
-    fetch(`${API_BASE}/api/system/mcp/keys`, { credentials: "include" })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) { setMcpKeys(d.keys || []); setMcpKeysEp(d.endpoint || ""); } setMcpKeysLoading(false); })
-      .catch(() => setMcpKeysLoading(false));
-  };
-
   useEffect(() => {
     fetchCfg();
-    fetchMcpKeys();
     fetch(`${API_BASE}/api/system/mcp`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setMcpStatus(d); })
@@ -825,37 +809,6 @@ function CyMindSection() {
       else { setMsg({ ok: false, text: d.error || "Save failed" }); }
     } catch (e) { setMsg({ ok: false, text: String(e) }); }
     finally { setSaving(false); }
-  };
-
-  const handleGenMcpKey = async () => {
-    const name = newKeyName.trim();
-    if (!name) { setMcpKeyMsg({ ok: false, text: "Enter a name for the key." }); return; }
-    setMcpKeyMsg({ ok: null, text: "Generating…" }); setGenKeyResult(null);
-    try {
-      const r = await fetch(`${API_BASE}/api/system/mcp/keys`, {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description: newKeyDesc.trim() }),
-      });
-      const d = await r.json();
-      if (d.ok) {
-        setGenKeyResult({ key: d.key, name: d.name });
-        setNewKeyName(""); setNewKeyDesc("");
-        setMcpKeyMsg({ ok: true, text: "Key generated. Copy it now — it will not be shown again." });
-        fetchMcpKeys();
-      } else { setMcpKeyMsg({ ok: false, text: d.error || "Generation failed" }); }
-    } catch (e) { setMcpKeyMsg({ ok: false, text: String(e) }); }
-  };
-
-  const handleRevokeMcpKey = async (keyId, keyName) => {
-    if (!window.confirm(`Revoke key "${keyName}"? This cannot be undone.`)) return;
-    setMcpKeyMsg(null);
-    try {
-      const r = await fetch(`${API_BASE}/api/system/mcp/keys/${keyId}`, { method: "DELETE", credentials: "include" });
-      const d = await r.json();
-      if (d.ok) { setMcpKeyMsg({ ok: true, text: `Key "${keyName}" revoked.` }); fetchMcpKeys(); }
-      else { setMcpKeyMsg({ ok: false, text: d.error || "Revoke failed" }); }
-    } catch (e) { setMcpKeyMsg({ ok: false, text: String(e) }); }
   };
 
   const handleTestConn = async () => {
@@ -988,59 +941,124 @@ function CyMindSection() {
         )}
       </div>
 
-      {/* MCP API Keys */}
-      <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 5, padding: "16px 18px" }}>
-        <div style={{ ...LABEL, marginBottom: 4 }}>MCP API Keys — 3rd Party Integrations</div>
-        <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.7, marginBottom: 14 }}>
-          Generate <code style={{ color: "rgba(0,229,160,0.5)" }}>cymk_…</code> keys for external AI agents or SIEM tools that need access to the Security MCP bridge.
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// McpApiKeysSection — standalone MCP API key management
+// ════════════════════════════════════════════════════════════════════════════
+
+function McpApiKeysSection() {
+  const [mcpKeys,        setMcpKeys]        = useState([]);
+  const [mcpKeysEp,      setMcpKeysEp]      = useState("");
+  const [mcpKeysLoading, setMcpKeysLoading] = useState(false);
+  const [newKeyName,     setNewKeyName]     = useState("");
+  const [newKeyDesc,     setNewKeyDesc]     = useState("");
+  const [genKeyResult,   setGenKeyResult]   = useState(null);
+  const [mcpKeyMsg,      setMcpKeyMsg]      = useState(null);
+
+  const fetchMcpKeys = () => {
+    setMcpKeysLoading(true);
+    fetch(`${API_BASE}/api/system/mcp/keys`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) { setMcpKeys(d.keys || []); setMcpKeysEp(d.endpoint || ""); } setMcpKeysLoading(false); })
+      .catch(() => setMcpKeysLoading(false));
+  };
+
+  useEffect(() => { fetchMcpKeys(); }, []);
+
+  const handleGenMcpKey = async () => {
+    const name = newKeyName.trim();
+    if (!name) { setMcpKeyMsg({ ok: false, text: "Enter a name for the key." }); return; }
+    setMcpKeyMsg({ ok: null, text: "Generating…" }); setGenKeyResult(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/system/mcp/keys`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description: newKeyDesc.trim() }),
+      });
+      let d = null;
+      try { d = await r.json(); } catch { /* non-JSON response */ }
+      if (r.ok && (!d || d.ok !== false)) {
+        setGenKeyResult({ key: d?.key, name: d?.name || name });
+        setNewKeyName(""); setNewKeyDesc("");
+        setMcpKeyMsg({ ok: true, text: "Key generated. Copy it now — it will not be shown again." });
+        fetchMcpKeys();
+      } else { setMcpKeyMsg({ ok: false, text: d?.error || "Generation failed" }); }
+    } catch (e) { setMcpKeyMsg({ ok: false, text: String(e) }); }
+  };
+
+  const handleRevokeMcpKey = async (keyId, keyName) => {
+    if (!window.confirm(`Revoke key "${keyName}"? This cannot be undone.`)) return;
+    setMcpKeyMsg(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/system/mcp/keys/${keyId}`, { method: "DELETE", credentials: "include" });
+      let d = null;
+      try { d = await r.json(); } catch { /* non-JSON response */ }
+      if (r.ok && (!d || d.ok !== false)) {
+        setMcpKeyMsg({ ok: true, text: `Key "${keyName}" revoked.` }); fetchMcpKeys();
+      } else { setMcpKeyMsg({ ok: false, text: d?.error || "Revoke failed" }); }
+    } catch (e) { setMcpKeyMsg({ ok: false, text: String(e) }); }
+  };
+
+  return (
+    <div style={{ ...CARD, borderLeft: "3px solid rgba(0,229,160,0.3)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+        <span style={{ fontSize: 20 }}>🔑</span>
+        <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
+          MCP API Keys — 3rd Party Integrations
         </div>
-        {mcpKeysEp && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 4, padding: "8px 12px" }}>
-            <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>ENDPOINT:</span>
-            <code style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace", flex: 1, wordBreak: "break-all" }}>{mcpKeysEp}</code>
-          </div>
-        )}
-        <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-          <input value={newKeyName} onChange={e => setNewKeyName(e.target.value)} placeholder="Key name (e.g. Claude Desktop)" style={{ ...INPUT, flex: 2, minWidth: 140 }} />
-          <input value={newKeyDesc} onChange={e => setNewKeyDesc(e.target.value)} placeholder="Description (optional)" style={{ ...INPUT, flex: 3, minWidth: 160 }} />
-          <button onClick={handleGenMcpKey} style={{ ...BTN("#00e5a0"), flexShrink: 0 }}>Generate Key</button>
-        </div>
-        {genKeyResult && (
-          <div style={{ marginBottom: 14, background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.2)", borderRadius: 4, padding: "10px 12px" }}>
-            <div style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace", marginBottom: 4 }}>{genKeyResult.name} — copy now (shown once)</div>
-            <code style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace", userSelect: "all", wordBreak: "break-all" }}>{genKeyResult.key}</code>
-          </div>
-        )}
-        {mcpKeyMsg && (
-          <div style={{ color: mcpKeyMsg.ok === true ? "#00e5a0" : mcpKeyMsg.ok === false ? "#ff3b3b" : "#ffd93d", fontSize: 12, fontFamily: "monospace", marginBottom: 12 }}>
-            {mcpKeyMsg.text}
-          </div>
-        )}
-        {mcpKeysLoading ? (
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>Loading keys…</div>
-        ) : mcpKeys.length === 0 ? (
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>No API keys generated yet.</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {mcpKeys.map(k => (
-              <div key={k.id} style={{ display: "flex", alignItems: "center", gap: 10, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 4, padding: "8px 12px" }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>{k.name}</div>
-                  {k.description && <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginTop: 1 }}>{k.description}</div>}
-                  <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 1 }}>
-                    Created {k.created_at ? new Date(k.created_at).toLocaleDateString() : "—"}
-                    {k.last_used ? ` · Last used ${new Date(k.last_used).toLocaleDateString()}` : ""}
-                  </div>
-                </div>
-                <button onClick={() => handleRevokeMcpKey(k.id, k.name)}
-                  style={{ background: "rgba(255,59,59,0.08)", color: "#ff6b6b", border: "1px solid rgba(255,59,59,0.2)", borderRadius: 3, padding: "5px 12px", fontFamily: "monospace", fontSize: 10, cursor: "pointer" }}>
-                  Revoke
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
+      <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.7, marginBottom: 14 }}>
+        Generate <code style={{ color: "rgba(0,229,160,0.5)" }}>cymk_…</code> keys for external AI agents or SIEM tools that need access to the Security MCP bridge.
+      </div>
+      {mcpKeysEp && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 4, padding: "8px 12px" }}>
+          <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>ENDPOINT:</span>
+          <code style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace", flex: 1, wordBreak: "break-all" }}>{mcpKeysEp}</code>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <input value={newKeyName} onChange={e => setNewKeyName(e.target.value)} placeholder="Key name (e.g. Claude Desktop)" style={{ ...INPUT, flex: 2, minWidth: 140 }} />
+        <input value={newKeyDesc} onChange={e => setNewKeyDesc(e.target.value)} placeholder="Description (optional)" style={{ ...INPUT, flex: 3, minWidth: 160 }} />
+        <button onClick={handleGenMcpKey} style={{ ...BTN("#00e5a0"), flexShrink: 0 }}>Generate Key</button>
+      </div>
+      {genKeyResult && (
+        <div style={{ marginBottom: 14, background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.2)", borderRadius: 4, padding: "10px 12px" }}>
+          <div style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace", marginBottom: 4 }}>{genKeyResult.name} — copy now (shown once)</div>
+          <code style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace", userSelect: "all", wordBreak: "break-all" }}>{genKeyResult.key}</code>
+        </div>
+      )}
+      {mcpKeyMsg && (
+        <div style={{ color: mcpKeyMsg.ok === true ? "#00e5a0" : mcpKeyMsg.ok === false ? "#ff3b3b" : "#ffd93d", fontSize: 12, fontFamily: "monospace", marginBottom: 12 }}>
+          {mcpKeyMsg.text}
+        </div>
+      )}
+      {mcpKeysLoading ? (
+        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>Loading keys…</div>
+      ) : mcpKeys.length === 0 ? (
+        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>No API keys generated yet.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {mcpKeys.map(k => (
+            <div key={k.id} style={{ display: "flex", alignItems: "center", gap: 10, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 4, padding: "8px 12px" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>{k.name}</div>
+                {k.description && <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginTop: 1 }}>{k.description}</div>}
+                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 1 }}>
+                  Created {k.created_at ? new Date(k.created_at).toLocaleDateString() : "—"}
+                  {k.last_used ? ` · Last used ${new Date(k.last_used).toLocaleDateString()}` : ""}
+                </div>
+              </div>
+              <button onClick={() => handleRevokeMcpKey(k.id, k.name)}
+                style={{ background: "rgba(255,59,59,0.08)", color: "#ff6b6b", border: "1px solid rgba(255,59,59,0.2)", borderRadius: 3, padding: "5px 12px", fontFamily: "monospace", fontSize: 10, cursor: "pointer" }}>
+                Revoke
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1090,7 +1108,7 @@ export function PlatformExtensionsPage({ installedModules = {}, onInstall, onUni
       {/* ── Section 1: Platform Add-on Modules ─────────────────────────────── */}
       <div style={{ marginBottom: 28 }}>
         <SectionLabel icon="🧩" title="Platform Add-on Modules" badge="INSTALLABLE" />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 16, alignItems: "stretch" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "stretch" }}>
           {addonModules.map(mod => (
             <UnifiedModuleCard
               key={mod.id}
@@ -1104,13 +1122,17 @@ export function PlatformExtensionsPage({ installedModules = {}, onInstall, onUni
         </div>
       </div>
 
-      {/* ── Section 2: SIEM Integrations — side-by-side, fills remaining height ── */}
+      {/* ── Section 2: SIEM Integrations — side-by-side ── */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
         <SectionLabel icon="🔌" title="SIEM Integrations" />
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, flex: 1, alignItems: "stretch" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "stretch", marginBottom: 16 }}>
           <MispSection />
           <CyMindSection />
         </div>
+
+        {/* ── Section 3: MCP API Keys — full-width standalone ── */}
+        <SectionLabel icon="🔑" title="MCP API Keys — 3rd Party Integrations" />
+        <McpApiKeysSection />
       </div>
     </div>
   );

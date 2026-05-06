@@ -17,8 +17,8 @@ import { SSOTab } from "./SSOTab.jsx";
 const CARD  = { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "20px 24px", marginBottom: 20 };
 
 // ── Collapsible section wrapper (collapsed by default) ───────────────────────
-function CollapsibleSection({ icon, title, badge, children }) {
-  const [open, setOpen] = useState(false);
+function CollapsibleSection({ icon, title, badge, children, initialOpen = false }) {
+  const [open, setOpen] = useState(initialOpen);
   return (
     <div style={{ ...CARD, padding: 0, marginBottom: 20 }}>
       <div
@@ -300,7 +300,7 @@ function UpdatesTab() {
         </div>
       )}
 
-      <CollapsibleSection icon="🔄" title="Current Version">
+      <CollapsibleSection icon="🔄" title="Current Version" initialOpen={true}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
           <span style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 22, fontWeight: 700 }}>
             {versionData?.version || "—"}
