@@ -792,7 +792,6 @@ def _collect_threat_intel_score() -> dict:
       b) Total IOC attribute count → 0-30 pts  (10,000+ attrs = full 30)
       c) Actionable ratio (to_ids) → 0-30 pts
     """
-    import pathlib as _pl
     misp_cfg = _read_misp_config()
     if not misp_cfg:
         return {"score": None, "stale": False,
