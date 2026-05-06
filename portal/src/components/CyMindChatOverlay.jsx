@@ -171,7 +171,7 @@ function ActionConfirmCard({ action, status, result, onConfirm, onCancel }) {
               background: "rgba(255,255,255,0.04)",
               border: "1px solid rgba(255,255,255,0.12)",
               borderRadius: 6, padding: "6px 14px",
-              color: "rgba(255,255,255,0.4)",
+              color: "rgba(255,255,255,0.65)",
               fontWeight: 600, fontSize: 11, cursor: executing ? "default" : "pointer",
               fontFamily: "monospace",
             }}
@@ -465,7 +465,7 @@ export function CyMindChatOverlay({ onClose }) {
             <span style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 12, fontWeight: 700, letterSpacing: "1.5px" }}>
               CYMIND
             </span>
-            <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+            <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>
               AI Security Assistant
             </span>
             {streaming && (
@@ -479,7 +479,7 @@ export function CyMindChatOverlay({ onClose }) {
             title="Close"
             style={{
               background: "transparent", border: "none", cursor: "pointer",
-              color: "rgba(255,255,255,0.4)", padding: 4, borderRadius: 4,
+              color: "rgba(255,255,255,0.65)", padding: 4, borderRadius: 4,
               display: "flex", alignItems: "center",
             }}
             onMouseEnter={e => e.currentTarget.style.color = "rgba(255,255,255,0.8)"}
@@ -500,7 +500,7 @@ export function CyMindChatOverlay({ onClose }) {
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1.5">
               <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
             </svg>
-            <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 12, fontFamily: "monospace", textAlign: "center", lineHeight: 1.7 }}>
+            <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 12, fontFamily: "monospace", textAlign: "center", lineHeight: 1.7 }}>
               {configErr}
             </div>
           </div>

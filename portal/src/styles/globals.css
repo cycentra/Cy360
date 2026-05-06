@@ -15,7 +15,7 @@
 
 body {
   background: #090b10;
-  color: white;
+  color: rgba(255, 255, 255, 0.92);
   font-family: 'Barlow', sans-serif;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;

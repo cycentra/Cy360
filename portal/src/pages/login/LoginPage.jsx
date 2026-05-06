@@ -152,7 +152,7 @@ export function LoginPage() {
             Attack Surface<br/>
             <span style={{ color: "#00e5a0" }}>Intelligence</span> Platform
           </h1>
-          <p style={{ color: "rgba(255,255,255,0.4)", fontSize: 16, lineHeight: 1.7, marginBottom: 40 }}>
+          <p style={{ color: "rgba(255,255,255,0.65)", fontSize: 16, lineHeight: 1.7, marginBottom: 40 }}>
             Unified security operations — ASM scanning, SIEM correlation, incident response and SOAR automation in one platform.
           </p>
           <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
@@ -183,7 +183,7 @@ export function LoginPage() {
               <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, lineHeight: 1.7, margin: 0 }}>
                 Your request for <strong style={{ color: "white" }}>{pendingEmail}</strong> is pending admin approval.
               </p>
-              <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, marginTop: 8, lineHeight: 1.6 }}>
+              <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 12, marginTop: 8, lineHeight: 1.6 }}>
                 You will receive an email once your access is approved or rejected. Contact your administrator if this takes longer than expected.
               </p>
               <button
@@ -198,7 +198,7 @@ export function LoginPage() {
           {authErrMsg && !pendingEmail && (
             <div style={{ marginBottom: 20, padding: "12px 16px", background: "rgba(255,59,59,0.07)", border: "1px solid rgba(255,59,59,0.25)", borderRadius: 6 }}>
               <div style={{ color: "#ff3b3b", fontSize: 12, lineHeight: 1.6 }}>{authErrMsg}</div>
-              <button onClick={() => setAuthErrMsg(null)} style={{ marginTop: 8, background: "none", border: "none", color: "rgba(255,255,255,0.35)", fontSize: 11, cursor: "pointer" }}>Dismiss</button>
+              <button onClick={() => setAuthErrMsg(null)} style={{ marginTop: 8, background: "none", border: "none", color: "rgba(255,255,255,0.62)", fontSize: 11, cursor: "pointer" }}>Dismiss</button>
             </div>
           )}
 
@@ -207,7 +207,7 @@ export function LoginPage() {
           <div style={{ marginBottom: 32 }}>
             <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, letterSpacing: "2px", fontFamily: "monospace", marginBottom: 8 }}>SECURE ACCESS</div>
             <h2 style={{ color: "white", fontSize: 24, fontWeight: 700, marginBottom: 8 }}>Sign in to CyCentra</h2>
-            <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 13 }}>
+            <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 13 }}>
               {showLocal ? "Enter your local account credentials." : "Use your organisation's SSO credentials."}
             </p>
           </div>
@@ -276,7 +276,7 @@ export function LoginPage() {
                 <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 13, lineHeight: 1.7, margin: 0 }}>
                   Your access request for <strong style={{ color: "white" }}>{reqEmail}</strong> has been sent to the administrator.
                 </p>
-                <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, marginTop: 8, lineHeight: 1.6 }}>
+                <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 12, marginTop: 8, lineHeight: 1.6 }}>
                   You will be notified by email once your account is approved.
                 </p>
                 <button onClick={() => { setShowRequestAccess(false); setReqSuccess(false); setReqEmail(""); setReqName(""); setShowLocal(false); }}
@@ -289,7 +289,7 @@ export function LoginPage() {
                 <div style={{ marginBottom: 8 }}>
                   <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, letterSpacing: "2px", fontFamily: "monospace", marginBottom: 6 }}>LOCAL ACCOUNT</div>
                   <div style={{ color: "white", fontSize: 18, fontWeight: 700 }}>Request Access</div>
-                  <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, marginTop: 4 }}>The administrator will review and approve your request.</div>
+                  <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 12, marginTop: 4 }}>The administrator will review and approve your request.</div>
                 </div>
                 <input type="text" placeholder="Full name" value={reqName} onChange={e => setReqName(e.target.value)}
                   required autoFocus

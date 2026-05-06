@@ -36,7 +36,7 @@ export function SiemFeedPage({ data }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 22 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: "white" }}>Alert Feed</h1>
-          <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 13, marginTop: 4 }}>
+          <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 13, marginTop: 4 }}>
             {alerts.length} alert{alerts.length !== 1 ? "s" : ""} from latest scan
           </p>
         </div>
@@ -97,12 +97,12 @@ export function SiemFeedPage({ data }) {
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 5 }}>
                     {a.host && (
-                      <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace" }}>
+                      <span style={{ color: "rgba(255,255,255,0.62)", fontSize: 10, fontFamily: "monospace" }}>
                         🖥 {a.host}
                       </span>
                     )}
                     {a.module && (
-                      <span style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.4)", fontSize: 9, fontFamily: "monospace", padding: "1px 6px", borderRadius: 2 }}>
+                      <span style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.65)", fontSize: 9, fontFamily: "monospace", padding: "1px 6px", borderRadius: 2 }}>
                         {a.module}
                       </span>
                     )}
@@ -149,7 +149,7 @@ export function SiemFeedPage({ data }) {
                       ["EPSS",         a.epss !== undefined ? `${(a.epss * 100).toFixed(1)}%` : null],
                     ].filter(([,v]) => v).map(([label, value]) => (
                       <div key={label}>
-                        <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace" }}>{label}: </span>
+                        <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace" }}>{label}: </span>
                         <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 10, fontFamily: "monospace" }}>{value}</span>
                       </div>
                     ))}

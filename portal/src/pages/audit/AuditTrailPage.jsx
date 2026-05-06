@@ -14,7 +14,7 @@ const C = {
   surface: "#0d1117",
   border:  "rgba(255,255,255,0.07)",
   text:    "rgba(255,255,255,0.82)",
-  muted:   "rgba(255,255,255,0.35)",
+  muted:   "rgba(255,255,255,0.62)",
   accent:  "#00e5a0",
   red:     "#ff3b3b",
   orange:  "#ff8c00",
@@ -500,7 +500,7 @@ export function AuditTrailPage() {
           <div style={{ padding: "40px 24px", textAlign: "center" }}>
             <div style={{ color: C.muted, fontSize: 30, marginBottom: 10 }}>📋</div>
             <div style={{ color: C.muted, fontSize: 13 }}>No audit events found for the current filters.</div>
-            <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 11, marginTop: 4 }}>
+            <div style={{ color: "rgba(255,255,255,0.42)", fontSize: 11, marginTop: 4 }}>
               Events are written as logins occur, scans run, and configuration changes are made.
             </div>
           </div>

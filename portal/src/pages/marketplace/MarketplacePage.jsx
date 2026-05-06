@@ -10,8 +10,9 @@
  *   admin     — pull, configure, remove, add/edit/delete custom items
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { API_BASE } from "../../core/constants";
+import { PLATFORM_MODULES } from '../../registry/platformModules.js';
 
 // ── O365 config modal ─────────────────────────────────────────────────────────
 
@@ -1091,7 +1092,295 @@ function MarketplaceCard({ item, isInstalled, isConfigured, isAdmin, pulling, on
 
 // ── Main marketplace page ─────────────────────────────────────────────────────
 
-export function MarketplacePage({ user }) {
+// ── Addon install flow ───────────────────────────────────────────────────────
+
+function AddonInstallFlow({ mod, onInstall, onCancel }) {
+  const [config,   setConfig]   = useState(mod.defaultConfig || {});
+  const [stage,    setStage]    = useState("config");
+  const [log,      setLog]      = useState([]);
+  const [progress, setProgress] = useState(0);
+  const logRef  = useRef(null);
+  const pollRef = useRef(null);
+
+  useEffect(() => () => clearInterval(pollRef.current), []);
+
+  const update = (k, v) => setConfig(prev => ({ ...prev, [k]: v }));
+
+  const startInstall = async () => {
+    setStage("installing");
+    setLog(["Preparing installation…"]);
+    setProgress(5);
+    try {
+      const res = await fetch(`${API_BASE}/api/platform/install`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+        body: JSON.stringify({ module: mod.id, config }),
+      });
+      if (!res.ok) {
+        const e = await res.json();
+        setLog(p => [...p, `ERROR: ${e.error || "Install failed"}`]);
+        setStage("error");
+        return;
+      }
+      pollRef.current = setInterval(async () => {
+        try {
+          const lr = await fetch(`${API_BASE}/api/platform/logs/${mod.id}`, { credentials: "include" });
+          if (lr.ok) {
+            const l = await lr.json();
+            if (l.lines?.length) {
+              setLog(l.lines);
+              const last = l.lines[l.lines.length - 1].toLowerCase();
+              if (last.includes("pulling"))              setProgress(p => Math.max(p, 15));
+              else if (last.includes("starting"))        setProgress(p => Math.max(p, 40));
+              else if (last.includes("waiting"))         setProgress(p => Math.max(p, 50));
+              else if (last.includes("live"))            setProgress(p => Math.max(p, 85));
+              else if (last.includes("credentials"))     setProgress(p => Math.max(p, 92));
+              else if (last.includes("done — status"))   setProgress(100);
+            }
+          }
+          const sr = await fetch(`${API_BASE}/api/platform/status`, { credentials: "include" });
+          if (!sr.ok) return;
+          const all = await sr.json();
+          const s = all[mod.id];
+          if (!s) return;
+          if (s.status === "running") {
+            clearInterval(pollRef.current);
+            setStage("done");
+            setProgress(100);
+            onInstall(mod.id, config);
+          } else if (s.status === "failed") {
+            clearInterval(pollRef.current);
+            setStage("error");
+          }
+        } catch {}
+      }, 3000);
+    } catch (e) {
+      setLog(p => [...p, `Network error: ${e.message}`]);
+      setStage("error");
+    }
+  };
+
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [log]);
+
+  const inpStyle = { width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", color: "white", padding: "10px 14px", borderRadius: 4, fontSize: 13, fontFamily: "monospace", outline: "none", boxSizing: "border-box" };
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.02)", borderTop: "1px solid rgba(255,255,255,0.06)", padding: "20px 24px" }}>
+      {stage === "config" && (
+        <>
+          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", marginBottom: 16 }}>
+            Configure {mod.name}
+          </div>
+          {(mod.configFields || []).map(f => (
+            <div key={f.key} style={{ marginBottom: 14 }}>
+              <label style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", display: "block", marginBottom: 6 }}>{f.label}</label>
+              <input type={f.type || "text"} value={config[f.key] || ""} onChange={e => update(f.key, e.target.value)} style={inpStyle} />
+              {f.help && <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, marginTop: 4 }}>{f.help}</div>}
+            </div>
+          ))}
+          {(mod.configFields || []).length === 0 && (
+            <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, marginBottom: 16 }}>No configuration required — all secrets are auto-generated.</div>
+          )}
+          <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+            <button onClick={startInstall}
+              style={{ background: mod.color, color: "#0d0f14", border: "none", borderRadius: 4, padding: "10px 24px", fontFamily: "monospace", fontSize: 12, fontWeight: 700, cursor: "pointer", letterSpacing: "1px" }}>
+              Install {mod.name} →
+            </button>
+            <button onClick={onCancel}
+              style={{ background: "transparent", color: "rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, padding: "10px 18px", fontFamily: "monospace", fontSize: 12, cursor: "pointer" }}>
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+      {stage !== "config" && (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
+            <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, fontFamily: "monospace" }}>
+              {stage === "installing" ? "Installing…" : stage === "done" ? "✓ Complete" : "✗ Failed"}
+            </span>
+            <span style={{ color: stage === "done" ? "#00e5a0" : stage === "error" ? "#ff3b3b" : "#f5c518", fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{progress}%</span>
+          </div>
+          <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2, marginBottom: 14 }}>
+            <div style={{ height: "100%", width: `${progress}%`, background: stage === "error" ? "#ff3b3b" : "#00e5a0", borderRadius: 2, transition: "width 0.4s ease" }} />
+          </div>
+          <div ref={logRef} style={{ height: 140, overflowY: "auto", background: "rgba(0,0,0,0.4)", borderRadius: 4, padding: "10px 14px", fontFamily: "monospace", fontSize: 10, color: "rgba(255,255,255,0.5)" }}>
+            {log.map((l, i) => <div key={i}>{l}</div>)}
+          </div>
+          {(stage === "done" || stage === "error") && (
+            <button onClick={onCancel}
+              style={{ marginTop: 14, background: stage === "done" ? "rgba(255,255,255,0.08)" : "rgba(255,59,59,0.2)", color: stage === "done" ? "rgba(255,255,255,0.6)" : "#ff3b3b", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, padding: "10px 24px", fontFamily: "monospace", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              {stage === "done" ? "Done" : "Close"}
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Platform Extensions section (CyIRIS + CySOAR) ────────────────────────────
+
+function AddonModulesSection({ installedModules = {}, onInstall, onUninstall }) {
+  const [installing,      setInstalling]      = useState(null);
+  const [confirmUninstall, setConfirmUninstall] = useState(null);
+  const [platformStatus,  setPlatformStatus]  = useState({});
+
+  const addonModules = Object.values(PLATFORM_MODULES).filter(m => m.tier === "addon");
+
+  // Poll platform status every 5 s
+  useEffect(() => {
+    const refresh = async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/platform/status`, { credentials: "include" });
+        if (!r.ok) return;
+        const data = await r.json();
+        setPlatformStatus(data);
+        Object.entries(data).forEach(([id, s]) => {
+          if (s.status === "running" && installedModules[id]?.status !== "running" && onInstall) {
+            onInstall(id, installedModules[id]?.config || {});
+          }
+        });
+      } catch {}
+    };
+    const timer = setInterval(refresh, 5000);
+    refresh();
+    return () => clearInterval(timer);
+  }, [installedModules, onInstall]);
+
+  const handleUninstallConfirm = async (mod) => {
+    try {
+      const r = await fetch(`${API_BASE}/api/platform/uninstall`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include",
+        body: JSON.stringify({ module: mod.id }),
+      });
+      if (r.ok && onUninstall) onUninstall(mod.id);
+    } catch {}
+    setConfirmUninstall(null);
+  };
+
+  if (addonModules.length === 0) return null;
+
+  return (
+    <div style={{ marginBottom: 40 }}>
+      {/* Section label */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, letterSpacing: "1.5px", fontFamily: "monospace", textTransform: "uppercase" }}>
+          Platform Extensions
+        </div>
+        <span style={{ background: "rgba(176,110,255,0.1)", color: "#b06eff", border: "1px solid rgba(176,110,255,0.25)", fontSize: 9, fontFamily: "monospace", padding: "2px 8px", borderRadius: 2, fontWeight: 700 }}>
+          INSTALLABLE MODULES
+        </span>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 14 }}>
+        {addonModules.map(mod => {
+          const liveStatus  = platformStatus[mod.id]?.status;
+          const stateStatus = installedModules[mod.id]?.status;
+          const status      = stateStatus || liveStatus || null;
+          const isRunning   = status === "running";
+          const isInstalling = status === "installing";
+          const isFailed    = status === "failed";
+          const isInstalled = !!installedModules[mod.id] || isRunning;
+          const showFlow    = installing === mod.id;
+
+          return (
+            <div key={mod.id} style={{ background: "rgba(255,255,255,0.025)", border: `1px solid ${mod.color}20`, borderLeft: `3px solid ${mod.color}`, borderRadius: 6, overflow: "hidden" }}>
+              <div style={{ padding: "18px 20px" }}>
+                {/* Header row */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <span style={{ fontSize: 22 }}>{mod.icon}</span>
+                    <div>
+                      <div style={{ color: "white", fontWeight: 700, fontSize: 15 }}>{mod.fullName}</div>
+                      <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginTop: 2 }}>
+                        OIDC SSO · {mod.ram_gb}GB RAM · {mod.disk_gb}GB disk
+                      </div>
+                    </div>
+                  </div>
+                  {/* Status pill */}
+                  {isRunning ? (
+                    <span style={{ background: "rgba(0,229,160,0.12)", color: "#00e5a0", border: "1px solid rgba(0,229,160,0.3)", fontSize: 9, fontFamily: "monospace", padding: "3px 10px", borderRadius: 2, fontWeight: 700, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
+                      <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00e5a0", animation: "pulse 2s infinite" }}/>
+                      RUNNING
+                    </span>
+                  ) : isInstalling ? (
+                    <span style={{ background: "rgba(245,197,24,0.12)", color: "#f5c518", border: "1px solid rgba(245,197,24,0.3)", fontSize: 9, fontFamily: "monospace", padding: "3px 10px", borderRadius: 2, fontWeight: 700, whiteSpace: "nowrap" }}>INSTALLING…</span>
+                  ) : isFailed ? (
+                    <span style={{ background: "rgba(255,59,59,0.12)", color: "#ff3b3b", border: "1px solid rgba(255,59,59,0.3)", fontSize: 9, fontFamily: "monospace", padding: "3px 10px", borderRadius: 2, fontWeight: 700, whiteSpace: "nowrap" }}>FAILED</span>
+                  ) : (
+                    <span style={{ background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.3)", border: "1px solid rgba(255,255,255,0.1)", fontSize: 9, fontFamily: "monospace", padding: "3px 10px", borderRadius: 2, fontWeight: 700, whiteSpace: "nowrap" }}>NOT INSTALLED</span>
+                  )}
+                </div>
+
+                <p style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, lineHeight: 1.6, margin: "0 0 14px" }}>{mod.description}</p>
+
+                {/* Action buttons */}
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {isRunning && (
+                    <a href={mod.modulePath} target="_blank" rel="noreferrer"
+                      style={{ background: `${mod.color}18`, color: mod.color, border: `1px solid ${mod.color}40`, borderRadius: 4, padding: "7px 14px", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      Open {mod.name} ↗
+                    </a>
+                  )}
+                  {!isInstalled && !showFlow && (
+                    <button onClick={() => setInstalling(mod.id)}
+                      style={{ background: `${mod.color}18`, color: mod.color, border: `1px solid ${mod.color}40`, borderRadius: 4, padding: "7px 14px", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                      Install {mod.name}
+                    </button>
+                  )}
+                  {isInstalled && (
+                    <button onClick={() => setConfirmUninstall(mod)}
+                      style={{ background: "rgba(255,59,59,0.08)", color: "#ff3b3b", border: "1px solid rgba(255,59,59,0.2)", borderRadius: 4, padding: "7px 14px", fontFamily: "monospace", fontSize: 11, cursor: "pointer" }}>
+                      Uninstall
+                    </button>
+                  )}
+                  {showFlow && (
+                    <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, fontFamily: "monospace", display: "flex", alignItems: "center" }}>Configuring below ↓</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Inline install flow */}
+              {showFlow && (
+                <AddonInstallFlow
+                  mod={mod}
+                  onInstall={(id, cfg) => { if (onInstall) onInstall(id, cfg); setInstalling(null); }}
+                  onCancel={() => setInstalling(null)}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Uninstall confirmation modal */}
+      {confirmUninstall && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}>
+          <div style={{ background: "#0d0f14", border: "1px solid rgba(255,59,59,0.3)", borderRadius: 8, padding: 32, width: "min(420px,90vw)" }}>
+            <div style={{ color: "#ff3b3b", fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Uninstall {confirmUninstall.name}?</div>
+            <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, lineHeight: 1.6, marginBottom: 20 }}>
+              This will stop and remove the {confirmUninstall.name} container. Volume data is preserved — you can reinstall at any time.
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={() => handleUninstallConfirm(confirmUninstall)}
+                style={{ background: "rgba(255,59,59,0.15)", color: "#ff3b3b", border: "1px solid rgba(255,59,59,0.35)", borderRadius: 4, padding: "10px 20px", fontFamily: "monospace", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                Uninstall
+              </button>
+              <button onClick={() => setConfirmUninstall(null)}
+                style={{ background: "transparent", color: "rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, padding: "10px 20px", fontFamily: "monospace", fontSize: 12, cursor: "pointer" }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function MarketplacePage({ user, installedModules = {}, onInstall, onUninstall }) {
   const isAdmin = user?.role === "admin";
 
   const [catalog,          setCatalog]          = useState([]);
@@ -1228,6 +1517,9 @@ export function MarketplacePage({ user }) {
 
   return (
     <div>
+      {/* ── Platform Extensions (CyIRIS / CySOAR) ── */}
+      <AddonModulesSection installedModules={installedModules} onInstall={onInstall} onUninstall={onUninstall} />
+
       {/* ── Header ── */}
       <div style={{ marginBottom:28 }}>
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, marginBottom:8, flexWrap:"wrap" }}>

@@ -287,7 +287,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
             ↗ Investigate in CySIEM Dashboard
           </a>
           <button onClick={onClose}
-            style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)",
+            style={{ background: "none", border: "none", color: "rgba(255,255,255,0.65)",
               cursor: "pointer", fontSize: 20, padding: 4, flexShrink: 0 }}>✕</button>
         </div>
       </div>
@@ -295,7 +295,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
       <div style={{ padding: "18px 24px", flex: 1 }}>
 
         {loadingDetail && (
-          <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 12, fontFamily: "monospace",
+          <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 12, fontFamily: "monospace",
             marginBottom: 16 }}>Loading full incident detail…</div>
         )}
 
@@ -310,7 +310,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
             <div key={s.label} style={{ background: "rgba(255,255,255,0.03)",
               border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, padding: "10px 14px" }}>
               <div style={{ color: "#00e5a0", fontSize: 20, fontWeight: 700, fontFamily: "monospace" }}>{s.value}</div>
-              <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace" }}>{s.label}</div>
+              <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 10, fontFamily: "monospace" }}>{s.label}</div>
             </div>
           ))}
         </div>
@@ -461,7 +461,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
                     Case #{inc.iris_case_id}
                   </span>
                 </div>
-                <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11 }}>
+                <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11 }}>
                   {inc.iris_case_status === "closed"
                     ? "Analyst closed this ticket in DFIR IRIS — incident auto-closed."
                     : "Ticket raised in DFIR IRIS and assigned to an analyst for investigation."}
@@ -492,7 +492,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
                 <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, marginBottom: 4 }}>
                   No ticket raised automatically for this incident.
                 </div>
-                <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, fontFamily: "monospace" }}>
+                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace" }}>
                   Raise a ticket manually to assign this incident for analyst investigation in CyIRIS.
                 </div>
                 {raiseErr && (
@@ -569,7 +569,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
                         <tr key={a.id || i} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
                           onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.025)"}
                           onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                          <td style={{ padding: "6px 10px", color: "rgba(255,255,255,0.35)", whiteSpace: "nowrap" }}>
+                          <td style={{ padding: "6px 10px", color: "rgba(255,255,255,0.62)", whiteSpace: "nowrap" }}>
                             {a.timestamp ? new Date(a.timestamp).toLocaleTimeString() : "—"}
                           </td>
                           <td style={{ padding: "6px 10px", color: "#4d9eff" }}>{a.rule_id}</td>
@@ -588,7 +588,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
               </div>
             )}
             {!alertsExpanded && (
-              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, fontFamily: "monospace",
+              <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace",
                 padding: "8px 0" }}>
                 Click ▼ expand to view individual alerts
               </div>
@@ -600,7 +600,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
         <SectionLabel>STATUS TRANSITION</SectionLabel>
         <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
           borderRadius: 4, padding: "16px 18px", marginBottom: 8 }}>
-          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace", marginBottom: 10 }}>
+          <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, fontFamily: "monospace", marginBottom: 10 }}>
             Current: <StatBadge status={inc.status} />
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -652,7 +652,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
                       <span style={{ color: actionColor, fontSize: 10, fontFamily: "monospace",
                         fontWeight: 700, textTransform: "uppercase" }}>{entry.action?.replace("_", " ")}</span>
                       {entry.from_status && entry.to_status && (
-                        <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace" }}>
+                        <span style={{ color: "rgba(255,255,255,0.62)", fontSize: 10, fontFamily: "monospace" }}>
                           {entry.from_status} → {entry.to_status}
                         </span>
                       )}
@@ -681,7 +681,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
         <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
           borderRadius: 4, padding: "16px 18px" }}>
           <div style={{ marginBottom: 10 }}>
-            <label style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace" }}>Assigned To</label>
+            <label style={{ color: "rgba(255,255,255,0.65)", fontSize: 11, fontFamily: "monospace" }}>Assigned To</label>
             <input value={assignee} onChange={e => setAssignee(e.target.value)}
               placeholder="analyst email…"
               style={{ width: "100%", background: "rgba(255,255,255,0.05)",
@@ -689,7 +689,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
                 padding: "8px 10px", borderRadius: 4, fontSize: 12, marginTop: 4, boxSizing: "border-box" }} />
           </div>
           <div style={{ marginBottom: 10 }}>
-            <label style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace" }}>Notes</label>
+            <label style={{ color: "rgba(255,255,255,0.65)", fontSize: 11, fontFamily: "monospace" }}>Notes</label>
             <textarea value={notes} onChange={e => setNotes(e.target.value)}
               rows={3} placeholder="Investigation notes…"
               style={{ width: "100%", background: "rgba(255,255,255,0.05)",
@@ -783,7 +783,7 @@ function IncidentDonut({ data, title, activeId, onSegmentClick }) {
   if (total === 0) return (
     <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
       borderRadius: 6, padding: "14px 16px" }}>
-      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace",
         letterSpacing: "1.5px", marginBottom: 8 }}>{title}</div>
       <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, padding: "30px 0",
         textAlign: "center" }}>No data</div>
@@ -803,7 +803,7 @@ function IncidentDonut({ data, title, activeId, onSegmentClick }) {
   return (
     <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
       borderRadius: 6, padding: "14px 16px" }}>
-      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace",
         letterSpacing: "1.5px", marginBottom: 10 }}>{title}</div>
       <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
         <svg width="140" height="140" viewBox="0 0 140 140" style={{ flexShrink: 0 }}>
@@ -881,7 +881,7 @@ function IncidentCategoryBar({ incidents }) {
   if (entries.length === 0) return (
     <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
       borderRadius: 6, padding: "14px 16px" }}>
-      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace",
         letterSpacing: "1.5px", marginBottom: 8 }}>CATEGORY DISTRIBUTION</div>
       <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, padding: "30px 0", textAlign: "center" }}>
         No categories
@@ -893,7 +893,7 @@ function IncidentCategoryBar({ incidents }) {
   return (
     <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
       borderRadius: 6, padding: "14px 16px" }}>
-      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace",
         letterSpacing: "1.5px", marginBottom: 12 }}>CATEGORY DISTRIBUTION</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
         {entries.map(([cat, count], i) => {
@@ -964,7 +964,7 @@ function IncidentTrendLine({ incidents }) {
       borderRadius: 6, padding: "14px 16px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
         marginBottom: open ? 8 : 0 }}>
-        <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+        <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace",
           letterSpacing: "1.5px" }}>INCIDENT TREND — LAST 14 DAYS</div>
         <button onClick={() => setOpen(v => !v)}
           style={{ background: "none", border: "none", color: "rgba(255,255,255,0.3)",
@@ -1016,7 +1016,7 @@ function IncidentTrendLine({ incidents }) {
         <div style={{ position: "fixed", left: tooltip.sx + 12, top: tooltip.sy - 10, zIndex: 9999,
           background: "#0d1117", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 5,
           padding: "8px 12px", pointerEvents: "none", boxShadow: "0 4px 16px rgba(0,0,0,0.5)" }}>
-          <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 10, fontFamily: "monospace", marginBottom: 3 }}>
+          <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 10, fontFamily: "monospace", marginBottom: 3 }}>
             {tooltip.p.d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
           </div>
           <div style={{ color: "#ff6b6b", fontSize: 14, fontFamily: "monospace", fontWeight: 700 }}>
@@ -1188,7 +1188,7 @@ export function SiemIncidentsPage() {
               letterSpacing: "1px" }}>CORRELATION ENGINE</span>
             <LiveDot connected={wsConnected} />
           </div>
-          <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 13 }}>
+          <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 13 }}>
             {total} incident{total !== 1 ? "s" : ""} — grouped by temporal + entity correlation across Wazuh alerts.
           </p>
         </div>
@@ -1283,7 +1283,7 @@ export function SiemIncidentsPage() {
                 {closing ? "Closing…" : "Confirm"}
               </button>
               <button onClick={() => setCloseConfirm(false)}
-                style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)",
+                style={{ background: "none", border: "none", color: "rgba(255,255,255,0.65)",
                   cursor: "pointer", fontSize: 11, fontFamily: "monospace" }}>
                 Cancel
               </button>
@@ -1312,7 +1312,7 @@ export function SiemIncidentsPage() {
                 {purging ? "Deleting…" : "Confirm Delete"}
               </button>
               <button onClick={() => setPurgeConfirm(false)}
-                style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)",
+                style={{ background: "none", border: "none", color: "rgba(255,255,255,0.65)",
                   cursor: "pointer", fontSize: 11, fontFamily: "monospace" }}>
                 Cancel
               </button>
@@ -1412,7 +1412,7 @@ export function SiemIncidentsPage() {
                     </span>
                   ))}
                   {!(inc.categories || []).length && (
-                    <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 11 }}>—</span>
+                    <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11 }}>—</span>
                   )}
                 </div>
                 <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 12,
@@ -1454,10 +1454,10 @@ export function SiemIncidentsPage() {
                     </span>
                   )}
                   {!inc.llm_summary && !(inc.misp_enrichment?.ioc_hits || []).length && !inc.iris_case_id && (
-                    <span style={{ color: "rgba(255,255,255,0.15)", fontSize: 10 }}>—</span>
+                    <span style={{ color: "rgba(255,255,255,0.42)", fontSize: 10 }}>—</span>
                   )}
                 </div>
-                <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace" }}>
+                <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 10, fontFamily: "monospace" }}>
                   {fmtTs(inc.last_seen)}
                 </div>
               </div>

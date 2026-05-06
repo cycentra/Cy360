@@ -329,7 +329,7 @@ export function ScanPage({ user, onScanComplete }) {
             <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>— last 6 generated</span>
           </div>
           <button onClick={fetchReports} disabled={reportsLoading}
-            style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", borderRadius: 3, padding: "4px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", opacity: reportsLoading ? 0.5 : 1 }}>
+            style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.65)", borderRadius: 3, padding: "4px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", opacity: reportsLoading ? 0.5 : 1 }}>
             {reportsLoading ? "Loading…" : "↺ Refresh"}
           </button>
         </div>
@@ -360,7 +360,7 @@ export function ScanPage({ user, onScanComplete }) {
                   </div>
                   <div style={{ textAlign: "right", flexShrink: 0 }}>
                     <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>{dateStr}</div>
-                    <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>{timeStr} · {r.size_kb} KB</div>
+                    <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>{timeStr} · {r.size_kb} KB</div>
                   </div>
                   <button onClick={() => handleDownloadReport(r.filename)}
                     style={{ background: `rgba(${isExec ? "77,158,255" : "0,229,160"},0.08)`, color: typeColor, border: `1px solid ${typeColor}40`, borderRadius: 3, padding: "5px 14px", fontSize: 10, fontFamily: "monospace", fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px", flexShrink: 0 }}>

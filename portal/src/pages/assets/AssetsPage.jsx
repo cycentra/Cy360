@@ -83,7 +83,7 @@ function AssetStatusPanel({ asset, status, onClose, onStatusChange }) {
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace",
               letterSpacing: "1.5px", marginBottom: 4 }}>UPDATE ASSET STATE</div>
             <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 13,
               fontFamily: "monospace", fontWeight: 700 }}>{asset.host}</div>
@@ -100,7 +100,7 @@ function AssetStatusPanel({ asset, status, onClose, onStatusChange }) {
       <div style={{ flex: 1, overflowY: "auto", padding: "18px" }}>
         {/* Current state */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
-          <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>Current:</span>
+          <span style={{ color: "rgba(255,255,255,0.65)", fontSize: 11 }}>Current:</span>
           <span style={{
             background: `${statCfg.color}18`, color: statCfg.color,
             border: `1px solid ${statCfg.color}50`, fontSize: 11, fontWeight: 700,
@@ -110,7 +110,7 @@ function AssetStatusPanel({ asset, status, onClose, onStatusChange }) {
 
         {txTarget ? (
           <div>
-            <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 10,
+            <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 10,
               fontFamily: "monospace", marginBottom: 6 }}>
               Transitioning to:{" "}
               <span style={{ color: STATUS_CONFIG[txTarget]?.color || "#888", fontWeight: 700 }}>
@@ -131,7 +131,7 @@ function AssetStatusPanel({ asset, status, onClose, onStatusChange }) {
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <button onClick={cancelTx} style={{
                 background: "none", border: "1px solid rgba(255,255,255,0.1)",
-                color: "rgba(255,255,255,0.4)", padding: "5px 12px", borderRadius: 3,
+                color: "rgba(255,255,255,0.65)", padding: "5px 12px", borderRadius: 3,
                 fontFamily: "monospace", fontSize: 11, cursor: "pointer",
               }}>Cancel</button>
               <button onClick={confirmTx} disabled={txBusy} style={{
@@ -146,7 +146,7 @@ function AssetStatusPanel({ asset, status, onClose, onStatusChange }) {
         ) : (
           targets.length > 0 ? (
             <div>
-              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9,
+              <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9,
                 fontFamily: "monospace", letterSpacing: "1px", marginBottom: 8 }}>TRANSITION TO</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {targets.map(t => {
@@ -306,7 +306,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
               <div style={{ color: "rgba(255,255,255,0.9)", fontSize: 15, fontWeight: 700, fontFamily: "monospace" }}>
                 {a.host}
               </div>
-              {a.owner && <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginTop: 2 }}>{a.owner}</div>}
+              {a.owner && <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, marginTop: 2 }}>{a.owner}</div>}
             </div>
             <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
               <button onClick={() => setShowStatusPanel(s => !s)} style={{
@@ -336,7 +336,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
             <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace",
               letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 10 }}>Asset State</div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: autoSug ? 10 : 0 }}>
-              <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>Current:</span>
+              <span style={{ color: "rgba(255,255,255,0.65)", fontSize: 11 }}>Current:</span>
               <span style={{ background: `${statCfg.color}18`, color: statCfg.color,
                 border: `1px solid ${statCfg.color}50`, fontSize: 11, fontWeight: 700,
                 fontFamily: "monospace", padding: "3px 10px", borderRadius: 3 }}>{statCfg.label}</span>
@@ -356,7 +356,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
               { label: "LAST SEEN",    val: a.last_seen  ? new Date(a.last_seen).toLocaleDateString("en-US",  { month: "short", day: "numeric", year: "numeric" }) : null },
             ].map(({ label, val }) => val && (
               <div key={label}>
-                <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace",
                   letterSpacing: "1px", marginBottom: 3 }}>{label}</div>
                 <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 12, fontFamily: "monospace" }}>{val}</div>
               </div>
@@ -366,7 +366,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
           {/* Subdomains list */}
           {a.subdomains?.length > 0 && (
             <div>
-              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+              <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace",
                 letterSpacing: "1px", marginBottom: 6 }}>SUBDOMAINS</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
                 {a.subdomains.slice(0, 20).map((s, i) => (
@@ -382,7 +382,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
           {/* Vulnerabilities — DashboardPage row layout ─────────────── */}
           {vulns.length > 0 && (
             <div>
-              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+              <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace",
                 letterSpacing: "1px", marginBottom: 8 }}>FINDINGS ({vulns.length})</div>
               <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
                 {critCount > 0 && <span style={{ background: "rgba(255,59,59,0.1)", color: "#ff3b3b", border: "1px solid rgba(255,59,59,0.3)", fontSize: 10, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 2 }}>▲ {critCount} CRITICAL</span>}
@@ -402,7 +402,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                           {typeof v.vulnerability === "string" ? v.vulnerability : String(v.vulnerability || "—")}
                         </div>
                         {v.description && (
-                          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginTop: 1,
+                          <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, marginTop: 1,
                             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                             {typeof v.description === "string" ? v.description : String(v.description)}
                           </div>
@@ -452,7 +452,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                 </div>
               )}
               {a.dns_records?.length > 0 && a.dns_records.slice(0, 4).map((r, i) => (
-                <div key={i} style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace" }}>{typeof r === "string" ? r : `${r.type} ${r.value}`}</div>
+                <div key={i} style={{ color: "rgba(255,255,255,0.62)", fontSize: 10, fontFamily: "monospace" }}>{typeof r === "string" ? r : `${r.type} ${r.value}`}</div>
               ))}
             </div>
           )}
@@ -461,7 +461,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
           {(a.http_analysis || a.exposed_paths?.length > 0) && (
             <div style={{ background: "rgba(77,158,255,0.04)", border: "1px solid rgba(77,158,255,0.15)", borderRadius: 4, padding: "10px 12px" }}>
               <div style={{ color: "#4d9eff", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>HTTP ANALYSIS</div>
-              {a.http_analysis?.server && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 10, fontFamily: "monospace", marginBottom: 4 }}>Server: {a.http_analysis.server}</div>}
+              {a.http_analysis?.server && <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 10, fontFamily: "monospace", marginBottom: 4 }}>Server: {a.http_analysis.server}</div>}
               {a.http_analysis?.technologies?.length > 0 && (
                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
                   {a.http_analysis.technologies.slice(0, 8).map((t, i) => (
@@ -471,7 +471,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
               )}
               {a.exposed_paths?.length > 0 && (
                 <div>
-                  <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", marginBottom: 3 }}>EXPOSED PATHS ({a.exposed_paths.length})</div>
+                  <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace", marginBottom: 3 }}>EXPOSED PATHS ({a.exposed_paths.length})</div>
                   {a.exposed_paths.slice(0, 5).map((p, i) => {
                     const pathStr = typeof p === "string" ? p : (p.path || p.url || String(p));
                     const sev     = typeof p === "object" ? p.severity : null;
@@ -496,7 +496,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
             <div style={{ background: "rgba(0,229,160,0.03)", border: "1px solid rgba(0,229,160,0.12)", borderRadius: 4, padding: "10px 12px" }}>
               <div style={{ color: "#00e5a0", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>API ENDPOINTS ({a.api_endpoints.length})</div>
               {a.api_endpoints.slice(0, 6).map((ep, i) => (
-                <div key={i} style={{ color: "rgba(255,255,255,0.4)", fontSize: 10, fontFamily: "monospace", marginBottom: 2 }}>
+                <div key={i} style={{ color: "rgba(255,255,255,0.65)", fontSize: 10, fontFamily: "monospace", marginBottom: 2 }}>
                   {typeof ep === "string" ? ep : (ep.url || ep.path || ep.endpoint || String(ep))}
                 </div>
               ))}
@@ -520,7 +520,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
               <div style={{ color: "#f5c518", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>CLOUD EXPOSURE</div>
               {Object.entries(a.cloud_data).slice(0, 4).map(([k, v], i) => (
                 <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
-                  <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", minWidth: 80 }}>{k}</span>
+                  <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace", minWidth: 80 }}>{k}</span>
                   <span style={{ color: "rgba(245,197,24,0.7)", fontSize: 10, fontFamily: "monospace" }}>{typeof v === "object" ? JSON.stringify(v) : String(v)}</span>
                 </div>
               ))}
@@ -533,7 +533,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
               <div style={{ color: "#ff8c00", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>SUPPLY CHAIN RISK</div>
               {Object.entries(a.supply_chain).slice(0, 4).map(([k, v], i) => (
                 <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
-                  <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", minWidth: 90 }}>{k.replace(/_/g, " ")}</span>
+                  <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace", minWidth: 90 }}>{k.replace(/_/g, " ")}</span>
                   <span style={{ color: "rgba(255,140,0,0.7)", fontSize: 10, fontFamily: "monospace" }}>{typeof v === "object" ? JSON.stringify(v) : String(v)}</span>
                 </div>
               ))}
@@ -546,7 +546,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
               <div style={{ color: "#ff3b3b", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>SOCIAL ENGINEERING EXPOSURE</div>
               {Object.entries(a.social_eng).slice(0, 4).map(([k, v], i) => (
                 <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
-                  <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", minWidth: 90 }}>{k.replace(/_/g, " ")}</span>
+                  <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace", minWidth: 90 }}>{k.replace(/_/g, " ")}</span>
                   <span style={{ color: "rgba(255,100,100,0.7)", fontSize: 10, fontFamily: "monospace" }}>{typeof v === "object" ? JSON.stringify(v) : String(v)}</span>
                 </div>
               ))}
@@ -566,7 +566,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                   { label: "City",    val: a.dns_ips[0].city },
                 ].filter(r => r.val).map((r, i) => (
                   <div key={i}>
-                    <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace" }}>{r.label}</div>
+                    <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace" }}>{r.label}</div>
                     <div style={{ color: "rgba(0,229,160,0.7)", fontSize: 10, fontFamily: "monospace" }}>{r.val}</div>
                   </div>
                 ))}
@@ -577,7 +577,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
           {/* WHOIS */}
           {a.whois_full && Object.keys(a.whois_full).length > 0 && (
             <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, padding: "10px 12px" }}>
-              <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>WHOIS</div>
+              <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>WHOIS</div>
               {Object.entries(a.whois_full).filter(([,v]) => v).slice(0, 6).map(([k, v], i) => (
                 <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
                   <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", minWidth: 100 }}>{k.replace(/_/g, " ")}</span>
@@ -595,7 +595,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                 .filter(([, v]) => v != null && (Array.isArray(v) ? v.length > 0 : true))
                 .slice(0, 6).map(([k, v], i) => (
                 <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
-                  <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", minWidth: 110 }}>{k.replace(/_/g, " ")}</span>
+                  <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace", minWidth: 110 }}>{k.replace(/_/g, " ")}</span>
                   <span style={{ color: "rgba(176,110,255,0.7)", fontSize: 10, fontFamily: "monospace" }}>
                     {Array.isArray(v) ? `${v.length} items` : typeof v === "object" ? JSON.stringify(v).slice(0, 60) : String(v)}
                   </span>
@@ -612,7 +612,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                 .filter(([, v]) => v != null && (Array.isArray(v) ? v.length > 0 : true))
                 .slice(0, 5).map(([k, v], i) => (
                 <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
-                  <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", minWidth: 110 }}>{k.replace(/_/g, " ")}</span>
+                  <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace", minWidth: 110 }}>{k.replace(/_/g, " ")}</span>
                   <span style={{ color: "rgba(245,197,24,0.7)", fontSize: 10, fontFamily: "monospace" }}>
                     {Array.isArray(v) ? `${v.length} entries` : typeof v === "object" ? JSON.stringify(v).slice(0, 60) : String(v)}
                   </span>
@@ -629,7 +629,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                 .filter(([, v]) => v != null)
                 .slice(0, 5).map(([k, v], i) => (
                 <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
-                  <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", minWidth: 110 }}>{k.replace(/_/g, " ")}</span>
+                  <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace", minWidth: 110 }}>{k.replace(/_/g, " ")}</span>
                   <span style={{ color: "rgba(77,158,255,0.7)", fontSize: 10, fontFamily: "monospace" }}>
                     {typeof v === "boolean" ? (v ? "Yes" : "No") : typeof v === "object" ? JSON.stringify(v).slice(0, 60) : String(v)}
                   </span>
@@ -642,7 +642,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
           {prevAudit.length > 0 && (
             <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
               borderRadius: 5, padding: "14px 16px" }}>
-              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+              <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace",
                 letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 10 }}>
                 Audit Trail ({prevAudit.length})
               </div>
@@ -656,7 +656,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                         <span style={{ color: fc.color, fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>{fc.label}</span>
                         <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9 }}>→</span>
                         <span style={{ color: tc.color, fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>{tc.label}</span>
-                        {e.actor && <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace" }}>• {e.actor}</span>}
+                        {e.actor && <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace" }}>• {e.actor}</span>}
                         {e.created_at && <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", marginLeft: "auto" }}>{new Date(e.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>}
                       </div>
                       {e.comment && <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, marginTop: 3, lineHeight: 1.4 }}>{e.comment}</div>}
@@ -771,7 +771,7 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700 }}>Asset Inventory</h1>
-          <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 13, marginTop: 4 }}>
+          <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 13, marginTop: 4 }}>
             {assets.length} asset{assets.length !== 1 ? "s" : ""} discovered
           </p>
         </div>
@@ -795,7 +795,7 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
                 <div style={{ color: "#00e5a0", fontSize: 11, fontWeight: 700, fontFamily: "monospace", letterSpacing: "0.8px" }}>
                   NEW ASSET{newCount !== 1 ? "S" : ""} DETECTED
                 </div>
-                <div style={{ color: "rgba(255,255,255,0.38)", fontSize: 10, marginTop: 2 }}>
+                <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 10, marginTop: 2 }}>
                   Not present in previous scan — verify ownership and exposure
                 </div>
               </div>
@@ -819,7 +819,7 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
                 <div style={{ color: "#ff8c00", fontSize: 11, fontWeight: 700, fontFamily: "monospace", letterSpacing: "0.8px" }}>
                   ASSET{droppedCount !== 1 ? "S" : ""} DROPPED FROM SCAN
                 </div>
-                <div style={{ color: "rgba(255,255,255,0.38)", fontSize: 10, marginTop: 2 }}>
+                <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 10, marginTop: 2 }}>
                   Was reachable last scan — now missing. Investigate immediately.
                 </div>
               </div>

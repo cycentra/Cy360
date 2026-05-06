@@ -102,7 +102,7 @@ function UebaConfidenceBar({ confidence }) {
   return (
     <div style={{ marginTop: 8, marginBottom: 8 }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-        <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 9,
+        <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 9,
           fontFamily: "monospace", letterSpacing: "1px" }}>CONFIDENCE</span>
         <span style={{ color, fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>{confidence}</span>
       </div>
@@ -373,25 +373,25 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
           {hasContext && (
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               {a.agent_name && (
-                <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10,
+                <span style={{ color: "rgba(255,255,255,0.62)", fontSize: 10,
                   fontFamily: "monospace" }}>
                   🖥 {a.agent_name}
                 </span>
               )}
               {a.src_ip && (
-                <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10,
+                <span style={{ color: "rgba(255,255,255,0.62)", fontSize: 10,
                   fontFamily: "monospace" }}>
                   🌐 {a.src_ip}
                 </span>
               )}
               {a.rule_id && (
-                <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10,
+                <span style={{ color: "rgba(255,255,255,0.62)", fontSize: 10,
                   fontFamily: "monospace" }}>
                   📋 Rule {a.rule_id}
                 </span>
               )}
               {a.process_name && (
-                <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10,
+                <span style={{ color: "rgba(255,255,255,0.62)", fontSize: 10,
                   fontFamily: "monospace" }}>
                   ⚡ {a.process_name}
                 </span>
@@ -427,7 +427,7 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
               { label: "CATEGORY", val: a.category },
             ].filter(r => r.val).map(({ label, val }) => (
               <div key={label}>
-                <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9,
+                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9,
                   fontFamily: "monospace", letterSpacing: "1px", marginBottom: 2 }}>
                   {label}
                 </div>
@@ -442,7 +442,7 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
           {/* Raw log */}
           {a.raw_log && (
             <div>
-              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9,
+              <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9,
                 fontFamily: "monospace", letterSpacing: "1px", marginBottom: 4 }}>
                 RAW LOG
               </div>
@@ -460,7 +460,7 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
           <div style={{ background: "rgba(255,255,255,0.025)",
             border: "1px solid rgba(255,255,255,0.08)", borderRadius: 4,
             padding: "12px 14px" }}>
-            <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace",
               letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 6 }}>
               Status Lifecycle
             </div>
@@ -470,7 +470,7 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
 
             {/* Current active state */}
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: txTarget ? 10 : (targets.length > 0 ? 8 : 0) }}>
-              <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>Current:</span>
+              <span style={{ color: "rgba(255,255,255,0.65)", fontSize: 11 }}>Current:</span>
               <span style={{ background: `${statCfg.color}18`, color: statCfg.color,
                 border: `1px solid ${statCfg.color}50`, fontSize: 11, fontWeight: 700,
                 fontFamily: "monospace", padding: "3px 10px", borderRadius: 3 }}>
@@ -490,7 +490,7 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
             {/* Inline transition form */}
             {txTarget ? (
               <div>
-                <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 10,
+                <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 10,
                   fontFamily: "monospace", marginBottom: 6 }}>
                   Transitioning to:{" "}
                   <span style={{ color: STATUS_CONFIG[txTarget]?.color || "#888", fontWeight: 700 }}>
@@ -510,7 +510,7 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
                 <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                   <button onClick={cancelTx} style={{ background: "none",
                     border: "1px solid rgba(255,255,255,0.1)",
-                    color: "rgba(255,255,255,0.4)", padding: "4px 10px", borderRadius: 3,
+                    color: "rgba(255,255,255,0.65)", padding: "4px 10px", borderRadius: 3,
                     fontFamily: "monospace", fontSize: 10, cursor: "pointer" }}>Cancel</button>
                   <button onClick={confirmTx} disabled={txBusy} style={{
                     background: `${STATUS_CONFIG[txTarget]?.color || "#888"}20`,
@@ -659,7 +659,7 @@ function UserProfile({ username, integrations, anomalyStatuses, onStatusChange }
                 { label: "Last Updated",     val: baseline.updated_at ? new Date(baseline.updated_at).toLocaleDateString() : "—" },
               ].map(({ label, val }) => (
                 <div key={label} style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 12 }}>{label}</span>
+                  <span style={{ color: "rgba(255,255,255,0.65)", fontSize: 12 }}>{label}</span>
                   <span style={{ color: "white", fontSize: 12, fontFamily: "monospace" }}>{val}</span>
                 </div>
               ))}
@@ -745,12 +745,12 @@ function UserGroup({ title, icon, color, users, selected, onSelect, defaultOpen 
       <button onClick={() => setOpen(v => !v)}
         style={{ width: "100%", display: "flex", alignItems: "center", gap: 6,
           background: "none", border: "none", cursor: "pointer",
-          color: "rgba(255,255,255,0.4)", padding: "4px 0", textAlign: "left" }}>
+          color: "rgba(255,255,255,0.65)", padding: "4px 0", textAlign: "left" }}>
         <span style={{ fontSize: 10, fontFamily: "monospace", letterSpacing: "1px",
           color, flex: 1, fontWeight: 700 }}>
           {icon} {title.toUpperCase()} ({users.length})
         </span>
-        <span style={{ fontSize: 10, color: "rgba(255,255,255,0.25)" }}>
+        <span style={{ fontSize: 10, color: "rgba(255,255,255,0.55)" }}>
           {open ? "▾" : "▸"}
         </span>
       </button>
@@ -949,7 +949,7 @@ export function SiemUebaPage() {
               fontFamily: "monospace", padding: "3px 10px", borderRadius: 2, fontWeight: 700,
               letterSpacing: "1px" }}>USER & ENTITY BEHAVIOUR</span>
           </div>
-          <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 13, margin: 0 }}>
+          <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 13, margin: 0 }}>
             Rolling behavioural baselines per user. Human, service, and system accounts are
             automatically classified. Filter to find what matters.
           </p>

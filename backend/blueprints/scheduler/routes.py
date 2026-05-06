@@ -303,6 +303,17 @@ def init_scheduler(app) -> None:
         if job.get("enabled", True):
             _add_to_apscheduler(_scheduler, job)
 
+    # ── Benchmark bands auto-update (monthly, opt-in) ─────────────────────────
+    # Reads BENCHMARK_AUTO_UPDATE from env — set in /opt/cycentra/.env.
+    # Fires on the 1st of each month at 03:00 UTC.
+    # Safe no-op when _AUTO_UPDATE is False or the import fails.
+    try:
+        from blueprints.benchmark.routes import register_benchmark_scheduler, _AUTO_UPDATE
+        if _AUTO_UPDATE:
+            register_benchmark_scheduler(_scheduler)
+    except Exception as _bench_exc:
+        log.warning("scheduler: benchmark job registration failed: %s", _bench_exc)
+
     _scheduler.start()
     log.info("scheduler: started with %d jobs", len(_scheduler.get_jobs()))
 

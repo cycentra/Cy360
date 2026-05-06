@@ -30,13 +30,13 @@ function CollapsibleSection({ icon, title, badge, children }) {
           {title}
         </div>
         {badge}
-        <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 13, fontFamily: "monospace", lineHeight: 1, marginLeft: 8 }}>{open ? "▲" : "▼"}</span>
+        <span style={{ color: "rgba(255,255,255,0.62)", fontSize: 13, fontFamily: "monospace", lineHeight: 1, marginLeft: 8 }}>{open ? "▲" : "▼"}</span>
       </div>
       {open && <div style={{ padding: "20px 24px" }}>{children}</div>}
     </div>
   );
 }
-const LABEL = { color: "rgba(255,255,255,0.35)", fontSize: 10, letterSpacing: "1.5px", fontFamily: "monospace", textTransform: "uppercase", marginBottom: 6 };
+const LABEL = { color: "rgba(255,255,255,0.62)", fontSize: 10, letterSpacing: "1.5px", fontFamily: "monospace", textTransform: "uppercase", marginBottom: 6 };
 const INPUT = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, color: "white", fontFamily: "monospace", fontSize: 12, padding: "8px 12px", width: "100%", outline: "none", boxSizing: "border-box" };
 const BTN   = (color="#00e5a0") => ({ background: `rgba(${color === "#00e5a0" ? "0,229,160" : "77,158,255"},0.1)`, color, border: `1px solid ${color}40`, padding: "8px 18px", borderRadius: 4, fontFamily: "monospace", fontSize: 11, fontWeight: 700, letterSpacing: "1px", cursor: "pointer", textTransform: "uppercase" });
 
@@ -333,7 +333,7 @@ function UpdatesTab() {
             <div style={{ color: "#00e5a0", fontSize: 10, letterSpacing: "1.5px", fontFamily: "monospace", fontWeight: 700, marginBottom: 8 }}>
               RUN UPDATE
             </div>
-            <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, marginBottom: 16, lineHeight: 1.6 }}>
+            <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 12, marginBottom: 16, lineHeight: 1.6 }}>
               Incremental patch — checks the latest version on GitHub and applies
               <code style={{ color: "#00e5a0" }}> cycentra-setup.sh --update</code>.
               Preserves all configuration and data.
@@ -356,7 +356,7 @@ function UpdatesTab() {
             <div style={{ color: "#ff8c00", fontSize: 10, letterSpacing: "1.5px", fontFamily: "monospace", fontWeight: 700, marginBottom: 8 }}>
               RUN UPGRADE
             </div>
-            <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, marginBottom: 16, lineHeight: 1.6 }}>
+            <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 12, marginBottom: 16, lineHeight: 1.6 }}>
               Full re-install — downloads and runs{" "}
               <code style={{ color: "#ff8c00" }}>cycentra-setup.sh</code> without flags.
               Use for major version upgrades or to re-apply all services from scratch.
@@ -368,7 +368,7 @@ function UpdatesTab() {
           </div>
         </div>
 
-        <div style={{ marginTop: 14, color: "rgba(255,255,255,0.18)", fontSize: 10, fontFamily: "monospace" }}>
+        <div style={{ marginTop: 14, color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>
           GitHub credentials are configured server-side in <code>/opt/cycentra/.env</code> — no token entry required.
         </div>
 
@@ -397,7 +397,7 @@ function UpdatesTab() {
 
       <CollapsibleSection icon="📋" title="Release Notes">
         {!versionData?.release_notes?.length && (
-          <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 12, fontFamily: "monospace" }}>
+          <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 12, fontFamily: "monospace" }}>
             No release notes found.
           </div>
         )}
@@ -405,7 +405,7 @@ function UpdatesTab() {
           <div key={i} style={{ borderBottom: i < versionData.release_notes.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none", paddingBottom: 16, marginBottom: 16 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
               <span style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 13, fontWeight: 700 }}>{rn.version}</span>
-              {rn.date && <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, fontFamily: "monospace" }}>{rn.date}</span>}
+              {rn.date && <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace" }}>{rn.date}</span>}
             </div>
             <pre style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace", whiteSpace: "pre-wrap", margin: 0, lineHeight: 1.7 }}>
               {rn.notes || "No details."}
@@ -444,7 +444,7 @@ function EnvVarRow({ v, onChange }) {
             style={{ ...INPUT, padding: "5px 10px", fontSize: 11, flex: 1 }}
           />
           <button onClick={() => setReveal(r => !r)}
-            style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", borderRadius: 3, padding: "4px 8px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", flexShrink: 0 }}>
+            style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.65)", borderRadius: 3, padding: "4px 8px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", flexShrink: 0 }}>
             {reveal ? "hide" : "show"}
           </button>
         </div>
@@ -813,7 +813,7 @@ function UserManagementTab() {
           { label: "SSO",             value: ssoCount,      color: "#4d9eff" },
           { label: "Local",           value: localCount,    color: "#00e5a0" },
           { label: "Pending approval",value: pendingCount,  color: pendingCount > 0 ? "#ffa500" : "rgba(255,255,255,0.3)" },
-          ...VALID_ROLES.filter(r => roleCounts[r] > 0).map(r => ({ label: r, value: roleCounts[r], color: "rgba(255,255,255,0.35)" })),
+          ...VALID_ROLES.filter(r => roleCounts[r] > 0).map(r => ({ label: r, value: roleCounts[r], color: "rgba(255,255,255,0.62)" })),
         ].map(stat => (
           <div key={stat.label} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "8px 14px", display: "flex", flexDirection: "column", alignItems: "center", minWidth: 80 }}>
             <span style={{ color: stat.color, fontSize: 20, fontWeight: 700, fontFamily: "monospace" }}>{stat.value}</span>
@@ -1182,7 +1182,7 @@ function MispTab() {
               fontFamily: "monospace", fontWeight: 700, marginBottom: 4 }}>
               {m.label}
             </div>
-            <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, lineHeight: 1.4 }}>
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, lineHeight: 1.4 }}>
               {m.desc}
             </div>
           </button>
@@ -1207,7 +1207,7 @@ function MispTab() {
           <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginBottom: 16, lineHeight: 1.6 }}>
             Credentials are provisioned server-side via <code style={{ color: "#4d9eff" }}>CLOUD_MISP_URL</code> and{" "}
             <code style={{ color: "#4d9eff" }}>CLOUD_MISP_API_KEY</code> in{" "}
-            <code style={{ color: "rgba(255,255,255,0.4)" }}>/opt/cycentra/.env</code>. No manual entry required.
+            <code style={{ color: "rgba(255,255,255,0.65)" }}>/opt/cycentra/.env</code>. No manual entry required.
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
             <button onClick={testConnection} disabled={testStatus === "testing"}
@@ -1221,7 +1221,7 @@ function MispTab() {
             {testStatus === "ok"   && <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ {testMsg}</span>}
             {testStatus === "fail" && <span style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace" }}>✗ {testMsg}</span>}
           </div>
-          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.25)" }}>
+          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.55)" }}>
             ℹ️ Cloud credentials are set at install time — contact Cycentra support to rotate your key.
           </div>
         </div>
@@ -1262,7 +1262,7 @@ function MispTab() {
             {testStatus === "fail" && <span style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace" }}>✗ {testMsg}</span>}
           </div>
 
-          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.25)" }}>
+          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.55)" }}>
             {misp.url && misp.apiKey
               ? <span style={{ color: "#ff6b6b" }}>✓ Configured — IOC lookups active on Deep scans</span>
               : <span style={{ color: "#ff8c00" }}>⚠ URL and API Key required to activate</span>}
@@ -1270,10 +1270,10 @@ function MispTab() {
 
           {/* Install CyMISP locally */}
           <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-            <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", marginBottom: 6 }}>
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace", marginBottom: 6 }}>
               NEED A LOCAL MISP INSTANCE?
             </div>
-            <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, lineHeight: 1.5 }}>
+            <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, lineHeight: 1.5 }}>
               Install CyMISP via <strong style={{ color: "rgba(255,255,255,0.5)" }}>Platform Modules</strong> — a fully containerised
               MISP appliance will be deployed at{" "}
               <code style={{ color: "#ff6b6b", fontSize: 10 }}>cymisp.{"{yourdomain}"}</code> with an auto-generated admin passphrase.
@@ -1409,7 +1409,7 @@ function CyIrisTab() {
               fontFamily: "monospace", fontWeight: 700, marginBottom: 4 }}>
               {m.label}
             </div>
-            <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, lineHeight: 1.4 }}>
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, lineHeight: 1.4 }}>
               {m.desc}
             </div>
           </button>
@@ -1435,7 +1435,7 @@ function CyIrisTab() {
             Credentials are provisioned server-side via <code style={{ color: "#4d9eff" }}>CLOUD_IRIS_URL</code>,{" "}
             <code style={{ color: "#4d9eff" }}>CLOUD_IRIS_API_KEY</code>, and{" "}
             <code style={{ color: "#4d9eff" }}>CLOUD_IRIS_CUSTOMER_ID</code> in{" "}
-            <code style={{ color: "rgba(255,255,255,0.4)" }}>/opt/cycentra/.env</code>. No manual entry required.
+            <code style={{ color: "rgba(255,255,255,0.65)" }}>/opt/cycentra/.env</code>. No manual entry required.
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
             <button onClick={testConnection} disabled={testStatus === "testing"}
@@ -1449,7 +1449,7 @@ function CyIrisTab() {
             {testStatus === "ok"   && <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ {testMsg}</span>}
             {testStatus === "fail" && <span style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace" }}>✗ {testMsg}</span>}
           </div>
-          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.25)" }}>
+          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.55)" }}>
             ℹ️ Cloud credentials are set at install time — contact Cycentra support to rotate your key.
           </div>
         </div>
@@ -1506,7 +1506,7 @@ function CyIrisTab() {
           </div>
 
           {/* Status hint */}
-          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.25)" }}>
+          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.55)" }}>
             {iris.url && iris.apiKey
               ? <span style={{ color: "#00e5a0" }}>✓ Configured — incidents will be escalated to CyIRIS</span>
               : <span style={{ color: "#ff8c00" }}>⚠ URL and API Key required to activate</span>}
@@ -1768,7 +1768,7 @@ async with sse_client("${status?.public_url || status?.endpoint || "<MCP_ENDPOIN
                 fontWeight: 700, minWidth: 0, flex: "0 0 auto", maxWidth: "55%", wordBreak: "break-all" }}>
                 {t.name}
               </code>
-              <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, lineHeight: 1.5 }}>
+              <span style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, lineHeight: 1.5 }}>
                 {t.description}
               </span>
             </div>
@@ -1983,14 +1983,14 @@ function CyMindIntegrationTab() {
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: "currentColor" }} />
             {isEnabled ? "CONNECTED" : "NOT CONFIGURED"}
           </span>
-          <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, fontFamily: "monospace" }}>{CYMIND_URL}</span>
+          <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace" }}>{CYMIND_URL}</span>
           {cfg.hasKey     && <span style={{ color: "rgba(0,229,160,0.6)", fontSize: 10, fontFamily: "monospace" }}>✓ M2M key</span>}
           {cfg.hasChatKey && <span style={{ color: "rgba(0,229,160,0.6)", fontSize: 10, fontFamily: "monospace" }}>✓ Chat key</span>}
         </div>
 
         {/* MCP status inline */}
         <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>MCP Bridge:</span>
+          <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>MCP Bridge:</span>
           {mcpStatus === null ? (
             <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>checking…</span>
           ) : (
@@ -2007,7 +2007,7 @@ function CyMindIntegrationTab() {
                 {mcpStatus.enabled ? "ENABLED" : "DISABLED"}
               </span>
               {mcpStatus.enabled && Array.isArray(mcpStatus.tools) && mcpStatus.tools.length > 0 && (
-                <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+                <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>
                   {mcpStatus.tools.length} tool{mcpStatus.tools.length !== 1 ? "s" : ""} active
                 </span>
               )}
@@ -2102,7 +2102,7 @@ function CyMindIntegrationTab() {
         <button
           onClick={() => setShowAdvanced(v => !v)}
           style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center",
-            gap: 8, color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace", padding: 0 }}>
+            gap: 8, color: "rgba(255,255,255,0.65)", fontSize: 11, fontFamily: "monospace", padding: 0 }}>
           <span style={{ fontSize: 10 }}>{showAdvanced ? "▼" : "▶"}</span>
           Advanced / Manual Key Management
         </button>
@@ -2112,9 +2112,9 @@ function CyMindIntegrationTab() {
             {/* M2M key rotation */}
             <div>
               <div style={{ ...LABEL, marginBottom: 6 }}>
-                Rotate M2M Key <span style={{ color: "rgba(255,255,255,0.25)", fontWeight: 400 }}>(cymk_… — CyMind reads SIEM via MCP)</span>
+                Rotate M2M Key <span style={{ color: "rgba(255,255,255,0.55)", fontWeight: 400 }}>(cymk_… — CyMind reads SIEM via MCP)</span>
               </div>
-              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", marginBottom: 8 }}>
+              <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace", marginBottom: 8 }}>
                 After rotating: update <code style={{ color: "rgba(0,229,160,0.6)" }}>CYCENTRA_API_KEY</code> in CyMind .env and restart, or re-run Enable Integration above.
               </div>
               <button onClick={handleGenKey} disabled={saving}
@@ -2133,10 +2133,10 @@ function CyMindIntegrationTab() {
             {/* Manual chat key paste */}
             <div>
               <div style={{ ...LABEL, marginBottom: 6 }}>
-                Manual Chat Key <span style={{ color: "rgba(255,255,255,0.25)", fontWeight: 400 }}>(pak_… — if auto-enable fails, paste manually)</span>
+                Manual Chat Key <span style={{ color: "rgba(255,255,255,0.55)", fontWeight: 400 }}>(pak_… — if auto-enable fails, paste manually)</span>
                 {cfg.hasChatKey && <span style={{ color: "#00e5a0", fontSize: 10, marginLeft: 10 }}>✓ set</span>}
               </div>
-              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", marginBottom: 8 }}>
+              <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace", marginBottom: 8 }}>
                 In CyMind: Users → cycentra-portal → API Keys → Generate. Paste the pak_… key below.
               </div>
               <div style={{ display: "flex", gap: 8 }}>
@@ -2160,7 +2160,7 @@ function CyMindIntegrationTab() {
       {/* ── MCP API Keys — 3rd-party integrations ─────────────────────────── */}
       <div style={{ ...CARD, marginTop: 12 }}>
         <div style={{ ...LABEL, marginBottom: 4 }}>MCP API Keys — 3rd Party Integrations</div>
-        <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.7, marginBottom: 14 }}>
+        <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.7, marginBottom: 14 }}>
           Generate <code style={{ color: "rgba(0,229,160,0.5)" }}>cymk_…</code> keys for external AI agents or SIEM tools that need access to the Security MCP bridge.
           CyMind uses its own built-in key above — this section is for additional integrations only.
         </div>
@@ -2219,7 +2219,7 @@ function CyMindIntegrationTab() {
         {mcpKeysLoading ? (
           <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>Loading…</div>
         ) : mcpKeys.length === 0 ? (
-          <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 11, fontFamily: "monospace" }}>No 3rd-party keys yet.</div>
+          <div style={{ color: "rgba(255,255,255,0.42)", fontSize: 11, fontFamily: "monospace" }}>No 3rd-party keys yet.</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {/* Header row */}
@@ -2237,7 +2237,7 @@ function CyMindIntegrationTab() {
                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {k.name}
                 </span>
-                <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+                <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>
                   {k.created_at ? new Date(k.created_at).toLocaleDateString() : "—"}
                 </span>
                 <code style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace",
@@ -2331,7 +2331,7 @@ function SchedulerTask({ taskId, task, onChange, baseDomain, timezone, noHeader 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
           <div>
             <div style={{ color: "white", fontWeight: 700, fontSize: 14 }}>{task.label}</div>
-            <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginTop: 3 }}>{task.desc}</div>
+            <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, marginTop: 3 }}>{task.desc}</div>
             {taskId === "asm_wordlist" && task._available === false && (
               <div style={{ color: "#ffd93d", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
                 ⚠ update_wordlist.py not found on server — install cy-asm package first
@@ -2340,7 +2340,7 @@ function SchedulerTask({ taskId, task, onChange, baseDomain, timezone, noHeader 
           </div>
           {/* Enable toggle */}
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
+            <span style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, fontFamily: "monospace" }}>
               {task.enabled ? "ENABLED" : "DISABLED"}
             </span>
             <div
@@ -2363,7 +2363,7 @@ function SchedulerTask({ taskId, task, onChange, baseDomain, timezone, noHeader 
           </div>
           {/* Enable toggle */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-            <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
+            <span style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, fontFamily: "monospace" }}>
               {task.enabled ? "ENABLED" : "DISABLED"}
             </span>
             <div
@@ -2455,7 +2455,7 @@ function SchedulerTask({ taskId, task, onChange, baseDomain, timezone, noHeader 
                 {SCAN_TYPES.map(o => <option key={o.value} value={o.value}>{o.label.split(" — ")[0]}</option>)}
               </select>
               {task.scan_type && (
-                <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, marginTop: 4, maxWidth: 260 }}>
+                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, marginTop: 4, maxWidth: 260 }}>
                   {SCAN_TYPES.find(o => o.value === task.scan_type)?.label.split(" — ")[1] || ""}
                 </div>
               )}
@@ -2469,7 +2469,7 @@ function SchedulerTask({ taskId, task, onChange, baseDomain, timezone, noHeader 
         <div style={{ marginTop: 12, background: "rgba(0,0,0,0.3)", borderRadius: 3, padding: "8px 10px", fontFamily: "monospace", fontSize: 10 }}>
           {task.log && (
             <div style={{ color: "rgba(0,229,160,0.6)", marginBottom: logLines && logLines.length > 0 ? 6 : 0 }}>
-              Log → <code style={{ color: "rgba(255,255,255,0.35)" }}>{task.log}</code>
+              Log → <code style={{ color: "rgba(255,255,255,0.62)" }}>{task.log}</code>
               {utcPreview && (
                 <span style={{ marginLeft: 12, color: "rgba(255,200,0,0.55)", fontSize: 10, fontFamily: "monospace" }}>
                   ⏱ {utcPreview}
@@ -2561,7 +2561,7 @@ function SchedulerTab() {
   return (
     <div style={{ maxWidth: 860 }}>
       <div style={{ marginBottom: 20 }}>
-        <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, lineHeight: 1.7 }}>
+        <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 12, lineHeight: 1.7 }}>
           Configure automated cron schedules for maintenance and scanning tasks.
           Changes are applied to the server crontab immediately on save.
         </div>
@@ -2703,16 +2703,16 @@ function BackupTab() {
               <code style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 11, whiteSpace: "nowrap", minWidth: 0, flexShrink: 0 }}>
                 {it.file}
               </code>
-              <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, lineHeight: 1.5 }}>{it.desc}</span>
+              <span style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, lineHeight: 1.5 }}>{it.desc}</span>
             </div>
           ))}
         </div>
         <div style={{ marginTop: 12, borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: 10,
           color: "rgba(255,255,255,0.2)", fontSize: 11, lineHeight: 1.7 }}>
-          <strong style={{ color: "rgba(255,255,255,0.35)" }}>Not backed up:</strong>{" "}
+          <strong style={{ color: "rgba(255,255,255,0.62)" }}>Not backed up:</strong>{" "}
           Docker images · log files · Python source code (all re-deployable via <code style={{ fontFamily: "monospace" }}>cycentra-setup.sh</code>).
           <br/>
-          <strong style={{ color: "rgba(255,255,255,0.35)" }}>Scheduling:</strong>{" "}
+          <strong style={{ color: "rgba(255,255,255,0.62)" }}>Scheduling:</strong>{" "}
           Configure automated backup runs in the <strong>Scheduler</strong> tab (Automated Backup task).
         </div>
       </div>

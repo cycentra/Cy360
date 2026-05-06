@@ -88,7 +88,7 @@ function LockedWidget({ title, accent = "#00e5a0", preview = null }) {
   return (
     <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
       borderTop: `2px solid ${accent}40`, borderRadius: 5, padding: "18px 22px", position: "relative", overflow: "hidden" }}>
-      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, letterSpacing: "1.5px",
+      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, letterSpacing: "1.5px",
         textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>{title}</div>
       {/* Blurred placeholder rows — use custom preview or generic bars */}
       {preview || [80, 60, 70, 50].map((w, i) => (
@@ -103,7 +103,7 @@ function LockedWidget({ title, accent = "#00e5a0", preview = null }) {
           <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
           <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
         </svg>
-        <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace",
+        <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace",
           marginTop: 6, letterSpacing: "1px" }}>FULL ACCESS REQUIRED</div>
       </div>
     </div>
@@ -138,7 +138,7 @@ function SslWidget({ assets = [] }) {
             </svg>
             <span style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace" }}>No SSL issues detected</span>
           </div>
-          <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace",
+          <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace",
             padding: "6px 8px", background: "rgba(0,229,160,0.05)", borderRadius: 3 }}>
             Certificate chain & cipher depth requires full access
           </div>
@@ -147,7 +147,7 @@ function SslWidget({ assets = [] }) {
         <div>
           <div style={{ color: "#f5c518", fontSize: 28, fontWeight: 800,
             fontFamily: "'Space Mono',monospace", lineHeight: 1, marginBottom: 4 }}>{total}</div>
-          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginBottom: 12 }}>SSL / TLS issues found</div>
+          <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, marginBottom: 12 }}>SSL / TLS issues found</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
             {[{ label: "Critical", val: critical, color: "#ff3b3b" },
               { label: "High",     val: high,     color: "#ff8c00" },
@@ -159,7 +159,7 @@ function SslWidget({ assets = [] }) {
             ))}
           </div>
           <div style={{ marginTop: 10, padding: "5px 8px", background: "rgba(245,197,24,0.07)",
-            borderRadius: 3, color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+            borderRadius: 3, color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>
             Certificate & cipher details require full access
           </div>
         </div>
@@ -215,7 +215,7 @@ function EmailSecurityWidget({ assets = [] }) {
         </div>
       )}
       <div style={{ marginTop: 8, padding: "5px 8px", background: "rgba(176,110,255,0.07)",
-        borderRadius: 3, color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+        borderRadius: 3, color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>
         Anti-spoofing & threat intel require full access
       </div>
     </div>
@@ -260,7 +260,7 @@ function AssetBreakdownWidget({ assets = [] }) {
         </div>
       )}
       <div style={{ marginTop: 10, padding: "5px 8px", background: "rgba(77,158,255,0.07)",
-        borderRadius: 3, color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+        borderRadius: 3, color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>
         Cloud infra & ownership data require full access
       </div>
     </div>
@@ -303,7 +303,7 @@ function GuestDashboard({ data, onRescan }) {
           </span>
         </div>
         <button onClick={onRescan}
-          style={{ background: "transparent", color: "rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.12)",
+          style={{ background: "transparent", color: "rgba(255,255,255,0.65)", border: "1px solid rgba(255,255,255,0.12)",
             borderRadius: 4, padding: "5px 14px", fontSize: 11, fontFamily: "monospace", cursor: "pointer" }}>
           ← New Scan
         </button>
@@ -320,7 +320,7 @@ function GuestDashboard({ data, onRescan }) {
               STANDARD SCAN
             </span>
           </div>
-          <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 13, marginTop: 4, marginBottom: 0 }}>
+          <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 13, marginTop: 4, marginBottom: 0 }}>
             {domain} · Scan ID: {scanId}
           </p>
         </div>
@@ -337,7 +337,7 @@ function GuestDashboard({ data, onRescan }) {
             <div key={c.label} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
               borderTop: `2px solid ${c.accent}`, padding: "16px 20px", borderRadius: 4, flex: 1, minWidth: 120 }}>
               <div style={{ color: c.accent, fontSize: 28, fontWeight: 800, fontFamily: "'Space Mono',monospace", lineHeight: 1 }}>{c.value}</div>
-              <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 10, letterSpacing: "1.5px", marginTop: 5, textTransform: "uppercase" }}>{c.label}</div>
+              <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 10, letterSpacing: "1.5px", marginTop: 5, textTransform: "uppercase" }}>{c.label}</div>
             </div>
           ))}
         </div>
@@ -418,7 +418,7 @@ function GuestDashboard({ data, onRescan }) {
           </a>
         </div>
 
-        <div style={{ marginTop: 16, textAlign: "center", color: "rgba(255,255,255,0.15)", fontSize: 11, fontFamily: "monospace" }}>
+        <div style={{ marginTop: 16, textAlign: "center", color: "rgba(255,255,255,0.42)", fontSize: 11, fontFamily: "monospace" }}>
           Powered by CyCentra 360 · Free scan provided as a courtesy · Results are indicative only
         </div>
       </div>
@@ -600,7 +600,7 @@ export function GuestScanPage() {
         <h1 style={{ color: "white", fontSize: 28, fontWeight: 700, margin: "0 0 10px" }}>
           Free Attack Surface Scan
         </h1>
-        <p style={{ color: "rgba(255,255,255,0.4)", fontSize: 14, maxWidth: 500, margin: "0 auto" }}>
+        <p style={{ color: "rgba(255,255,255,0.65)", fontSize: 14, maxWidth: 500, margin: "0 auto" }}>
           Get an instant security overview of any domain — powered by CyCentra's ASM engine.
           No account required.
         </p>
@@ -654,7 +654,7 @@ export function GuestScanPage() {
                 border: "2px solid #00e5a0", background: "#00e5a0", boxShadow: "0 0 8px #00e5a0" }}/>
               <div>
                 <div style={{ color: "#00e5a0", fontSize: 13, fontWeight: 600 }}>Standard (Recommended)</div>
-                <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginTop: 2 }}>
+                <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, marginTop: 2 }}>
                   DNS, Web, Crypto, Email, Cloud, Dark Web, Supply Chain, Social Eng, Mobile/API + AI overview — ~45s
                 </div>
               </div>
@@ -672,7 +672,7 @@ export function GuestScanPage() {
                   <span style={{ marginLeft: 8, fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.3)",
                     background: "rgba(255,255,255,0.05)", padding: "1px 6px", borderRadius: 2 }}>PAID</span>
                 </div>
-                <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, marginTop: 2 }}>
+                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, marginTop: 2 }}>
                   Full suite + unlimited AI with in-depth technical remediation — ~90s
                 </div>
               </div>
@@ -690,7 +690,7 @@ export function GuestScanPage() {
                   <span style={{ marginLeft: 8, fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.3)",
                     background: "rgba(255,255,255,0.05)", padding: "1px 6px", borderRadius: 2 }}>PAID</span>
                 </div>
-                <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 11, marginTop: 2 }}>
+                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, marginTop: 2 }}>
                   Read-only, no active probing — ~20s
                 </div>
               </div>
@@ -838,7 +838,7 @@ export function GuestScanPage() {
             <div style={{ color: "rgba(0,229,160,0.7)", fontSize: 11, fontFamily: "monospace", fontWeight: 700, marginBottom: 4 }}>
               ✓ No registration required
             </div>
-            <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, lineHeight: 1.5 }}>
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, lineHeight: 1.5 }}>
               Scan results are not stored beyond 24 hours.<br/>
               For continuous monitoring, get full access.
             </div>

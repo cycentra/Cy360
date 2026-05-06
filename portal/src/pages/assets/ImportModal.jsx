@@ -22,9 +22,9 @@ export function ImportModal({ onClose, onImport }) {
       <div style={{ background: "#0d0f14", border: "1px solid rgba(0,229,160,0.2)", borderTop: "2px solid #00e5a0", borderRadius: 6, padding: 32, width: "min(560px,95vw)" }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
           <span style={{ color: "white", fontFamily: "monospace", fontSize: 14, fontWeight: 700 }}>IMPORT SCAN JSON</span>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: 20 }}>×</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.65)", cursor: "pointer", fontSize: 20 }}>×</button>
         </div>
-        <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, marginBottom: 12 }}>
+        <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11, marginBottom: 12 }}>
           Paste output from <code style={{ color: "#00e5a0" }}>cycentra_scan.py</code>
         </div>
         <textarea value={text} onChange={e => { setText(e.target.value); setErr(""); }}
@@ -35,7 +35,7 @@ export function ImportModal({ onClose, onImport }) {
           <button onClick={handle} style={{ background: "#00e5a0", color: "#0d0f14", fontFamily: "monospace", fontWeight: 700, fontSize: 12, letterSpacing: "1px", padding: "10px 24px", border: "none", borderRadius: 3, cursor: "pointer", textTransform: "uppercase" }}>
             Import & Apply
           </button>
-          <button onClick={onClose} style={{ background: "transparent", color: "rgba(255,255,255,0.4)", fontFamily: "monospace", fontSize: 12, padding: "10px 20px", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 3, cursor: "pointer" }}>
+          <button onClick={onClose} style={{ background: "transparent", color: "rgba(255,255,255,0.65)", fontFamily: "monospace", fontSize: 12, padding: "10px 20px", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 3, cursor: "pointer" }}>
             Cancel
           </button>
         </div>

@@ -37,7 +37,7 @@ class PageErrorBoundary extends Component {
               Clear Cache &amp; Reload
             </button>
           </div>
-          <div style={{ marginTop: 12, fontSize: 10, color: "rgba(255,255,255,0.25)" }}>
+          <div style={{ marginTop: 12, fontSize: 10, color: "rgba(255,255,255,0.55)" }}>
             "Clear Cache &amp; Reload" removes cached module data, AI settings, and asset statuses — your account and scan data are not affected.
           </div>
         </div>
@@ -60,7 +60,6 @@ import { ScanPage }          from './pages/scan/ScanPage.jsx';
 import { DashboardPage }     from './pages/dashboard/DashboardPage.jsx';
 import { AssetsPage }        from './pages/assets/AssetsPage.jsx';
 import { VulnerabilityPage } from './pages/vulnerabilities/VulnerabilityPage.jsx';
-import { PlatformPage }      from './pages/platform/PlatformPage.jsx';
 import { MarketplacePage }   from './pages/marketplace/MarketplacePage.jsx';
 import { SystemSettingsPage } from './pages/settings/SystemSettingsPage.jsx';
 import { AssetModal }        from './pages/assets/AssetModal.jsx';
@@ -340,8 +339,7 @@ export default function App() {
             {activeTab==="siem-incidents" && <SiemIncidentsPage/>}
             {activeTab==="siem-risk"      && <SiemRiskScoresPage/>}
             {activeTab==="siem-ueba"      && <SiemUebaPage/>}
-            {activeTab==="marketplace"    && <MarketplacePage user={user}/>}
-            {activeTab==="platform"       && <PlatformPage installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
+            {activeTab==="marketplace"    && <MarketplacePage user={user} installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
             {activeTab==="benchmark"       && <BenchmarkPage />}
             {activeTab==="system-settings" && <SystemSettingsPage />}
             {activeTab==="audit-trail"    && <AuditTrailPage />}

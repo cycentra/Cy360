@@ -45,7 +45,7 @@ function TrendArrow({ trend }) {
 function BreakdownRow({ label, value, max, color }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-      <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 10, fontFamily: "monospace",
+      <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 10, fontFamily: "monospace",
         width: 130, flexShrink: 0 }}>{label}</div>
       <div style={{ flex: 1, height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2, overflow: "hidden" }}>
         <div style={{ width: `${Math.min(100, (value / max) * 100)}%`, height: "100%",
@@ -84,7 +84,7 @@ function RiskDistHistogram({ scores }) {
   return (
     <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
       borderRadius: 6, padding: "14px 16px" }}>
-      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace",
         letterSpacing: "1.5px", marginBottom: 14 }}>SCORE DISTRIBUTION (0–100)</div>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 72 }}>
         {buckets.map((b, i) => (
@@ -129,7 +129,7 @@ function EntityTypeSplit({ scores }) {
   return (
     <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
       borderRadius: 6, padding: "14px 16px" }}>
-      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace",
         letterSpacing: "1.5px", marginBottom: 14 }}>ENTITY TYPE SPLIT</div>
       <div style={{ display: "flex", borderRadius: 3, overflow: "hidden", height: 14, marginBottom: 14 }}>
         {hosts > 0 && <div style={{ width: `${hostPct}%`, background: "#4d9eff",
@@ -147,7 +147,7 @@ function EntityTypeSplit({ scores }) {
             <div>
               <span style={{ color: r.color, fontSize: 18, fontFamily: "monospace",
                 fontWeight: 700 }}>{r.count}</span>
-              <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11,
+              <span style={{ color: "rgba(255,255,255,0.65)", fontSize: 11,
                 fontFamily: "monospace", marginLeft: 6 }}>{r.label}</span>
               <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9,
                 fontFamily: "monospace", marginLeft: 4 }}>{r.pct}%</span>
@@ -204,7 +204,7 @@ export function SiemRiskScoresPage() {
               fontFamily: "monospace", padding: "3px 10px", borderRadius: 2, fontWeight: 700,
               letterSpacing: "1px" }}>ENTITY INTELLIGENCE</span>
           </div>
-          <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 13 }}>
+          <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 13 }}>
             Composite 0–100 risk scores per host and user. Updated every 5 minutes by the correlation engine.
           </p>
         </div>
@@ -275,7 +275,7 @@ export function SiemRiskScoresPage() {
                       gap: 12, padding: "13px 16px", cursor: "pointer",
                       borderBottom: `1px solid rgba(255,255,255,${isExpanded ? 0.1 : 0.04})`,
                       background: isExpanded ? "rgba(255,255,255,0.03)" : "transparent" }}>
-                    <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10,
+                    <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10,
                       fontFamily: "monospace", alignSelf: "center" }}>
                       {String(idx + 1).padStart(2, "0")}
                     </div>
@@ -305,7 +305,7 @@ export function SiemRiskScoresPage() {
                     <div style={{ alignSelf: "center", display: "flex", alignItems: "center",
                       gap: 6, justifyContent: "flex-end" }}>
                       <TrendArrow trend={entity.trend} />
-                      <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 12 }}>
+                      <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 12 }}>
                         {isExpanded ? "▲" : "▼"}
                       </span>
                     </div>
@@ -316,7 +316,7 @@ export function SiemRiskScoresPage() {
                     <div style={{ padding: "14px 16px 16px 76px",
                       background: "rgba(255,255,255,0.015)",
                       borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-                      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10,
+                      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10,
                         fontFamily: "monospace", letterSpacing: "1px", marginBottom: 10 }}>
                         SCORE BREAKDOWN
                       </div>

@@ -30,9 +30,9 @@ const C = {
   surface2: "#111620",
   border:   "rgba(255,255,255,0.07)",
   border2:  "rgba(255,255,255,0.12)",
-  text:     "rgba(255,255,255,0.85)",
-  muted:    "rgba(255,255,255,0.35)",
-  dim:      "rgba(255,255,255,0.18)",
+  text:     "rgba(255,255,255,0.92)",
+  muted:    "rgba(255,255,255,0.62)",
+  dim:      "rgba(255,255,255,0.45)",
   accent:   "#00e5a0",
   red:      "#ff3b3b",
   orange:   "#ff8c00",
@@ -291,7 +291,7 @@ function BenchmarkChart({ cspi, cohort, industry, allIndustries, onIndustryChang
                 {BAND_LABELS[i]}
               </text>
               <text x={toX(b)} y={H + 26} textAnchor="middle"
-                style={{ fontSize: 9, fill: C.dim, fontFamily: "monospace" }}>
+                style={{ fontSize: 9, fill: C.muted, fontFamily: "monospace" }}>
                 {b}
               </text>
             </g>
@@ -299,9 +299,9 @@ function BenchmarkChart({ cspi, cohort, industry, allIndustries, onIndustryChang
 
           {/* 0 and 100 axis labels */}
           <text x={2} y={H + 26} textAnchor="start"
-            style={{ fontSize: 9, fill: C.dim, fontFamily: "monospace" }}>0</text>
+            style={{ fontSize: 9, fill: C.muted, fontFamily: "monospace" }}>0</text>
           <text x={W - 2} y={H + 26} textAnchor="end"
-            style={{ fontSize: 9, fill: C.dim, fontFamily: "monospace" }}>100</text>
+            style={{ fontSize: 9, fill: C.muted, fontFamily: "monospace" }}>100</text>
 
           {/* Customer marker */}
           {customerX !== null && (
@@ -326,7 +326,7 @@ function BenchmarkChart({ cspi, cohort, industry, allIndustries, onIndustryChang
           {/* No score placeholder */}
           {customerX === null && (
             <text x={W / 2} y={H / 2 + 4} textAnchor="middle"
-              style={{ fontSize: 12, fill: C.dim, fontFamily: "monospace" }}>
+              style={{ fontSize: 12, fill: C.muted, fontFamily: "monospace" }}>
               Run a scan to place your score
             </text>
           )}
@@ -414,7 +414,7 @@ function DimensionCard({ id, dim }) {
       </div>
 
       <div style={{ color: C.muted, fontSize: 11 }}>{dim.detail || "—"}</div>
-      <div style={{ color: "rgba(255,255,255,0.18)", fontSize: 10,
+      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10,
         fontFamily: "monospace", marginTop: 4 }}>
         {meta.desc}
       </div>

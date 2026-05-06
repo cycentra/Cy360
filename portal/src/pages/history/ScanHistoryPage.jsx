@@ -39,7 +39,7 @@ function ScanTooltip({ tooltip }) {
         ["Subdomains", s.subdomains     || 0, "#4d9eff"],
       ].map(([label, val, color]) => (
         <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 14, marginTop: 3 }}>
-          <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>{label}</span>
+          <span style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, fontFamily: "monospace" }}>{label}</span>
           <span style={{ color, fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{val}</span>
         </div>
       ))}
@@ -97,7 +97,7 @@ function LineGraph({ scans, selectedScanId, onScanSelect }) {
 
   return (
     <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "18px 22px", marginBottom: 18 }}>
-      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1.5px", marginBottom: 10 }}>
+      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1.5px", marginBottom: 10 }}>
         FINDINGS & SUBDOMAINS — TREND OVER TIME
       </div>
 
@@ -196,7 +196,7 @@ function LineGraph({ scans, selectedScanId, onScanSelect }) {
             <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace" }}>{s.label}</span>
           </div>
         ))}
-        <span style={{ marginLeft: "auto", color: "rgba(255,255,255,0.15)", fontSize: 9, fontFamily: "monospace" }}>
+        <span style={{ marginLeft: "auto", color: "rgba(255,255,255,0.42)", fontSize: 9, fontFamily: "monospace" }}>
           click a point to load that scan
         </span>
       </div>
@@ -212,7 +212,7 @@ function BarChart({ scans, selectedScanId, onScanSelect }) {
 
   return (
     <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "18px 22px", marginBottom: 18 }}>
-      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1.5px", marginBottom: 14 }}>
+      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1.5px", marginBottom: 14 }}>
         STACKED SEVERITY — FINDINGS PER SCAN
       </div>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 5, height: 80 }}>
@@ -266,7 +266,7 @@ function BarChart({ scans, selectedScanId, onScanSelect }) {
         {[["#ff3b3b", "Critical"], ["#ff8c00", "High"], ["#f5c518", "Other"]].map(([c, l]) => (
           <div key={l} style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <div style={{ width: 8, height: 8, borderRadius: 1, background: c }}/>
-            <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace" }}>{l}</span>
+            <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace" }}>{l}</span>
           </div>
         ))}
       </div>
@@ -288,7 +288,7 @@ function FindingBar({ scan, maxTotal }) {
         {high > 0 && <div style={{ flex: high, background: "#ff8c00" }}/>}
         {rest > 0 && <div style={{ flex: rest, background: "#f5c518" }}/>}
       </div>
-      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace" }}>{total} findings</div>
+      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace" }}>{total} findings</div>
     </div>
   );
 }
@@ -309,9 +309,9 @@ export function ScanHistoryPage({ scanHistory, selectedScanId, onScanSelect, his
     return (
       <div>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: "white", marginBottom: 8 }}>Scan Timeline</h1>
-        <p style={{ color: "rgba(255,255,255,0.4)", fontSize: 13, marginBottom: 22 }}>Historical scan results — last 15 scans</p>
+        <p style={{ color: "rgba(255,255,255,0.65)", fontSize: 13, marginBottom: 22 }}>Historical scan results — last 15 scans</p>
         <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "48px 24px", textAlign: "center" }}>
-          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 13, fontFamily: "monospace" }}>
+          <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 13, fontFamily: "monospace" }}>
             No scan history found. Run your first scan to start tracking changes over time.
           </div>
         </div>
@@ -331,7 +331,7 @@ export function ScanHistoryPage({ scanHistory, selectedScanId, onScanSelect, his
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 22 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: "white" }}>Scan Timeline</h1>
-          <p style={{ color: "rgba(255,255,255,0.4)", fontSize: 13, marginTop: 4 }}>
+          <p style={{ color: "rgba(255,255,255,0.65)", fontSize: 13, marginTop: 4 }}>
             {scanHistory.length} scan{scanHistory.length !== 1 ? "s" : ""} · click any point or row to load that scan
           </p>
         </div>
@@ -344,7 +344,7 @@ export function ScanHistoryPage({ scanHistory, selectedScanId, onScanSelect, his
               <div style={{ color: delta > 0 ? posColor : delta < 0 ? "#00e5a0" : "rgba(255,255,255,0.4)", fontSize: 18, fontFamily: "monospace", fontWeight: 700 }}>
                 {delta > 0 ? `+${delta}` : delta}
               </div>
-              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", marginTop: 2 }}>{label}</div>
+              <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace", marginTop: 2 }}>{label}</div>
             </div>
           ))}
         </div>
@@ -358,7 +358,7 @@ export function ScanHistoryPage({ scanHistory, selectedScanId, onScanSelect, his
 
       {/* Scan list table */}
       <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, overflow: "hidden" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 70px 1fr 80px 80px 90px", padding: "10px 18px", borderBottom: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1.2px", textTransform: "uppercase" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 70px 1fr 80px 80px 90px", padding: "10px 18px", borderBottom: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1.2px", textTransform: "uppercase" }}>
           <span>Date / Scan ID</span><span>Type</span><span>Findings</span>
           <span style={{ textAlign: "right" }}>Subdomains</span>
           <span style={{ textAlign: "right" }}>Critical</span>

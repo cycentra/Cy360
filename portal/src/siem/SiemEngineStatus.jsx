@@ -26,7 +26,7 @@ export function SiemEngineStatus({ children }) {
   if (status === "checking") {
     return (
       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "40px 0",
-        color: "rgba(255,255,255,0.4)", fontSize: 13 }}>
+        color: "rgba(255,255,255,0.65)", fontSize: 13 }}>
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#f5c518",
           animation: "pulse 1.5s infinite", display: "inline-block" }} />
         Checking CySIEM Correlation Engine…

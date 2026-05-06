@@ -25,7 +25,7 @@ const DISCOVERY_DEFAULTS = {
 
 // ── Shared style constants (copied from SystemSettingsPage to stay self-contained) ──
 const CARD  = { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "20px 24px", marginBottom: 20 };
-const LABEL = { color: "rgba(255,255,255,0.35)", fontSize: 10, letterSpacing: "1.5px", fontFamily: "monospace", textTransform: "uppercase", marginBottom: 6 };
+const LABEL = { color: "rgba(255,255,255,0.62)", fontSize: 10, letterSpacing: "1.5px", fontFamily: "monospace", textTransform: "uppercase", marginBottom: 6 };
 const INPUT = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, color: "white", fontFamily: "monospace", fontSize: 12, padding: "8px 12px", width: "100%", outline: "none", boxSizing: "border-box" };
 const BTN   = (color = "#00e5a0") => ({
   background:   `rgba(${color === "#00e5a0" ? "0,229,160" : color === "#4d9eff" ? "77,158,255" : color === "#ff3b3b" ? "255,59,59" : "255,140,0"},0.1)`,
@@ -210,7 +210,7 @@ function SSOProviderCard({ onStatusMsg }) {
             </span>
           )}
         </div>
-        <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 13, fontFamily: "monospace", lineHeight: 1 }}>{open ? "▲" : "▼"}</span>
+        <span style={{ color: "rgba(255,255,255,0.62)", fontSize: 13, fontFamily: "monospace", lineHeight: 1 }}>{open ? "▲" : "▼"}</span>
       </div>
 
       {open && (<>
@@ -264,8 +264,8 @@ function SSOProviderCard({ onStatusMsg }) {
           <div style={LABEL}>OIDC Discovery URL</div>
           <input type="url" value={discoveryUrl} onChange={e => setDiscoveryUrl(e.target.value)}
             placeholder="https://…/.well-known/openid-configuration  (auto-filled for Google/Microsoft/CyCentra360)" style={INPUT} />
-          <div style={{ color: "rgba(255,255,255,0.22)", fontSize: 10, fontFamily: "monospace", marginTop: 4, lineHeight: 1.6 }}>
-            This is your <strong style={{ color: "rgba(255,255,255,0.4)" }}>identity provider's</strong> URL, not this portal's URL.
+          <div style={{ color: "rgba(255,255,255,0.52)", fontSize: 10, fontFamily: "monospace", marginTop: 4, lineHeight: 1.6 }}>
+            This is your <strong style={{ color: "rgba(255,255,255,0.65)" }}>identity provider's</strong> URL, not this portal's URL.
             {provider === "google"      && " Auto-filled for Google — leave blank."}
             {provider === "microsoft"   && " Auto-filled for Microsoft / Azure AD — leave blank."}
             {provider === "cycentra360" && " Auto-filled to the CyCentra OIDC endpoint — leave blank."}
@@ -328,7 +328,7 @@ function SSOProviderCard({ onStatusMsg }) {
 
       {msg && <div style={msg.ok ? STATUS_OK : STATUS_ERR}>{msg.ok ? "✓" : "✗"} {msg.text}</div>}
 
-      <div style={{ marginTop: 14, color: "rgba(255,255,255,0.18)", fontSize: 10, fontFamily: "monospace", lineHeight: 1.8 }}>
+      <div style={{ marginTop: 14, color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", lineHeight: 1.8 }}>
         SSO login URL: <code style={{ color: "#00e5a0" }}>{`${window.location.origin}/api/sso/redirect`}</code><br/>
         Callback URL: <code style={{ color: "#00e5a0" }}>{`${window.location.origin}/api/sso/callback`}</code>
       </div>
@@ -438,7 +438,7 @@ function SMTPCard() {
             </span>
           )}
         </div>
-        <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 13, fontFamily: "monospace", lineHeight: 1 }}>{open ? "▲" : "▼"}</span>
+        <span style={{ color: "rgba(255,255,255,0.62)", fontSize: 13, fontFamily: "monospace", lineHeight: 1 }}>{open ? "▲" : "▼"}</span>
       </div>
 
       {open && (<>
@@ -584,7 +584,7 @@ function PendingUsersCard() {
       )}
 
       {!loading && pending.length === 0 && (
-        <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 12, fontFamily: "monospace" }}>
+        <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 12, fontFamily: "monospace" }}>
           No users are pending approval.
         </div>
       )}
@@ -607,8 +607,8 @@ function PendingUsersCard() {
                   <td style={{ padding: "10px 10px" }}>
                     <span style={{ background: "rgba(0,229,160,0.08)", color: "#00e5a0", borderRadius: 3, padding: "2px 7px", fontSize: 10, fontFamily: "monospace" }}>{u.role}</span>
                   </td>
-                  <td style={{ padding: "10px 10px", color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace" }}>{u.sso_provider || "—"}</td>
-                  <td style={{ padding: "10px 10px", color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
+                  <td style={{ padding: "10px 10px", color: "rgba(255,255,255,0.65)", fontSize: 11, fontFamily: "monospace" }}>{u.sso_provider || "—"}</td>
+                  <td style={{ padding: "10px 10px", color: "rgba(255,255,255,0.62)", fontSize: 11, fontFamily: "monospace" }}>
                     {u.approval_requested_at ? new Date(u.approval_requested_at).toLocaleString() : "—"}
                   </td>
                   <td style={{ padding: "10px 10px" }}>

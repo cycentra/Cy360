@@ -27,7 +27,7 @@ function formatDate(dateStr) {
 function Section({ title, children, accent = "#00e5a0" }) {
   return (
     <div style={{ marginBottom: 22 }}>
-      <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, letterSpacing: "1px", textTransform: "uppercase", marginBottom: 10, fontFamily: "monospace", borderBottom: `1px solid ${accent}20`, paddingBottom: 4 }}>
+      <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 10, letterSpacing: "1px", textTransform: "uppercase", marginBottom: 10, fontFamily: "monospace", borderBottom: `1px solid ${accent}20`, paddingBottom: 4 }}>
         {title}
       </div>
       {children}
@@ -84,7 +84,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
             </div>
             <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11 }}>{asset.type} · {asset.ip}</div>
           </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: 20, padding: 4 }}>×</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.65)", cursor: "pointer", fontSize: 20, padding: 4 }}>×</button>
         </div>
 
         {/* Section tabs */}
@@ -113,7 +113,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                   <div style={{ color: days < 0 ? "#ff3b3b" : days < 30 ? "#ff8c00" : "#00e5a0", fontSize: 12, fontWeight: 600 }}>
                     SSL Certificate: {days < 0 ? "EXPIRED" : `${days} days remaining`}
                   </div>
-                  {asset.cert_expiry && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, marginTop: 2 }}>Expires {formatDate(asset.cert_expiry)}</div>}
+                  {asset.cert_expiry && <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11, marginTop: 2 }}>Expires {formatDate(asset.cert_expiry)}</div>}
                 </div>
               )}
 
@@ -190,7 +190,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                   )}
                   {asset.sources?.length > 0 && (
                     <div style={{ padding: "8px 0" }}>
-                      <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", marginBottom: 6 }}>DISCOVERED VIA</div>
+                      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace", marginBottom: 6 }}>DISCOVERED VIA</div>
                       <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                         {asset.sources.map(s => (
                           <span key={s} style={{ background: "rgba(0,229,160,0.06)", color: "#00e5a0", border: "1px solid rgba(0,229,160,0.2)", fontSize: 10, fontFamily: "monospace", padding: "2px 7px", borderRadius: 2 }}>{s}</span>
@@ -253,11 +253,11 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                   {asset.dns_ips.map((ipObj, i) => (
                     <div key={i} style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 3, padding: "8px 12px", marginBottom: 6 }}>
                       <div style={{ color: "#4d9eff", fontSize: 12, fontFamily: "monospace", fontWeight: 700, marginBottom: 4 }}>{ipObj.ip}</div>
-                      {ipObj.org     && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>Org: {ipObj.org}</div>}
-                      {ipObj.asn     && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>ASN: {ipObj.asn}</div>}
-                      {ipObj.country && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>Country: {ipObj.country} {ipObj.city ? `· ${ipObj.city}` : ""}</div>}
-                      {ipObj.cloud_provider && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>Cloud: {ipObj.cloud_provider}</div>}
-                      {ipObj.reverse_dns && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>rDNS: {ipObj.reverse_dns}</div>}
+                      {ipObj.org     && <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11 }}>Org: {ipObj.org}</div>}
+                      {ipObj.asn     && <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11 }}>ASN: {ipObj.asn}</div>}
+                      {ipObj.country && <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11 }}>Country: {ipObj.country} {ipObj.city ? `· ${ipObj.city}` : ""}</div>}
+                      {ipObj.cloud_provider && <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11 }}>Cloud: {ipObj.cloud_provider}</div>}
+                      {ipObj.reverse_dns && <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11 }}>rDNS: {ipObj.reverse_dns}</div>}
                     </div>
                   ))}
                 </Section>
@@ -309,7 +309,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                   <KV label="Compression"      value={asset.ssl_detail.compression_enabled != null ? (asset.ssl_detail.compression_enabled ? "⚠ Enabled" : "✓ Disabled") : null}/>
                   {asset.ssl_detail.san_details?.length > 0 && (
                     <div style={{ padding: "5px 0" }}>
-                      <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace", marginBottom: 4 }}>SANs</div>
+                      <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, fontFamily: "monospace", marginBottom: 4 }}>SANs</div>
                       {asset.ssl_detail.san_details.slice(0, 8).map((s, i) => (
                         <div key={i} style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace", padding: "2px 0" }}>{s}</div>
                       ))}
@@ -336,7 +336,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                   <KV label="CORS Issues"     value={asset.http_analysis.cors_issues?.length > 0 ? asset.http_analysis.cors_issues.join(", ") : (asset.http_analysis.cors_issues != null ? "None detected" : null)}/>
                   {asset.http_analysis.http_headers && Object.keys(asset.http_analysis.http_headers).length > 0 && (
                     <div style={{ padding: "5px 0" }}>
-                      <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace", marginBottom: 4 }}>Missing Security Headers</div>
+                      <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, fontFamily: "monospace", marginBottom: 4 }}>Missing Security Headers</div>
                       {Object.entries(asset.http_analysis.http_headers).slice(0, 8).map(([h, v]) => (
                         <div key={h} style={{ color: "rgba(255,59,59,0.6)", fontSize: 11, fontFamily: "monospace", padding: "2px 0" }}>✗ {h}</div>
                       ))}
@@ -357,7 +357,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                   <Section title="Cloud Infrastructure" accent="#4d9eff">
                     {asset.cloud_data.providers?.length > 0 && (
                       <div style={{ marginBottom: 10 }}>
-                        <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace", marginBottom: 4 }}>Providers</div>
+                        <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, fontFamily: "monospace", marginBottom: 4 }}>Providers</div>
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           {asset.cloud_data.providers.map((p, i) => (
                             <span key={i} style={{ background: "rgba(77,158,255,0.1)", color: "#4d9eff", border: "1px solid rgba(77,158,255,0.25)", fontSize: 11, fontFamily: "monospace", padding: "2px 8px", borderRadius: 2 }}>{p}</span>
@@ -418,7 +418,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                   <KV label="DNSSEC"           value={asset.whois_full.dnssec}/>
                   {asset.whois_full.name_servers?.length > 0 && (
                     <div style={{ padding: "5px 0" }}>
-                      <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace", marginBottom: 4 }}>Name Servers</div>
+                      <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, fontFamily: "monospace", marginBottom: 4 }}>Name Servers</div>
                       {asset.whois_full.name_servers.map((ns, i) => (
                         <div key={i} style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace", padding: "2px 0" }}>{ns}</div>
                       ))}
@@ -507,7 +507,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                         Social Engineering Risk: {asset.social_eng.risk_assessment.level}
                       </div>
                       {asset.social_eng.risk_assessment.score != null && (
-                        <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, marginTop: 2 }}>Score: {asset.social_eng.risk_assessment.score}/10</div>
+                        <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11, marginTop: 2 }}>Score: {asset.social_eng.risk_assessment.score}/10</div>
                       )}
                       {asset.social_eng.risk_assessment.reasons?.length > 0 && (
                         <div style={{ marginTop: 6 }}>
@@ -525,7 +525,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                           <div style={{ color: "#ff8c00", fontSize: 12, fontFamily: "monospace" }}>{e.email || e}</div>
                           {e.first_name && <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11 }}>{e.first_name} {e.last_name || ""} {e.position ? `· ${e.position}` : ""}</div>}
                           {e.confidence && <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginTop: 2 }}>Confidence: {e.confidence}</div>}
-                          {e.source && <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>Source: {e.source}</div>}
+                          {e.source && <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>Source: {e.source}</div>}
                         </div>
                       ))}
                     </Section>
@@ -567,7 +567,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                       {asset.mobile_api.api_findings.map((f, i) => (
                         <div key={i} style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 3, padding: "8px 12px", marginBottom: 6 }}>
                           <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 11, fontFamily: "monospace" }}>{f.url || f.endpoint}</div>
-                          {f.status && <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, marginTop: 2 }}>Status: {f.status}</div>}
+                          {f.status && <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 10, marginTop: 2 }}>Status: {f.status}</div>}
                           {f.cors_wildcard && <div style={{ color: "#ff3b3b", fontSize: 11, marginTop: 3 }}>⚠ CORS wildcard origin</div>}
                           {f.rate_limited === false && <div style={{ color: "#ff8c00", fontSize: 11, marginTop: 2 }}>⚠ No rate limiting detected</div>}
                           {f.issues?.length > 0 && (
@@ -630,7 +630,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                         {r.osv_id && <div style={{ color: "rgba(245,197,24,0.6)", fontSize: 10, fontFamily: "monospace" }}>OSV: {r.osv_id}</div>}
                         {r.cve_ids?.length > 0 && <div style={{ color: "rgba(255,59,59,0.6)", fontSize: 10, fontFamily: "monospace" }}>CVEs: {r.cve_ids.join(", ")}</div>}
                         {r.cvss && <div style={{ color: "rgba(255,140,0,0.6)", fontSize: 10, fontFamily: "monospace" }}>CVSS: {r.cvss}</div>}
-                        {r.reason && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, marginTop: 4 }}>{r.reason}</div>}
+                        {r.reason && <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11, marginTop: 4 }}>{r.reason}</div>}
                       </div>
                     );
                   })}
@@ -686,7 +686,7 @@ function VulnList({ vulns, expanded = false }) {
 function StatusButtons({ asset, onStatusChange, onClose }) {
   return (
     <div style={{ marginTop: 24, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-      <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, letterSpacing: "1px", textTransform: "uppercase", marginBottom: 10, fontFamily: "monospace" }}>Update Status</div>
+      <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 10, letterSpacing: "1px", textTransform: "uppercase", marginBottom: 10, fontFamily: "monospace" }}>Update Status</div>
       <div style={{ display: "flex", gap: 8 }}>
         {["open", "in-review", "resolved"].map(s => (
           <button key={s} onClick={() => { onStatusChange(asset.id, s); onClose(); }}

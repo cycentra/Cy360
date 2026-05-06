@@ -25,11 +25,19 @@ const SvgGear  = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" str
 
 /**
  * Build the sidebar nav sections.
- * Called with live state so badges and OPEN module links stay current.
+ * Called with live state so badges and OPERATIONS module links stay current.
+ *
+ * Navigation hierarchy:
+ *   SECURITY POSTURE     — Posture Benchmark (primary entry)
+ *   EXTERNAL EXPOSURE    — Attack Surface · Asset Inventory · Vulnerabilities · Scan Operations
+ *   INTERNAL EXPOSURE    — Active Incidents · Entity Risk · Behavioral Analytics
+ *   OPERATIONS           — Audit Trail · Active module launch links (CySIEM always, addons when enabled)
+ *   MARKETPLACE          — Marketplace (integrations, playbooks, platform extensions)
+ *   PLATFORM CONFIGURATION — System Settings
  *
  * @param {object} opts
  * @param {object} opts.installedModules - current installedModules state
- * @param {object|null} opts.data        - current scan data (for SIEM badge)
+ * @param {object|null} opts.data        - current scan data (unused, kept for API compat)
  */
 export function buildNavSections({ installedModules = {}, data = null }) {
   const addonInstalled = Object.entries(installedModules)
@@ -37,45 +45,32 @@ export function buildNavSections({ installedModules = {}, data = null }) {
 
   return [
     {
-      section: "THREAT INTELLIGENCE",
-      items: [
-        { id: "dashboard",     label: "External Threat Overview", icon: SvgDash  },
-        { id: "assets",        label: "Asset Inventory",          icon: SvgAsset },
-        { id: "vulns",         label: "Findings",                 icon: SvgVuln  },
-        { id: "scan",          label: "Run Scan",                 icon: SvgScan,  accent: "#00e5a0" },
-      ],
-    },
-    {
-      section: "CORRELATION ENGINE",
-      items: [
-        { id: "siem-incidents", label: "Active Incidents",     icon: <span style={{ fontSize: 13 }}>🔥</span>, accent: "#ff3b3b" },
-        { id: "siem-risk",      label: "Entity Risk",          icon: <span style={{ fontSize: 13 }}>⚡</span>, accent: "#ff8c00" },
-        { id: "siem-ueba",      label: "Behaviour Analytics",  icon: <span style={{ fontSize: 13 }}>👤</span>, accent: "#b06eff" },
-      ],
-    },
-    {
       section: "SECURITY POSTURE",
       items: [
         { id: "benchmark", label: "Posture Benchmark", icon: SvgBench, accent: "#00e5a0" },
       ],
     },
     {
-      section: "ACTIONS",
+      section: "EXTERNAL EXPOSURE",
       items: [
-        { id: "marketplace", label: "Marketplace",  icon: SvgMkt,   accent: "#4d9eff" },
-        { id: "audit-trail", label: "Audit Trail",  icon: SvgAudit, accent: "#b06eff" },
+        { id: "dashboard", label: "Attack Surface",  icon: SvgDash  },
+        { id: "assets",    label: "Asset Inventory", icon: SvgAsset },
+        { id: "vulns",     label: "Vulnerabilities", icon: SvgVuln  },
+        { id: "scan",      label: "Scan Operations", icon: SvgScan, accent: "#00e5a0" },
       ],
     },
     {
-      section: "PLATFORM",
+      section: "INTERNAL EXPOSURE",
       items: [
-        { id: "platform",         label: "Platform Modules", icon: SvgMods, badge: addonInstalled.length || 0, accent: "#b06eff" },
-        { id: "system-settings",  label: "Settings",  icon: SvgGear, accent: "#00e5a0" },
+        { id: "siem-incidents", label: "Active Incidents",     icon: <span style={{ fontSize: 13 }}>🔥</span>, accent: "#ff3b3b" },
+        { id: "siem-risk",      label: "Entity Risk",          icon: <span style={{ fontSize: 13 }}>⚡</span>, accent: "#ff8c00" },
+        { id: "siem-ueba",      label: "Behavioral Analytics", icon: <span style={{ fontSize: 13 }}>👤</span>, accent: "#b06eff" },
       ],
     },
     {
-      section: "OPEN",
+      section: "OPERATIONS",
       items: [
+        { id: "audit-trail", label: "Audit Trail", icon: SvgAudit, accent: "#b06eff" },
         {
           id:          "open-cysiem",
           label:       "CySIEM",
@@ -93,6 +88,18 @@ export function buildNavSections({ installedModules = {}, data = null }) {
             externalUrl: mod?.embeddedPath || getModuleUrl(id),
           };
         }),
+      ],
+    },
+    {
+      section: "MARKETPLACE",
+      items: [
+        { id: "marketplace", label: "Marketplace", icon: SvgMkt, accent: "#4d9eff" },
+      ],
+    },
+    {
+      section: "PLATFORM CONFIGURATION",
+      items: [
+        { id: "system-settings", label: "System Settings", icon: SvgGear, accent: "#00e5a0" },
       ],
     },
   ];
