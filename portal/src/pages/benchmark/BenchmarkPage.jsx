@@ -57,11 +57,11 @@ const SCORE_COLOR = (s) =>
 
 const BAND_LABELS = ["P10", "P25", "P50 (Median)", "P75", "P90"];
 const BAND_COLORS = [
-  "rgba(255,59,59,0.25)",
-  "rgba(255,140,0,0.20)",
-  "rgba(245,166,35,0.18)",
-  "rgba(77,158,255,0.18)",
-  "rgba(0,229,160,0.22)",
+  "rgba(255,59,59,0.60)",
+  "rgba(255,140,0,0.55)",
+  "rgba(245,166,35,0.52)",
+  "rgba(77,158,255,0.52)",
+  "rgba(0,229,160,0.58)",
 ];
 
 // ── Small helpers ─────────────────────────────────────────────────────────────
@@ -139,7 +139,7 @@ function CspiGauge({ cspi, grade, percentile, percentileLabel }) {
       <svg width="220" height="118" viewBox="0 0 220 118">
         {/* Background arc */}
         <path d={`M ${CX - R} ${CY} A ${R} ${R} 0 0 1 ${CX + R} ${CY}`}
-          fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="18" strokeLinecap="round"/>
+          fill="none" stroke="rgba(255,255,255,0.14)" strokeWidth="18" strokeLinecap="round"/>
         {/* Zone arcs: red → orange → yellow → blue → green */}
         {[
           [0.00, 0.30, "#ff3b3b"],
@@ -155,7 +155,7 @@ function CspiGauge({ cspi, grade, percentile, percentileLabel }) {
             <path key={col}
               d={`M ${x0} ${y0} A ${R} ${R} 0 0 1 ${x1} ${y1}`}
               fill="none" stroke={col} strokeWidth="18" strokeLinecap="butt"
-              opacity="0.7"
+              opacity="1"
             />
           );
         })}
@@ -163,7 +163,7 @@ function CspiGauge({ cspi, grade, percentile, percentileLabel }) {
         {hasScore && cspi > 0 && (
           <path d={arcPath(cspi / 100, R)}
             fill="none" stroke={color} strokeWidth="18"
-            strokeLinecap="round" opacity="0.35"/>
+            strokeLinecap="round" opacity="0.55"/>
         )}
         {/* Needle */}
         {hasScore && (
@@ -226,7 +226,7 @@ function BenchmarkChart({ cspi, cohort, industry, allIndustries, onIndustryChang
     [bands[1], bands[2], BAND_COLORS[2], "Average"],
     [bands[2], bands[3], BAND_COLORS[3], "Above Avg"],
     [bands[3], bands[4], BAND_COLORS[4], "Leader"],
-    [bands[4], 100,      "rgba(0,229,160,0.32)", "Top 10%"],
+    [bands[4], 100,      "rgba(0,229,160,0.72)", "Top 10%"],
   ];
 
   const customerX = cspi !== null && cspi !== undefined ? toX(cspi) : null;
