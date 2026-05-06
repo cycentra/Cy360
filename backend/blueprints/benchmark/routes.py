@@ -246,24 +246,43 @@ def _latest_asm_scan_file() -> Optional[Path]:
 # ── 1. ASM ────────────────────────────────────────────────────────────────────
 
 def _collect_asm_score() -> dict:
-    """External attack surface score from the latest ASM scan JSON (0-100)."""
+    """
+    External attack surface score (0-100).
+
+    Primary:  reads meta.posture_score embedded by cycentra_scan.py
+              (post-patch scans — available immediately after this patch).
+    Fallback: calls score_from_portal_json() for pre-patch scans on disk.
+
+    Single source of truth: backend/cy_asm/posture_score.py
+    """
     latest = _latest_asm_scan_file()
     if not latest:
         return {"score": None, "stale": False,
                 "detail": "No ASM scan found — run a scan first"}
     try:
-        mtime = datetime.fromtimestamp(latest.stat().st_mtime, tz=timezone.utc)
-        stale = (datetime.now(timezone.utc) - mtime) > timedelta(hours=48)
-        data  = json.loads(latest.read_text())
-        score = (data.get("posture_score")
-                 or data.get("score")
-                 or (data.get("summary") or {}).get("posture_score"))
-        domain = (data.get("meta") or {}).get("domain", latest.parent.name)
+        mtime  = datetime.fromtimestamp(latest.stat().st_mtime, tz=timezone.utc)
+        stale  = (datetime.now(timezone.utc) - mtime) > timedelta(hours=48)
+        data   = json.loads(latest.read_text())
+        meta   = data.get("meta") or {}
+        domain = meta.get("domain", latest.parent.name)
+
+        # Primary: score already embedded in meta (post-patch scans)
+        score = meta.get("posture_score")
+        grade = meta.get("posture_grade", "—")
+
+        # Fallback: recompute for pre-patch scan files still on disk
+        if score is None:
+            try:
+                from cy_asm.posture_score import score_from_portal_json
+                score, grade = score_from_portal_json(data)
+            except Exception as _fb:
+                log.warning("[benchmark] ASM score fallback failed: %s", _fb)
+
         return {
             "score":  int(score) if score is not None else None,
             "stale":  stale,
-            "detail": f"{domain} — scanned {mtime.strftime('%Y-%m-%d %H:%M UTC')}",
-            "grade":  data.get("posture_grade", "—"),
+            "grade":  grade,
+            "detail": f"{domain} — grade {grade} — scanned {mtime.strftime('%Y-%m-%d %H:%M UTC')}",
         }
     except Exception as exc:
         log.warning("[benchmark] ASM score parse error: %s", exc)

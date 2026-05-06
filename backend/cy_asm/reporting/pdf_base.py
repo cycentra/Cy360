@@ -506,56 +506,9 @@ def build_cover(report_type: str, domain: str, org: str,
 
 
 # ── Score Helpers ─────────────────────────────────────────────────────────────
-
-def compute_posture_score(all_findings: List[Dict], subdomain_count: int,
-                          ssl_ok: bool, email_status: str) -> Tuple[int, str]:
-    """
-    Compute a 0-100 external security posture score.
-    Deductions:
-      - Critical finding: -12 each (max -48)
-      - High finding:     -6  each (max -30)
-      - Medium finding:   -2  each (max -16)
-      - Low finding:      -0.5 each (max -5)
-      - SSL issues:       -10
-      - Email weak:       -5
-    Bonuses:
-      - SSL OK:           +5
-      - Email elite/robust: +3
-    """
-    score = 80  # baseline
-
-    crit  = sum(1 for f in all_findings if str(f.get("severity","")).lower() == "critical")
-    high  = sum(1 for f in all_findings if str(f.get("severity","")).lower() == "high")
-    med   = sum(1 for f in all_findings if str(f.get("severity","")).lower() == "medium")
-    low   = sum(1 for f in all_findings if str(f.get("severity","")).lower() == "low")
-
-    score -= min(crit * 12, 48)
-    score -= min(high * 6,  30)
-    score -= min(med  * 2,  16)
-    score -= min(int(low * 0.5), 5)
-
-    if not ssl_ok:
-        score -= 10
-    else:
-        score += 5
-
-    if email_status == "elite":
-        score += 3
-    elif email_status in ("basic", "none", ""):
-        score -= 5
-
-    score = max(0, min(100, score))
-
-    grade = (
-        "A+" if score >= 90 else
-        "A"  if score >= 80 else
-        "B"  if score >= 70 else
-        "C"  if score >= 55 else
-        "D"  if score >= 35 else
-        "F"
-    )
-    return score, grade
-
+# Single source of truth: cy_asm/posture_score.py
+# Relative import works from all callers (cycentra_scan.py, Flask, CLI).
+from ..posture_score import compute_posture_score
 
 def extract_domain_scores(results: Dict[str, Any]) -> Dict[str, float]:
     """Derive per-domain scores for the radar chart (0-100, higher = better)."""

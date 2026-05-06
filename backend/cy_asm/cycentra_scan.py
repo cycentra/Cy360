@@ -1338,6 +1338,17 @@ def main():
             }]
         }
 
+        # ── Embed posture score in scan JSON before writing to disk ──────────
+        # Single source of truth: cy_asm/posture_score.py
+        try:
+            from posture_score import score_from_portal_json as _score_fn
+            _pscore, _pgrade = _score_fn(portal_payload)
+            portal_payload["meta"]["posture_score"] = _pscore
+            portal_payload["meta"]["posture_grade"] = _pgrade
+            logger.info(f"✅ [Posture] Score embedded: {_pscore} ({_pgrade})")
+        except Exception as _score_err:
+            logger.warning(f"⚠️ [Posture] Score embedding skipped (scan unaffected): {_score_err}")
+
         with open(portal_file, "w") as pf:
             json.dump(portal_payload, pf, indent=2)
 
