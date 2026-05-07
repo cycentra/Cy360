@@ -211,11 +211,12 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
   const [escalated,    setEscalated]    = useState(null);  // { case_id, case_url }
   const [escalateErr,  setEscalateErr]  = useState(null);
   // Status lifecycle (inline in expanded panel)
-  const [txTarget,  setTxTarget]  = useState(null);
-  const [txComment, setTxComment] = useState("");
-  const [txErr,     setTxErr]     = useState("");
-  const [txBusy,    setTxBusy]    = useState(false);
-  const [autoBusy,  setAutoBusy]  = useState(false);
+  const [txTarget,       setTxTarget]       = useState(null);
+  const [txComment,      setTxComment]      = useState("");
+  const [txErr,          setTxErr]          = useState("");
+  const [txBusy,         setTxBusy]         = useState(false);
+  const [autoBusy,       setAutoBusy]       = useState(false);
+  const [wazuhLaunching, setWazuhLaunching] = useState(false);
 
   const color      = ANOMALY_COLORS[a.anomaly_type] || "#888";
   const anomalyId  = makeAnomalyId(a);
@@ -314,6 +315,29 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
   const wazuhLink = (integrations?.wazuh_url && (a.alert_ids?.[0]))
     ? `${integrations.wazuh_url}/app/discover#/?_g=(time:(from:now-1d,to:now))&_a=(query:(language:kuery,query:'_id:"${a.alert_ids[0]}"'))`
     : null;
+
+  const handleWazuhLaunch = async (e) => {
+    e.stopPropagation();
+    if (!wazuhLink) return;
+    setWazuhLaunching(true);
+    try {
+      const res = await fetch("/api/siem/wazuh-launch", { credentials: "include" });
+      if (res.redirected) {
+        window.open(res.url, "_blank", "noopener,noreferrer");
+        return;
+      }
+      const data = await res.json();
+      if (data.token) {
+        sessionStorage.setItem("wazuh_auth_token", data.token);
+      }
+      // Always open the specific Discover deep-link, not the generic launch_url
+      window.open(wazuhLink, "_blank", "noopener,noreferrer");
+    } catch {
+      window.open(wazuhLink, "_blank", "noopener,noreferrer");
+    } finally {
+      setWazuhLaunching(false);
+    }
+  };
 
   const hasContext = a.agent_name || a.src_ip || a.rule_id || a.process_name || a.file_path;
 
@@ -541,16 +565,20 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
 
           {/* ── CyIRIS Ticket indicator ────────────────────────────────── */}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            {/* Wazuh deep-link */}
+            {/* Wazuh deep-link — SSO launch */}
             {wazuhLink && (
-              <a href={wazuhLink} target="_blank" rel="noopener noreferrer"
+              <button
+                onClick={handleWazuhLaunch}
+                disabled={wazuhLaunching}
+                title="Opens Wazuh Discover for this alert with your CyCentra session (SSO)"
                 style={{ display: "inline-flex", alignItems: "center", gap: 5,
-                  background: "rgba(77,158,255,0.08)", border: "1px solid rgba(77,158,255,0.25)",
+                  background: wazuhLaunching ? "rgba(77,158,255,0.03)" : "rgba(77,158,255,0.08)",
+                  border: "1px solid rgba(77,158,255,0.25)",
                   color: "#4d9eff", fontSize: 11, fontFamily: "monospace",
-                  padding: "5px 12px", borderRadius: 3, textDecoration: "none",
-                  cursor: "pointer" }}>
-                🔍 View in Wazuh
-              </a>
+                  padding: "5px 12px", borderRadius: 3,
+                  cursor: wazuhLaunching ? "wait" : "pointer" }}>
+                {wazuhLaunching ? "Launching…" : "View in Wazuh"}
+              </button>
             )}
 
             {/* SUCCESS — ticket already exists */}

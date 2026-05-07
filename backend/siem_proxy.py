@@ -15,7 +15,9 @@ RBAC:
 
 import os
 import json
+import time
 import subprocess
+from collections import defaultdict
 from datetime import datetime, timezone
 from functools import wraps
 
@@ -24,6 +26,16 @@ from flask import Blueprint, request, Response, jsonify, session, make_response
 
 SIEM_ENGINE_URL = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100")
 PROXY_TIMEOUT   = int(os.environ.get("SIEM_PROXY_TIMEOUT", "10"))
+
+# Wazuh API credentials — same env vars used by benchmark/routes.py
+WAZUH_API_URL  = os.environ.get("WAZUH_API_URL",      "https://127.0.0.1:55000")
+WAZUH_API_USER = os.environ.get("WAZUH_API_USER",     "wazuh-wui")
+WAZUH_API_PASS = os.environ.get("WAZUH_API_PASSWORD", "")
+
+# Rate-limiter: max 10 wazuh-launch requests per user per 60-second window
+_WAZUH_LAUNCH_WINDOW = 60   # seconds
+_WAZUH_LAUNCH_LIMIT  = 10   # requests per window
+_wazuh_launch_hits: dict = defaultdict(list)  # email -> [timestamp, ...]
 
 siem_bp = Blueprint("siem", __name__, url_prefix="/api/siem")
 
@@ -478,6 +490,88 @@ def siem_ueba_integrations():
         "iris_enabled":  bool(iris_cfg),
         "wazuh_enabled": bool(WAZUH_URL),
     })
+
+
+@siem_bp.route("/wazuh-launch", methods=["GET"])
+def siem_wazuh_launch():
+    """Return a Wazuh JWT so the frontend can open an authenticated session.
+
+    RBAC:
+      - No session         → 401
+      - viewer role        → 403 (read-only users do not get raw Wazuh access)
+      - analyst / admin    → 200 with {"launch_url": ..., "token": ...}
+      - Rate limit         → 429 after 10 calls / 60 s per user
+
+    Fallback: if Wazuh API creds are missing or the API is unreachable,
+    returns {"launch_url": <WAZUH_URL>, "token": null} so the frontend
+    still opens the Wazuh dashboard (unauthenticated, current behaviour).
+    """
+    from core.config import WAZUH_URL
+    from core.helpers import auth_event
+    import base64
+
+    email = session.get("user_email")
+    if not email:
+        return jsonify({"error": "Authentication required"}), 401
+
+    role = _get_role()
+    if role not in ("admin", "analyst"):
+        auth_event(
+            event_type="rbac_denied",
+            email=email,
+            client_id="",
+            result="failure",
+            detail="wazuh-launch: viewer role denied",
+            ip=request.remote_addr,
+        )
+        return jsonify({"error": "Analyst or admin role required to launch Wazuh SSO"}), 403
+
+    # ── Rate limiting ──────────────────────────────────────────────────────────
+    now = time.time()
+    hits = _wazuh_launch_hits[email]
+    # Evict timestamps outside the current window
+    hits[:] = [t for t in hits if now - t < _WAZUH_LAUNCH_WINDOW]
+    if len(hits) >= _WAZUH_LAUNCH_LIMIT:
+        return jsonify({"error": "Too many Wazuh launch requests — try again shortly"}), 429
+    hits.append(now)
+
+    # ── Determine Wazuh dashboard URL ─────────────────────────────────────────
+    # Prefer the configured WAZUH_URL; fall back to deriving from request host.
+    launch_url = WAZUH_URL or ""
+    if not launch_url:
+        host = request.host.split(":")[0]
+        wazuh_host = host.replace("cy360.", "cysiem.") if host.startswith("cy360.") else host
+        launch_url = f"https://{wazuh_host}/app/wazuh"
+
+    # ── Obtain Wazuh JWT ───────────────────────────────────────────────────────
+    token = None
+    if WAZUH_API_PASS:
+        try:
+            creds = base64.b64encode(
+                f"{WAZUH_API_USER}:{WAZUH_API_PASS}".encode()
+            ).decode()
+            resp = _req.get(
+                f"{WAZUH_API_URL}/security/user/authenticate",
+                headers={"Authorization": f"Basic {creds}"},
+                timeout=8,
+                verify=False,  # Wazuh uses self-signed cert
+            )
+            resp.raise_for_status()
+            token = resp.json().get("data", {}).get("token")
+        except Exception:
+            # Graceful fallback: return URL without token
+            token = None
+
+    auth_event(
+        event_type="oauth_login",
+        email=email,
+        client_id="wazuh",
+        result="success" if token else "failure",
+        detail=f"wazuh-launch SSO {'token obtained' if token else 'fallback (no token)'}",
+        ip=request.remote_addr,
+    )
+
+    return jsonify({"launch_url": launch_url, "token": token})
 
 
 @siem_bp.route("/alerts")

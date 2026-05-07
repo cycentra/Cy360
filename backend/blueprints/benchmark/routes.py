@@ -854,7 +854,9 @@ def _collect_threat_intel_score() -> dict:
                      timeout=timeout, verify=verify)
         if r.status_code == 200:
             feeds     = r.json() if isinstance(r.json(), list) else []
-            enabled_n = sum(1 for f in feeds if f.get("enabled"))
+            # MISP wraps each feed under a "Feed" key: [{"Feed": {...}}, ...]
+            # Unwrap before reading "enabled" so the field is always accessible.
+            enabled_n = sum(1 for f in feeds if f.get("Feed", f).get("enabled"))
             total_n   = len(feeds)
             # 3+ enabled feeds = full 40 pts; proportional below 3
             feed_score  = min(40, round((enabled_n / max(3, 1)) * 40))
