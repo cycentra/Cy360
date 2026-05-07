@@ -764,13 +764,17 @@ def _read_cysiemstack_env() -> dict:
 
 def _read_misp_config() -> dict | None:
     """
-    Resolve MISP credentials using a three-level fallback chain.
-    Mirrors iris_connector._load_iris_config() pattern.
+    Resolve MISP credentials using a four-level fallback chain.
 
     Priority (first source with both url AND apiKey wins):
       1. /opt/cycentra/ai_settings.json  → misp.url / misp.apiKey
-      2. /opt/cycentra/cysiemstack.env   → MISP_URL / MISP_API_KEY
-      3. os.environ                      → MISP_URL / MISP_API_KEY
+      2. os.environ CLOUD_MISP_*         → set by EnvironmentFile=/opt/cycentra/.env
+      3. /opt/cycentra/cysiemstack.env   → MISP_URL / MISP_API_KEY
+      4. os.environ MISP_*               → MISP_URL / MISP_API_KEY
+
+    CLOUD_MISP_* (Source 2) is checked before cysiemstack.env because the .env
+    file is updated by the UI and always carries the current key, whereas
+    cysiemstack.env may hold a stale key written during initial install.
 
     Returns dict(url, apiKey, mode) or None if disabled/unconfigured.
     """
@@ -791,7 +795,17 @@ def _read_misp_config() -> dict | None:
     except Exception as exc:
         log.warning("[benchmark] ai_settings.json read error: %s", exc)
 
-    # Source 2: cysiemstack.env
+    # Source 2: os.environ CLOUD_MISP_* (written by UI to /opt/cycentra/.env)
+    if not url or not api_key:
+        cloud_url = _os.environ.get("CLOUD_MISP_URL", "").strip().rstrip("/")
+        cloud_key = _os.environ.get("CLOUD_MISP_API_KEY", "").strip()
+        if cloud_url and cloud_key:
+            url     = url     or cloud_url
+            api_key = api_key or cloud_key
+            if not mode or mode == "disabled":
+                mode = _os.environ.get("CLOUD_MISP_MODE", "cloud").lower()
+
+    # Source 3: cysiemstack.env
     if not url or not api_key:
         siem_env = _read_cysiemstack_env()
         url      = url      or siem_env.get("MISP_URL",     "").strip().rstrip("/")
@@ -801,7 +815,7 @@ def _read_misp_config() -> dict | None:
         if siem_env.get("MISP_ENABLED", "true").lower() == "false":
             return None
 
-    # Source 3: os.environ
+    # Source 4: os.environ MISP_*
     if not url or not api_key:
         url     = url     or _os.environ.get("MISP_URL",     "").strip().rstrip("/")
         api_key = api_key or _os.environ.get("MISP_API_KEY", "").strip()
