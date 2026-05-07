@@ -1,11 +1,3 @@
-## v1.0.382 -- 2026-05-07
-
-### Bug Fixes
-
-  - **Posture Benchmark — Threat Intel widget shows 0 despite MISP feeds active**: `_collect_threat_intel_score()` called `f.get("enabled")` directly on each item from MISP `/feeds/index`, but MISP wraps every feed object under a `"Feed"` key (`[{"Feed": {"enabled": 1, ...}}]`). The top-level dict has no `"enabled"` key, so `enabled_n` was always 0, making `feed_score = 0` and the composite score = 0 regardless of configured feeds. Fixed: `f.get("Feed", f).get("enabled")` unwraps the MISP envelope before reading `enabled`, while remaining backward-compatible with any unwrapped format. (`backend/blueprints/benchmark/routes.py`)
-
----
-
 ## v1.0.381 -- 2026-05-07
 
 ### Improvements
