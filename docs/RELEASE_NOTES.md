@@ -1,3 +1,11 @@
+## v1.0.382 -- 2026-05-07
+
+### New Features
+
+  - Wazuh SSO auto-login via /api/siem/wazuh-launch
+
+---
+
 ## v1.0.381 -- 2026-05-07
 
 ### Improvements
