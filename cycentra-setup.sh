@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.383 -- 2026-05-08 11:12 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.384 -- 2026-05-08 11:16 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -610,8 +610,8 @@ if [[ -f "$WAZUH_YML" ]]; then
     # proxy auth config.
     # Priority: (1) uncomment existing real password, (2) inject from installer
     # tar, (3) fall-back to checking if tar is available from a previous install.
-    _ks_line_user=$(grep -E "^#?\s*opensearch\.username:" "$WAZUH_YML" | head -1)
-    _ks_line_pass=$(grep -E "^#?\s*opensearch\.password:" "$WAZUH_YML" | head -1)
+    _ks_line_user=$(grep -E "^#?\s*opensearch\.username:" "$WAZUH_YML" | head -1 || true)
+    _ks_line_pass=$(grep -E "^#?\s*opensearch\.password:" "$WAZUH_YML" | head -1 || true)
     _ks_pass_val=$(echo "$_ks_line_pass" | awk '{print $NF}' | tr -d '"')
     if [[ -n "$_ks_line_user" && -n "$_ks_pass_val" && "$_ks_pass_val" != "kibanaserver" ]]; then
         # Lines exist with a real (non-placeholder) password — uncomment if needed
@@ -634,10 +634,10 @@ if [[ -f "$WAZUH_YML" ]]; then
         fi
     fi
 
-    # ── Write proxy auth settings early (idempotent) ─────────────────────────
-    # Same logic as step 4.3b — writing here ensures proxy auth survives even if
-    # setup.sh is interrupted before step 4.3b runs, or is re-run in update mode
-    # only up to this step.  Step 4.3b will re-apply (no-op if already correct).
+    # ── Strip any leftover proxy auth settings (idempotent) ─────────────────
+    # Wazuh Dashboard uses basicauth mode — nginx injects cy360_sso Basic Auth
+    # credentials for all oauth2-proxy-gated requests, so no proxy auth config
+    # in opensearch_dashboards.yml is needed or wanted.
     python3 - "$WAZUH_YML" << 'WAZUH_EARLY_PROXY_EOF'
 import sys
 path = sys.argv[1]
@@ -657,20 +657,13 @@ cleaned = "\n".join(
     line for line in text.splitlines()
     if not any(line.strip().startswith(p) for p in remove_prefixes)
 ).rstrip() + "\n"
-cleaned += (
-    "# CyCentra 360 IAP proxy auth — written by cycentra-setup.sh\n"
-    "opensearch_security.auth.type: proxy\n"
-    "opensearch_security.proxycache.user_header: \"x-proxy-user\"\n"
-    "opensearch_security.proxycache.roles_header: \"x-proxy-roles\"\n"
-    "opensearch.requestHeadersAllowlist: [\"securitytenant\",\"Authorization\",\"x-proxy-user\",\"x-proxy-roles\"]\n"
-)
 with open(path, "w") as f:
     f.write(cleaned)
-print("Wazuh proxy auth config written (early, step 4.1)")
+print("Wazuh basicauth mode ensured — proxy auth settings removed if present")
 WAZUH_EARLY_PROXY_EOF
 
     systemctl restart wazuh-dashboard 2>/dev/null || true
-    success "CySIEM Dashboard configured: host=127.0.0.1, port=5601, auth.type=proxy"
+    success "CySIEM Dashboard configured: host=127.0.0.1, port=5601, basicauth mode"
 
 fi
 
@@ -1403,18 +1396,15 @@ else
              ERRORS+=("oauth2-proxy failed to start"); }
     fi
 
-    # ── Wazuh Dashboard: switch to proxy auth mode ──────────────────────────────
-    # Remove all OIDC settings, add proxy auth.
-    # NOTE: proxy mode still requires two OpenSearch Security changes:
-    #   1. proxy_auth_domain http_enabled: true  (applied via securityadmin.sh)
-    #   2. all_access rolesmapping entry          (applied via REST API or securityadmin.sh)
-    # Both are attempted below; see "OpenSearch Security" section.
+    # ── Wazuh Dashboard: ensure basicauth mode + cy360_sso SSO user ─────────────
+    # SSO mechanism: nginx injects Authorization: Basic <cy360_sso:pass> for all
+    # requests that pass the oauth2-proxy IAP gate. Wazuh stays in basicauth mode.
+    # cy360_sso is an OpenSearch admin user created below via REST API (idempotent).
     if [[ -f "$_WAZUH_DASH_YML" ]]; then
-        step_header "CySIEM PROXY AUTH"
+        step_header "CySIEM SSO (nginx Basic Auth injection)"
         cp "$_WAZUH_DASH_YML" "${_WAZUH_DASH_YML}.pre-iap-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
 
-        # Use Python to rewrite cleanly — avoids null bytes from shell heredocs,
-        # idempotent (strips old proxy/OIDC lines before re-adding).
+        # Strip any leftover proxy auth config — keep dashboard in basicauth mode.
         python3 - "$_WAZUH_DASH_YML" << 'WAZUH_PY_EOF'
 import sys
 path = sys.argv[1]
@@ -1434,25 +1424,74 @@ cleaned = "\n".join(
     line for line in text.splitlines()
     if not any(line.strip().startswith(p) for p in remove_prefixes)
 ).rstrip() + "\n"
-cleaned += (
-    "# CyCentra 360 IAP proxy auth — written by cycentra-setup.sh\n"
-    "opensearch_security.auth.type: proxy\n"
-    "opensearch_security.proxycache.user_header: \"x-proxy-user\"\n"
-    "opensearch_security.proxycache.roles_header: \"x-proxy-roles\"\n"
-    "opensearch.requestHeadersAllowlist: [\"securitytenant\",\"Authorization\",\"x-proxy-user\",\"x-proxy-roles\"]\n"
-)
 with open(path, "w") as f:
     f.write(cleaned)
-print("Wazuh proxy auth config written")
+print("Wazuh basicauth mode confirmed — proxy/OIDC settings removed")
 WAZUH_PY_EOF
 
-        # ── OpenSearch Security: enable proxy_auth_domain ────────────────────────
-        # The Dashboard proxy auth requires OpenSearch to accept proxy headers.
-        # Enable http_enabled under proxy_auth_domain in the security config and
-        # apply via the REST API (primary) or securityadmin.sh (fallback).
+        # ── OpenSearch Security: create cy360_sso service account (idempotent) ──
+        # cy360_sso is an admin user whose credentials nginx injects via Basic Auth
+        # for every request that passes the oauth2-proxy IAP gate.  This is the SSO
+        # mechanism: one shared service account, gated by the oauth2-proxy cookie.
         _OS_SEC_CFG="/etc/wazuh-indexer/opensearch-security/config.yml"
         _CY_SEC_LOG="/var/log/cycentra/securityadmin.log"
+        _CERT_DIR="/etc/wazuh-indexer/certs"
+        _SEC_ADMIN="/usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh"
+        _IU_YML="/etc/wazuh-indexer/opensearch-security/internal_users.yml"
+        _RM_YML="/etc/wazuh-indexer/opensearch-security/roles_mapping.yml"
         mkdir -p /var/log/cycentra 2>/dev/null || true
+        if [[ -f "$_IU_YML" && -f "${_CERT_DIR}/admin.pem" ]]; then
+            # Hash for CyCentra360!SiemSSO — generated with OpenSearch hash.sh ($2y prefix)
+            _CY360_SSO_HASH='$2y$12$nv335OI0o5tb4dnYtda8OeQastkTuiivxpkzh0nAYoxoZpMrJZ40S'
+            if ! grep -q "cy360_sso:" "$_IU_YML" 2>/dev/null; then
+                cat >> "$_IU_YML" << CY360_SSO_EOF
+
+cy360_sso:
+  hash: "${_CY360_SSO_HASH}"
+  reserved: false
+  backend_roles:
+  - "admin"
+  description: "CyCentra 360 SSO service account — nginx Basic Auth injection"
+CY360_SSO_EOF
+                # Ensure kibana_server role maps cy360_sso
+                if grep -q "^kibana_server:" "$_RM_YML" 2>/dev/null; then
+                    python3 - "$_RM_YML" << 'RM_PY_EOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    text = f.read()
+if "cy360_sso" not in text:
+    # Append cy360_sso to the users list under kibana_server
+    import re
+    text = re.sub(
+        r'(kibana_server:.*?users:\n)((?:  - "[^"]+"\n)*)',
+        lambda m: m.group(1) + m.group(2) + '  - "cy360_sso"\n',
+        text, flags=re.DOTALL
+    )
+    with open(path, "w") as f:
+        f.write(text)
+    print("cy360_sso added to kibana_server rolesmapping")
+else:
+    print("cy360_sso already in rolesmapping")
+RM_PY_EOF
+                fi
+                # Apply via securityadmin.sh
+                export JAVA_HOME=/usr/share/wazuh-indexer/jdk
+                cd / && "$_SEC_ADMIN" \
+                    -f "$_IU_YML" -t internalusers \
+                    -icl -nhnv \
+                    -cacert "${_CERT_DIR}/root-ca.pem" \
+                    -cert   "${_CERT_DIR}/admin.pem" \
+                    -key    "${_CERT_DIR}/admin-key.pem" \
+                    -h 127.0.0.1 2>>"$_CY_SEC_LOG" \
+                    && success "OpenSearch cy360_sso user created and applied" \
+                    || warn "securityadmin.sh failed for cy360_sso — check ${_CY_SEC_LOG}"
+            else
+                success "OpenSearch cy360_sso user already present"
+            fi
+        fi
+        if false; then
+        # dead code block — original proxy_auth_domain section replaced
         if [[ -f "$_OS_SEC_CFG" ]]; then
             # Patch config.yml on disk: enable proxy_auth_domain.http_enabled.
             # Bugs in the previous state-machine:
@@ -1779,22 +1818,27 @@ CY_ROLES_EOF
             fi
         fi
 
+        fi  # end dead-code if false block
         systemctl restart wazuh-dashboard 2>/dev/null || true
-        success "CySIEM Dashboard: proxy auth configured (X-Proxy-User from nginx)"
+        success "CySIEM Dashboard: basicauth mode, cy360_sso user ready"
     else
-        info "Wazuh not installed — CySIEM proxy auth will run when Wazuh is deployed"
+        info "Wazuh not installed — CySIEM SSO will run when Wazuh is deployed"
     fi
 
-    # ── Patch running nginx cysiem block: all_access role (idempotent) ────────
-    # Earlier installs wrote X-Proxy-Roles admin which has no OpenSearch roles_mapping
-    # entry by default.  all_access is the built-in backend role pre-mapped to the
-    # all_access security role in every vanilla OpenSearch installation.
+    # ── Patch running nginx cysiem block: inject cy360_sso Basic Auth (idempotent) ──
+    # nginx injects Authorization: Basic cy360_sso credentials for all requests
+    # that pass the oauth2-proxy IAP gate — this is the SSO mechanism for Wazuh.
     _NGINX_MOD="/etc/nginx/sites-available/cycentra-modules"
-    if [[ -f "$_NGINX_MOD" ]] && grep -q 'X-Proxy-Roles admin' "$_NGINX_MOD" 2>/dev/null; then
-        sed -i 's/X-Proxy-Roles admin;/X-Proxy-Roles all_access;/g' "$_NGINX_MOD" || true
+    _CY360_AUTH_HEADER='proxy_set_header Authorization "Basic Y3kzNjBfc3NvOkN5Q2VudHJhMzYwIVNpZW1TU08=";'
+    if [[ -f "$_NGINX_MOD" ]] && ! grep -q 'Y3kzNjBfc3NvOkN5Q2VudHJhMzYwIVNpZW1TU08=' "$_NGINX_MOD" 2>/dev/null; then
+        # Insert the Authorization header inside the cysiem location / block
+        sed -i '/proxy_pass https:\/\/127\.0\.0\.1:5601;/{n; s|.*|        '"$_CY360_AUTH_HEADER"'\n&|}' "$_NGINX_MOD" 2>/dev/null || \
+        sed -i '/server_name cysiem\./,/^}/{ /proxy_pass https.*5601/a\        '"$_CY360_AUTH_HEADER"' }' "$_NGINX_MOD" 2>/dev/null || true
         nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
-            success "nginx cysiem: X-Proxy-Roles patched to all_access" || \
-            warn "nginx reload failed after X-Proxy-Roles patch — check: nginx -t"
+            success "nginx cysiem: cy360_sso Basic Auth injection added" || \
+            warn "nginx reload after Basic Auth patch — check: nginx -t"
+    elif [[ -f "$_NGINX_MOD" ]]; then
+        success "nginx cysiem: cy360_sso Basic Auth injection already present"
     fi
 
     # ── Remove duplicate CORS headers from cyasm nginx block (added before v1.0.286) ──
@@ -2294,9 +2338,8 @@ server {
         proxy_set_header Connection \$connection_upgrade;
         proxy_set_header Host \$host;
         proxy_set_header X-Forwarded-Proto https;
-        # Pass authenticated identity to Wazuh Dashboard (proxy auth mode)
-        proxy_set_header X-Proxy-User  \$proxy_user;
-        proxy_set_header X-Proxy-Roles all_access;
+        # Inject cy360_sso credentials — passes IAP gate; Wazuh stays in basicauth mode
+        proxy_set_header Authorization "Basic Y3kzNjBfc3NvOkN5Q2VudHJhMzYwIVNpZW1TU08=";
         proxy_read_timeout 120;
         proxy_buffering off;
         proxy_cookie_flags ~ samesite=none secure;
