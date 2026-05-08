@@ -1,3 +1,11 @@
+## v1.0.383 -- 2026-05-08
+
+### Bug Fixes
+
+  - MISP Threat Intel widget — CLOUD_MISP_API_KEY fallback + Feed envelope unwrap
+
+---
+
 ## v1.0.382 -- 2026-05-07
 
 ### New Features
