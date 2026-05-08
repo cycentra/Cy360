@@ -1,8 +1,18 @@
 ## v1.0.384 -- 2026-05-08
 
-### Improvements
+### Bug Fixes
 
-  - Stability and performance improvements.
+  - **`cycentra-setup.sh` — fatal grep abort in CySIEM dashboard step**: `grep -E "^#?\s*opensearch\.username:"` returned exit code 1 (no match) under `set -euo pipefail`, aborting every `--update` run at Step 1. Fixed by appending `|| true` to both grep assignments.
+
+  - **`cycentra-setup.sh` — replace broken proxy-auth approach with nginx Basic Auth injection**: All sections that attempted to configure `opensearch_security.auth.type: proxy` in `opensearch_dashboards.yml` have been replaced. Confirmed root cause: OpenSearch proxy auth returned `Authentication finally failed for null` regardless of `requestHeadersAllowlist`, `challenge: false`, or `proxy_auth_domain.http_enabled: true` — headers were not being forwarded correctly in this Wazuh 4.x build.
+
+    **Working SSO mechanism (nginx Basic Auth injection)**:
+    - Wazuh Dashboard stays in default `basicauth` mode — no `opensearch_security.auth.type` change.
+    - `cy360_sso` service account in OpenSearch with `backend_role: admin` (hash via `hash.sh`, `$2y$` prefix — Python bcrypt `$2b$` does not authenticate).
+    - nginx cysiem location block injects `Authorization: Basic Y3kzNjBfc3NvOkN5Q2VudHJhMzYwIVNpZW1TU08=` (`cy360_sso:CyCentra360!SiemSSO`) for every request that passes the oauth2-proxy IAP gate.
+    - Result: any logged-in Cy360 user clicking CySIEM lands directly in the Wazuh Dashboard — no secondary login prompt.
+
+    **Files changed**: `cycentra-setup.sh` — Step 4.1 (grep fix + strip proxy auth), Step 4.3b (replaced proxy-auth/securityadmin block with cy360_sso user creation), nginx template cysiem location (added `proxy_set_header Authorization`), idempotent nginx patch section.
 
 ---
 
@@ -10,7 +20,15 @@
 
 ### Bug Fixes
 
-  - MISP Threat Intel widget — CLOUD_MISP_API_KEY fallback + Feed envelope unwrap
+  - **`backend/blueprints/benchmark/routes.py` — Threat Intel widget showing 0**: Two compounding issues caused the "Threat Intelligence" widget on the Posture Benchmark page to display score 0 with "feeds unavailable · attribute count unavailable":
+
+    1. **Wrong MISP API key selected**: `_read_misp_config()` resolved credentials via `ai_settings.json` → `cysiemstack.env` → `os.environ`. The `cysiemstack.env` file contained a stale key (`MISP_API_KEY=v2ZTsp4J...`) that returned 401 from MISP. The correct key (`CLOUD_MISP_API_KEY=M74nCZUC...`) was written by the UI to `/opt/cycentra/.env` (loaded into `os.environ`), but was never reached because both URL and key appeared to be satisfied by `cysiemstack.env` (URL matched, key was stale).
+
+       **Fix**: Added new Source 2 in `_read_misp_config()` that checks `os.environ.get("CLOUD_MISP_URL")` / `os.environ.get("CLOUD_MISP_API_KEY")` **before** reading `cysiemstack.env`. This matches the priority of all other CLOUD_* settings in the platform.
+
+    2. **MISP feed response envelope not unwrapped**: `_collect_threat_intel_score()` counted enabled feeds with `f.get("enabled")`, but the MISP `/feeds/index` API wraps each feed: `[{"Feed": {"enabled": 1, ...}}]`. Fix: `f.get("Feed", f).get("enabled")` — handles both wrapped (MISP 2.4+) and unwrapped formats.
+
+    **Result**: Score 40/40 (5/96 feeds enabled). Files: `backend/blueprints/benchmark/routes.py` lines ~859, ~765. Tests: `tests/unit/test_benchmark_threat_intel.py` (5 cases covering both formats).
 
 ---
 
@@ -18,7 +36,13 @@
 
 ### New Features
 
-  - Wazuh SSO auto-login via /api/siem/wazuh-launch
+  - **CySIEM (Wazuh) seamless auto-login from Cy360 portal**: Clicking the CySIEM link in the portal now opens the Wazuh Dashboard without a secondary login prompt, matching the SSO experience of CyIRIS and CySOAR.
+
+    **Architecture**: `cysiem.cycentra.com` is already gated by an oauth2-proxy IAP (`auth_request` in nginx) that validates the `.cycentra.com` session cookie. After the IAP gate passes, nginx injects `Authorization: Basic cy360_sso` credentials to Wazuh. The `cy360_sso` user is an OpenSearch admin service account created during setup. No Wazuh Dashboard config changes are required.
+
+    **Portal changes** (`portal/src/siem/SiemIncidentsPage.jsx`, `portal/src/siem/SiemUebaPage.jsx`): CySIEM buttons call `GET /api/siem/wazuh-launch` before opening the tab, storing a launch token in `sessionStorage` for potential deep-link usage.
+
+    **Backend** (`backend/siem_proxy.py`): Added `GET /api/siem/wazuh-launch` endpoint — session auth check, role guard (viewer blocked), rate limit (10 req/min), returns `{"launch_url": ..., "token": ...}` with graceful fallback if Wazuh API is unreachable.
 
 ---
 
