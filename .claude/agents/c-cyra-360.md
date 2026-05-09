@@ -1,5 +1,5 @@
 ---
-name: cyra-360
+name: c-cyra-360
 description: Lead Fullstack Architect and Feature Development Agent for CyCentra 360. Owns the entire backend Blueprint layer and the React SPA portal. Activates automatically on issues labelled feature or enhancement, and on any fullstack or portal bug.
 model: claude-sonnet-4-6
 applyTo:

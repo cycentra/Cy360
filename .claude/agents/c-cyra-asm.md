@@ -1,5 +1,5 @@
 ---
-name: cyra-asm
+name: c-cyra-asm
 description: Senior ASM Engine Agent for CyCentra 360. Owns the attack surface management scanner (backend/cy_asm), the ASM Blueprint (backend/blueprints/asm/scanner.py), and the scan result visualization pipeline. Activates on issues labelled asm, scan, vulnerability, or asset.
 model: claude-sonnet-4-6
 applyTo:

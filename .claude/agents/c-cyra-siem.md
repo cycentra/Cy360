@@ -1,5 +1,5 @@
 ---
-name: cyra-siem
+name: c-cyra-siem
 description: Senior SIEM and Correlation Engine Agent for CyCentra 360. Owns the CySIEM correlation engine (backend/cysiemstack), UEBA anomaly detection, FP scoring, CyIRIS ticket lifecycle, and the SIEM proxy layer (backend/siem_proxy.py). Activates on issues labelled siem, correlation, ueba, incident, or iris.
 model: claude-sonnet-4-6
 applyTo:

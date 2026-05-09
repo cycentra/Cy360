@@ -1,5 +1,5 @@
 ---
-name: cyra-rbac
+name: c-cyra-rbac
 description: Senior Identity, Auth and Access Control Agent for CyCentra 360. Owns OAuth flows (auth/oauth.py), OIDC provider (oidc/provider.py), RBAC management (rbac/manager.py), and session/cookie security. Reviews every new route added by other agents. Activates on auth, rbac, oidc, and security labels.
 model: claude-sonnet-4-6
 applyTo:

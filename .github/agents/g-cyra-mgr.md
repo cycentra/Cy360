@@ -1,5 +1,5 @@
 ---
-name: cyra-mgr
+name: g-cyra-mgr
 description: Primary Orchestrator Agent for the entire CyCentra product suite. Receives all tasks, delegates to specialist agents, monitors status, enforces the mandatory operational protocol, and owns ticket closure. All tasks must be initiated through cyra-mgr.
 model: claude-sonnet-4-6
 applyTo:

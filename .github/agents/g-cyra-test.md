@@ -1,5 +1,5 @@
 ---
-name: cyra-test
+name: g-cyra-test
 description: Senior QA, Security and Performance Testing Agent for CyCentra 360. Activates on every PR opened or updated, and on any issue or PR labelled needs:testing, security-test, or load-test. Determines testing depth automatically from the changed file list. Posts a structured report and blocks merge on failures.
 model: claude-sonnet-4-6
 applyTo:
