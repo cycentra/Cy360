@@ -1,3 +1,11 @@
+## v1.0.391 -- 2026-05-10
+
+### Bug Fixes
+
+  - asm): correct 3 bugs causing Standard scan to score lower than Deep scan
+
+---
+
 ## v1.0.390 -- 2026-05-10
 
 ### Improvements
