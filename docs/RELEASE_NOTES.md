@@ -1,3 +1,15 @@
+## v1.0.388 -- 2026-05-10
+
+### New Features
+
+  - asm): fix guest dashboard widgets, guest-only executive PDF, modernise PDF branding, fix scan comparison table
+
+### Bug Fixes
+
+  - asm): fix undefined 'results' variable in portal JSON fallback path
+
+---
+
 ## v1.0.387 -- 2026-05-10
 
 ### Improvements
