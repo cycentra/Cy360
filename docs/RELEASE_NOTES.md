@@ -1,5 +1,13 @@
 ## v1.0.389 -- 2026-05-10
 
+### Bug Fixes
+
+  - asm): rebuild guest dashboard with real data widgets; correct SCAN_TIERS for standard scan
+
+---
+
+## v1.0.389 -- 2026-05-10
+
 ### Enhancements
 
 - **ASM Guest Dashboard — full real-data widget rebuild (Issues A, B, C)**
