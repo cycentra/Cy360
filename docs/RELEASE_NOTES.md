@@ -1,3 +1,32 @@
+## v1.0.389 -- 2026-05-10
+
+### Enhancements
+
+- **ASM Guest Dashboard — full real-data widget rebuild (Issues A, B, C)**
+
+  **Issue A fixed — SSL/Email widgets now read from `raw_results` directly:**
+  `SslWidget` and `EmailSecurityWidget` in `GuestScanPage.jsx` previously counted findings by filtering `a.vulnerabilities` with regex keyword matching. This inflated counts when Deep scan AI enrichment tagged additional findings as ssl/email-related. Both widgets are now completely rewritten to read from `asset.raw_results.crypto.results.ssl` and `asset.raw_results.email_sec.results` respectively — the exact module output, unchanged between scan types. SSL widget shows: protocol (color-coded by version), days to expiry (red/orange/green), chain validity, OCSP stapling, PQC hybrid TLS detection, and raw issue count. Email widget shows: SPF present/missing, DKIM valid selectors count, DMARC policy (reject/quarantine/none, color-coded), DNSSEC state, spoofing risk level, and elite score.
+
+  **Issue B fixed — guest dashboard now shows 6 real unlocked widgets:**
+  Replaced the previous layout (3 real + 5 locked) with a full rebuild covering all modules Standard scan collects:
+  - Row 1: Risk Donut, SslWidget (raw_results), EmailSecurityWidget (raw_results)
+  - Row 2: WebSecurityWidget (ports, exposed paths, JS secrets, HTTPS redirect, missing headers), DnsWidget (A/MX records, DNSSEC, typosquatting, subdomain summary), CloudWidget (providers, bucket counts, K8s exposure)
+  - Row 3: PartialLockedWidget x3 (Dark Web, Supply Chain, AI Risk Score) — show teaser numbers if raw_results key exists, otherwise show "requires Deep Scan"
+  Stat strip updated: shows posture_score/posture_grade from meta, total findings, critical count, subdomain total, open port count.
+
+  **Issue C fixed — ScanPage.jsx SCAN_TIERS corrected for Standard scan:**
+  Standard tier previously listed "Dark web mention search" and "AI enrichment & remediation" as included — both are false per `SCAN_PROFILES["standard"]` (ai_enrichment: False, no dark_web module). Features list corrected to: DNS/WHOIS, Subdomain enumeration, SSL/TLS audit, Email security, Web security & ports, Cloud exposure, OSINT — all included. Dark web, Supply chain, AI enrichment, PDF Technical Report — all marked excluded. Scan time corrected from ~60s to ~45s. A note field added explaining posture score tier differences, rendered as italic text with an ⓘ info icon and tooltip.
+
+  **Issue D documented — posture score difference is by design:**
+  Deep Scan activates 4 extra modules (dark_web, supply_chain, social_eng, mobile_api) + AI enrichment, surfacing more findings. Each additional finding deducts from the score per `posture_score.py`. A lower Deep Scan score is a more accurate measurement, not a regression. Documented in `docs/standard-vs-deep-scan.md` with the full formula table, FAQ, and module coverage matrix.
+
+  **Files changed:**
+  - `portal/src/pages/guest-scan/GuestScanPage.jsx` — full GuestDashboard rebuild, new widgets: SslWidget, EmailSecurityWidget, WebSecurityWidget, DnsWidget, CloudWidget, PartialLockedWidget
+  - `portal/src/pages/scan/ScanPage.jsx` — SCAN_TIERS Standard features corrected, note + ⓘ tooltip added
+  - `docs/standard-vs-deep-scan.md` — new document: Standard vs Deep Scan explanation, posture formula, FAQ
+
+---
+
 ## v1.0.388 -- 2026-05-10
 
 ### New Features

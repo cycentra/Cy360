@@ -36,6 +36,66 @@ const RISK_CONFIG = {
 
 // ── GuestDashboard ────────────────────────────────────────────────────────────
 
+// Shared check/cross icon pair
+function CheckIcon({ color = "#00e5a0" }) {
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5">
+      <polyline points="20 6 9 17 4 12"/>
+    </svg>
+  );
+}
+function CrossIcon({ color = "#ff3b3b" }) {
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5">
+      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+    </svg>
+  );
+}
+
+function widgetCard(borderColor) {
+  return {
+    background: "rgba(255,255,255,0.025)",
+    border: "1px solid rgba(255,255,255,0.07)",
+    borderTop: `2px solid ${borderColor}`,
+    borderRadius: 5,
+    padding: "18px 22px",
+    flex: 1,
+    minWidth: 280,
+  };
+}
+
+function WidgetLabel({ children }) {
+  return (
+    <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
+      textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>
+      {children}
+    </div>
+  );
+}
+
+function WidgetNote({ children }) {
+  return (
+    <div style={{ marginTop: 10, padding: "5px 8px", background: "rgba(255,255,255,0.04)",
+      borderRadius: 3, color: "rgba(255,255,255,0.4)", fontSize: 10, fontFamily: "monospace",
+      fontStyle: "italic", lineHeight: 1.4 }}>
+      {children}
+    </div>
+  );
+}
+
+function StatusRow({ label, ok, okText = "Pass", failText = "Issue", okColor = "#00e5a0", failColor = "#ff8c00", detail = null }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
+      <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>{label}</span>
+      <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontFamily: "monospace",
+        color: ok ? okColor : failColor }}>
+        {ok ? <CheckIcon color={okColor}/> : <CrossIcon color={failColor}/>}
+        {detail !== null ? detail : (ok ? okText : failText)}
+      </span>
+    </div>
+  );
+}
+
 function RiskDonut({ assets = [] }) {
   const counts = { critical: 0, high: 0, medium: 0, low: 0 };
   assets.forEach(a => (a.vulnerabilities || []).forEach(v => {
@@ -83,236 +143,341 @@ function RiskDonut({ assets = [] }) {
   );
 }
 
-function LockedWidget({ title, accent = "#00e5a0", preview = null }) {
+// ── Real-data widgets (read from raw_results) ──────────────────────────────────
+
+function SslWidget({ asset }) {
+  const ssl      = asset?.raw_results?.crypto?.results?.ssl || {};
+  const cert     = ssl.cert_info || {};
+  const sslEnabled = ssl.ssl_enabled !== false;
+  const daysLeft = cert.days_to_expiry ?? null;
+  const protocol = cert.protocol || ssl.protocol || null;
+  const cipher   = cert.cipher || null;
+  const ocsp     = cert.ocsp_stapling ?? false;
+  const chainValid = cert.chain_valid !== false;
+  const issues   = ssl.issues || [];
+  const pqc      = asset?.raw_results?.crypto?.results?.pqc?.server_pqc ?? false;
+
+  const daysColor = daysLeft === null ? "rgba(255,255,255,0.4)"
+    : daysLeft < 30 ? "#ff3b3b"
+    : daysLeft < 60 ? "#ff8c00"
+    : "#00e5a0";
+
+  const protocolColor = protocol
+    ? (protocol.includes("1.3") ? "#00e5a0" : protocol.includes("1.2") ? "#f5c518" : "#ff3b3b")
+    : "rgba(255,255,255,0.3)";
+
   return (
-    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
-      borderTop: `2px solid ${accent}40`, borderRadius: 5, padding: "18px 22px", position: "relative", overflow: "hidden" }}>
-      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, letterSpacing: "1.5px",
-        textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>{title}</div>
-      {preview || [80, 60, 70, 50].map((w, i) => (
-        <div key={i} style={{ height: 12, width: `${w}%`, background: "rgba(255,255,255,0.05)",
-          borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>
-      ))}
-      {/* Overlay with professional note — no "Limited Access" language */}
-      <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column",
-        alignItems: "center", justifyContent: "center", gap: 8,
-        background: "rgba(9,11,16,0.72)", backdropFilter: "blur(3px)", padding: "0 16px" }}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="2">
-          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-        </svg>
-        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace",
-          textAlign: "center", lineHeight: 1.5 }}>
-          For deeper access and full vulnerability analysis,<br/>generate a <span style={{ color: "rgba(0,229,160,0.7)", fontWeight: 700 }}>Deep Scan</span> report from the Licensed Portal.
+    <div style={widgetCard("#f5c518")}>
+      <WidgetLabel>SSL / Crypto Health</WidgetLabel>
+      <StatusRow label="SSL Enabled" ok={sslEnabled} okColor="#00e5a0" failColor="#ff3b3b"/>
+      {protocol && (
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Protocol</span>
+          <span style={{ color: protocolColor, fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{protocol}</span>
         </div>
-      </div>
+      )}
+      {daysLeft !== null && (
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Cert Expires</span>
+          <span style={{ color: daysColor, fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{daysLeft}d</span>
+        </div>
+      )}
+      <StatusRow label="Chain Valid" ok={chainValid}/>
+      <StatusRow label="OCSP Stapling" ok={ocsp} okColor="#00e5a0" failColor="#f5c518" failText="Off"/>
+      <StatusRow label="PQC Hybrid TLS" ok={pqc} okColor="#00e5a0" failColor="rgba(255,255,255,0.3)" failText="Not detected"/>
+      {issues.length > 0 && (
+        <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Active Issues</span>
+          <span style={{ color: "#ff8c00", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{issues.length}</span>
+        </div>
+      )}
+      {cipher && (
+        <div style={{ marginTop: 6, padding: "4px 7px", background: "rgba(245,197,24,0.07)", borderRadius: 3 }}>
+          <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace" }}>{cipher}</span>
+        </div>
+      )}
+      <WidgetNote>Full cipher suite audit and PQC readiness available in Deep Scan.</WidgetNote>
     </div>
   );
 }
 
-// ── Partial-data widgets ───────────────────────────────────────────────────────
+function EmailSecurityWidget({ asset }) {
+  const email      = asset?.raw_results?.email_sec?.results || {};
+  const spf        = email.spf || {};
+  const dmarc      = email.dmarc || {};
+  const dkimList   = Array.isArray(email.dkim) ? email.dkim : [];
+  const dnssec     = email.dnssec || {};
+  const spoofRisk  = email.spoofing_risk?.level || null;
+  const eliteScore = email.elite_score || "—";
+  const eliteStatus = email.elite_status || "basic";
 
-function SslWidget({ assets = [] }) {
-  const sslFindings = assets.flatMap(a =>
-    (a.vulnerabilities || []).filter(v =>
-      /ssl|tls|cert|crypto|cipher|https/i.test(v.vulnerability || v.title || "") ||
-      /ssl|tls|cert|crypto|cipher/i.test(v.module || v.category || "")
-    )
-  );
-  const critical = sslFindings.filter(v => v.severity?.toLowerCase() === "critical").length;
-  const high     = sslFindings.filter(v => v.severity?.toLowerCase() === "high").length;
-  const medium   = sslFindings.filter(v => v.severity?.toLowerCase() === "medium").length;
-  const total    = sslFindings.length;
-  // Hide widget entirely if no SSL-related data at all (no findings at all in assets)
-  const noDataAtAll = assets.flatMap(a => a.vulnerabilities || []).length === 0;
-  if (total === 0 && noDataAtAll) return null;
+  const dmarcPolicy   = dmarc.policy || (dmarc.present ? "present" : null);
+  const dmarcOk       = dmarcPolicy === "reject";
+  const dmarcColor    = dmarcPolicy === "reject" ? "#00e5a0"
+    : dmarcPolicy === "quarantine" ? "#f5c518"
+    : "#ff3b3b";
+  const dmarcLabel    = dmarcPolicy || "Missing";
+
+  const spoofColor = spoofRisk === "low" ? "#00e5a0" : spoofRisk === "medium" ? "#f5c518" : spoofRisk === "high" ? "#ff3b3b" : "rgba(255,255,255,0.3)";
+  const validDkim  = dkimList.filter(d => d.valid !== false).length;
+
   return (
-    <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
-      borderTop: "2px solid #f5c518", borderRadius: 5, padding: "18px 22px" }}>
-      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
-        textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>
-        SSL / Crypto Health
+    <div style={widgetCard("#b06eff")}>
+      <WidgetLabel>Email Security</WidgetLabel>
+      <StatusRow label="SPF" ok={!!spf.present} failColor="#ff3b3b"/>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+        <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>DKIM</span>
+        <span style={{ color: dkimList.length > 0 ? "#00e5a0" : "#ff8c00", fontSize: 11, fontFamily: "monospace" }}>
+          {dkimList.length > 0 ? `${validDkim}/${dkimList.length} valid` : "Not found"}
+        </span>
       </div>
-      {total === 0 ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00e5a0" strokeWidth="2.5">
-              <polyline points="20 6 9 17 4 12"/>
-            </svg>
-            <span style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace" }}>No SSL issues detected</span>
-          </div>
-          <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace",
-            padding: "6px 8px", background: "rgba(0,229,160,0.05)", borderRadius: 3 }}>
-            Deep Scan includes full certificate chain, cipher audit, and PQC readiness
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+        <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>DMARC</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 5, color: dmarcColor, fontSize: 11, fontFamily: "monospace" }}>
+          {dmarcOk ? <CheckIcon color={dmarcColor}/> : <CrossIcon color={dmarcColor}/>}
+          {dmarcLabel}
+        </span>
+      </div>
+      <StatusRow label="DNSSEC" ok={!!dnssec.enabled} failColor="#f5c518" failText="Disabled"/>
+      {spoofRisk && (
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Spoofing Risk</span>
+          <span style={{ color: spoofColor, fontSize: 11, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase" }}>{spoofRisk}</span>
+        </div>
+      )}
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
+        <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Elite Score</span>
+        <span style={{ color: eliteStatus === "elite" ? "#00e5a0" : eliteStatus === "robust" ? "#4d9eff" : "#f5c518",
+          fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{eliteScore}</span>
+      </div>
+      <WidgetNote>MTA-STS, BIMI, and full email threat correlation available in Deep Scan.</WidgetNote>
+    </div>
+  );
+}
+
+const PORT_LABELS = { 21: "FTP", 22: "SSH", 25: "SMTP", 80: "HTTP", 443: "HTTPS",
+  3306: "MySQL", 3389: "RDP", 5432: "PgSQL", 6379: "Redis", 8080: "Alt-HTTP",
+  8443: "Alt-HTTPS", 27017: "MongoDB" };
+
+function WebSecurityWidget({ asset }) {
+  const web       = asset?.raw_results?.web?.results || {};
+  const ports     = web.ports || [];
+  const exposed   = web.exposed_paths || [];
+  const jsSecrets = web.js_secrets || [];
+  const http      = web.http_analysis || {};
+  const headers   = http.http_headers || [];
+  const redirects = http.redirects_to_https ?? null;
+  const fingerprints = web.fingerprints || {};
+
+  const critPaths = exposed.filter(p => (p.severity || p.status || "").toString().match(/critical|200/i)).length;
+  const banner    = Object.values(fingerprints)[0]?.banner || null;
+
+  return (
+    <div style={widgetCard("#ff8c00")}>
+      <WidgetLabel>Web Security</WidgetLabel>
+      {ports.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 5 }}>OPEN PORTS</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {ports.slice(0, 6).map(p => (
+              <span key={p} style={{ background: p === 22 || p === 3389 || p === 3306 ? "rgba(255,59,59,0.12)" : "rgba(255,140,0,0.1)",
+                color: p === 22 || p === 3389 || p === 3306 ? "#ff8c00" : "rgba(255,255,255,0.55)",
+                fontSize: 10, fontFamily: "monospace", padding: "2px 7px", borderRadius: 3 }}>
+                {p}{PORT_LABELS[p] ? ` (${PORT_LABELS[p]})` : ""}
+              </span>
+            ))}
+            {ports.length > 6 && <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace" }}>+{ports.length - 6} more</span>}
           </div>
         </div>
-      ) : (
-        <div>
-          <div style={{ color: "#f5c518", fontSize: 28, fontWeight: 800,
-            fontFamily: "'Space Mono',monospace", lineHeight: 1, marginBottom: 4 }}>{total}</div>
-          <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, marginBottom: 12 }}>SSL / TLS issues found</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            {[{ label: "Critical", val: critical, color: "#ff3b3b" },
-              { label: "High",     val: high,     color: "#ff8c00" },
-              { label: "Medium",   val: medium,   color: "#f5c518" }].filter(r => r.val > 0).map(r => (
-              <div key={r.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 11 }}>{r.label}</span>
-                <span style={{ color: r.color, fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{r.val}</span>
+      )}
+      {redirects !== null && <StatusRow label="HTTPS Redirect" ok={redirects} failColor="#ff3b3b"/>}
+      {exposed.length > 0 && (
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Exposed Paths</span>
+          <span style={{ color: critPaths > 0 ? "#ff3b3b" : "#ff8c00", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>
+            {exposed.length}{critPaths > 0 ? ` (${critPaths} critical)` : ""}
+          </span>
+        </div>
+      )}
+      {jsSecrets.length > 0 && (
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>JS Secrets Found</span>
+          <span style={{ color: "#ff3b3b", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{jsSecrets.length} found</span>
+        </div>
+      )}
+      {headers.length > 0 && (
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Missing Headers</span>
+          <span style={{ color: "#f5c518", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{headers.length}</span>
+        </div>
+      )}
+      {banner && (
+        <div style={{ marginTop: 4, padding: "3px 7px", background: "rgba(0,0,0,0.2)", borderRadius: 3 }}>
+          <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace" }}>{banner}</span>
+        </div>
+      )}
+      <WidgetNote>Full CORS audit, WAF detection, and API endpoint mapping available in Deep Scan.</WidgetNote>
+    </div>
+  );
+}
+
+function DnsWidget({ asset, data }) {
+  const dns     = asset?.raw_results?.dns?.results || {};
+  const records = dns.records || {};
+  const typos   = dns.typos || {};
+  const subSum  = data?.subdomain_summary || {};
+  // reuse DNSSEC from email_sec module (same underlying check)
+  const dnssec  = asset?.raw_results?.email_sec?.results?.dnssec || {};
+
+  const aCount  = (records.A || records.a || []).length;
+  const mxCount = (records.MX || records.mx || []).length;
+  const typoReg = Array.isArray(typos.registered) ? typos.registered.length : (typeof typos.registered === "number" ? typos.registered : 0);
+
+  return (
+    <div style={widgetCard("#4d9eff")}>
+      <WidgetLabel>DNS Overview</WidgetLabel>
+      {aCount > 0 && (
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>A Records</span>
+          <span style={{ color: "#4d9eff", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{aCount}</span>
+        </div>
+      )}
+      {mxCount > 0 && (
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>MX Records</span>
+          <span style={{ color: "#4d9eff", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{mxCount}</span>
+        </div>
+      )}
+      <StatusRow label="DNSSEC" ok={!!dnssec.enabled} failColor="#f5c518" failText="Disabled"/>
+      {typoReg > 0 && (
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Typosquats Registered</span>
+          <span style={{ color: "#ff8c00", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{typoReg} domains</span>
+        </div>
+      )}
+      {subSum.total != null && (
+        <div style={{ marginTop: 6, padding: "6px 8px", background: "rgba(77,158,255,0.06)", borderRadius: 3 }}>
+          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 9, fontFamily: "monospace", marginBottom: 4 }}>SUBDOMAIN SUMMARY</div>
+          <div style={{ display: "flex", gap: 12 }}>
+            {[["Total", subSum.total, "#4d9eff"], ["Live", subSum.live, "#00e5a0"], ["New", subSum.new, "#f5c518"]].map(([l, v, c]) => (
+              <div key={l}>
+                <div style={{ color: c, fontSize: 16, fontFamily: "monospace", fontWeight: 800 }}>{v ?? 0}</div>
+                <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace" }}>{l}</div>
               </div>
             ))}
           </div>
-          <div style={{ marginTop: 10, padding: "5px 8px", background: "rgba(245,197,24,0.07)",
-            borderRadius: 3, color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>
-            Full certificate depth available in the Licensed Portal
-          </div>
         </div>
       )}
+      <WidgetNote>Typosquatting takedown analysis and full DNS history available in Deep Scan.</WidgetNote>
     </div>
   );
 }
 
-function EmailSecurityWidget({ assets = [] }) {
-  const emailFindings = assets.flatMap(a =>
-    (a.vulnerabilities || []).filter(v =>
-      /spf|dkim|dmarc|email|smtp|mx |phishing|spoofing/i.test(v.vulnerability || v.title || "") ||
-      /email|mail/i.test(v.module || v.category || "")
-    )
-  );
-  const hasSpfIssue   = emailFindings.some(v => /spf/i.test(v.vulnerability || v.title || ""));
-  const hasDkimIssue  = emailFindings.some(v => /dkim/i.test(v.vulnerability || v.title || ""));
-  const hasDmarcIssue = emailFindings.some(v => /dmarc/i.test(v.vulnerability || v.title || ""));
-  const total = emailFindings.length;
-  // Hide widget if scan returned no findings at all (not yet enriched)
-  const noDataAtAll = assets.flatMap(a => a.vulnerabilities || []).length === 0;
-  if (total === 0 && noDataAtAll) return null;
+function CloudWidget({ asset }) {
+  const cloud    = asset?.raw_results?.cloud?.results || {};
+  const providers = cloud.providers || [];
+  const buckets  = cloud.buckets || [];
+  const k8s      = cloud.k8s_exposed ?? false;
+  const pubBuckets = buckets.filter(b => b.public || b.listable).length;
+  const privBuckets = buckets.length - pubBuckets;
 
-  const rows = [
-    { label: "SPF",   ok: !hasSpfIssue   },
-    { label: "DKIM",  ok: !hasDkimIssue  },
-    { label: "DMARC", ok: !hasDmarcIssue },
-  ];
-  return (
-    <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
-      borderTop: "2px solid #b06eff", borderRadius: 5, padding: "18px 22px" }}>
-      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
-        textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>
-        Email Security
+  const PROVIDER_COLORS = { AWS: "#ff8c00", Azure: "#4d9eff", GCP: "#00e5a0", Cloudflare: "#f5c518" };
+
+  if (providers.length === 0 && buckets.length === 0 && !k8s) {
+    return (
+      <div style={widgetCard("#00e5a0")}>
+        <WidgetLabel>Cloud Exposure</WidgetLabel>
+        <div style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace", display: "flex", alignItems: "center", gap: 6 }}>
+          <CheckIcon color="#00e5a0"/> No cloud infrastructure detected
+        </div>
+        <WidgetNote>Kubernetes cluster exposure, Azure/GCP misconfiguration, and metadata endpoint probing available in Deep Scan.</WidgetNote>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 9, marginBottom: 10 }}>
-        {rows.map(r => (
-          <div key={r.label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>{r.label}</span>
-            {r.ok
-              ? <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace", display: "flex", alignItems: "center", gap: 4 }}>
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#00e5a0" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                  Pass
-                </span>
-              : <span style={{ color: "#ff8c00", fontSize: 11, fontFamily: "monospace", display: "flex", alignItems: "center", gap: 4 }}>
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#ff8c00" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                  Issue
-                </span>
-            }
+    );
+  }
+
+  return (
+    <div style={widgetCard("#00e5a0")}>
+      <WidgetLabel>Cloud Exposure</WidgetLabel>
+      {providers.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 }}>
+          {providers.map(p => (
+            <span key={p} style={{ background: `rgba(255,255,255,0.06)`, color: PROVIDER_COLORS[p] || "rgba(255,255,255,0.5)",
+              fontSize: 10, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 3, border: `1px solid ${(PROVIDER_COLORS[p] || "#fff")}30` }}>
+              {p}
+            </span>
+          ))}
+        </div>
+      )}
+      {buckets.length > 0 && (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+            <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Public Buckets</span>
+            <span style={{ color: pubBuckets > 0 ? "#ff3b3b" : "#00e5a0", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{pubBuckets}</span>
           </div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
+            <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Private Buckets</span>
+            <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{privBuckets}</span>
+          </div>
+        </>
+      )}
+      <StatusRow label="K8s API Exposed" ok={!k8s} okText="No" failText="Exposed" failColor="#ff3b3b"/>
+      <WidgetNote>Kubernetes cluster exposure, Azure/GCP misconfiguration, and metadata endpoint probing available in Deep Scan.</WidgetNote>
+    </div>
+  );
+}
+
+// ── Partial-locked premium widgets (deep-only) ─────────────────────────────────
+
+function PartialLockedWidget({ title, accent = "#00e5a0", teaser }) {
+  return (
+    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+      borderTop: `2px solid ${accent}40`, borderRadius: 5, padding: "18px 22px", flex: 1, minWidth: 280 }}>
+      <WidgetLabel>{title}</WidgetLabel>
+      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 12, fontFamily: "monospace", marginBottom: 10 }}>
+        {teaser}
+      </div>
+      {/* blurred preview bars */}
+      <div style={{ marginBottom: 10 }}>
+        {[75, 55, 65].map((w, i) => (
+          <div key={i} style={{ height: 10, width: `${w}%`, background: `${accent}18`,
+            borderRadius: 3, marginBottom: 7, filter: "blur(2px)" }}/>
         ))}
       </div>
-      {total > 0 && (
-        <div style={{ color: "#b06eff", fontFamily: "monospace", fontSize: 11 }}>
-          {total} email finding{total !== 1 ? "s" : ""} detected
-        </div>
-      )}
-      <div style={{ marginTop: 8, padding: "5px 8px", background: "rgba(176,110,255,0.07)",
-        borderRadius: 3, color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>
-        Anti-spoofing analysis and threat intel available in the Licensed Portal
-      </div>
-    </div>
-  );
-}
-
-function AssetBreakdownWidget({ assets = [] }) {
-  // Group findings by module — the scan JSON uses v.module as the source identifier
-  const byModule = {};
-  assets.forEach(a => {
-    (a.vulnerabilities || []).forEach(v => {
-      const m = v.module || "other";
-      byModule[m] = (byModule[m] || 0) + 1;
-    });
-  });
-  const totalFindings = Object.values(byModule).reduce((s, n) => s + n, 0);
-  const topModules = Object.entries(byModule).sort((a, b) => b[1] - a[1]).slice(0, 5);
-
-  // Hide widget entirely if there's genuinely no data
-  if (totalFindings === 0) return null;
-
-  const MODULE_COLORS = {
-    dns:          "#4d9eff",
-    crypto:       "#f5c518",
-    email_sec:    "#b06eff",
-    web:          "#ff8c00",
-    cloud:        "#00e5a0",
-    osint:        "#4d9eff",
-    supply_chain: "#ff3b3b",
-    dark_web:     "#ff3b3b",
-    social_eng:   "#ff8c00",
-    mobile_api:   "#b06eff",
-  };
-  const MODULE_LABELS = {
-    dns:          "DNS",
-    crypto:       "SSL / Crypto",
-    email_sec:    "Email Security",
-    web:          "Web Analysis",
-    cloud:        "Cloud",
-    osint:        "OSINT",
-    supply_chain: "Supply Chain",
-    dark_web:     "Dark Web",
-    social_eng:   "Social Eng.",
-    mobile_api:   "Mobile / API",
-  };
-
-  return (
-    <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
-      borderTop: "2px solid #4d9eff", borderRadius: 5, padding: "18px 22px" }}>
-      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
-        textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>
-        Findings by Module
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-        {topModules.map(([mod, count]) => {
-          const pct   = Math.round((count / totalFindings) * 100);
-          const color = MODULE_COLORS[mod] || "rgba(255,255,255,0.3)";
-          const label = MODULE_LABELS[mod] || mod.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-          return (
-            <div key={mod}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11 }}>{label}</span>
-                <span style={{ color, fontFamily: "monospace", fontSize: 11, fontWeight: 700 }}>{count}</span>
-              </div>
-              <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2 }}>
-                <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 2,
-                  transition: "width 0.6s ease" }}/>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <div style={{ marginTop: 10, padding: "5px 8px", background: "rgba(77,158,255,0.07)",
-        borderRadius: 3, color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>
-        Full cloud inventory and ownership mapping available in the Licensed Portal
+      <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "rgba(255,255,255,0.04)",
+        border: "1px solid rgba(255,255,255,0.08)", borderRadius: 3, padding: "5px 10px" }}>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="2">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+        <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace" }}>
+          Available in Deep Scan — request Licensed Portal
+        </span>
       </div>
     </div>
   );
 }
 
 function GuestDashboard({ data, onRescan }) {
-  const assets    = data?.assets || [];
-  const domain    = data?.meta?.domain || "—";
-  const scanId    = data?.meta?.scan_id || "—";
-  const totalAssets = assets.length;
-  const totalFindings = assets.reduce((n, a) => n + (a.vulnerabilities?.length || 0), 0);
-  const critCount = assets.reduce((n, a) =>
-    n + (a.vulnerabilities || []).filter(v => v.severity?.toLowerCase() === "critical").length, 0);
-  const highCount = assets.reduce((n, a) =>
-    n + (a.vulnerabilities || []).filter(v => v.severity?.toLowerCase() === "high").length, 0);
-  const subdomains = data?.subdomain_summary?.total || 0;
+  const assets   = data?.assets || [];
+  const asset    = assets[0] || {};
+  const domain   = data?.meta?.domain || "—";
+  const scanId   = data?.meta?.scan_id || "—";
+  const postureScore = data?.meta?.posture_score ?? null;
+  const postureGrade = data?.meta?.posture_grade || null;
+
+  const totalFindings = (asset.vulnerabilities || []).length;
+  const critCount     = (asset.vulnerabilities || []).filter(v => v.severity?.toLowerCase() === "critical").length;
+  const subdomains    = data?.subdomain_summary?.total ?? 0;
+  const openPorts     = (asset?.raw_results?.web?.results?.ports || []).length;
+
+  // Dark web / supply chain — only present if deep scan
+  const darkWebRaw     = asset?.raw_results?.dark_web;
+  const supplyChainRaw = asset?.raw_results?.supply_chain;
+  const darkWebTeaser  = darkWebRaw
+    ? `${(darkWebRaw.results?.hits || []).length} breach record(s) found`
+    : "Dark web breach monitoring requires Deep Scan";
+  const supplyChainTeaser = supplyChainRaw
+    ? `${(supplyChainRaw.results?.vulnerable_libs || []).length} vulnerable JS libraries detected`
+    : "CDN & third-party JS vulnerability analysis requires Deep Scan";
 
   return (
     <div style={{ minHeight: "100vh", background: "#090b10",
@@ -360,102 +525,74 @@ function GuestDashboard({ data, onRescan }) {
           </p>
         </div>
 
-        {/* Stat cards */}
+        {/* Row 0: Stat strip — 5 cards full width */}
         <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
           {[
-            { label: "Assets Found",   value: totalAssets,   accent: "#00e5a0" },
+            {
+              label: "Security Posture",
+              value: postureScore !== null ? `${postureScore}` : "—",
+              sub: postureGrade ? `Grade ${postureGrade}` : null,
+              accent: postureScore !== null
+                ? (postureScore >= 70 ? "#00e5a0" : postureScore >= 50 ? "#f5c518" : "#ff3b3b")
+                : "#4d9eff",
+            },
             { label: "Total Findings", value: totalFindings, accent: "#ff8c00" },
-            { label: "Critical",       value: critCount,     accent: "#ff3b3b" },
-            { label: "High",           value: highCount,     accent: "#ff8c00" },
+            { label: "Critical",       value: critCount,     accent: critCount > 0 ? "#ff3b3b" : "#00e5a0" },
             { label: "Subdomains",     value: subdomains,    accent: "#4d9eff" },
+            { label: "Open Ports",     value: openPorts,     accent: openPorts > 5 ? "#ff8c00" : "#00e5a0" },
           ].map(c => (
             <div key={c.label} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
               borderTop: `2px solid ${c.accent}`, padding: "16px 20px", borderRadius: 4, flex: 1, minWidth: 120 }}>
               <div style={{ color: c.accent, fontSize: 28, fontWeight: 800, fontFamily: "'Space Mono',monospace", lineHeight: 1 }}>{c.value}</div>
+              {c.sub && <div style={{ color: c.accent, fontSize: 11, fontFamily: "monospace", opacity: 0.8, marginTop: 2 }}>{c.sub}</div>}
               <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 10, letterSpacing: "1.5px", marginTop: 5, textTransform: "uppercase" }}>{c.label}</div>
             </div>
           ))}
         </div>
 
-        {/* Row 1: Risk donut + SSL (partial) + Email security (partial) — flex so absent widgets collapse */}
+        {/* Row 1: Risk donut + SSL + Email security */}
         <div style={{ display: "flex", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
           <div style={{ flex: "1 1 260px", background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
             borderTop: "2px solid #ff3b3b", borderRadius: 5, padding: "18px 22px" }}>
-            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
-              textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>
-              Overall Risk Overview
-            </div>
+            <WidgetLabel>Overall Risk Distribution</WidgetLabel>
             <RiskDonut assets={assets}/>
           </div>
-          <div style={{ flex: "1 1 220px" }}><SslWidget assets={assets}/></div>
-          <div style={{ flex: "1 1 220px" }}><EmailSecurityWidget assets={assets}/></div>
+          <div style={{ flex: "1 1 280px" }}><SslWidget asset={asset}/></div>
+          <div style={{ flex: "1 1 280px" }}><EmailSecurityWidget asset={asset}/></div>
         </div>
 
-        {/* Row 2: Asset breakdown (partial) + 2 locked widgets — flex for graceful collapse */}
+        {/* Row 2: Web Security + DNS Overview + Cloud Exposure */}
         <div style={{ display: "flex", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 220px" }}><AssetBreakdownWidget assets={assets}/></div>
-          <div style={{ flex: "1 1 220px" }}>
-            <LockedWidget title="Web Security" accent="#ff8c00"
-              preview={[
-                <div key="p1" style={{ height: 12, width: "85%", background: "rgba(255,140,0,0.12)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-                <div key="p2" style={{ height: 12, width: "60%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-                <div key="p3" style={{ height: 12, width: "70%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-              ]}/>
-          </div>
-          <div style={{ flex: "1 1 220px" }}>
-            <LockedWidget title="Brand & External Exposure" accent="#ff3b3b"
-              preview={[
-                <div key="p1" style={{ height: 12, width: "75%", background: "rgba(255,59,59,0.12)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-                <div key="p2" style={{ height: 12, width: "55%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-                <div key="p3" style={{ height: 12, width: "65%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-              ]}/>
-          </div>
+          <WebSecurityWidget asset={asset}/>
+          <DnsWidget asset={asset} data={data}/>
+          <CloudWidget asset={asset}/>
         </div>
 
-        {/* Row 3: 3 showcase locked widgets */}
+        {/* Row 3: 3 partial-locked premium widgets */}
         <div style={{ display: "flex", gap: 14, marginBottom: 24, flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 220px" }}>
-            <LockedWidget title="Dark Web Monitoring" accent="#ff3b3b"
-              preview={[
-                <div key="p1" style={{ height: 12, width: "70%", background: "rgba(255,59,59,0.1)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-                <div key="p2" style={{ height: 12, width: "50%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-                <div key="p3" style={{ height: 8, width: "90%", background: "rgba(255,255,255,0.04)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-              ]}/>
-          </div>
-          <div style={{ flex: "1 1 220px" }}>
-            <LockedWidget title="Supply Chain Risk" accent="#4d9eff"
-              preview={[
-                <div key="p1" style={{ height: 12, width: "80%", background: "rgba(77,158,255,0.1)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-                <div key="p2" style={{ height: 12, width: "60%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-                <div key="p3" style={{ height: 8, width: "75%", background: "rgba(255,255,255,0.04)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-              ]}/>
-          </div>
-          <div style={{ flex: "1 1 220px" }}>
-            <LockedWidget title="AI Risk Score" accent="#b06eff"
-              preview={[
-                <div key="p1" style={{ height: 12, width: "65%", background: "rgba(176,110,255,0.12)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-                <div key="p2" style={{ height: 12, width: "80%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-                <div key="p3" style={{ height: 8, width: "55%", background: "rgba(255,255,255,0.04)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-              ]}/>
-          </div>
+          <PartialLockedWidget title="Dark Web Monitoring" accent="#ff3b3b" teaser={darkWebTeaser}/>
+          <PartialLockedWidget title="Supply Chain Risk" accent="#4d9eff" teaser={supplyChainTeaser}/>
+          <PartialLockedWidget title="AI Risk Score & Remediation" accent="#b06eff"
+            teaser="AI-powered risk scoring and step-by-step remediation requires Deep Scan"/>
         </div>
 
-        {/* Professional upsell note — no "Limited Access" language */}
+        {/* Upsell banner */}
         <div style={{ background: "linear-gradient(135deg, rgba(0,229,160,0.06) 0%, rgba(77,158,255,0.04) 100%)",
           border: "1px solid rgba(0,229,160,0.15)", borderRadius: 8, padding: "24px 28px",
           display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 24, flexWrap: "wrap" }}>
           <div style={{ flex: 1 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
               <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#00e5a0", flexShrink: 0 }}/>
-              <div style={{ color: "white", fontSize: 15, fontWeight: 700 }}>
-                Standard Scan Complete
-              </div>
+              <div style={{ color: "white", fontSize: 15, fontWeight: 700 }}>Standard Scan Complete</div>
             </div>
-            <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, lineHeight: 1.7, maxWidth: 540 }}>
-              This report covers your Standard scan surface.
-              For deeper access and full vulnerability analysis — including complete SSL/Crypto health,
-              Web security posture, Supply chain risk, Brand monitoring, and step-by-step AI remediation —
-              generate a <span style={{ color: "#ff8c00", fontWeight: 700 }}>Deep Scan</span> report from the Licensed Portal.
+            <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, lineHeight: 1.7, maxWidth: 560 }}>
+              This Standard Scan report covers your active attack surface across DNS, Web, SSL/Crypto, Email, and Cloud.
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, lineHeight: 1.7, marginTop: 6 }}>
+              Deep Scan adds: <span style={{ color: "#ff8c00" }}>Dark Web breach intelligence</span>,{" "}
+              <span style={{ color: "#4d9eff" }}>Supply Chain JS risk</span>,{" "}
+              <span style={{ color: "#b06eff" }}>AI-powered step-by-step remediation</span>,{" "}
+              Social Engineering intel, Mobile &amp; API exposure.
             </div>
           </div>
           <a href="https://cycentra.com/#contact" target="_blank" rel="noreferrer"

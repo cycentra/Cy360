@@ -47,18 +47,21 @@ const SCAN_TIERS = [
     color: "#00e5a0",
     bg: "rgba(0,229,160,0.08)",
     border: "rgba(0,229,160,0.3)",
-    time: "~60s",
+    time: "~45s",
     desc: "Balanced active discovery. Recommended.",
+    note: "Posture score reflects only modules active in this scan tier — Deep Scan surfaces additional findings across 4+ extra modules.",
     features: [
-      { label: "DNS & WHOIS lookup", included: true },
-      { label: "Certificate transparency", included: true },
-      { label: "Email security (SPF/DMARC/DKIM)", included: true },
-      { label: "Dark web mention search", included: true },
-      { label: "OSINT & threat intel feeds", included: true },
-      { label: "Active port scanning (14 ports)", included: true },
-      { label: "Protocol handshaking (SSH/RDP/SMB)", included: true },
-      { label: "AI enrichment & remediation", included: true },
-      { label: "PDF Executive Report", included: true },
+      { label: "DNS & WHOIS lookup",               included: true  },
+      { label: "Subdomain enumeration",             included: true  },
+      { label: "SSL / TLS certificate audit",       included: true  },
+      { label: "Email security (SPF/DKIM/DMARC)",   included: true  },
+      { label: "Web security & port analysis",      included: true  },
+      { label: "Cloud exposure check",              included: true  },
+      { label: "OSINT & threat intel feeds",        included: true  },
+      { label: "Dark web & breach monitoring",      included: false },
+      { label: "Supply chain JS risk",              included: false },
+      { label: "AI enrichment & remediation",       included: false },
+      { label: "PDF Technical Report",              included: false },
     ],
   },
   {
@@ -142,9 +145,19 @@ function ScanTierMatrix({ selected, onSelect, disabled }) {
               ))}
             </div>
             {tier.note && (
-              <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 6, borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 8 }}>
-                <span style={{ color: "#f5c518", fontSize: 10 }}>⚠</span>
-                <span style={{ color: "rgba(245,197,24,0.7)", fontSize: 10, fontFamily: "monospace" }}>{tier.note}</span>
+              <div style={{ marginTop: 8, borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 8 }}>
+                {tier.id === "standard" ? (
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+                    <span title="Deep Scan activates 4 additional modules and AI enrichment, which surfaces more vulnerabilities. A lower Deep Scan score reflects a more complete picture — not a regression in security posture."
+                      style={{ color: "#4d9eff", fontSize: 12, cursor: "help", flexShrink: 0, lineHeight: 1.2 }}>ⓘ</span>
+                    <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 10, fontFamily: "monospace", fontStyle: "italic", lineHeight: 1.5 }}>{tier.note}</span>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ color: "#f5c518", fontSize: 10 }}>⚠</span>
+                    <span style={{ color: "rgba(245,197,24,0.7)", fontSize: 10, fontFamily: "monospace" }}>{tier.note}</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
