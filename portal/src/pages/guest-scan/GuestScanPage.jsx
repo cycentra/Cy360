@@ -90,21 +90,22 @@ function LockedWidget({ title, accent = "#00e5a0", preview = null }) {
       borderTop: `2px solid ${accent}40`, borderRadius: 5, padding: "18px 22px", position: "relative", overflow: "hidden" }}>
       <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, letterSpacing: "1.5px",
         textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>{title}</div>
-      {/* Blurred placeholder rows — use custom preview or generic bars */}
       {preview || [80, 60, 70, 50].map((w, i) => (
         <div key={i} style={{ height: 12, width: `${w}%`, background: "rgba(255,255,255,0.05)",
           borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>
       ))}
-      {/* Lock overlay */}
+      {/* Overlay with professional note — no "Limited Access" language */}
       <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column",
-        alignItems: "center", justifyContent: "center", background: "rgba(9,11,16,0.65)",
-        backdropFilter: "blur(3px)" }}>
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="2">
+        alignItems: "center", justifyContent: "center", gap: 8,
+        background: "rgba(9,11,16,0.72)", backdropFilter: "blur(3px)", padding: "0 16px" }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="2">
           <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
           <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
         </svg>
-        <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace",
-          marginTop: 6, letterSpacing: "1px" }}>FULL ACCESS REQUIRED</div>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace",
+          textAlign: "center", lineHeight: 1.5 }}>
+          For deeper access and full vulnerability analysis,<br/>generate a <span style={{ color: "rgba(0,229,160,0.7)", fontWeight: 700 }}>Deep Scan</span> report from the Licensed Portal.
+        </div>
       </div>
     </div>
   );
@@ -140,7 +141,7 @@ function SslWidget({ assets = [] }) {
           </div>
           <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace",
             padding: "6px 8px", background: "rgba(0,229,160,0.05)", borderRadius: 3 }}>
-            Certificate chain & cipher depth requires full access
+            Deep Scan includes full certificate chain, cipher audit, and PQC readiness
           </div>
         </div>
       ) : (
@@ -160,7 +161,7 @@ function SslWidget({ assets = [] }) {
           </div>
           <div style={{ marginTop: 10, padding: "5px 8px", background: "rgba(245,197,24,0.07)",
             borderRadius: 3, color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>
-            Certificate & cipher details require full access
+            Full certificate depth available in the Licensed Portal
           </div>
         </div>
       )}
@@ -216,7 +217,7 @@ function EmailSecurityWidget({ assets = [] }) {
       )}
       <div style={{ marginTop: 8, padding: "5px 8px", background: "rgba(176,110,255,0.07)",
         borderRadius: 3, color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>
-        Anti-spoofing & threat intel require full access
+        Anti-spoofing analysis and threat intel available in the Licensed Portal
       </div>
     </div>
   );
@@ -261,7 +262,7 @@ function AssetBreakdownWidget({ assets = [] }) {
       )}
       <div style={{ marginTop: 10, padding: "5px 8px", background: "rgba(77,158,255,0.07)",
         borderRadius: 3, color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>
-        Cloud infra & ownership data require full access
+        Full cloud inventory and ownership mapping available in the Licensed Portal
       </div>
     </div>
   );
@@ -395,26 +396,30 @@ function GuestDashboard({ data, onRescan }) {
             ]}/>
         </div>
 
-        {/* CTA banner */}
-        <div style={{ background: "linear-gradient(135deg, rgba(0,229,160,0.08) 0%, rgba(77,158,255,0.06) 100%)",
-          border: "1px solid rgba(0,229,160,0.2)", borderRadius: 8, padding: "28px 32px",
-          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 24, flexWrap: "wrap" }}>
-          <div>
-            <div style={{ color: "white", fontSize: 18, fontWeight: 700, marginBottom: 6 }}>
-              Want full visibility into your attack surface?
+        {/* Professional upsell note — no "Limited Access" language */}
+        <div style={{ background: "linear-gradient(135deg, rgba(0,229,160,0.06) 0%, rgba(77,158,255,0.04) 100%)",
+          border: "1px solid rgba(0,229,160,0.15)", borderRadius: 8, padding: "24px 28px",
+          display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 24, flexWrap: "wrap" }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#00e5a0", flexShrink: 0 }}/>
+              <div style={{ color: "white", fontSize: 15, fontWeight: 700 }}>
+                Standard Scan Complete
+              </div>
             </div>
-            <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 13, lineHeight: 1.6, maxWidth: 560 }}>
-              This free scan shows only an overview. The full CyCentra 360 platform gives you complete
-              SSL/Crypto health, Email security posture, Web vulnerabilities, Supply chain risk,
-              Brand exposure monitoring, and AI-powered remediation guidance — in real time.
+            <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, lineHeight: 1.7, maxWidth: 540 }}>
+              This report covers your Standard scan surface.
+              For deeper access and full vulnerability analysis — including complete SSL/Crypto health,
+              Web security posture, Supply chain risk, Brand monitoring, and step-by-step AI remediation —
+              generate a <span style={{ color: "#ff8c00", fontWeight: 700 }}>Deep Scan</span> report from the Licensed Portal.
             </div>
           </div>
           <a href="https://cycentra.com/#contact" target="_blank" rel="noreferrer"
             style={{ display: "inline-block", background: "#00e5a0", color: "#0d0f14",
-              fontFamily: "'Space Mono',monospace", fontWeight: 700, fontSize: 13, letterSpacing: "1px",
-              padding: "14px 28px", borderRadius: 4, textDecoration: "none", whiteSpace: "nowrap",
-              flexShrink: 0 }}>
-            Get Full Access →
+              fontFamily: "'Space Mono',monospace", fontWeight: 700, fontSize: 12, letterSpacing: "1px",
+              padding: "12px 22px", borderRadius: 4, textDecoration: "none", whiteSpace: "nowrap",
+              flexShrink: 0, alignSelf: "center" }}>
+            Request Licensed Portal →
           </a>
         </div>
 
@@ -640,71 +645,69 @@ export function GuestScanPage() {
                 outline: "none", boxSizing: "border-box", opacity: scanState === "running" ? 0.5 : 1 }}/>
           </div>
 
-          {/* Scan type selector */}
-          <div style={{ marginBottom: 18 }}>
+          {/* Three-tier scan comparison matrix — educational */}
+          <div style={{ marginBottom: 22 }}>
             <label style={{ color: "rgba(255,255,255,0.5)", fontSize: 10, letterSpacing: "1.5px",
               textTransform: "uppercase", fontFamily: "monospace", display: "block", marginBottom: 10 }}>
-              Scan Type
+              Scan Tiers
             </label>
 
-            {/* Standard — active, selectable */}
-            <div style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 14px", marginBottom: 6,
-              background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.3)", borderRadius: 4, cursor: scanState === "running" ? "not-allowed" : "default" }}>
-              <div style={{ width: 16, height: 16, borderRadius: "50%", flexShrink: 0, marginTop: 2,
-                border: "2px solid #00e5a0", background: "#00e5a0", boxShadow: "0 0 8px #00e5a0" }}/>
-              <div>
-                <div style={{ color: "#00e5a0", fontSize: 13, fontWeight: 600 }}>Standard (Recommended)</div>
-                <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, marginTop: 2 }}>
-                  DNS, Web, Crypto, Email, Cloud, Dark Web, Supply Chain, Social Eng, Mobile/API + AI overview — ~45s
+            {/* Bubble row: Standard (active) + Deep + Passive (licensed) */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+              {[
+                { id: "passive",  label: "Passive",  badge: "OSINT",      color: "#b06eff", active: false },
+                { id: "standard", label: "Standard", badge: "THIS SCAN",  color: "#00e5a0", active: true  },
+                { id: "deep",     label: "Deep",     badge: "LICENSED",   color: "#ff8c00", active: false },
+              ].map(t => (
+                <div key={t.id}
+                  style={{ flex: 1, padding: "8px 6px", textAlign: "center",
+                    border: `1px solid ${t.active ? `${t.color}50` : "rgba(255,255,255,0.06)"}`,
+                    borderRadius: 4,
+                    background: t.active ? `${t.color}12` : "rgba(255,255,255,0.02)",
+                    opacity: t.active ? 1 : 0.5, cursor: t.active ? "default" : "not-allowed" }}>
+                  <div style={{ color: t.active ? t.color : "rgba(255,255,255,0.25)", fontSize: 9,
+                    fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", marginBottom: 2 }}>{t.badge}</div>
+                  <div style={{ color: t.active ? t.color : "rgba(255,255,255,0.4)", fontSize: 13, fontWeight: 700 }}>{t.label}</div>
                 </div>
-              </div>
+              ))}
             </div>
 
-            {/* Deep Scan — greyed out */}
-            <div style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 14px", marginBottom: 6,
-              background: "rgba(255,255,255,0.01)", border: "1px solid rgba(255,255,255,0.05)",
-              borderRadius: 4, opacity: 0.4, cursor: "not-allowed" }}>
-              <div style={{ width: 16, height: 16, borderRadius: "50%", flexShrink: 0, marginTop: 2,
-                border: "2px solid rgba(255,255,255,0.15)", background: "transparent" }}/>
-              <div>
-                <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 13, fontWeight: 600 }}>
-                  Deep Scan
-                  <span style={{ marginLeft: 8, fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.3)",
-                    background: "rgba(255,255,255,0.05)", padding: "1px 6px", borderRadius: 2 }}>PAID</span>
+            {/* Comparison table */}
+            <div style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 4, overflow: "hidden" }}>
+              {[
+                { feature: "DNS / WHOIS",         passive: true,  standard: true,  deep: true  },
+                { feature: "Email Security",       passive: true,  standard: true,  deep: true  },
+                { feature: "Dark Web Search",      passive: true,  standard: true,  deep: true  },
+                { feature: "OSINT / Threat Intel", passive: true,  standard: true,  deep: true  },
+                { feature: "Active Port Scan",     passive: false, standard: true,  deep: true  },
+                { feature: "Protocol Handshaking", passive: false, standard: true,  deep: true  },
+                { feature: "Full Port Range",      passive: false, standard: false, deep: true  },
+                { feature: "AI Remediation",       passive: false, standard: "overview", deep: "step-by-step" },
+                { feature: "PDF Technical Report", passive: false, standard: false, deep: true  },
+              ].map((row, i) => (
+                <div key={row.feature} style={{ display: "grid", gridTemplateColumns: "1fr 52px 52px 52px",
+                  borderBottom: i < 8 ? "1px solid rgba(255,255,255,0.04)" : "none",
+                  alignItems: "center" }}>
+                  <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", padding: "7px 12px" }}>
+                    {row.feature}
+                  </div>
+                  {[
+                    { val: row.passive,  color: "#b06eff" },
+                    { val: row.standard, color: "#00e5a0" },
+                    { val: row.deep,     color: "#ff8c00" },
+                  ].map((cell, ci) => (
+                    <div key={ci} style={{ textAlign: "center", fontSize: 11 }}>
+                      {cell.val === true  && <span style={{ color: cell.color }}>✓</span>}
+                      {cell.val === false && <span style={{ color: "rgba(255,255,255,0.1)" }}>–</span>}
+                      {typeof cell.val === "string" && <span style={{ color: cell.color, fontSize: 9, fontFamily: "monospace" }}>{cell.val}</span>}
+                    </div>
+                  ))}
                 </div>
-                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, marginTop: 2 }}>
-                  Full suite + unlimited AI with in-depth technical remediation — ~90s
-                </div>
-              </div>
+              ))}
             </div>
-
-            {/* Passive Scan — greyed out */}
-            <div style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 14px",
-              background: "rgba(255,255,255,0.01)", border: "1px solid rgba(255,255,255,0.05)",
-              borderRadius: 4, opacity: 0.4, cursor: "not-allowed" }}>
-              <div style={{ width: 16, height: 16, borderRadius: "50%", flexShrink: 0, marginTop: 2,
-                border: "2px solid rgba(255,255,255,0.15)", background: "transparent" }}/>
-              <div>
-                <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 13, fontWeight: 600 }}>
-                  Passive Scan
-                  <span style={{ marginLeft: 8, fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.3)",
-                    background: "rgba(255,255,255,0.05)", padding: "1px 6px", borderRadius: 2 }}>PAID</span>
-                </div>
-                <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, marginTop: 2 }}>
-                  Read-only, no active probing — ~20s
-                </div>
-              </div>
+            <div style={{ marginTop: 8, color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", textAlign: "right" }}>
+              Passive &nbsp;·&nbsp; Standard &nbsp;·&nbsp; Deep
             </div>
-          </div>
-
-          {/* Subdomain enumeration — always on, greyed out toggle */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 22, opacity: 0.45, cursor: "not-allowed" }}>
-            <div style={{ width: 18, height: 18, borderRadius: 3, display: "flex", alignItems: "center",
-              justifyContent: "center", flexShrink: 0, border: "2px solid rgba(255,255,255,0.2)",
-              background: "transparent", pointerEvents: "none" }}/>
-            <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 13 }}>Include Subdomain Enumeration</span>
-            <span style={{ fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.3)",
-              background: "rgba(255,255,255,0.05)", padding: "1px 6px", borderRadius: 2 }}>PAID</span>
           </div>
 
           {/* Action buttons */}
@@ -839,8 +842,8 @@ export function GuestScanPage() {
               ✓ No registration required
             </div>
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, lineHeight: 1.5 }}>
-              Scan results are not stored beyond 24 hours.<br/>
-              For continuous monitoring, get full access.
+              Scan results are ephemeral and not retained.<br/>
+              For continuous monitoring and Deep Scan reports, use the Licensed Portal.
             </div>
           </div>
         </div>

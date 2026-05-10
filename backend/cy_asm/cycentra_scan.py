@@ -1,5 +1,6 @@
 #!/opt/cycentra/backend/venv/bin/python3
 import asyncio
+import hashlib
 import json
 import re
 import sys
@@ -10,6 +11,19 @@ import traceback
 from pathlib import Path
 from typing import Dict, Any, List
 from datetime import datetime
+
+
+def _asm_finding_id(domain: str, module: str, finding: str) -> str:
+    """
+    Generate a stable, deterministic ASM- prefixed ID for a finding.
+    Format: ASM-NNNNN  (5-digit hex, uppercase)
+    Aligned with the Correlation Engine's INC-NNNNN namespace —
+    ASM- prefix identifies the source as the Attack Surface Manager.
+    """
+    raw = f"{domain}|{module}|{finding}".lower().encode()
+    digest = hashlib.sha256(raw).hexdigest()
+    # Take first 5 hex chars → 0x00000–0xFFFFF range (up to 1,048,575 unique IDs)
+    return f"ASM-{digest[:5].upper()}"
 
 # Import all modules
 from modules.dns_recon import gather_dns_intel
@@ -1200,9 +1214,12 @@ def main():
                             }) + "\n")
 
                     for issue in mod_data.get('issues', []):
+                        finding_str = issue if isinstance(issue, str) else json.dumps(issue)
                         f.write(json.dumps({
-                            "type": "vulnerability", "tenant_id": final_tenant_id,
-                            "domain": domain, "module": mod_name, "finding": issue
+                            "type": "vulnerability",
+                            "asm_id": _asm_finding_id(domain, mod_name, finding_str),
+                            "tenant_id": final_tenant_id,
+                            "domain": domain, "module": mod_name, "finding": issue,
                         }) + "\n")
 
             logger.info(f"✅ NDJSON report saved → {report_file}")
@@ -1224,16 +1241,24 @@ def main():
         # still shows real findings rather than empty vulnerability widgets.
         def _normalise_issue(issue) -> dict:
             if isinstance(issue, dict):
-                return {
-                    "vulnerability":  issue.get("vulnerability", issue.get("type", "Unknown Finding")),
+                mod   = issue.get("module", "Scan")
+                vuln  = issue.get("vulnerability", issue.get("type", "Unknown Finding"))
+                entry = {
+                    "vulnerability":  vuln,
                     "severity":       issue.get("severity",      "Medium"),
                     "risk_score":     issue.get("risk_score",    5),
                     "description":    issue.get("description",   ""),
                     "recommendation": issue.get("recommendation",""),
-                    "module":         issue.get("module",        "Scan"),
+                    "module":         mod,
                 }
-            return {"vulnerability": str(issue), "severity": "Medium", "risk_score": 5,
-                    "description": str(issue), "recommendation": "", "module": "Scan"}
+                entry.setdefault("asm_id", issue.get("asm_id") or _asm_finding_id(domain, mod, vuln))
+                return entry
+            vuln_str = str(issue)
+            return {
+                "vulnerability": vuln_str, "severity": "Medium", "risk_score": 5,
+                "description": vuln_str, "recommendation": "", "module": "Scan",
+                "asm_id": _asm_finding_id(domain, "Scan", vuln_str),
+            }
 
         # Use AI findings when available; fall back to rich scanner findings +
         # deduplicated module issue strings.

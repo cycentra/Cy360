@@ -19,6 +19,86 @@ import {
 } from '../../core/adapter.js';
 import { PLATFORM_MODULES } from '../../registry/platformModules.js';
 
+// ── ASM Posture Widget ─────────────────────────────────────────────────────────
+function ASMPostureWidget({ score, grade, scanType, domain, lastScan }) {
+  const gradeColor = {
+    "A+": "#00e5a0", A: "#00e5a0", B: "#4d9eff",
+    C: "#f5c518", D: "#ff8c00", F: "#ff3b3b",
+  }[grade] || "#00e5a0";
+  const scanTypeColor = { deep: "#b06eff", standard: "#00e5a0", passive: "#4d9eff" };
+  const stColor = scanTypeColor[scanType] || "#00e5a0";
+  const tierLabel = scanType ? scanType.toUpperCase() : null;
+
+  // Gauge: 0-100 mapped to 180° arc (half-circle)
+  const radius = 52, cx = 70, cy = 70;
+  const arcLen = Math.PI * radius;
+  const filled = score != null ? (score / 100) * arcLen : 0;
+
+  return (
+    <div style={{
+      background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
+      borderTop: `2px solid ${gradeColor}`, borderRadius: 6, padding: "18px 24px",
+      display: "flex", alignItems: "center", gap: 28, flexWrap: "wrap",
+      marginBottom: 14,
+    }}>
+      {/* Half-circle gauge */}
+      <div style={{ flexShrink: 0, position: "relative" }}>
+        <svg width="140" height="80" style={{ overflow: "visible" }}>
+          {/* Track */}
+          <path d={`M ${cx - radius} ${cy} A ${radius} ${radius} 0 0 1 ${cx + radius} ${cy}`}
+            fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="10" strokeLinecap="round"/>
+          {/* Fill */}
+          <path d={`M ${cx - radius} ${cy} A ${radius} ${radius} 0 0 1 ${cx + radius} ${cy}`}
+            fill="none" stroke={gradeColor} strokeWidth="10" strokeLinecap="round"
+            strokeDasharray={`${filled} ${arcLen}`}
+            style={{ transition: "stroke-dasharray 1.2s ease", filter: `drop-shadow(0 0 6px ${gradeColor}60)` }}/>
+          {/* Score label */}
+          <text x={cx} y={cy - 6} textAnchor="middle" fill="white" fontSize="28" fontWeight="800" fontFamily="'Space Mono',monospace">
+            {score != null ? score : "—"}
+          </text>
+          <text x={cx} y={cy + 10} textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize="9" fontFamily="monospace" letterSpacing="1">
+            POSTURE SCORE
+          </text>
+          {/* Grade pill */}
+          <rect x={cx - 16} y={cy + 18} width="32" height="18" rx="3" fill={`${gradeColor}20`} stroke={`${gradeColor}50`} strokeWidth="1"/>
+          <text x={cx} y={cy + 31} textAnchor="middle" fill={gradeColor} fontSize="11" fontWeight="700" fontFamily="'Space Mono',monospace">
+            {grade || "—"}
+          </text>
+        </svg>
+      </div>
+
+      {/* Labels */}
+      <div style={{ flex: 1, minWidth: 160 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+          <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace" }}>
+            Overall ASM Security Posture
+          </span>
+          {tierLabel && (
+            <span style={{ background: `${stColor}15`, color: stColor, border: `1px solid ${stColor}40`, fontSize: 9, fontFamily: "monospace", fontWeight: 700, padding: "1px 6px", borderRadius: 2, letterSpacing: "1px" }}>
+              {tierLabel}
+            </span>
+          )}
+        </div>
+        <div style={{ color: gradeColor, fontSize: 32, fontWeight: 800, fontFamily: "'Space Mono',monospace", lineHeight: 1, marginBottom: 4 }}>
+          Grade {grade || "—"}
+        </div>
+        {domain && <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace", marginBottom: 2 }}>{domain}</div>}
+        {lastScan && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>Last scan: {lastScan}</div>}
+      </div>
+
+      {/* Score band guide */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+        {[["A+", "≥ 90", "#00e5a0"], ["A", "≥ 80", "#00e5a0"], ["B", "≥ 70", "#4d9eff"], ["C", "≥ 55", "#f5c518"], ["D", "≥ 35", "#ff8c00"], ["F", "< 35", "#ff3b3b"]].map(([g, range, c]) => (
+          <div key={g} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ color: grade === g ? c : "rgba(255,255,255,0.15)", fontSize: 10, fontFamily: "monospace", fontWeight: grade === g ? 700 : 400, width: 16 }}>{g}</span>
+            <span style={{ color: grade === g ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.12)", fontSize: 9, fontFamily: "monospace" }}>{range}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── AnimCounter ───────────────────────────────────────────────────────────────
 function AnimCounter({ value, duration = 1200 }) {
   const [display, setDisplay] = useState(0);
@@ -341,6 +421,15 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
         <StatCard label="New Subdomains"  value={newSubCount}           accent="#4d9eff" sub="Since last scan"/>
         <StatCard label="Add-ons Active"  value={installedAddons.length} accent="#b06eff" sub="Optional modules"/>
       </div>
+
+      {/* ASM Posture Widget — mirrors BenchmarkPage CSPI gauge, always visible */}
+      <ASMPostureWidget
+        score={data?.meta?.posture_score ?? null}
+        grade={data?.meta?.posture_grade ?? null}
+        scanType={scanType}
+        domain={data?.meta?.domain || data?.meta?.org}
+        lastScan={data?.meta?.last_scan ? new Date(data.meta.last_scan).toLocaleString() : null}
+      />
 
       {/* ROW 1 */}
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:14 }}>

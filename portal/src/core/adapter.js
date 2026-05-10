@@ -6,7 +6,24 @@
  * v2: Enriches vulnerabilities with raw vuln_scanner/nuclei fields (CVSS, EPSS,
  *     compliance_impact, source, discovered_at). Exposes all previously ignored
  *     module data on primary assets. Fixes module-name filter bug in getWebSecStats.
+ *
+ * Indexing: ASM findings use ASM-XXXXX prefix (aligned with SIEM INC-NNNNN namespace).
+ * Stable deterministic ID per (asset, vulnerability, module) triplet.
  */
+
+/**
+ * Deterministic ASM finding ID — mirrors _asm_finding_id() in cycentra_scan.py.
+ * FNV-1a 32-bit hash, 5 uppercase hex chars. Same inputs → same ID across
+ * scanner, portal, and SIEM bridge for unified searchability.
+ */
+function _asmFindingId(domain, module, finding) {
+  const raw = `${(domain||"").toLowerCase()}|${(module||"scan").toLowerCase()}|${(finding||"").toLowerCase()}`;
+  let h = 0x811c9dc5 >>> 0;
+  for (let i = 0; i < raw.length; i++) {
+    h = Math.imul(h ^ raw.charCodeAt(i), 0x01000193) >>> 0;
+  }
+  return `ASM-${h.toString(16).toUpperCase().slice(0, 5).padStart(5, "0")}`;
+}
 
 // ── Vulnerability enrichment ──────────────────────────────────────────────────
 
@@ -112,17 +129,21 @@ export function adaptCyCentraJSON(raw) {
     // ── CySIEM alert bridge ───────────────────────────────────────────────────
     const cySiemAlerts = vulns
       .filter(v => v.severity === "Critical" || v.severity === "High")
-      .map((v, i) => ({
-        rule_id:     `CC-${100000 + i}`,
-        level:       v.severity === "Critical" ? 12 : 8,
-        description: v.vulnerability,
-        asset:       a.host,
-        ts:          raw.meta?.last_scan || new Date().toISOString(),
-        module:      v.module,
-        cvss:        v.cvss   ?? null,
-        risk_score:  v.risk_score ?? null,
-        source:      v.source ?? null,
-      }));
+      .map((v) => {
+        const asmId = v.asm_id || _asmFindingId(a.host, v.module, v.vulnerability);
+        return {
+          rule_id:     asmId,
+          level:       v.severity === "Critical" ? 12 : 8,
+          description: v.vulnerability,
+          asset:       a.host,
+          ts:          raw.meta?.last_scan || new Date().toISOString(),
+          module:      v.module,
+          cvss:        v.cvss       ?? null,
+          risk_score:  v.risk_score ?? null,
+          source:      v.source     ?? null,
+          asm_id:      asmId,
+        };
+      });
 
     // ── Subdomains ────────────────────────────────────────────────────────────
     const subRaw  = a.raw_results?.subdomains?.results || [];

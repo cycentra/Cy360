@@ -94,10 +94,22 @@ PQC_HYBRID_GROUPS = {
 }
 
 COMMON_DKIM_SELECTORS = ["default", "google", "selector1", "selector2", "k1", "mail"]
-QUICK_SCAN_PORTS      = "80,443,22,21,25,110,143,3389,8080,8443,3306,5432,6379,27017"
+
+# Core ports: standard service set + SMB(445) for signing check
+QUICK_SCAN_PORTS = (
+    "80,443,22,21,25,110,143,3389,8080,8443,"
+    "3306,5432,6379,27017,445"
+)
+
+# Infra-exposure ports added to the deep-scan nmap pass (not quick scan to avoid noise)
+INFRA_EXPOSURE_PORTS = "2375,2376,6443,9200,9300,11211,5900,9090,9091,8161"
+
 EXTENDED_PORT_RANGE   = "1-65535"
 ENABLE_EXTENDED_PORT_SCAN = os.environ.get("ENABLE_EXTENDED_PORT_SCAN", "false").lower() == "true"
 ENABLE_UDP_SCAN       = os.environ.get("ENABLE_UDP_SCAN", "false").lower() == "true"
+
+# Protocol-specific probe timeouts (seconds)
+PROTO_PROBE_TIMEOUT   = int(os.environ.get("PROTO_PROBE_TIMEOUT", "5"))
 
 ANON_CIPHERS       = {"ADH", "AECDH", "DH_anon", "EXP"}
 WEAK_CIPHERS       = {"RC4", "3DES", "DES", "MD5", "NULL", "EXPORT"}

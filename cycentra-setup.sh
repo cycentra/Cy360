@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.386 -- 2026-05-09 22:29 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.387 -- 2026-05-10 09:45 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1159,6 +1159,19 @@ PATCHEOF
         info "Added CYCENTRA_DB_URL to .env"
     fi
 
+    # Add ASM scanner tuning vars if missing (introduced with protocol-probe engine)
+    if ! grep -q "^PROTO_PROBE_TIMEOUT=" "$_env" 2>/dev/null; then
+        cat >> "$_env" << PATCHEOF
+
+# ── ASM Scanner tuning ────────────────────────────────────────────────────────
+ENABLE_EXTENDED_PORT_SCAN=false
+ENABLE_UDP_SCAN=false
+PROTO_PROBE_TIMEOUT=5
+INFRA_EXPOSURE_PORTS=2375,2376,6443,9200,9300,11211,5900,9090,9091,8161
+PATCHEOF
+        info "Added ASM scanner tuning vars to .env"
+    fi
+
     chmod 600 "$_env"
     success ".env patched"
 fi
@@ -1264,6 +1277,22 @@ AZURE_KEYVAULT_URL=${AZURE_KEYVAULT_URL:-}
 ENVEOF
     # MAXMIND_KEY pulled from Key Vault at runtime — not written here
     echo "MAXMIND_KEY=${MAXMIND_KEY:-}" >> /opt/cycentra/.env
+
+    # ── ASM Scanner tuning (optional — defaults are safe for most deployments) ──
+    cat >> /opt/cycentra/.env << ASMEOF
+
+# ── ASM Scanner tuning ────────────────────────────────────────────────────────
+# These vars tune the cy-asm engine. Defaults are safe for standard installs.
+# ENABLE_EXTENDED_PORT_SCAN: scan all 65535 ports (slower, more thorough)
+ENABLE_EXTENDED_PORT_SCAN=${ENABLE_EXTENDED_PORT_SCAN:-false}
+# ENABLE_UDP_SCAN: add UDP scan layer (requires root; significantly slower)
+ENABLE_UDP_SCAN=${ENABLE_UDP_SCAN:-false}
+# PROTO_PROBE_TIMEOUT: seconds per protocol-specific handshake probe (SSH/RDP/SMB/etc.)
+PROTO_PROBE_TIMEOUT=${PROTO_PROBE_TIMEOUT:-5}
+# INFRA_EXPOSURE_PORTS: extra ports checked for infrastructure exposure in Deep scans
+# Default covers Docker, Kubernetes, Elasticsearch, Memcached, VNC, Prometheus, ActiveMQ
+INFRA_EXPOSURE_PORTS=${INFRA_EXPOSURE_PORTS:-2375,2376,6443,9200,9300,11211,5900,9090,9091,8161}
+ASMEOF
     chmod 600 /opt/cycentra/.env
    # mkdir -p /root/cy-asm && cp /opt/cycentra/.env /root/cy-asm/.env
    # success "Main .env written → /opt/cycentra/.env"
