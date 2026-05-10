@@ -28,7 +28,7 @@ from .charts import (
 from .pdf_base import (
     BODY_W, C_BLUE, C_BORDER, C_GREEN, C_LIGHT, C_MID, C_NAVY, C_ORANGE,
     C_RED, C_SKY, C_SUBTLE, C_TEXT, C_YELLOW, MARGIN, SEV_COLOR, STYLES, W,
-    CyCentraDocTemplate, build_cover, compute_posture_score,
+    CyCentraDocTemplate, build_cover, callout_box, compute_posture_score,
     extract_domain_scores, finding_table, img_from_bytes, metric_card,
     rule, section_header, severity_badge,
 )
@@ -426,20 +426,46 @@ def _recommendations_section(all_f: List[Dict]) -> List:
     return story
 
 
+# ── Standard scan upsell callout ─────────────────────────────────────────────
+
+_STANDARD_UPSELL_TEXT = (
+    "This is a Standard scan executive summary. "
+    "For comprehensive analysis including AI-powered remediation, supply chain risk, "
+    "dark web exposure, social engineering indicators, mobile/API vulnerabilities, "
+    "and a full technical report with CVE details — request a Deep Scan from the Licensed Portal."
+)
+
+
 # ── Main builder ──────────────────────────────────────────────────────────────
 
 def generate_executive_report(portal_json: Dict[str, Any],
-                               output_path: str) -> str:
+                               output_path: str,
+                               scan_type: Optional[str] = None) -> str:
     """
     Generate an executive PDF report from a cy_asm portal JSON payload.
-    Returns the path to the saved PDF file.
+
+    Parameters
+    ----------
+    portal_json : dict
+        Portal JSON payload from cycentra_scan.py
+    output_path : str
+        Absolute path for the output PDF
+    scan_type : str, optional
+        Override scan_type — falls back to portal_json["meta"]["scan_type"].
+        "standard" produces a shorter 3-page business summary with an upsell callout.
+        "deep" produces the full multi-page executive report.
+
+    Returns
+    -------
+    str — path to the saved PDF file
     """
     meta      = portal_json.get("meta", {})
     domain    = meta.get("domain", "unknown")
     org       = meta.get("org", "Unknown Organisation")
     scan_id   = meta.get("scan_id", "ASM-0000")
     scan_date = meta.get("last_scan", datetime.now().isoformat())[:10]
-    scan_type = meta.get("scan_type", "standard")
+    _scan_type = scan_type or meta.get("scan_type", "standard")
+    is_deep   = _scan_type == "deep"
 
     assets    = portal_json.get("assets", [{}])
     asset     = assets[0] if assets else {}
@@ -481,7 +507,7 @@ def generate_executive_report(portal_json: Dict[str, Any],
 
     story = []
 
-    # Cover
+    # Cover page
     story += build_cover("Executive", domain, org, scan_id, scan_date, score, grade)
 
     # Switch to content template
@@ -489,10 +515,21 @@ def generate_executive_report(portal_json: Dict[str, Any],
     story.append(NextPageTemplate("Content"))
     story.append(PageBreak())
 
-    # Sections
+    # ── Executive Summary (always present) ───────────────────────────────────
     story += _exec_summary(flat, score, grade, STYLES)
     story.append(PageBreak())
 
+    # ── Standard scan: compact 3-page report with upsell callout ─────────────
+    if not is_deep:
+        story += _top_risks(all_f)
+        story.append(Spacer(1, 16))
+        story.append(callout_box(_STANDARD_UPSELL_TEXT, accent=C_BLUE))
+        story.append(PageBreak())
+        story += _recommendations_section(all_f)
+        doc.multiBuild(story)
+        return output_path
+
+    # ── Deep scan: full multi-page executive report ────────────────────────
     story += _posture_visual(score, flat)
     story.append(PageBreak())
 

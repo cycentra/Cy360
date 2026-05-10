@@ -75,9 +75,11 @@ def generate_all_reports(
     tenant_id: str,
     domain: str,
     timestamp: Optional[int] = None,
+    report_type: str = "both",
+    scan_type: Optional[str] = None,
 ) -> Tuple[str, str]:
     """
-    Generate both Executive and Technical PDF reports.
+    Generate Executive and (optionally) Technical PDF reports.
 
     Parameters
     ----------
@@ -89,10 +91,17 @@ def generate_all_reports(
         Target domain (used for filename)
     timestamp : int, optional
         Unix timestamp; defaults to now
+    report_type : str
+        "both"           — Executive + Technical (default, authenticated users)
+        "executive_only" — Executive only (guest scans: no technical PDF generated)
+    scan_type : str, optional
+        Override scan_type for report differentiation ("standard" | "deep").
+        Defaults to portal_payload["meta"]["scan_type"].
 
     Returns
     -------
     (executive_path, technical_path) : Tuple[str, str]
+        technical_path is "" when report_type == "executive_only"
     """
     ts = timestamp or int(time.time())
     out_dir = _output_dir(tenant_id)
@@ -106,21 +115,28 @@ def generate_all_reports(
     from reporting.executive_report import generate_executive_report
     from reporting.technical_report import generate_technical_report
 
+    # Resolve effective scan_type — prefer explicit arg, then portal meta
+    _effective_scan_type = scan_type or portal_payload.get("meta", {}).get("scan_type", "standard")
+
     logger.info(f"[Reports] Generating Executive report → {exec_path}")
     try:
-        generate_executive_report(portal_payload, exec_path)
+        generate_executive_report(portal_payload, exec_path, scan_type=_effective_scan_type)
         logger.info(f"[Reports] ✅ Executive report saved → {exec_path}")
     except Exception as e:
         logger.error(f"[Reports] ❌ Executive report failed: {type(e).__name__}: {e}")
         exec_path = ""
 
-    logger.info(f"[Reports] Generating Technical report → {tech_path}")
-    try:
-        generate_technical_report(portal_payload, tech_path)
-        logger.info(f"[Reports] ✅ Technical report saved → {tech_path}")
-    except Exception as e:
-        logger.error(f"[Reports] ❌ Technical report failed: {type(e).__name__}: {e}")
+    if report_type == "executive_only":
+        logger.info("[Reports] Technical report skipped — executive_only mode (guest scan).")
         tech_path = ""
+    else:
+        logger.info(f"[Reports] Generating Technical report → {tech_path}")
+        try:
+            generate_technical_report(portal_payload, tech_path)
+            logger.info(f"[Reports] ✅ Technical report saved → {tech_path}")
+        except Exception as e:
+            logger.error(f"[Reports] ❌ Technical report failed: {type(e).__name__}: {e}")
+            tech_path = ""
 
     _prune_old_reports(tenant_id)
 
@@ -132,10 +148,17 @@ def generate_all_reports(
 def hook_into_scan(portal_payload: Dict[str, Any],
                    tenant_id: str,
                    domain: str,
-                   timestamp: int) -> Tuple[str, str]:
+                   timestamp: int,
+                   report_type: str = "both") -> Tuple[str, str]:
     """
     Drop-in hook called from cycentra_scan.py main() after portal_file is saved.
     Never raises — report failure must never block scan output.
+
+    Parameters
+    ----------
+    report_type : str
+        "both"           — Executive + Technical (default, authenticated users)
+        "executive_only" — Executive only (guest scans)
 
     Returns
     -------
@@ -143,7 +166,10 @@ def hook_into_scan(portal_payload: Dict[str, Any],
     """
     exec_p, tech_p = "", ""
     try:
-        exec_p, tech_p = generate_all_reports(portal_payload, tenant_id, domain, timestamp)
+        exec_p, tech_p = generate_all_reports(
+            portal_payload, tenant_id, domain, timestamp,
+            report_type=report_type,
+        )
         if exec_p:
             logger.info(f"[Reports] Executive → {exec_p}")
         if tech_p:

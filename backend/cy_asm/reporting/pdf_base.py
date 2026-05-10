@@ -33,27 +33,29 @@ from reportlab.platypus import (
 from reportlab.platypus.flowables import Flowable
 
 # ── Colour constants (hex → ReportLab Color) ─────────────────────────────────
-C_NAVY    = colors.HexColor("#0B1F3A")
-C_BLUE    = colors.HexColor("#1E40FF")
-C_SKY     = colors.HexColor("#4FB6FF")
-C_TEAL    = colors.HexColor("#00C9C8")
-C_RED     = colors.HexColor("#E53E3E")
-C_ORANGE  = colors.HexColor("#F6AD55")
-C_YELLOW  = colors.HexColor("#ECC94B")
-C_GREEN   = colors.HexColor("#48BB78")
-C_PURPLE  = colors.HexColor("#805AD5")
-C_LIGHT   = colors.HexColor("#F7FAFC")
-C_MID     = colors.HexColor("#EBF4FF")
-C_BORDER  = colors.HexColor("#CBD5E0")
-C_TEXT    = colors.HexColor("#1A202C")
-C_SUBTLE  = colors.HexColor("#718096")
+# Primary brand palette — kept in sync with portal CSS variables
+C_NAVY    = colors.HexColor("#0d1b2a")   # deep navy background / headers
+C_BLUE    = colors.HexColor("#1565c0")   # section headers
+C_SKY     = colors.HexColor("#4FB6FF")   # accent info / captions
+C_TEAL    = colors.HexColor("#00C9C8")   # teal accent
+C_RED     = colors.HexColor("#e53935")   # critical severity
+C_ORANGE  = colors.HexColor("#ff8c00")   # high severity
+C_YELLOW  = colors.HexColor("#ECC94B")   # medium severity
+C_GREEN   = colors.HexColor("#00e5a0")   # brand green / low severity / positive
+C_PURPLE  = colors.HexColor("#805AD5")   # purple accent
+C_LIGHT   = colors.HexColor("#F7FAFC")   # card background
+C_MID     = colors.HexColor("#EBF4FF")   # mid-tone fill
+C_BORDER  = colors.HexColor("#CBD5E0")   # subtle borders
+C_TEXT    = colors.HexColor("#1A202C")   # body text
+C_SUBTLE  = colors.HexColor("#718096")   # muted / footer text
 
 SEV_COLOR = {
-    "Critical": C_RED,
-    "High":     C_ORANGE,
-    "Medium":   C_YELLOW,
-    "Low":      C_GREEN,
-    "Info":     C_SKY,
+    "Critical":     C_RED,
+    "High":         C_ORANGE,
+    "Medium":       C_YELLOW,
+    "Low":          C_GREEN,
+    "Info":         C_SKY,
+    "Informational": C_SKY,
 }
 
 W, H = A4   # 595 x 842 pts
@@ -71,45 +73,48 @@ def build_styles() -> dict:
         return ParagraphStyle(name, **kw)
 
     s["cover_title"] = ps("cover_title",
-        fontName="Helvetica-Bold", fontSize=36, textColor=colors.white,
-        leading=42, alignment=TA_LEFT, spaceAfter=6)
+        fontName="Helvetica-Bold", fontSize=28, textColor=colors.white,
+        leading=34, alignment=TA_LEFT, spaceAfter=6)
 
     s["cover_sub"] = ps("cover_sub",
-        fontName="Helvetica", fontSize=14, textColor=C_SKY,
-        leading=18, alignment=TA_LEFT, spaceAfter=4)
+        fontName="Helvetica", fontSize=16, textColor=C_SKY,
+        leading=20, alignment=TA_LEFT, spaceAfter=4)
 
     s["cover_meta"] = ps("cover_meta",
         fontName="Helvetica", fontSize=10, textColor=colors.white,
         leading=14, alignment=TA_LEFT)
 
+    # Section h1: uppercase with extra space — companion to section_header() colored bar
     s["h1"] = ps("h1",
-        fontName="Helvetica-Bold", fontSize=16, textColor=C_NAVY,
-        leading=20, spaceBefore=18, spaceAfter=6)
+        fontName="Helvetica-Bold", fontSize=14, textColor=C_NAVY,
+        leading=18, spaceBefore=16, spaceAfter=4, textTransform="uppercase")
 
     s["h2"] = ps("h2",
-        fontName="Helvetica-Bold", fontSize=12, textColor=C_BLUE,
-        leading=16, spaceBefore=12, spaceAfter=4)
+        fontName="Helvetica-Bold", fontSize=11, textColor=C_BLUE,
+        leading=15, spaceBefore=10, spaceAfter=3)
 
     s["h3"] = ps("h3",
         fontName="Helvetica-Bold", fontSize=10, textColor=C_NAVY,
         leading=14, spaceBefore=8, spaceAfter=3)
 
+    # Body: 10pt with 1.4 line-height (14pt leading)
     s["body"] = ps("body",
-        fontName="Helvetica", fontSize=9, textColor=C_TEXT,
-        leading=13, spaceAfter=4, alignment=TA_JUSTIFY)
+        fontName="Helvetica", fontSize=10, textColor=C_TEXT,
+        leading=14, spaceAfter=4, alignment=TA_JUSTIFY)
 
     s["body_small"] = ps("body_small",
-        fontName="Helvetica", fontSize=8, textColor=C_SUBTLE,
-        leading=11, spaceAfter=3)
+        fontName="Helvetica", fontSize=8.5, textColor=C_SUBTLE,
+        leading=12, spaceAfter=3)
 
     s["bullet"] = ps("bullet",
         fontName="Helvetica", fontSize=9, textColor=C_TEXT,
-        leading=12, leftIndent=12, spaceAfter=2,
+        leading=13, leftIndent=14, spaceAfter=2,
         bulletIndent=0, bulletText="•")
 
+    # Finding title: bold 10pt
     s["finding_title"] = ps("finding_title",
-        fontName="Helvetica-Bold", fontSize=9.5, textColor=C_NAVY,
-        leading=13, spaceAfter=2)
+        fontName="Helvetica-Bold", fontSize=10, textColor=C_NAVY,
+        leading=14, spaceAfter=2)
 
     s["tag"] = ps("tag",
         fontName="Helvetica-Bold", fontSize=8, textColor=colors.white,
@@ -134,6 +139,11 @@ def build_styles() -> dict:
     s["metric_label"] = ps("metric_label",
         fontName="Helvetica", fontSize=7.5, textColor=C_SUBTLE,
         alignment=TA_CENTER, leading=10)
+
+    # Callout box text (used for scan-type upsell notices)
+    s["callout"] = ps("callout",
+        fontName="Helvetica-Oblique", fontSize=9, textColor=C_BLUE,
+        leading=13, spaceAfter=4, alignment=TA_LEFT)
 
     return s
 
@@ -204,15 +214,62 @@ def metric_card(value: str, label: str, color=C_NAVY) -> Table:
     return t
 
 
-def section_header(title: str, subtitle: str = "") -> List:
-    items = [
-        rule(C_BLUE, thickness=2, space_before=10, space_after=2),
-        Paragraph(title, STYLES["h1"]),
+class _LeftBarFlowable(Flowable):
+    """A colored left-border bar rendered behind the section title text."""
+    def __init__(self, title: str, bar_color=None, width: float = None):
+        super().__init__()
+        self.title     = title
+        self.bar_color = bar_color or C_GREEN
+        self._width    = width or BODY_W
+        self._height   = 0.55 * cm
+
+    def wrap(self, aw, ah):
+        self.width  = min(aw, self._width)
+        self.height = self._height
+        return self.width, self.height
+
+    def draw(self):
+        c = self.canv
+        # Left accent bar
+        c.setFillColor(self.bar_color)
+        c.rect(0, 0, 4, self.height, fill=1, stroke=0)
+        # Light background
+        c.setFillColor(colors.HexColor("#F0F4F8"))
+        c.rect(4, 0, self.width - 4, self.height, fill=1, stroke=0)
+        # Title text
+        c.setFillColor(C_NAVY)
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(10, 0.14 * cm, self.title.upper())
+
+
+def section_header(title: str, subtitle: str = "", accent=None) -> List:
+    """Returns flowables for a branded section header with a colored left bar."""
+    bar_color = accent or C_GREEN
+    items: List = [
+        Spacer(1, 8),
+        _LeftBarFlowable(title, bar_color=bar_color),
     ]
     if subtitle:
         items.append(Paragraph(subtitle, STYLES["body_small"]))
-    items.append(rule(C_BORDER, thickness=0.5, space_before=0, space_after=10))
+    items.append(Spacer(1, 6))
     return items
+
+
+def callout_box(text: str, accent=None) -> Table:
+    """A bordered callout box for upsell notices or scan-type notes."""
+    _color = accent or C_BLUE
+    cell = Paragraph(text, STYLES["callout"])
+    t = Table([[cell]], colWidths=[BODY_W])
+    t.setStyle(TableStyle([
+        ("BACKGROUND",   (0, 0), (-1, -1), colors.HexColor("#EBF4FF")),
+        ("LEFTPADDING",  (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING",   (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING",(0, 0), (-1, -1), 8),
+        ("BOX",          (0, 0), (-1, -1), 1, _color),
+        ("LINEAFTER",    (0, 0), (0, -1),  3, _color),
+    ]))
+    return t
 
 
 def finding_table(rows: List[List], col_widths: List[float],
@@ -308,6 +365,9 @@ _LOGO_CANDIDATES = [
     "/var/www/cycentra360/favicon-192.png",
     "/var/www/cycentra360/favicon-96.png",
     "/var/www/cycentra360/favicon-32x32.png",
+    # Bundled fallback — always present in the source tree after deployment
+    "/opt/cycentra/backend/cy_asm/modules/cylogo/favicons/android-chrome-192x192.png",
+    "/opt/cycentra/backend/cy_asm/modules/cylogo/favicons/apple-touch-icon.png",
     "/var/www/cycentra360/favicon.ico",
 ]
 
@@ -434,24 +494,31 @@ def build_cover(report_type: str, domain: str, org: str,
             c.setLineWidth(0.8)
             c.line(2 * cm, self.h - 4.1 * cm, self.w - 2 * cm, self.h - 4.1 * cm)
 
-            # Report type label
+            # Report type label — "CyCentra 360" primary title
+            c.setFillColor(colors.white)
+            c.setFont("Helvetica-Bold", 28)
+            c.drawString(2 * cm, self.h - 4.9 * cm, "CyCentra 360")
+
+            # Subtitle — "Attack Surface Management Report"
             c.setFillColor(C_SKY)
-            c.setFont("Helvetica-Bold", 13)
-            c.drawString(2 * cm, self.h - 4.9 * cm,
-                         f"ATTACK SURFACE MANAGEMENT  |  {self.rt.upper()} REPORT")
+            c.setFont("Helvetica", 16)
+            c.drawString(2 * cm, self.h - 5.7 * cm,
+                         f"Attack Surface Management Report  |  {self.rt.upper()}")
 
             # Domain big
             c.setFillColor(colors.white)
-            c.setFont("Helvetica-Bold", 38)
-            c.drawString(2 * cm, self.h - 6.8 * cm, self.domain_)
+            c.setFont("Helvetica-Bold", 36)
+            # Truncate long domains so they don't overflow the page
+            _domain_display = self.domain_ if len(self.domain_) <= 38 else self.domain_[:35] + "..."
+            c.drawString(2 * cm, self.h - 7.2 * cm, _domain_display)
 
             # Organisation
             c.setFillColor(C_SKY)
             c.setFont("Helvetica", 11)
-            c.drawString(2 * cm, self.h - 7.6 * cm, f"Organisation: {self.org_}")
+            c.drawString(2 * cm, self.h - 8.0 * cm, f"Organisation: {self.org_}")
 
             # Meta block
-            meta_y = self.h - 9.2 * cm
+            meta_y = self.h - 9.6 * cm
             for label, val in [("Scan ID", self.scan_id_), ("Scan Date", self.scan_date_),
                                 ("Prepared By", "CyCentra ASM Engine")]:
                 c.setFillColor(C_SKY)

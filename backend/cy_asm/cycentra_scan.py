@@ -102,17 +102,16 @@ SCAN_PROFILES = {
         "ai_enrichment_limit": 0,
     },
     "standard": {
-        # Full module suite — same breadth as Deep but AI analysis is capped at 10
-        # top findings with high-level recommendations. Modules beyond the top 10
-        # trigger an upsell notice directing users to a Deep scan or PDF report.
+        # Active probes across core modules. No AI enrichment — that is a Deep scan
+        # exclusive feature (as shown in the guest comparison table).
+        # Dark web and supply chain / social eng / mobile_api are Deep-only.
         "run_subdomains":      True,
         "modules":             [
             "web", "crypto", "email_sec", "cloud", "whois", "osint",
-            "dark_web", "supply_chain", "social_eng", "mobile_api",
         ],
         "run_vuln_scanner":    True,
-        "ai_enrichment":       True,
-        "ai_enrichment_limit": 10,   # top-10 findings, high-level recommendations
+        "ai_enrichment":       False,
+        "ai_enrichment_limit": 0,
     },
     "deep": {
         "run_subdomains":      True,
@@ -1117,39 +1116,17 @@ def main():
 
     # AI Enrichment — Deep and Standard scans; Passive is always skipped
     profile = SCAN_PROFILES[scan_type]
+    # Guard: standard scan must never reach AI enrichment — it is a Deep-exclusive feature.
+    if scan_type == "standard":
+        assert not profile["ai_enrichment"], (
+            f"SCAN_PROFILES misconfiguration: 'standard' has ai_enrichment=True. "
+            f"AI enrichment is a Deep scan exclusive. Fix SCAN_PROFILES."
+        )
     if profile["ai_enrichment"]:
-        ai_limit = profile.get("ai_enrichment_limit")
-        _limit_note = f" (top {ai_limit}, high-level)" if ai_limit else " (full depth)"
-        logger.info(f"🤖 Starting AI enrichment for {domain}{_limit_note}...")
+        logger.info(f"🤖 Starting AI enrichment for {domain} (full depth)...")
         enriched_issues, ai_provider_used = asyncio.run(
             enrich_findings_with_ai(result['results'], domain, scan_type)
         )
-        # Standard scan: enforce the 10-finding cap and append an upsell notice
-        # when more raw issues were found than the AI covered.
-        if ai_limit is not None:
-            raw_finding_count = len(result.get("all_issues", []))
-            if len(enriched_issues) > ai_limit:
-                enriched_issues = enriched_issues[:ai_limit]
-            if raw_finding_count > ai_limit:
-                overflow = raw_finding_count - ai_limit
-                enriched_issues.append({
-                    "vulnerability":  "Additional Findings Require Deep Scan",
-                    "severity":       "info",
-                    "risk_score":     1,
-                    "description":    (
-                        f"{overflow} additional finding(s) were detected across {domain} but are not "
-                        f"included in the Standard scan AI analysis (limited to the top {ai_limit} findings). "
-                        f"These may include dark web credential exposure, supply chain risks, social "
-                        f"engineering indicators, and mobile/API vulnerabilities requiring deeper investigation."
-                    ),
-                    "recommendation": (
-                        "Generate a detailed PDF report from the Reports section for a full breakdown, "
-                        "or run a Deep scan for comprehensive AI-enriched analysis of all findings with "
-                        "in-depth technical remediation steps. "
-                        "Contact the CyCentra team for a full assessment: support@cycentra.com."
-                    ),
-                    "module": "Standard Scan Limit",
-                })
     else:
         logger.info(f"⏭️  AI enrichment skipped — {scan_type} scan profile.")
         enriched_issues, ai_provider_used = [], f"Skipped ({scan_type} scan)"
@@ -1389,11 +1366,17 @@ def main():
             except Exception as _save_err:
                 logger.warning(f"⚠️ [AssetState] Failed to save state store: {_save_err}")
 
-        # ── Generate PDF Reports (Executive + Technical) ─────────────────────
+        # ── Generate PDF Reports ─────────────────────────────────────────────
+        # Guest scans receive executive PDF only — no technical report.
+        # Authenticated scans get both executive and technical PDFs.
         exec_pdf_path, tech_pdf_path = "", ""
         try:
             from reporting.generate_reports import hook_into_scan
-            exec_pdf_path, tech_pdf_path = hook_into_scan(portal_payload, final_tenant_id, domain, timestamp)
+            _report_type = "executive_only" if is_guest else "both"
+            exec_pdf_path, tech_pdf_path = hook_into_scan(
+                portal_payload, final_tenant_id, domain, timestamp,
+                report_type=_report_type,
+            )
         except Exception as _rpt_err:
             logger.warning(f"⚠️ [Reports] PDF generation failed (scan unaffected): {_rpt_err}")
 

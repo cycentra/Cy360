@@ -19,13 +19,12 @@ function genGuestUid() {
   return "guest_" + Math.random().toString(36).slice(2, 10);
 }
 
+// Standard scan module sequence — matches SCAN_PROFILES["standard"] in cycentra_scan.py
 const MODULES = [
   "DNS Reconnaissance", "Subdomain Enumeration", "Web Analysis",
   "Crypto & SSL Audit", "Email Security Check", "WHOIS & History",
   "OSINT Gathering", "Cloud Infrastructure",
-  "Dark Web Monitoring", "Supply Chain Analysis",
-  "Social Engineering Intel", "Mobile & API Checks",
-  "AI Risk Enrichment", "Generating Report",
+  "Generating Report",
 ];
 
 const RISK_CONFIG = {
@@ -116,14 +115,17 @@ function LockedWidget({ title, accent = "#00e5a0", preview = null }) {
 function SslWidget({ assets = [] }) {
   const sslFindings = assets.flatMap(a =>
     (a.vulnerabilities || []).filter(v =>
-      /ssl|tls|cert|crypto|cipher|https/i.test(v.title || "") ||
-      /ssl|tls|cert|crypto|cipher/i.test(v.category || "")
+      /ssl|tls|cert|crypto|cipher|https/i.test(v.vulnerability || v.title || "") ||
+      /ssl|tls|cert|crypto|cipher/i.test(v.module || v.category || "")
     )
   );
   const critical = sslFindings.filter(v => v.severity?.toLowerCase() === "critical").length;
   const high     = sslFindings.filter(v => v.severity?.toLowerCase() === "high").length;
   const medium   = sslFindings.filter(v => v.severity?.toLowerCase() === "medium").length;
   const total    = sslFindings.length;
+  // Hide widget entirely if no SSL-related data at all (no findings at all in assets)
+  const noDataAtAll = assets.flatMap(a => a.vulnerabilities || []).length === 0;
+  if (total === 0 && noDataAtAll) return null;
   return (
     <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
       borderTop: "2px solid #f5c518", borderRadius: 5, padding: "18px 22px" }}>
@@ -172,14 +174,17 @@ function SslWidget({ assets = [] }) {
 function EmailSecurityWidget({ assets = [] }) {
   const emailFindings = assets.flatMap(a =>
     (a.vulnerabilities || []).filter(v =>
-      /spf|dkim|dmarc|email|smtp|mx |phishing|spoofing/i.test(v.title || "") ||
-      /email|mail/i.test(v.category || "")
+      /spf|dkim|dmarc|email|smtp|mx |phishing|spoofing/i.test(v.vulnerability || v.title || "") ||
+      /email|mail/i.test(v.module || v.category || "")
     )
   );
-  const hasSpfIssue   = emailFindings.some(v => /spf/i.test(v.title || ""));
-  const hasDkimIssue  = emailFindings.some(v => /dkim/i.test(v.title || ""));
-  const hasDmarcIssue = emailFindings.some(v => /dmarc/i.test(v.title || ""));
+  const hasSpfIssue   = emailFindings.some(v => /spf/i.test(v.vulnerability || v.title || ""));
+  const hasDkimIssue  = emailFindings.some(v => /dkim/i.test(v.vulnerability || v.title || ""));
+  const hasDmarcIssue = emailFindings.some(v => /dmarc/i.test(v.vulnerability || v.title || ""));
   const total = emailFindings.length;
+  // Hide widget if scan returned no findings at all (not yet enriched)
+  const noDataAtAll = assets.flatMap(a => a.vulnerabilities || []).length === 0;
+  if (total === 0 && noDataAtAll) return null;
 
   const rows = [
     { label: "SPF",   ok: !hasSpfIssue   },
@@ -224,42 +229,71 @@ function EmailSecurityWidget({ assets = [] }) {
 }
 
 function AssetBreakdownWidget({ assets = [] }) {
-  const byType = {};
+  // Group findings by module — the scan JSON uses v.module as the source identifier
+  const byModule = {};
   assets.forEach(a => {
-    const t = a.type || "Other";
-    byType[t] = (byType[t] || 0) + 1;
+    (a.vulnerabilities || []).forEach(v => {
+      const m = v.module || "other";
+      byModule[m] = (byModule[m] || 0) + 1;
+    });
   });
-  const topTypes = Object.entries(byType).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  const typeColors = { Subdomain: "#4d9eff", IP: "#00e5a0", Web: "#f5c518", SSL: "#b06eff", Other: "rgba(255,255,255,0.3)" };
+  const totalFindings = Object.values(byModule).reduce((s, n) => s + n, 0);
+  const topModules = Object.entries(byModule).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  // Hide widget entirely if there's genuinely no data
+  if (totalFindings === 0) return null;
+
+  const MODULE_COLORS = {
+    dns:          "#4d9eff",
+    crypto:       "#f5c518",
+    email_sec:    "#b06eff",
+    web:          "#ff8c00",
+    cloud:        "#00e5a0",
+    osint:        "#4d9eff",
+    supply_chain: "#ff3b3b",
+    dark_web:     "#ff3b3b",
+    social_eng:   "#ff8c00",
+    mobile_api:   "#b06eff",
+  };
+  const MODULE_LABELS = {
+    dns:          "DNS",
+    crypto:       "SSL / Crypto",
+    email_sec:    "Email Security",
+    web:          "Web Analysis",
+    cloud:        "Cloud",
+    osint:        "OSINT",
+    supply_chain: "Supply Chain",
+    dark_web:     "Dark Web",
+    social_eng:   "Social Eng.",
+    mobile_api:   "Mobile / API",
+  };
+
   return (
     <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
       borderTop: "2px solid #4d9eff", borderRadius: 5, padding: "18px 22px" }}>
       <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
         textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>
-        Asset Breakdown
+        Findings by Module
       </div>
-      {topTypes.length === 0 ? (
-        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12 }}>No assets found</div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-          {topTypes.map(([type, count]) => {
-            const pct = Math.round((count / assets.length) * 100);
-            const color = typeColors[type] || typeColors.Other;
-            return (
-              <div key={type}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11 }}>{type}</span>
-                  <span style={{ color, fontFamily: "monospace", fontSize: 11, fontWeight: 700 }}>{count}</span>
-                </div>
-                <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2 }}>
-                  <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 2,
-                    transition: "width 0.6s ease" }}/>
-                </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+        {topModules.map(([mod, count]) => {
+          const pct   = Math.round((count / totalFindings) * 100);
+          const color = MODULE_COLORS[mod] || "rgba(255,255,255,0.3)";
+          const label = MODULE_LABELS[mod] || mod.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+          return (
+            <div key={mod}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11 }}>{label}</span>
+                <span style={{ color, fontFamily: "monospace", fontSize: 11, fontWeight: 700 }}>{count}</span>
               </div>
-            );
-          })}
-        </div>
-      )}
+              <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2 }}>
+                <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 2,
+                  transition: "width 0.6s ease" }}/>
+              </div>
+            </div>
+          );
+        })}
+      </div>
       <div style={{ marginTop: 10, padding: "5px 8px", background: "rgba(77,158,255,0.07)",
         borderRadius: 3, color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>
         Full cloud inventory and ownership mapping available in the Licensed Portal
@@ -278,7 +312,7 @@ function GuestDashboard({ data, onRescan }) {
     n + (a.vulnerabilities || []).filter(v => v.severity?.toLowerCase() === "critical").length, 0);
   const highCount = assets.reduce((n, a) =>
     n + (a.vulnerabilities || []).filter(v => v.severity?.toLowerCase() === "high").length, 0);
-  const subdomains = assets.filter(a => a.type === "Subdomain").length;
+  const subdomains = data?.subdomain_summary?.total || 0;
 
   return (
     <div style={{ minHeight: "100vh", background: "#090b10",
@@ -343,9 +377,9 @@ function GuestDashboard({ data, onRescan }) {
           ))}
         </div>
 
-        {/* Row 1: Risk donut + SSL (partial) + Email security (partial) */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
-          <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
+        {/* Row 1: Risk donut + SSL (partial) + Email security (partial) — flex so absent widgets collapse */}
+        <div style={{ display: "flex", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 260px", background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
             borderTop: "2px solid #ff3b3b", borderRadius: 5, padding: "18px 22px" }}>
             <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
               textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>
@@ -353,47 +387,57 @@ function GuestDashboard({ data, onRescan }) {
             </div>
             <RiskDonut assets={assets}/>
           </div>
-          <SslWidget assets={assets}/>
-          <EmailSecurityWidget assets={assets}/>
+          <div style={{ flex: "1 1 220px" }}><SslWidget assets={assets}/></div>
+          <div style={{ flex: "1 1 220px" }}><EmailSecurityWidget assets={assets}/></div>
         </div>
 
-        {/* Row 2: Asset breakdown (partial) + 2 locked widgets */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
-          <AssetBreakdownWidget assets={assets}/>
-          <LockedWidget title="Web Security" accent="#ff8c00"
-            preview={[
-              <div key="p1" style={{ height: 12, width: "85%", background: "rgba(255,140,0,0.12)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-              <div key="p2" style={{ height: 12, width: "60%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-              <div key="p3" style={{ height: 12, width: "70%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-            ]}/>
-          <LockedWidget title="Brand & External Exposure" accent="#ff3b3b"
-            preview={[
-              <div key="p1" style={{ height: 12, width: "75%", background: "rgba(255,59,59,0.12)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-              <div key="p2" style={{ height: 12, width: "55%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-              <div key="p3" style={{ height: 12, width: "65%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-            ]}/>
+        {/* Row 2: Asset breakdown (partial) + 2 locked widgets — flex for graceful collapse */}
+        <div style={{ display: "flex", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 220px" }}><AssetBreakdownWidget assets={assets}/></div>
+          <div style={{ flex: "1 1 220px" }}>
+            <LockedWidget title="Web Security" accent="#ff8c00"
+              preview={[
+                <div key="p1" style={{ height: 12, width: "85%", background: "rgba(255,140,0,0.12)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+                <div key="p2" style={{ height: 12, width: "60%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+                <div key="p3" style={{ height: 12, width: "70%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+              ]}/>
+          </div>
+          <div style={{ flex: "1 1 220px" }}>
+            <LockedWidget title="Brand & External Exposure" accent="#ff3b3b"
+              preview={[
+                <div key="p1" style={{ height: 12, width: "75%", background: "rgba(255,59,59,0.12)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+                <div key="p2" style={{ height: 12, width: "55%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+                <div key="p3" style={{ height: 12, width: "65%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+              ]}/>
+          </div>
         </div>
 
         {/* Row 3: 3 showcase locked widgets */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 24 }}>
-          <LockedWidget title="Dark Web Monitoring" accent="#ff3b3b"
-            preview={[
-              <div key="p1" style={{ height: 12, width: "70%", background: "rgba(255,59,59,0.1)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-              <div key="p2" style={{ height: 12, width: "50%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-              <div key="p3" style={{ height: 8, width: "90%", background: "rgba(255,255,255,0.04)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-            ]}/>
-          <LockedWidget title="Supply Chain Risk" accent="#4d9eff"
-            preview={[
-              <div key="p1" style={{ height: 12, width: "80%", background: "rgba(77,158,255,0.1)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-              <div key="p2" style={{ height: 12, width: "60%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-              <div key="p3" style={{ height: 8, width: "75%", background: "rgba(255,255,255,0.04)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-            ]}/>
-          <LockedWidget title="AI Risk Score" accent="#b06eff"
-            preview={[
-              <div key="p1" style={{ height: 12, width: "65%", background: "rgba(176,110,255,0.12)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-              <div key="p2" style={{ height: 12, width: "80%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-              <div key="p3" style={{ height: 8, width: "55%", background: "rgba(255,255,255,0.04)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
-            ]}/>
+        <div style={{ display: "flex", gap: 14, marginBottom: 24, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 220px" }}>
+            <LockedWidget title="Dark Web Monitoring" accent="#ff3b3b"
+              preview={[
+                <div key="p1" style={{ height: 12, width: "70%", background: "rgba(255,59,59,0.1)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+                <div key="p2" style={{ height: 12, width: "50%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+                <div key="p3" style={{ height: 8, width: "90%", background: "rgba(255,255,255,0.04)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+              ]}/>
+          </div>
+          <div style={{ flex: "1 1 220px" }}>
+            <LockedWidget title="Supply Chain Risk" accent="#4d9eff"
+              preview={[
+                <div key="p1" style={{ height: 12, width: "80%", background: "rgba(77,158,255,0.1)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+                <div key="p2" style={{ height: 12, width: "60%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+                <div key="p3" style={{ height: 8, width: "75%", background: "rgba(255,255,255,0.04)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+              ]}/>
+          </div>
+          <div style={{ flex: "1 1 220px" }}>
+            <LockedWidget title="AI Risk Score" accent="#b06eff"
+              preview={[
+                <div key="p1" style={{ height: 12, width: "65%", background: "rgba(176,110,255,0.12)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+                <div key="p2" style={{ height: 12, width: "80%", background: "rgba(255,255,255,0.05)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+                <div key="p3" style={{ height: 8, width: "55%", background: "rgba(255,255,255,0.04)", borderRadius: 3, marginBottom: 10, filter: "blur(2px)" }}/>,
+              ]}/>
+          </div>
         </div>
 
         {/* Professional upsell note — no "Limited Access" language */}
@@ -672,21 +716,24 @@ export function GuestScanPage() {
               ))}
             </div>
 
-            {/* Comparison table */}
+            {/* Comparison table — reflects actual SCAN_PROFILES in cycentra_scan.py */}
             <div style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 4, overflow: "hidden" }}>
               {[
-                { feature: "DNS / WHOIS",         passive: true,  standard: true,  deep: true  },
-                { feature: "Email Security",       passive: true,  standard: true,  deep: true  },
-                { feature: "Dark Web Search",      passive: true,  standard: true,  deep: true  },
-                { feature: "OSINT / Threat Intel", passive: true,  standard: true,  deep: true  },
-                { feature: "Active Port Scan",     passive: false, standard: true,  deep: true  },
-                { feature: "Protocol Handshaking", passive: false, standard: true,  deep: true  },
-                { feature: "Full Port Range",      passive: false, standard: false, deep: true  },
-                { feature: "AI Remediation",       passive: false, standard: "overview", deep: "step-by-step" },
-                { feature: "PDF Technical Report", passive: false, standard: false, deep: true  },
-              ].map((row, i) => (
+                { feature: "DNS / WHOIS",            passive: true,  standard: true,  deep: true  },
+                { feature: "Email Security",          passive: true,  standard: true,  deep: true  },
+                { feature: "Dark Web / OSINT",        passive: true,  standard: false, deep: true  },
+                { feature: "Subdomain Enumeration",   passive: false, standard: true,  deep: true  },
+                { feature: "Web Security Analysis",   passive: false, standard: true,  deep: true  },
+                { feature: "SSL / Crypto Audit",      passive: false, standard: true,  deep: true  },
+                { feature: "Cloud Exposure",          passive: false, standard: true,  deep: true  },
+                { feature: "Supply Chain Risk",       passive: false, standard: false, deep: true  },
+                { feature: "Social Engineering",      passive: false, standard: false, deep: true  },
+                { feature: "Mobile & API Checks",     passive: false, standard: false, deep: true  },
+                { feature: "AI Risk Remediation",     passive: false, standard: false, deep: "step-by-step" },
+                { feature: "PDF Technical Report",    passive: false, standard: false, deep: true  },
+              ].map((row, i, arr) => (
                 <div key={row.feature} style={{ display: "grid", gridTemplateColumns: "1fr 52px 52px 52px",
-                  borderBottom: i < 8 ? "1px solid rgba(255,255,255,0.04)" : "none",
+                  borderBottom: i < arr.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
                   alignItems: "center" }}>
                   <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", padding: "7px 12px" }}>
                     {row.feature}
