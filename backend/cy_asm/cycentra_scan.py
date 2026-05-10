@@ -1239,13 +1239,14 @@ def main():
 
         # Use AI findings when available; fall back to rich scanner findings +
         # deduplicated module issue strings.
+        _scan_results = result.get("results", {})   # alias for clarity inside this block
         if enriched_issues:
             final_vulns = enriched_issues
         else:
             # 1. Rich findings from vuln_scanner and nuclei are the source of truth
             #    for those modules (proper CVSSv3 scores, compliance tags, etc.).
-            vs_rich  = results.get("vuln_scanner", {}).get("results", {}).get("findings", [])
-            nuc_rich = results.get("nuclei",       {}).get("results", {}).get("findings", [])
+            vs_rich  = _scan_results.get("vuln_scanner", {}).get("results", {}).get("findings", [])
+            nuc_rich = _scan_results.get("nuclei",       {}).get("results", {}).get("findings", [])
 
             # 2. Deduplicate remaining module issue strings (handles e.g. the
             #    "SAN mismatch" string emitted by both web and crypto modules).
