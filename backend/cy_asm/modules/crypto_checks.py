@@ -304,8 +304,15 @@ def check_ssl_status(domain: str) -> Dict[str, Any]:
     if cert_info["heartbleed_risk"]:
         issues.append("Heartbleed probe indicates potential vulnerability (CVE-2014-0160)")
 
+    # ssl_enabled = TLS connection was established and cert data was obtained.
+    # chain_valid and san_valid are separate quality flags — issues in those
+    # are already captured in the issues list and shown as separate findings.
+    # Do NOT gate ssl_enabled on chain_valid/san_valid: Python's strict CA bundle
+    # can fail intermediate issuer verification even when a valid TLS cert is
+    # in use, which would falsely assign a -10 posture penalty.
+    _tls_established = cert_info.get("protocol") is not None and cert_info.get("protocol") not in ("Unknown", None, "")
     return {
-        "ssl_enabled": cert_info["chain_valid"] and cert_info["san_valid"],
+        "ssl_enabled": _tls_established,
         "issues": list(set(issues)),
         "cert_info": cert_info,
     }

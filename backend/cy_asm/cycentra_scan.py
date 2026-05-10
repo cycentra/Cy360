@@ -1216,14 +1216,52 @@ def main():
         # ── Normalise raw module issues into the same shape the UI adapter expects ──
         # Needed when AI enrichment fails (all providers exhausted) so the dashboard
         # still shows real findings rather than empty vulnerability widgets.
+
+        # Keyword-to-severity classifier for raw module issue strings.
+        # First match wins (case-insensitive). Default is Low — advisory items
+        # (missing headers, OCSP stapling, PQC suggestions) must NOT tank the score
+        # by defaulting to Medium as the old code did.
+        import re as _re
+        _ISSUE_SEVERITY_RE = [
+            # (pattern, severity)
+            (r"chain.invalid|chain.validation.fail|trust.chain",              "Medium"),
+            (r"san.mismatch|no.*subject.alt|san.*not.covered|not covered by", "Medium"),
+            (r"email.spoofing.risk.*high|spoofing.*high",                     "High"),
+            (r"email.spoofing.risk.*medium|spoofing.*medium",                 "Medium"),
+            (r"email.spoofing.risk.*low|spoofing.*low",                       "Low"),
+            (r"deprecated.tls|deprecated.ssl|tls.1\.0|ssl.2|ssl.3",          "Medium"),
+            (r"weak.cipher|weak.key|anonymous.cipher",                        "Medium"),
+            (r"heartbleed",                                                    "High"),
+            (r"missing.*header|header.*missing|cache.control|x-frame|"
+             r"csp|hsts|permissions.policy|cross.origin|referrer.policy",     "Low"),
+            (r"ocsp.stapling|ocsp.*not|tls.compression",                      "Low"),
+            (r"post.quantum|pqc|hybrid.key.exchange",                         "Low"),
+            (r"dnssec.*not|dnssec.*disabled|dnssec.*off",                     "Low"),
+            (r"long.validity|validity.*year",                                  "Low"),
+            (r"deprecated.signature|sha1",                                     "Low"),
+            (r"self.signed",                                                   "Medium"),
+            (r"trust chain invalid",                                           "Medium"),
+        ]
+
+        def _classify_issue_severity(issue_str: str) -> str:
+            """Map a raw module issue string to a severity level. Defaults to Low."""
+            s = issue_str.lower()
+            for pattern, sev in _ISSUE_SEVERITY_RE:
+                if _re.search(pattern, s):
+                    return sev
+            return "Low"   # safe default — advisory items should not tank the score
+
         def _normalise_issue(issue) -> dict:
             if isinstance(issue, dict):
                 mod   = issue.get("module", "Scan")
                 vuln  = issue.get("vulnerability", issue.get("type", "Unknown Finding"))
+                # Use explicit severity if present; else classify by content; else Low
+                raw_sev = issue.get("severity", "")
+                sev = raw_sev if raw_sev else _classify_issue_severity(vuln)
                 entry = {
                     "vulnerability":  vuln,
-                    "severity":       issue.get("severity",      "Medium"),
-                    "risk_score":     issue.get("risk_score",    5),
+                    "severity":       sev,
+                    "risk_score":     issue.get("risk_score",    3),
                     "description":    issue.get("description",   ""),
                     "recommendation": issue.get("recommendation",""),
                     "module":         mod,
@@ -1232,9 +1270,13 @@ def main():
                 return entry
             vuln_str = str(issue)
             return {
-                "vulnerability": vuln_str, "severity": "Medium", "risk_score": 5,
-                "description": vuln_str, "recommendation": "", "module": "Scan",
-                "asm_id": _asm_finding_id(domain, "Scan", vuln_str),
+                "vulnerability": vuln_str,
+                "severity":      _classify_issue_severity(vuln_str),  # was hardcoded "Medium"
+                "risk_score":    3,
+                "description":   vuln_str,
+                "recommendation": "",
+                "module":        "Scan",
+                "asm_id":        _asm_finding_id(domain, "Scan", vuln_str),
             }
 
         # Use AI findings when available; fall back to rich scanner findings +

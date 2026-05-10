@@ -89,7 +89,14 @@ def score_from_portal_json(data: Dict[str, Any]) -> Tuple[int, str]:
     raw       = asset.get("raw_results") or data.get("results") or {}
     ssl_r     = (raw.get("crypto")    or {}).get("results", {}).get("ssl", {})
     email_r   = (raw.get("email_sec") or {}).get("results", {})
-    ssl_ok    = bool(ssl_r.get("ssl_enabled", False))
+    cert_info = ssl_r.get("cert_info", {})
+    # Belt-and-suspenders: treat SSL as enabled if the TLS protocol field is
+    # populated, even when ssl_enabled was recorded as False in older scan JSONs
+    # (pre-patch scans that used the chain_valid && san_valid logic).
+    _proto = cert_info.get("protocol", "")
+    ssl_ok    = bool(ssl_r.get("ssl_enabled", False)) or bool(
+        _proto and _proto not in ("Unknown", "", None)
+    )
     email_st  = str(email_r.get("elite_status", "")).lower()
     sub_count = int((data.get("subdomain_summary") or {}).get("total", 0))
 

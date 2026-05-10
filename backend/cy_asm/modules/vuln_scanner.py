@@ -352,6 +352,38 @@ async def scan_ssl_vulnerabilities(domain: str) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Exposed sensitive path enrichment (extends web_analysis.exposed_paths)
 # ---------------------------------------------------------------------------
+async def _verify_path_content(
+    url: str,
+    path: str,
+    session: aiohttp.ClientSession,
+) -> bool:
+    """
+    Return True only if the response body confirms the resource is real, not a soft-404.
+    Prevents false-positive Critical/High findings when CMS pages or catch-all routes
+    return HTTP 200 for any URL (e.g. /.git/ or /db.dump returning a marketing page).
+    """
+    _CONTENT_SIGNATURES: Dict[str, List[bytes]] = {
+        "/.git/":   [b"HEAD", b"packed-refs", b"refs/heads", b"[core]", b"COMMIT_EDITMSG"],
+        "/db.dump": [b"INSERT INTO", b"CREATE TABLE", b"mysqldump", b"-- MySQL", b"-- PostgreSQL"],
+        "/.env":    [b"=", b"DB_", b"SECRET", b"KEY", b"PASSWORD", b"APP_ENV"],
+        "/backup":  [b"PK\x03\x04", b".zip", b"backup"],  # zip magic bytes or common strings
+    }
+    signatures = next(
+        (sigs for k, sigs in _CONTENT_SIGNATURES.items() if k in path), None
+    )
+    if not signatures:
+        # No signature map for this path — trust the HTTP status code
+        return True
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=6)) as r:
+            if r.status != 200:
+                return False
+            body = await r.read()
+            return any(sig in body for sig in signatures)
+    except Exception:
+        return False
+
+
 async def enrich_exposed_paths(
     exposed_paths: List[Dict[str, Any]],
     domain: str,
@@ -361,6 +393,10 @@ async def enrich_exposed_paths(
     Takes the exposed_paths list from web_analysis and adds CVE context
     where known patterns match (e.g. /.git/ → CVE-2021-40438 Apache mod_proxy).
     Also validates .env file contents for leaked secrets.
+
+    Content verification: before assigning Critical or High severity for any
+    matched path, the response body is checked for expected signatures.
+    A 200 that returns a CMS page (soft-404) is demoted to Medium with a note.
     """
     _PATH_CVE_MAP = {
         "/.git/":    ("CVE-2021-40438", 9.1, "Git repository exposed — remove .git from web root"),
@@ -378,12 +414,36 @@ async def enrich_exposed_paths(
 
         if match:
             cve_ref, cvss, rec = match
-            # If it's a .env file, try to read and detect secret patterns
             extra_note = ""
+
+            # ── Content verification (Critical/High only) ──────────────────────
+            # For paths with CVSS >= 7.0 (High+), verify the response body
+            # contains expected content before assigning full severity.
+            # This prevents soft-404/CMS-page false positives.
+            probe_url = ep.get("url", f"https://{domain}{path}")
+            if cvss >= 7.0 and ep.get("status") == 200:
+                verified = await _verify_path_content(probe_url, path, session)
+                if not verified:
+                    # Downgrade: path returned 200 but body does not match expected pattern
+                    final_cvss = min(cvss, 5.0)
+                    final_sev  = "Medium"
+                    cve_ref_final = f"{cve_ref}_UNVERIFIED"
+                    extra_note = " Unverified — HTTP 200 response body does not match expected content; may be a soft-404 redirect."
+                else:
+                    final_cvss    = cvss
+                    final_sev     = _severity_label(cvss)
+                    cve_ref_final = cve_ref
+            else:
+                # CVSS < 7.0 or non-200 status — no body verification needed
+                final_cvss    = cvss
+                final_sev     = _severity_label(cvss)
+                cve_ref_final = cve_ref
+
+            # Special case: .env secret content detection (keeps independent of verification above)
             if ".env" in path and ep.get("status") == 200:
                 try:
                     async with session.get(
-                        ep.get("url", f"https://{domain}/.env"),
+                        probe_url,
                         timeout=aiohttp.ClientTimeout(total=8),
                     ) as r:
                         if r.status == 200:
@@ -396,15 +456,15 @@ async def enrich_exposed_paths(
                     pass
 
             enriched.append({
-                "vulnerability":  cve_ref,
+                "vulnerability":  cve_ref_final,
                 "module":         "vuln_scanner",
                 "source":         "exposed_path",
                 "path":           path,
                 "http_status":    ep.get("status"),
-                "cvss":           cvss,
+                "cvss":           final_cvss,
                 "epss":           0.0,
-                "severity":       _severity_label(cvss),
-                "risk_score":     _risk_score(cvss, 0.0),
+                "severity":       final_sev,
+                "risk_score":     _risk_score(final_cvss, 0.0),
                 "description":    f"Exposed path {path} on {domain} returned HTTP {ep.get('status')}.{extra_note}",
                 "recommendation": rec,
                 "compliance_impact": _compliance_tags(cve_ref, path),

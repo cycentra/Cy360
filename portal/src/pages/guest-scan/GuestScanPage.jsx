@@ -5,6 +5,15 @@
  * Offers Standard scan only (Deep/Passive are visible but greyed out).
  * After completion, shows a limited free-tier dashboard.
  *
+ * Design language matches DashboardPage.jsx exactly:
+ *   - ASMPostureWidget half-circle gauge (same SVG math)
+ *   - StatCard border/font/size spec
+ *   - ASMWidget wrapper (same background/border/borderTop/padding)
+ *   - ESecRow (same pass/fail colors and icon logic)
+ *   - statRow helper (same flex justify-between row format)
+ *   - RiskDonut (same SVG segment math and color array)
+ *   - CertTimeline (same bar visual)
+ *
  * Uses the same /api/scan/* endpoints as the main app; no auth required
  * since the Flask backend doesn't enforce session on these routes.
  */
@@ -34,9 +43,9 @@ const RISK_CONFIG = {
   low:      { color: "#00e5a0", bg: "rgba(0,229,160,0.12)",  label: "LOW"      },
 };
 
-// ── GuestDashboard ────────────────────────────────────────────────────────────
+// ── GuestDashboard design primitives (mirrors DashboardPage.jsx exactly) ──────
 
-// Shared check/cross icon pair
+// Shared check/cross icon pair — same as DashboardPage ESecRow icons
 function CheckIcon({ color = "#00e5a0" }) {
   return (
     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5">
@@ -52,27 +61,68 @@ function CrossIcon({ color = "#ff3b3b" }) {
   );
 }
 
-function widgetCard(borderColor) {
-  return {
-    background: "rgba(255,255,255,0.025)",
-    border: "1px solid rgba(255,255,255,0.07)",
-    borderTop: `2px solid ${borderColor}`,
-    borderRadius: 5,
-    padding: "18px 22px",
-    flex: 1,
-    minWidth: 280,
-  };
+// ESecRow — exact match of DashboardPage ESecRow (pass=null = neutral/—)
+function ESecRow({ label, value, pass }) {
+  const color = pass === null ? "rgba(255,255,255,0.35)" : pass ? "#00e5a0" : "#ff3b3b";
+  const icon  = pass === null ? "—" : pass ? "✓" : "✗";
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+      padding: "5px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+      <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>{label}</span>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, maxWidth: 170,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value || "—"}</span>
+        <span style={{ color, fontWeight: 700, fontSize: 12 }}>{icon}</span>
+      </div>
+    </div>
+  );
 }
 
-function WidgetLabel({ children }) {
+// ASMWidget wrapper — exact match of DashboardPage ASMWidget
+function ASMWidget({ title, children, accent = "#00e5a0", badge }) {
   return (
-    <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
-      textTransform: "uppercase", fontFamily: "monospace", marginBottom: 14 }}>
+    <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
+      borderTop: `2px solid ${accent}`, borderRadius: 5, padding: "18px 22px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
+          textTransform: "uppercase", fontFamily: "monospace" }}>{title}</div>
+        {badge != null && (
+          <span style={{ background: `${accent}18`, color: accent, fontSize: 10, fontFamily: "monospace",
+            padding: "2px 8px", borderRadius: 2, fontWeight: 700 }}>{badge}</span>
+        )}
+      </div>
       {children}
     </div>
   );
 }
 
+// statRow helper — exact match of DashboardPage statRow
+function StatRows({ items }) {
+  return items.map(r => (
+    <div key={r.label} style={{ display: "flex", justifyContent: "space-between",
+      padding: "5px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+      <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 12 }}>{r.label}</span>
+      <span style={{ color: r.color, fontFamily: "monospace", fontSize: 13, fontWeight: 700 }}>{r.val}</span>
+    </div>
+  ));
+}
+
+// StatCard — exact match of DashboardPage StatCard
+function StatCard({ label, value, accent, sub }) {
+  return (
+    <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
+      borderTop: `2px solid ${accent}`, padding: "18px 22px", borderRadius: 4,
+      flex: 1, minWidth: 130 }}>
+      <div style={{ color: accent, fontSize: 30, fontWeight: 800,
+        fontFamily: "'Space Mono',monospace", lineHeight: 1 }}>{value}</div>
+      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
+        marginTop: 5, textTransform: "uppercase" }}>{label}</div>
+      {sub && <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+// WidgetNote — dim italic footer inside a widget
 function WidgetNote({ children }) {
   return (
     <div style={{ marginTop: 10, padding: "5px 8px", background: "rgba(255,255,255,0.04)",
@@ -83,7 +133,9 @@ function WidgetNote({ children }) {
   );
 }
 
-function StatusRow({ label, ok, okText = "Pass", failText = "Issue", okColor = "#00e5a0", failColor = "#ff8c00", detail = null }) {
+// StatusRow — used inside SSL/Web widgets for simple pass/fail rows
+function StatusRow({ label, ok, okText = "Pass", failText = "Issue",
+  okColor = "#00e5a0", failColor = "#ff8c00", detail = null }) {
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 7 }}>
       <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>{label}</span>
@@ -92,6 +144,105 @@ function StatusRow({ label, ok, okText = "Pass", failText = "Issue", okColor = "
         {ok ? <CheckIcon color={okColor}/> : <CrossIcon color={failColor}/>}
         {detail !== null ? detail : (ok ? okText : failText)}
       </span>
+    </div>
+  );
+}
+
+// ── ASMPostureWidget — identical half-circle gauge SVG as DashboardPage ────────
+function ASMPostureWidget({ score, grade, domain, lastScan }) {
+  const gradeColor = {
+    "A+": "#00e5a0", A: "#00e5a0", B: "#4d9eff",
+    C: "#f5c518", D: "#ff8c00", F: "#ff3b3b",
+  }[grade] || "#00e5a0";
+
+  // Gauge: 0-100 mapped to 180° arc (half-circle) — same math as DashboardPage
+  const radius = 52, cx = 70, cy = 70;
+  const arcLen = Math.PI * radius;
+  const filled = score != null ? (score / 100) * arcLen : 0;
+
+  return (
+    <div style={{
+      background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
+      borderTop: `2px solid ${gradeColor}`, borderRadius: 6, padding: "18px 24px",
+      display: "flex", alignItems: "center", gap: 28, flexWrap: "wrap",
+      marginBottom: 14,
+    }}>
+      {/* Half-circle gauge */}
+      <div style={{ flexShrink: 0, position: "relative" }}>
+        <svg width="140" height="80" style={{ overflow: "visible" }}>
+          {/* Track */}
+          <path d={`M ${cx - radius} ${cy} A ${radius} ${radius} 0 0 1 ${cx + radius} ${cy}`}
+            fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="10" strokeLinecap="round"/>
+          {/* Fill */}
+          <path d={`M ${cx - radius} ${cy} A ${radius} ${radius} 0 0 1 ${cx + radius} ${cy}`}
+            fill="none" stroke={gradeColor} strokeWidth="10" strokeLinecap="round"
+            strokeDasharray={`${filled} ${arcLen}`}
+            style={{ transition: "stroke-dasharray 1.2s ease", filter: `drop-shadow(0 0 6px ${gradeColor}60)` }}/>
+          {/* Score label */}
+          <text x={cx} y={cy - 6} textAnchor="middle" fill="white" fontSize="28" fontWeight="800"
+            fontFamily="'Space Mono',monospace">
+            {score != null ? score : "—"}
+          </text>
+          <text x={cx} y={cy + 10} textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize="9"
+            fontFamily="monospace" letterSpacing="1">
+            POSTURE SCORE
+          </text>
+          {/* Grade pill */}
+          <rect x={cx - 16} y={cy + 18} width="32" height="18" rx="3"
+            fill={`${gradeColor}20`} stroke={`${gradeColor}50`} strokeWidth="1"/>
+          <text x={cx} y={cy + 31} textAnchor="middle" fill={gradeColor} fontSize="11"
+            fontWeight="700" fontFamily="'Space Mono',monospace">
+            {grade || "—"}
+          </text>
+        </svg>
+      </div>
+
+      {/* Labels */}
+      <div style={{ flex: 1, minWidth: 160 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+          <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
+            textTransform: "uppercase", fontFamily: "monospace" }}>
+            Overall ASM Security Posture
+          </span>
+          <span style={{ background: "rgba(0,229,160,0.15)", color: "#00e5a0",
+            border: "1px solid rgba(0,229,160,0.4)", fontSize: 9, fontFamily: "monospace",
+            fontWeight: 700, padding: "1px 6px", borderRadius: 2, letterSpacing: "1px" }}>
+            STANDARD SCAN
+          </span>
+        </div>
+        <div style={{ color: gradeColor, fontSize: 32, fontWeight: 800,
+          fontFamily: "'Space Mono',monospace", lineHeight: 1, marginBottom: 4 }}>
+          Grade {grade || "—"}
+        </div>
+        {domain && (
+          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11,
+            fontFamily: "monospace", marginBottom: 2 }}>{domain}</div>
+        )}
+        {lastScan && (
+          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>
+            Last scan: {lastScan}
+          </div>
+        )}
+      </div>
+
+      {/* Score band guide — same as DashboardPage */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+        {[
+          ["A+", ">= 90", "#00e5a0"],
+          ["A",  ">= 80", "#00e5a0"],
+          ["B",  ">= 70", "#4d9eff"],
+          ["C",  ">= 55", "#f5c518"],
+          ["D",  ">= 35", "#ff8c00"],
+          ["F",  "< 35",  "#ff3b3b"],
+        ].map(([g, range, c]) => (
+          <div key={g} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ color: grade === g ? c : "rgba(255,255,255,0.15)", fontSize: 10,
+              fontFamily: "monospace", fontWeight: grade === g ? 700 : 400, width: 16 }}>{g}</span>
+            <span style={{ color: grade === g ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.12)",
+              fontSize: 9, fontFamily: "monospace" }}>{range}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -145,113 +296,121 @@ function RiskDonut({ assets = [] }) {
 
 // ── Real-data widgets (read from raw_results) ──────────────────────────────────
 
+// CertTimeline — matches DashboardPage CertTimeline visual (mini progress bar)
+function CertTimeline({ daysLeft, domain: certDomain }) {
+  if (daysLeft === null) return null;
+  const color = daysLeft < 0 ? "#ff3b3b" : daysLeft < 30 ? "#ff8c00" : daysLeft < 90 ? "#f5c518" : "#00e5a0";
+  const pct   = Math.min(100, Math.max(0, (daysLeft / 365) * 100));
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+        <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 11, fontFamily: "monospace",
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 160 }}>
+          {certDomain}
+        </span>
+        <span style={{ color, fontSize: 10, fontFamily: "monospace", fontWeight: 700, flexShrink: 0 }}>
+          {daysLeft < 0 ? "EXPIRED" : `${daysLeft}d`}
+        </span>
+      </div>
+      <div style={{ height: 3, background: "rgba(255,255,255,0.07)", borderRadius: 2 }}>
+        <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 2,
+          boxShadow: `0 0 4px ${color}60` }}/>
+      </div>
+    </div>
+  );
+}
+
 function SslWidget({ asset }) {
-  const ssl      = asset?.raw_results?.crypto?.results?.ssl || {};
-  const cert     = ssl.cert_info || {};
-  const sslEnabled = ssl.ssl_enabled !== false;
-  const daysLeft = cert.days_to_expiry ?? null;
-  const protocol = cert.protocol || ssl.protocol || null;
-  const cipher   = cert.cipher || null;
-  const ocsp     = cert.ocsp_stapling ?? false;
+  const ssl        = asset?.raw_results?.crypto?.results?.ssl || {};
+  const cert       = ssl.cert_info || {};
+  // After the crypto_checks.py bug fix, ssl_enabled reflects TLS handshake success.
+  // Belt-and-suspenders: also check protocol field for backward compat with pre-fix JSONs.
+  const _proto     = cert.protocol || ssl.protocol || null;
+  const sslEnabled = ssl.ssl_enabled !== false || (_proto && _proto !== "Unknown");
+  const daysLeft   = cert.days_to_expiry ?? null;
+  const protocol   = _proto;
+  const cipher     = cert.cipher || null;
+  const ocsp       = cert.ocsp_stapling ?? false;
   const chainValid = cert.chain_valid !== false;
-  const issues   = ssl.issues || [];
-  const pqc      = asset?.raw_results?.crypto?.results?.pqc?.server_pqc ?? false;
+  const issues     = ssl.issues || [];
+  const pqc        = asset?.raw_results?.crypto?.results?.pqc?.server_pqc ?? false;
+  const domain     = asset?.host || "";
 
-  const daysColor = daysLeft === null ? "rgba(255,255,255,0.4)"
-    : daysLeft < 30 ? "#ff3b3b"
-    : daysLeft < 60 ? "#ff8c00"
-    : "#00e5a0";
-
+  const expiredCount  = daysLeft !== null && daysLeft < 0 ? 1 : 0;
+  const expiring30    = daysLeft !== null && daysLeft >= 0 && daysLeft <= 30 ? 1 : 0;
   const protocolColor = protocol
     ? (protocol.includes("1.3") ? "#00e5a0" : protocol.includes("1.2") ? "#f5c518" : "#ff3b3b")
     : "rgba(255,255,255,0.3)";
 
   return (
-    <div style={widgetCard("#f5c518")}>
-      <WidgetLabel>SSL / Crypto Health</WidgetLabel>
-      <StatusRow label="SSL Enabled" ok={sslEnabled} okColor="#00e5a0" failColor="#ff3b3b"/>
-      {protocol && (
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Protocol</span>
-          <span style={{ color: protocolColor, fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{protocol}</span>
-        </div>
-      )}
-      {daysLeft !== null && (
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Cert Expires</span>
-          <span style={{ color: daysColor, fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{daysLeft}d</span>
-        </div>
-      )}
-      <StatusRow label="Chain Valid" ok={chainValid}/>
-      <StatusRow label="OCSP Stapling" ok={ocsp} okColor="#00e5a0" failColor="#f5c518" failText="Off"/>
-      <StatusRow label="PQC Hybrid TLS" ok={pqc} okColor="#00e5a0" failColor="rgba(255,255,255,0.3)" failText="Not detected"/>
-      {issues.length > 0 && (
-        <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between" }}>
-          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Active Issues</span>
-          <span style={{ color: "#ff8c00", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{issues.length}</span>
-        </div>
-      )}
+    <ASMWidget title="2. SSL / Crypto Health" accent="#f5c518"
+      badge={expiredCount > 0 ? `${expiredCount} EXPIRED` : null}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+        <StatRows items={[
+          { label: "Certs Monitored", val: 1,             color: "rgba(255,255,255,0.7)" },
+          { label: "Expired",         val: expiredCount,  color: expiredCount > 0 ? "#ff3b3b" : "#00e5a0" },
+          { label: "Expiring <30d",   val: expiring30,    color: expiring30 > 0 ? "#ff8c00" : "#00e5a0" },
+          ...(protocol ? [{ label: "Protocol", val: protocol, color: protocolColor }] : []),
+          { label: "PQC Hybrid TLS",  val: pqc ? "Ready" : "Not detected",
+            color: pqc ? "#00e5a0" : "rgba(255,255,255,0.3)" },
+          ...(issues.length > 0 ? [{ label: "Active Issues", val: issues.length, color: "#ff8c00" }] : []),
+        ]}/>
+      </div>
+      <CertTimeline daysLeft={daysLeft} domain={domain}/>
       {cipher && (
         <div style={{ marginTop: 6, padding: "4px 7px", background: "rgba(245,197,24,0.07)", borderRadius: 3 }}>
           <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace" }}>{cipher}</span>
         </div>
       )}
-      <WidgetNote>Full cipher suite audit and PQC readiness available in Deep Scan.</WidgetNote>
-    </div>
+      <WidgetNote>Full cipher suite audit and certificate chain depth available in Deep Scan.</WidgetNote>
+    </ASMWidget>
   );
 }
 
 function EmailSecurityWidget({ asset }) {
-  const email      = asset?.raw_results?.email_sec?.results || {};
-  const spf        = email.spf || {};
-  const dmarc      = email.dmarc || {};
-  const dkimList   = Array.isArray(email.dkim) ? email.dkim : [];
-  const dnssec     = email.dnssec || {};
-  const spoofRisk  = email.spoofing_risk?.level || null;
-  const eliteScore = email.elite_score || "—";
+  const email       = asset?.raw_results?.email_sec?.results || {};
+  const spf         = email.spf || {};
+  const dmarc       = email.dmarc || {};
+  const dkimList    = Array.isArray(email.dkim) ? email.dkim : [];
+  const dnssec      = email.dnssec || {};
+  const eliteScore  = email.elite_score ?? null;
   const eliteStatus = email.elite_status || "basic";
+  // BIMI: may be present in elite_checks or directly on email results
+  const bimi        = email.elite_checks?.bimi || email.bimi || {};
 
-  const dmarcPolicy   = dmarc.policy || (dmarc.present ? "present" : null);
-  const dmarcOk       = dmarcPolicy === "reject";
-  const dmarcColor    = dmarcPolicy === "reject" ? "#00e5a0"
-    : dmarcPolicy === "quarantine" ? "#f5c518"
-    : "#ff3b3b";
-  const dmarcLabel    = dmarcPolicy || "Missing";
+  const dmarcPolicy  = dmarc.policy || (dmarc.present ? "present" : null);
+  const dmarcPass    = dmarcPolicy === "reject";
+  const dmarcLabel   = dmarcPolicy || "Missing";
+  const validDkim    = dkimList.filter(d => d.valid !== false).length;
+  const dkimVal      = dkimList.length > 0
+    ? `${validDkim} selector(s)`
+    : "Not found";
 
-  const spoofColor = spoofRisk === "low" ? "#00e5a0" : spoofRisk === "medium" ? "#f5c518" : spoofRisk === "high" ? "#ff3b3b" : "rgba(255,255,255,0.3)";
-  const validDkim  = dkimList.filter(d => d.valid !== false).length;
+  const eliteColor = eliteStatus === "elite" ? "#00e5a0"
+    : eliteStatus === "robust" ? "#4d9eff"
+    : "#f5c518";
 
   return (
-    <div style={widgetCard("#b06eff")}>
-      <WidgetLabel>Email Security</WidgetLabel>
-      <StatusRow label="SPF" ok={!!spf.present} failColor="#ff3b3b"/>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-        <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>DKIM</span>
-        <span style={{ color: dkimList.length > 0 ? "#00e5a0" : "#ff8c00", fontSize: 11, fontFamily: "monospace" }}>
-          {dkimList.length > 0 ? `${validDkim}/${dkimList.length} valid` : "Not found"}
-        </span>
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-        <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>DMARC</span>
-        <span style={{ display: "flex", alignItems: "center", gap: 5, color: dmarcColor, fontSize: 11, fontFamily: "monospace" }}>
-          {dmarcOk ? <CheckIcon color={dmarcColor}/> : <CrossIcon color={dmarcColor}/>}
-          {dmarcLabel}
-        </span>
-      </div>
-      <StatusRow label="DNSSEC" ok={!!dnssec.enabled} failColor="#f5c518" failText="Disabled"/>
-      {spoofRisk && (
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Spoofing Risk</span>
-          <span style={{ color: spoofColor, fontSize: 11, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase" }}>{spoofRisk}</span>
+    <ASMWidget title="3. Email Security" accent="#b06eff">
+      {/* Use ESecRow — exact match of DashboardPage ESecRow component */}
+      <ESecRow label="SPF"    value={spf.record?.slice(0, 40) || null} pass={!!spf.present}/>
+      <ESecRow label="DKIM"   value={dkimVal}   pass={dkimList.length > 0 && validDkim > 0}/>
+      <ESecRow label="DMARC"  value={dmarcLabel} pass={dmarcPass}/>
+      <ESecRow label="DNSSEC" value={dnssec.enabled ? "Enabled" : "Disabled"}
+        pass={!!dnssec.enabled}/>
+      {bimi.status && (
+        <ESecRow label="BIMI" value={bimi.status} pass={bimi.status === "pass"}/>
+      )}
+      {eliteScore !== null && (
+        <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", padding: "5px 0" }}>
+          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Elite Score</span>
+          <span style={{ color: eliteColor, fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>
+            {eliteScore}/100 · {eliteStatus}
+          </span>
         </div>
       )}
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 2 }}>
-        <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Elite Score</span>
-        <span style={{ color: eliteStatus === "elite" ? "#00e5a0" : eliteStatus === "robust" ? "#4d9eff" : "#f5c518",
-          fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{eliteScore}</span>
-      </div>
-      <WidgetNote>MTA-STS, BIMI, and full email threat correlation available in Deep Scan.</WidgetNote>
-    </div>
+      <WidgetNote>MTA-STS, TLS-RPT, and anti-spoofing correlation available in Deep Scan.</WidgetNote>
+    </ASMWidget>
   );
 }
 
@@ -260,64 +419,94 @@ const PORT_LABELS = { 21: "FTP", 22: "SSH", 25: "SMTP", 80: "HTTP", 443: "HTTPS"
   8443: "Alt-HTTPS", 27017: "MongoDB" };
 
 function WebSecurityWidget({ asset }) {
-  const web       = asset?.raw_results?.web?.results || {};
-  const ports     = web.ports || [];
-  const exposed   = web.exposed_paths || [];
-  const jsSecrets = web.js_secrets || [];
-  const http      = web.http_analysis || {};
-  const headers   = http.http_headers || [];
-  const redirects = http.redirects_to_https ?? null;
+  const web         = asset?.raw_results?.web?.results || {};
+  const ports       = web.ports || [];
+  const exposed     = web.exposed_paths || [];
+  const jsSecrets   = web.js_secrets || [];
+  const http        = web.http_analysis || {};
+  const headers     = http.http_headers || [];
+  const redirects   = http.redirects_to_https ?? null;
   const fingerprints = web.fingerprints || {};
+  const vulns       = asset?.vulnerabilities || [];
 
-  const critPaths = exposed.filter(p => (p.severity || p.status || "").toString().match(/critical|200/i)).length;
-  const banner    = Object.values(fingerprints)[0]?.banner || null;
+  // Top 4 web/vuln_scanner findings — same filter logic as DashboardPage webVulns
+  const webVulns = vulns.filter(v => {
+    const m = (v.module || "").toLowerCase();
+    return m === "web" || m === "crypto" || m === "web_analysis" ||
+           m === "vuln_scanner" || m === "nuclei" ||
+           v.source === "port_banner" || v.source === "exposed_path" || v.source === "js_secret";
+  });
+
+  const critPaths = exposed.filter(p =>
+    (p.severity || "").toString().toLowerCase() === "critical"
+  ).length;
+  const banner = Object.values(fingerprints)[0]?.banner || null;
 
   return (
-    <div style={widgetCard("#ff8c00")}>
-      <WidgetLabel>Web Security</WidgetLabel>
+    <ASMWidget title="4. Web Security" accent="#ff8c00">
+      {/* Port badges — same style as DashboardPage PORT EXPOSURE section */}
       {ports.length > 0 && (
         <div style={{ marginBottom: 10 }}>
-          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 5 }}>OPEN PORTS</div>
+          <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+            letterSpacing: "1px", marginBottom: 5 }}>OPEN PORTS</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
             {ports.slice(0, 6).map(p => (
-              <span key={p} style={{ background: p === 22 || p === 3389 || p === 3306 ? "rgba(255,59,59,0.12)" : "rgba(255,140,0,0.1)",
-                color: p === 22 || p === 3389 || p === 3306 ? "#ff8c00" : "rgba(255,255,255,0.55)",
+              <span key={p} style={{
+                background: (p === 22 || p === 3389 || p === 3306)
+                  ? "rgba(255,59,59,0.12)" : "rgba(255,140,0,0.1)",
+                color: (p === 22 || p === 3389 || p === 3306)
+                  ? "#ff8c00" : "rgba(255,255,255,0.55)",
+                border: `1px solid rgba(255,140,0,0.2)`,
                 fontSize: 10, fontFamily: "monospace", padding: "2px 7px", borderRadius: 3 }}>
                 {p}{PORT_LABELS[p] ? ` (${PORT_LABELS[p]})` : ""}
               </span>
             ))}
-            {ports.length > 6 && <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace" }}>+{ports.length - 6} more</span>}
+            {ports.length > 6 && (
+              <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace" }}>
+                +{ports.length - 6} more
+              </span>
+            )}
           </div>
         </div>
       )}
-      {redirects !== null && <StatusRow label="HTTPS Redirect" ok={redirects} failColor="#ff3b3b"/>}
-      {exposed.length > 0 && (
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Exposed Paths</span>
-          <span style={{ color: critPaths > 0 ? "#ff3b3b" : "#ff8c00", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>
-            {exposed.length}{critPaths > 0 ? ` (${critPaths} critical)` : ""}
-          </span>
-        </div>
-      )}
-      {jsSecrets.length > 0 && (
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>JS Secrets Found</span>
-          <span style={{ color: "#ff3b3b", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{jsSecrets.length} found</span>
-        </div>
-      )}
-      {headers.length > 0 && (
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Missing Headers</span>
-          <span style={{ color: "#f5c518", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{headers.length}</span>
+      {/* statRow-style rows */}
+      <StatRows items={[
+        ...(redirects !== null ? [{ label: "HTTPS Redirect", val: redirects ? "Yes" : "No",
+          color: redirects ? "#00e5a0" : "#ff3b3b" }] : []),
+        ...(exposed.length > 0 ? [{ label: "Exposed Paths", val: `${exposed.length}${critPaths > 0 ? ` (${critPaths} critical)` : ""}`,
+          color: critPaths > 0 ? "#ff3b3b" : "#ff8c00" }] : []),
+        ...(jsSecrets.length > 0 ? [{ label: "JS Secrets", val: `${jsSecrets.length} found`, color: "#ff3b3b" }] : []),
+        ...(headers.length > 0 ? [{ label: "Missing Headers", val: headers.length, color: "#f5c518" }] : []),
+      ]}/>
+      {/* Top 4 web findings — same colored-dot list as DashboardPage */}
+      {webVulns.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 8 }}>
+          {webVulns.slice(0, 4).map((v, i) => {
+            const cfg = RISK_CONFIG[v.severity?.toLowerCase()] || RISK_CONFIG.low;
+            return (
+              <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%",
+                  background: cfg.color, flexShrink: 0 }}/>
+                <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {v.vulnerability}
+                </span>
+                {v.cvss && (
+                  <span style={{ color: "rgba(255,140,0,0.5)", fontSize: 9,
+                    fontFamily: "monospace", flexShrink: 0 }}>{v.cvss}</span>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
       {banner && (
-        <div style={{ marginTop: 4, padding: "3px 7px", background: "rgba(0,0,0,0.2)", borderRadius: 3 }}>
+        <div style={{ marginTop: 6, padding: "3px 7px", background: "rgba(0,0,0,0.2)", borderRadius: 3 }}>
           <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace" }}>{banner}</span>
         </div>
       )}
-      <WidgetNote>Full CORS audit, WAF detection, and API endpoint mapping available in Deep Scan.</WidgetNote>
-    </div>
+      <WidgetNote>Full CORS audit, WAF detection, and API endpoint mapping in Deep Scan.</WidgetNote>
+    </ASMWidget>
   );
 }
 
@@ -326,38 +515,35 @@ function DnsWidget({ asset, data }) {
   const records = dns.records || {};
   const typos   = dns.typos || {};
   const subSum  = data?.subdomain_summary || {};
-  // reuse DNSSEC from email_sec module (same underlying check)
+  // DNSSEC from email_sec module (same underlying DNS check)
   const dnssec  = asset?.raw_results?.email_sec?.results?.dnssec || {};
 
-  const aCount  = (records.A || records.a || []).length;
-  const mxCount = (records.MX || records.mx || []).length;
-  const typoReg = Array.isArray(typos.registered) ? typos.registered.length : (typeof typos.registered === "number" ? typos.registered : 0);
+  const aCount   = (records.A || records.a || []).length;
+  const mxCount  = (records.MX || records.mx || []).length;
+  const nsCount  = (records.NS || records.ns || []).length;
+  const typoReg  = Array.isArray(typos.registered)
+    ? typos.registered.length
+    : (typeof typos.registered === "number" ? typos.registered : 0);
+
+  // Up to 3 A-record IPs to display below the stat rows
+  const aRecords = records.A || records.a || [];
 
   return (
-    <div style={widgetCard("#4d9eff")}>
-      <WidgetLabel>DNS Overview</WidgetLabel>
-      {aCount > 0 && (
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>A Records</span>
-          <span style={{ color: "#4d9eff", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{aCount}</span>
-        </div>
-      )}
-      {mxCount > 0 && (
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>MX Records</span>
-          <span style={{ color: "#4d9eff", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{mxCount}</span>
-        </div>
-      )}
-      <StatusRow label="DNSSEC" ok={!!dnssec.enabled} failColor="#f5c518" failText="Disabled"/>
-      {typoReg > 0 && (
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-          <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Typosquats Registered</span>
-          <span style={{ color: "#ff8c00", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{typoReg} domains</span>
-        </div>
-      )}
+    <ASMWidget title="5. DNS Overview" accent="#4d9eff">
+      <StatRows items={[
+        ...(aCount > 0   ? [{ label: "A Records",  val: aCount,  color: "#4d9eff" }] : []),
+        ...(mxCount > 0  ? [{ label: "MX Records", val: mxCount, color: "#4d9eff" }] : []),
+        ...(nsCount > 0  ? [{ label: "NS Records", val: nsCount, color: "#4d9eff" }] : []),
+        { label: "DNSSEC", val: dnssec.enabled ? "Enabled" : "Disabled",
+          color: dnssec.enabled ? "#00e5a0" : "#f5c518" },
+        ...(typoReg > 0 ? [{ label: "Typosquats Registered", val: `${typoReg} domains`,
+          color: "#ff8c00" }] : []),
+      ]}/>
       {subSum.total != null && (
-        <div style={{ marginTop: 6, padding: "6px 8px", background: "rgba(77,158,255,0.06)", borderRadius: 3 }}>
-          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 9, fontFamily: "monospace", marginBottom: 4 }}>SUBDOMAIN SUMMARY</div>
+        <div style={{ marginTop: 8, padding: "6px 8px", background: "rgba(77,158,255,0.06)", borderRadius: 3 }}>
+          <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 9, fontFamily: "monospace", marginBottom: 4 }}>
+            SUBDOMAIN SUMMARY
+          </div>
           <div style={{ display: "flex", gap: 12 }}>
             {[["Total", subSum.total, "#4d9eff"], ["Live", subSum.live, "#00e5a0"], ["New", subSum.new, "#f5c518"]].map(([l, v, c]) => (
               <div key={l}>
@@ -368,90 +554,108 @@ function DnsWidget({ asset, data }) {
           </div>
         </div>
       )}
-      <WidgetNote>Typosquatting takedown analysis and full DNS history available in Deep Scan.</WidgetNote>
-    </div>
+      {aRecords.length > 0 && (
+        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 3 }}>
+          {aRecords.slice(0, 3).map((ip, i) => (
+            <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ color: "rgba(77,158,255,0.5)", fontSize: 9, fontFamily: "monospace" }}>A</span>
+              <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>{ip}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <WidgetNote>Typosquatting monitoring and DNS change alerts available in Deep Scan.</WidgetNote>
+    </ASMWidget>
   );
 }
 
 function CloudWidget({ asset }) {
-  const cloud    = asset?.raw_results?.cloud?.results || {};
-  const providers = cloud.providers || [];
-  const buckets  = cloud.buckets || [];
-  const k8s      = cloud.k8s_exposed ?? false;
+  const cloud      = asset?.raw_results?.cloud?.results || {};
+  const providers  = cloud.providers || [];
+  const buckets    = cloud.buckets || [];
+  const k8s        = cloud.k8s_exposed ?? false;
   const pubBuckets = buckets.filter(b => b.public || b.listable).length;
   const privBuckets = buckets.length - pubBuckets;
 
-  const PROVIDER_COLORS = { AWS: "#ff8c00", Azure: "#4d9eff", GCP: "#00e5a0", Cloudflare: "#f5c518" };
+  // Provider color map — matches DashboardPage CloudWidget exactly
+  const PROVIDER_COLORS = {
+    AWS: "#ff9900", Azure: "#0072c6", GCP: "#4285f4", Cloudflare: "#f48120",
+  };
 
   if (providers.length === 0 && buckets.length === 0 && !k8s) {
     return (
-      <div style={widgetCard("#00e5a0")}>
-        <WidgetLabel>Cloud Exposure</WidgetLabel>
-        <div style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace", display: "flex", alignItems: "center", gap: 6 }}>
+      <ASMWidget title="6. Cloud Exposure" accent="#00e5a0">
+        <div style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace",
+          display: "flex", alignItems: "center", gap: 6 }}>
           <CheckIcon color="#00e5a0"/> No cloud infrastructure detected
         </div>
-        <WidgetNote>Kubernetes cluster exposure, Azure/GCP misconfiguration, and metadata endpoint probing available in Deep Scan.</WidgetNote>
-      </div>
+        <WidgetNote>Kubernetes cluster exposure and metadata endpoint probing in Deep Scan.</WidgetNote>
+      </ASMWidget>
     );
   }
 
   return (
-    <div style={widgetCard("#00e5a0")}>
-      <WidgetLabel>Cloud Exposure</WidgetLabel>
+    <ASMWidget title="6. Cloud Exposure" accent="#00e5a0">
       {providers.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 }}>
           {providers.map(p => (
-            <span key={p} style={{ background: `rgba(255,255,255,0.06)`, color: PROVIDER_COLORS[p] || "rgba(255,255,255,0.5)",
-              fontSize: 10, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 3, border: `1px solid ${(PROVIDER_COLORS[p] || "#fff")}30` }}>
+            <span key={p} style={{
+              background: "rgba(255,255,255,0.06)",
+              color: PROVIDER_COLORS[p] || "rgba(255,255,255,0.5)",
+              fontSize: 10, fontFamily: "monospace", fontWeight: 700,
+              padding: "2px 8px", borderRadius: 3,
+              border: `1px solid ${(PROVIDER_COLORS[p] || "#fff")}30` }}>
               {p}
             </span>
           ))}
         </div>
       )}
-      {buckets.length > 0 && (
-        <>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-            <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Public Buckets</span>
-            <span style={{ color: pubBuckets > 0 ? "#ff3b3b" : "#00e5a0", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{pubBuckets}</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
-            <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>Private Buckets</span>
-            <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{privBuckets}</span>
-          </div>
-        </>
-      )}
-      <StatusRow label="K8s API Exposed" ok={!k8s} okText="No" failText="Exposed" failColor="#ff3b3b"/>
-      <WidgetNote>Kubernetes cluster exposure, Azure/GCP misconfiguration, and metadata endpoint probing available in Deep Scan.</WidgetNote>
-    </div>
+      <StatRows items={[
+        ...(buckets.length > 0 ? [
+          { label: "Public Buckets",  val: pubBuckets,  color: pubBuckets > 0 ? "#ff3b3b" : "#00e5a0" },
+          { label: "Private Buckets", val: privBuckets, color: "#00e5a0" },
+        ] : []),
+        { label: "K8s API Exposed", val: k8s ? "Exposed" : "No", color: k8s ? "#ff3b3b" : "#00e5a0" },
+      ]}/>
+      <WidgetNote>Kubernetes cluster exposure and metadata endpoint probing in Deep Scan.</WidgetNote>
+    </ASMWidget>
   );
 }
 
 // ── Partial-locked premium widgets (deep-only) ─────────────────────────────────
+// Uses the same ASMWidget wrapper with a semi-transparent overlay.
 
 function PartialLockedWidget({ title, accent = "#00e5a0", teaser }) {
   return (
-    <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
-      borderTop: `2px solid ${accent}40`, borderRadius: 5, padding: "18px 22px", flex: 1, minWidth: 280 }}>
-      <WidgetLabel>{title}</WidgetLabel>
-      <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 12, fontFamily: "monospace", marginBottom: 10 }}>
-        {teaser}
-      </div>
-      {/* blurred preview bars */}
-      <div style={{ marginBottom: 10 }}>
-        {[75, 55, 65].map((w, i) => (
-          <div key={i} style={{ height: 10, width: `${w}%`, background: `${accent}18`,
-            borderRadius: 3, marginBottom: 7, filter: "blur(2px)" }}/>
-        ))}
-      </div>
-      <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "rgba(255,255,255,0.04)",
-        border: "1px solid rgba(255,255,255,0.08)", borderRadius: 3, padding: "5px 10px" }}>
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="2">
-          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-        </svg>
-        <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace" }}>
-          Available in Deep Scan — request Licensed Portal
-        </span>
-      </div>
+    <div style={{ flex: 1, minWidth: 280 }}>
+      <ASMWidget title={title} accent={`${accent}40`}>
+        {/* Teaser: live data line or "no data" message */}
+        <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 12,
+          fontFamily: "monospace", marginBottom: 10 }}>
+          {teaser}
+        </div>
+        {/* Blurred content preview */}
+        <div style={{ marginBottom: 10 }}>
+          {[75, 55, 65].map((w, i) => (
+            <div key={i} style={{ height: 10, width: `${w}%`,
+              background: `${accent}18`, borderRadius: 3, marginBottom: 7,
+              filter: "blur(2px)" }}/>
+          ))}
+        </div>
+        {/* Lock overlay */}
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 6,
+          background: "rgba(255,255,255,0.04)",
+          border: "1px solid rgba(255,255,255,0.08)", borderRadius: 3, padding: "5px 10px" }}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+            stroke="rgba(255,255,255,0.25)" strokeWidth="2">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+          <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace" }}>
+            Full analysis available in Deep Scan · Request Licensed Portal →
+          </span>
+        </div>
+      </ASMWidget>
     </div>
   );
 }
@@ -461,23 +665,31 @@ function GuestDashboard({ data, onRescan }) {
   const asset    = assets[0] || {};
   const domain   = data?.meta?.domain || "—";
   const scanId   = data?.meta?.scan_id || "—";
+  const lastScan = data?.meta?.last_scan
+    ? new Date(data.meta.last_scan).toLocaleString() : null;
   const postureScore = data?.meta?.posture_score ?? null;
   const postureGrade = data?.meta?.posture_grade || null;
 
-  const totalFindings = (asset.vulnerabilities || []).length;
-  const critCount     = (asset.vulnerabilities || []).filter(v => v.severity?.toLowerCase() === "critical").length;
+  const vulns         = asset.vulnerabilities || [];
+  const totalFindings = vulns.length;
+  const critCount     = vulns.filter(v => v.severity?.toLowerCase() === "critical").length;
   const subdomains    = data?.subdomain_summary?.total ?? 0;
   const openPorts     = (asset?.raw_results?.web?.results?.ports || []).length;
+
+  // Grade letter for stat card — same color logic as DashboardPage grade display
+  const gradeAccent = postureScore !== null
+    ? (postureScore >= 80 ? "#00e5a0" : postureScore >= 70 ? "#4d9eff" : postureScore >= 55 ? "#f5c518" : postureScore >= 35 ? "#ff8c00" : "#ff3b3b")
+    : "#4d9eff";
 
   // Dark web / supply chain — only present if deep scan
   const darkWebRaw     = asset?.raw_results?.dark_web;
   const supplyChainRaw = asset?.raw_results?.supply_chain;
   const darkWebTeaser  = darkWebRaw
-    ? `${(darkWebRaw.results?.hits || []).length} breach record(s) found`
-    : "Dark web breach monitoring requires Deep Scan";
+    ? `${(darkWebRaw.results?.hibp || darkWebRaw.results?.hits || []).length} breach record(s) found`
+    : "No data — requires Deep Scan";
   const supplyChainTeaser = supplyChainRaw
-    ? `${(supplyChainRaw.results?.vulnerable_libs || []).length} vulnerable JS libraries detected`
-    : "CDN & third-party JS vulnerability analysis requires Deep Scan";
+    ? `${(supplyChainRaw.results?.count || (supplyChainRaw.results?.scripts || []).length)} third-party scripts detected`
+    : "No data — requires Deep Scan";
 
   return (
     <div style={{ minHeight: "100vh", background: "#090b10",
@@ -505,7 +717,7 @@ function GuestDashboard({ data, onRescan }) {
         <button onClick={onRescan}
           style={{ background: "transparent", color: "rgba(255,255,255,0.65)", border: "1px solid rgba(255,255,255,0.12)",
             borderRadius: 4, padding: "5px 14px", fontSize: 11, fontFamily: "monospace", cursor: "pointer" }}>
-          ← New Scan
+          New Scan
         </button>
       </div>
 
@@ -514,85 +726,109 @@ function GuestDashboard({ data, onRescan }) {
         {/* Header */}
         <div style={{ marginBottom: 22 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <h1 style={{ fontSize: 22, fontWeight: 700, color: "white", margin: 0 }}>Free Scan Results</h1>
-            <span style={{ background: "rgba(0,229,160,0.1)", color: "#00e5a0", border: "1px solid rgba(0,229,160,0.3)",
-              fontSize: 10, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 2 }}>
+            <h1 style={{ fontSize: 22, fontWeight: 700, color: "white", margin: 0 }}>
+              Attack Surface Overview
+            </h1>
+            <span style={{ background: "rgba(0,229,160,0.15)", color: "#00e5a0",
+              border: "1px solid rgba(0,229,160,0.4)",
+              fontSize: 10, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px",
+              borderRadius: 2, letterSpacing: "1px" }}>
               STANDARD SCAN
             </span>
           </div>
-          <p style={{ color: "rgba(255,255,255,0.62)", fontSize: 13, marginTop: 4, marginBottom: 0 }}>
+          <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 13, marginTop: 4, marginBottom: 0 }}>
             {domain} · Scan ID: {scanId}
           </p>
         </div>
 
-        {/* Row 0: Stat strip — 5 cards full width */}
+        {/* ── Stat cards — matches DashboardPage StatCard exactly ── */}
         <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
-          {[
-            {
-              label: "Security Posture",
-              value: postureScore !== null ? `${postureScore}` : "—",
-              sub: postureGrade ? `Grade ${postureGrade}` : null,
-              accent: postureScore !== null
-                ? (postureScore >= 70 ? "#00e5a0" : postureScore >= 50 ? "#f5c518" : "#ff3b3b")
-                : "#4d9eff",
-            },
-            { label: "Total Findings", value: totalFindings, accent: "#ff8c00" },
-            { label: "Critical",       value: critCount,     accent: critCount > 0 ? "#ff3b3b" : "#00e5a0" },
-            { label: "Subdomains",     value: subdomains,    accent: "#4d9eff" },
-            { label: "Open Ports",     value: openPorts,     accent: openPorts > 5 ? "#ff8c00" : "#00e5a0" },
-          ].map(c => (
-            <div key={c.label} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
-              borderTop: `2px solid ${c.accent}`, padding: "16px 20px", borderRadius: 4, flex: 1, minWidth: 120 }}>
-              <div style={{ color: c.accent, fontSize: 28, fontWeight: 800, fontFamily: "'Space Mono',monospace", lineHeight: 1 }}>{c.value}</div>
-              {c.sub && <div style={{ color: c.accent, fontSize: 11, fontFamily: "monospace", opacity: 0.8, marginTop: 2 }}>{c.sub}</div>}
-              <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 10, letterSpacing: "1.5px", marginTop: 5, textTransform: "uppercase" }}>{c.label}</div>
-            </div>
-          ))}
+          <StatCard
+            label="Security Grade"
+            value={postureGrade || "—"}
+            accent={gradeAccent}
+            sub={postureScore !== null ? `Score ${postureScore}/100` : null}
+          />
+          <StatCard
+            label="Total Findings"
+            value={totalFindings}
+            accent="#ff8c00"
+            sub="Across all modules"
+          />
+          <StatCard
+            label="Critical"
+            value={critCount}
+            accent={critCount > 0 ? "#ff3b3b" : "#00e5a0"}
+          />
+          <StatCard
+            label="Open Ports"
+            value={openPorts}
+            accent={openPorts > 5 ? "#ff8c00" : "#00e5a0"}
+            sub="Detected open"
+          />
+          <StatCard
+            label="Subdomains"
+            value={subdomains}
+            accent="#4d9eff"
+            sub={data?.subdomain_summary?.live != null ? `${data.subdomain_summary.live} live` : null}
+          />
         </div>
 
-        {/* Row 1: Risk donut + SSL + Email security */}
+        {/* ── Posture Gauge — identical half-circle SVG as DashboardPage ASMPostureWidget ── */}
+        <ASMPostureWidget
+          score={postureScore}
+          grade={postureGrade}
+          domain={domain}
+          lastScan={lastScan}
+        />
+
+        {/* ── Row 1: Risk Donut + SSL/Crypto + Email Security ── */}
         <div style={{ display: "flex", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 260px", background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
-            borderTop: "2px solid #ff3b3b", borderRadius: 5, padding: "18px 22px" }}>
-            <WidgetLabel>Overall Risk Distribution</WidgetLabel>
-            <RiskDonut assets={assets}/>
+          <div style={{ flex: "1 1 260px" }}>
+            <ASMWidget title="1. Overall Risk Overview" accent="#ff3b3b">
+              <RiskDonut assets={assets}/>
+            </ASMWidget>
           </div>
           <div style={{ flex: "1 1 280px" }}><SslWidget asset={asset}/></div>
           <div style={{ flex: "1 1 280px" }}><EmailSecurityWidget asset={asset}/></div>
         </div>
 
-        {/* Row 2: Web Security + DNS Overview + Cloud Exposure */}
+        {/* ── Row 2: Web Security + DNS Overview + Cloud Exposure ── */}
         <div style={{ display: "flex", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
           <WebSecurityWidget asset={asset}/>
           <DnsWidget asset={asset} data={data}/>
           <CloudWidget asset={asset}/>
         </div>
 
-        {/* Row 3: 3 partial-locked premium widgets */}
+        {/* ── Row 3: 3 partial-locked premium widgets ── */}
         <div style={{ display: "flex", gap: 14, marginBottom: 24, flexWrap: "wrap" }}>
           <PartialLockedWidget title="Dark Web Monitoring" accent="#ff3b3b" teaser={darkWebTeaser}/>
           <PartialLockedWidget title="Supply Chain Risk" accent="#4d9eff" teaser={supplyChainTeaser}/>
           <PartialLockedWidget title="AI Risk Score & Remediation" accent="#b06eff"
-            teaser="AI-powered risk scoring and step-by-step remediation requires Deep Scan"/>
+            teaser="AI-powered scoring requires Deep Scan"/>
         </div>
 
-        {/* Upsell banner */}
+        {/* ── Upsell banner ── */}
         <div style={{ background: "linear-gradient(135deg, rgba(0,229,160,0.06) 0%, rgba(77,158,255,0.04) 100%)",
           border: "1px solid rgba(0,229,160,0.15)", borderRadius: 8, padding: "24px 28px",
-          display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 24, flexWrap: "wrap" }}>
+          display: "flex", alignItems: "flex-start", justifyContent: "space-between",
+          gap: 24, flexWrap: "wrap" }}>
           <div style={{ flex: 1 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
               <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#00e5a0", flexShrink: 0 }}/>
-              <div style={{ color: "white", fontSize: 15, fontWeight: 700 }}>Standard Scan Complete</div>
+              <div style={{ color: "white", fontSize: 15, fontWeight: 700 }}>
+                Standard Scan Complete — {domain}
+              </div>
             </div>
             <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, lineHeight: 1.7, maxWidth: 560 }}>
-              This Standard Scan report covers your active attack surface across DNS, Web, SSL/Crypto, Email, and Cloud.
+              This report covers your active attack surface across 7 modules.
             </div>
             <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, lineHeight: 1.7, marginTop: 6 }}>
-              Deep Scan adds: <span style={{ color: "#ff8c00" }}>Dark Web breach intelligence</span>,{" "}
-              <span style={{ color: "#4d9eff" }}>Supply Chain JS risk</span>,{" "}
-              <span style={{ color: "#b06eff" }}>AI-powered step-by-step remediation</span>,{" "}
-              Social Engineering intel, Mobile &amp; API exposure.
+              Deep Scan adds 4 more modules + AI enrichment for complete coverage:{" "}
+              <span style={{ color: "#ff8c00" }}>dark web</span>,{" "}
+              <span style={{ color: "#4d9eff" }}>supply chain JS</span>,{" "}
+              <span style={{ color: "#b06eff" }}>social engineering</span>,
+              mobile/API exposure, and step-by-step remediation.
             </div>
           </div>
           <a href="https://cycentra.com/#contact" target="_blank" rel="noreferrer"
