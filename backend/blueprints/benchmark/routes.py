@@ -19,6 +19,9 @@ import glob
 import json
 import logging
 import os
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from pathlib import Path
@@ -944,14 +947,20 @@ def _collect_threat_intel_score() -> dict:
 
 # ── 6. External benchmark (Phase 1 estimate) ──────────────────────────────────
 
-def _collect_ext_benchmark_score() -> dict:
+def _collect_ext_benchmark_score(
+    _pre_comp: Optional[dict] = None,
+    _pre_asm:  Optional[dict] = None,
+) -> dict:
     """
     CIS Controls v8 / NIST CSF 2.0 alignment (0-100).
     Phase 1: weighted blend of compliance + ASM scores as a proxy.
     Phase 2: replace with bundled CIS JSON and nightly NVD/MITRE sync.
+
+    Accepts pre-computed results from the parallel collector run to avoid
+    calling _collect_compliance_score / _collect_asm_score a second time.
     """
-    comp = _collect_compliance_score()
-    asm  = _collect_asm_score()
+    comp   = _pre_comp if _pre_comp is not None else _collect_compliance_score()
+    asm    = _pre_asm  if _pre_asm  is not None else _collect_asm_score()
     comp_s, asm_s = comp.get("score"), asm.get("score")
     if comp_s is None and asm_s is None:
         return {"score": None, "stale": False,
@@ -967,30 +976,109 @@ def _collect_ext_benchmark_score() -> dict:
 
 
 # ── Ordered collector registry (matches UI display order) ─────────────────────
+# ext_benchmark is excluded here — it is computed last, using pre-collected
+# asm + compliance results to avoid running those collectors twice.
 
 _COLLECTORS = [
-    ("asm",           _collect_asm_score),
-    ("siem",          _collect_siem_score),
-    ("compliance",    _collect_compliance_score),
-    ("vuln",          _collect_vuln_score),
-    ("threat_intel",  _collect_threat_intel_score),
-    ("ext_benchmark", _collect_ext_benchmark_score),
+    ("asm",          _collect_asm_score),
+    ("siem",         _collect_siem_score),
+    ("compliance",   _collect_compliance_score),
+    ("vuln",         _collect_vuln_score),
+    ("threat_intel", _collect_threat_intel_score),
 ]
+
+# Per-source wall-clock timeout (seconds).  Any collector that exceeds this
+# budget is abandoned and returns {score: None} rather than blocking the whole
+# response.  These are intentionally generous — adjust down if needed.
+_COLLECTOR_TIMEOUT = int(os.environ.get("BENCHMARK_COLLECTOR_TIMEOUT", "15"))
+
+# ── In-memory TTL cache for _compute_cspi ─────────────────────────────────────
+# The score changes at most every few minutes; re-running all collectors on
+# every page refresh is wasteful.  Cache the result for BENCHMARK_CACHE_TTL
+# seconds (default 120 s) and invalidate on explicit PUT /config saves.
+
+_CSPI_CACHE_TTL  = int(os.environ.get("BENCHMARK_CACHE_TTL", "120"))
+_cspi_cache_lock = threading.Lock()
+_cspi_cache: dict = {"result": None, "computed_at": 0.0, "config_hash": None}
+
+
+def _config_hash(config: dict) -> str:
+    """Cheap fingerprint of the config to detect changes that should bust the cache."""
+    import hashlib
+    return hashlib.md5(
+        json.dumps(config, sort_keys=True).encode(), usedforsecurity=False
+    ).hexdigest()
+
+
+def invalidate_cspi_cache() -> None:
+    """Call after PUT /config to force the next GET /score to recompute."""
+    with _cspi_cache_lock:
+        _cspi_cache["result"] = None
+        _cspi_cache["computed_at"] = 0.0
 
 # ── CSPI composite ─────────────────────────────────────────────────────────────
 
 def _compute_cspi(config: dict) -> dict:
-    sources  = config.get("sources", _DEFAULT_CONFIG["sources"])
-    breakdown = {}
-    weighted = 0.0
-    total_w  = 0.0
+    """
+    Compute the CSPI composite score.
 
-    for src_id, collector in _COLLECTORS:
+    All five primary collectors run **in parallel** via a ThreadPoolExecutor
+    capped at _COLLECTOR_TIMEOUT seconds each.  Collectors that time out or
+    raise return {score: None} without blocking the others.
+
+    The ext_benchmark score is derived last from the already-collected
+    compliance + asm results (no duplicate HTTP/DB calls).
+
+    Results are cached for _CSPI_CACHE_TTL seconds and returned on subsequent
+    calls unless the config has changed or the cache is explicitly invalidated.
+    """
+    sources = config.get("sources", _DEFAULT_CONFIG["sources"])
+
+    # ── TTL cache check ────────────────────────────────────────────────────────
+    chash = _config_hash(config)
+    with _cspi_cache_lock:
+        cached = _cspi_cache["result"]
+        if (
+            cached is not None
+            and _cspi_cache["config_hash"] == chash
+            and (time.monotonic() - _cspi_cache["computed_at"]) < _CSPI_CACHE_TTL
+        ):
+            return cached
+
+    breakdown = {}
+    weighted  = 0.0
+    total_w   = 0.0
+
+    # ── Parallel collection ────────────────────────────────────────────────────
+    raw_results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=len(_COLLECTORS), thread_name_prefix="bench") as pool:
+        futures = {pool.submit(collector): src_id for src_id, collector in _COLLECTORS}
+        for fut in as_completed(futures, timeout=_COLLECTOR_TIMEOUT + 2):
+            src_id = futures[fut]
+            try:
+                raw_results[src_id] = fut.result(timeout=_COLLECTOR_TIMEOUT)
+            except FuturesTimeout:
+                raw_results[src_id] = {"score": None, "stale": False,
+                                       "detail": f"Collector timed out ({_COLLECTOR_TIMEOUT}s)"}
+            except Exception as exc:
+                raw_results[src_id] = {"score": None, "stale": False, "detail": str(exc)}
+
+    # Ensure all collectors have an entry even if as_completed timed out globally
+    for src_id, _ in _COLLECTORS:
+        raw_results.setdefault(src_id, {"score": None, "stale": False, "detail": "Collector did not complete"})
+
+    # ── ext_benchmark — reuse already-collected asm + compliance (no re-call) ─
+    raw_results["ext_benchmark"] = _collect_ext_benchmark_score(
+        _pre_comp=raw_results.get("compliance"),
+        _pre_asm=raw_results.get("asm"),
+    )
+
+    # ── Assemble breakdown ────────────────────────────────────────────────────
+    all_src_ids = [s for s, _ in _COLLECTORS] + ["ext_benchmark"]
+
+    for src_id in all_src_ids:
         src_cfg = sources.get(src_id, {})
-        try:
-            raw = collector()
-        except Exception as exc:
-            raw = {"score": None, "stale": False, "detail": str(exc)}
+        raw     = raw_results[src_id]
 
         enabled     = src_cfg.get("enabled", True)
         weight      = float(src_cfg.get("weight", 10))
@@ -1025,13 +1113,22 @@ def _compute_cspi(config: dict) -> dict:
              "D"  if cspi is not None and cspi >= 35 else
              "F"  if cspi is not None else "—")
 
-    return {
+    result = {
         "cspi":         cspi,
         "grade":        grade,
         "breakdown":    breakdown,
         "computed_at":  datetime.now(timezone.utc).isoformat(),
         "total_weight": round(total_w, 2),
+        "cached":       False,
     }
+
+    # ── Store in TTL cache ─────────────────────────────────────────────────────
+    with _cspi_cache_lock:
+        _cspi_cache["result"]      = result
+        _cspi_cache["computed_at"] = time.monotonic()
+        _cspi_cache["config_hash"] = chash
+
+    return result
 
 
 def _percentile(cspi: Optional[int], bands: list) -> tuple:
@@ -1180,6 +1277,12 @@ def put_config():
         if key in body:
             config[key] = body[key]
     _save_config(config)
+    # Invalidate the CSPI cache so the next GET /score recomputes with the
+    # new weights/sources.  Industry-only changes do NOT need a score recompute
+    # (bands are applied client-side) but it is safe to bust the cache here.
+    score_affecting = set(body.keys()) - {"industry", "size_band", "cohort_opt_in"}
+    if score_affecting or body.get("sources"):
+        invalidate_cspi_cache()
     return jsonify({"ok": True, "config": config})
 
 

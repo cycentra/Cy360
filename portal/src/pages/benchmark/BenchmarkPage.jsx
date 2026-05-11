@@ -691,7 +691,7 @@ function CohortSelector({ config, allIndustries, onSave }) {
 
       {dirty && (
         <button
-          onClick={() => onSave({ industry, size_band: sizeBand, cohort_opt_in: optIn })}
+          onClick={() => onSave({ industry, size_band: sizeBand, cohort_opt_in: optIn }, { reloadScores: false })}
           style={{
             background: "rgba(77,158,255,0.15)", color: C.blue,
             border: `1px solid rgba(77,158,255,0.3)`,
@@ -747,7 +747,7 @@ export function BenchmarkPage() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  const handleSaveConfig = async (patch) => {
+  const handleSaveConfig = async (patch, { reloadScores = true } = {}) => {
     setSaving(true);
     try {
       const r = await fetch(`${API}/config`, {
@@ -757,7 +757,16 @@ export function BenchmarkPage() {
         body: JSON.stringify(patch),
       });
       if (!r.ok) throw new Error(`Save failed: ${r.status}`);
-      await fetchAll();
+      // Only re-fetch scores when a weight/source change was made.
+      // Industry/size changes only affect the chart band overlay — no need to
+      // re-run all collectors (which is the slow part of the page load).
+      if (reloadScores) {
+        await fetchAll();
+      } else {
+        // Just refresh config so the saved values are reflected in the UI
+        const cfg = await fetch(`${API}/config`, { credentials: "include" });
+        if (cfg.ok) setConfig(await cfg.json());
+      }
     } catch (e) {
       alert(e.message);
     } finally {
@@ -767,7 +776,9 @@ export function BenchmarkPage() {
 
   const handleIndustryChange = (newInd) => {
     setIndustry(newInd);
-    handleSaveConfig({ industry: newInd });
+    // Industry only affects the cohort band chart — pass reloadScores:false so
+    // we don't re-run all collectors (SIEM, Wazuh, MISP, etc.) needlessly.
+    handleSaveConfig({ industry: newInd }, { reloadScores: false });
   };
 
   // ── Render ──────────────────────────────────────────────────────────────────
