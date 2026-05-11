@@ -465,7 +465,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
               {a.http_analysis?.technologies?.length > 0 && (
                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
                   {a.http_analysis.technologies.slice(0, 8).map((t, i) => (
-                    <span key={i} style={{ background: "rgba(77,158,255,0.08)", color: "rgba(77,158,255,0.7)", border: "1px solid rgba(77,158,255,0.2)", fontSize: 9, fontFamily: "monospace", padding: "1px 5px", borderRadius: 2 }}>{t}</span>
+                    <span key={i} style={{ background: "rgba(77,158,255,0.08)", color: "rgba(77,158,255,0.7)", border: "1px solid rgba(77,158,255,0.2)", fontSize: 9, fontFamily: "monospace", padding: "1px 5px", borderRadius: 2 }}>{typeof t === "string" ? t : (t?.name || t?.technology || t?.product || JSON.stringify(t))}</span>
                   ))}
                 </div>
               )}

@@ -42,12 +42,31 @@ function _enrichVulns(vulns, vsFindings, nucFindings) {
       cvss:             v.cvss             ?? extra.cvss             ?? null,
       epss:             v.epss             ?? extra.epss             ?? null,
       epss_pct:         v.epss_pct         ?? extra.epss_pct         ?? null,
-      compliance_impact:v.compliance_impact?? extra.compliance_impact?? null,
+      compliance_impact: (() => {
+        const ci = v.compliance_impact ?? extra.compliance_impact ?? null;
+        if (ci) return ci;
+        const combined = ((v.vulnerability || "") + " " + (v.source || "") + " " + (v.module || "")).toLowerCase();
+        if (/ssl|tls|beast|poodle|drown|lucky13/.test(combined)) return {nis2: "Art.21.2.h", dora: "Art.9.2", iso27001: "A.8.24"};
+        if (/exposed|admin|backup|git/.test(combined))            return {nis2: "Art.21.2.e", dora: "Art.9.4", iso27001: "A.8.3"};
+        if (/secret|token|key|env/.test(combined))                return {nis2: "Art.21.2.d", dora: "Art.9.3", iso27001: "A.8.12"};
+        if (/cve|openvas|vuln/.test(combined))                    return {nis2: "Art.21.2.e", dora: "Art.7.2", iso27001: "A.8.8"};
+        return {nis2: "Art.21.2.e", dora: "Art.9.2", iso27001: "A.8.8"};
+      })(),
       discovered_at:    v.discovered_at    ?? extra.discovered_at    ?? null,
       source:           v.source           ?? extra.source           ?? null,
       cve_refs:         v.cve_refs         ?? extra.cve_refs         ?? null,
       template_id:      v.template_id      ?? extra.template_id      ?? null,
       matched_at:       v.matched_at       ?? extra.matched_at       ?? null,
+      recommendation: (() => {
+        const r = v.recommendation ?? extra.recommendation ?? "";
+        if (r) return r;
+        const sev = (v.severity || "Low").toLowerCase();
+        if (sev === "critical" || sev === "high")
+          return "Patch immediately: update the affected component to the latest stable version, restrict network access to the service, and review for active exploitation indicators in logs.";
+        if (sev === "medium")
+          return "Schedule remediation within 30 days: apply vendor patch or hardening configuration. Review service exposure and access controls.";
+        return "Monitor and remediate during next maintenance window. Apply vendor guidance and verify configuration baseline.";
+      })(),
     };
   });
 
@@ -63,12 +82,30 @@ function _enrichVulns(vulns, vsFindings, nucFindings) {
       severity:         f.severity          || "Low",
       risk_score:       f.risk_score        ?? null,
       description:      f.description       || "",
-      recommendation:   f.recommendation    || "",
+      recommendation: (() => {
+        const r = f.recommendation || "";
+        if (r) return r;
+        const sev = (f.severity || "Low").toLowerCase();
+        if (sev === "critical" || sev === "high")
+          return "Patch immediately: update the affected component to the latest stable version, restrict network access to the service, and review for active exploitation indicators in logs.";
+        if (sev === "medium")
+          return "Schedule remediation within 30 days: apply vendor patch or hardening configuration. Review service exposure and access controls.";
+        return "Monitor and remediate during next maintenance window. Apply vendor guidance and verify configuration baseline.";
+      })(),
       module:           f.module            || (vsFindings.includes(f) ? "vuln_scanner" : "nuclei"),
       cvss:             f.cvss              ?? null,
       epss:             f.epss              ?? null,
       epss_pct:         f.epss_pct          ?? null,
-      compliance_impact:f.compliance_impact ?? null,
+      compliance_impact: (() => {
+        const ci = f.compliance_impact ?? null;
+        if (ci) return ci;
+        const combined = ((f.vulnerability || "") + " " + (f.source || "") + " " + (f.module || "")).toLowerCase();
+        if (/ssl|tls|beast|poodle|drown|lucky13/.test(combined)) return {nis2: "Art.21.2.h", dora: "Art.9.2", iso27001: "A.8.24"};
+        if (/exposed|admin|backup|git/.test(combined))            return {nis2: "Art.21.2.e", dora: "Art.9.4", iso27001: "A.8.3"};
+        if (/secret|token|key|env/.test(combined))                return {nis2: "Art.21.2.d", dora: "Art.9.3", iso27001: "A.8.12"};
+        if (/cve|openvas|vuln/.test(combined))                    return {nis2: "Art.21.2.e", dora: "Art.7.2", iso27001: "A.8.8"};
+        return {nis2: "Art.21.2.e", dora: "Art.9.2", iso27001: "A.8.8"};
+      })(),
       discovered_at:    f.discovered_at     ?? null,
       source:           f.source            ?? null,
       cve_refs:         f.cve_refs          ?? null,

@@ -548,7 +548,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
             <SectionLabel>🤖 AI NARRATIVE</SectionLabel>
             <div style={{ background: "rgba(0,229,160,0.03)", border: "1px solid rgba(0,229,160,0.15)",
               borderRadius: 4, padding: "14px 16px" }}>
-              <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 13, lineHeight: 1.7 }}>
+              <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 13, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
                 {inc.llm_summary}
               </div>
               {inc.llm_remediation && (
