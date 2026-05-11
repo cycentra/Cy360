@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.402 -- 2026-05-11 21:14 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.403 -- 2026-05-11 23:13 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1488,9 +1488,11 @@ WAZUH_PY_EOF
         _RM_YML="/etc/wazuh-indexer/opensearch-security/roles_mapping.yml"
         mkdir -p /var/log/cycentra 2>/dev/null || true
         if [[ -f "$_IU_YML" && -f "${_CERT_DIR}/admin.pem" ]]; then
+            # ── cy360_sso: admin account for admin/analyst Cy360 users ─────────
             # Hash for CyCentra360!SiemSSO — generated with OpenSearch hash.sh ($2y prefix)
             _CY360_SSO_HASH='$2y$12$nv335OI0o5tb4dnYtda8OeQastkTuiivxpkzh0nAYoxoZpMrJZ40S'
-            if ! grep -q "cy360_sso:" "$_IU_YML" 2>/dev/null; then
+            _USERS_CHANGED=false
+            if ! grep -q "^cy360_sso:" "$_IU_YML" 2>/dev/null; then
                 cat >> "$_IU_YML" << CY360_SSO_EOF
 
 cy360_sso:
@@ -1498,31 +1500,60 @@ cy360_sso:
   reserved: false
   backend_roles:
   - "admin"
-  description: "CyCentra 360 SSO service account — nginx Basic Auth injection"
+  description: "CyCentra 360 admin/analyst SSO — nginx siem-gate injection"
 CY360_SSO_EOF
-                # Ensure kibana_server role maps cy360_sso
-                if grep -q "^kibana_server:" "$_RM_YML" 2>/dev/null; then
-                    python3 - "$_RM_YML" << 'RM_PY_EOF'
-import sys
+                _USERS_CHANGED=true
+                success "OpenSearch cy360_sso user added"
+            else
+                success "OpenSearch cy360_sso user already present"
+            fi
+
+            # ── cy360_readonly: read-only account for viewer Cy360 users ───────
+            # Hash for CyCentra360!ReadOnly — generated with OpenSearch hash.sh ($2y prefix)
+            _CY360_RO_HASH='$2y$12$0Tim1grS5kbbBdG20PFsF.WF2eovIc23rrYO2D0E92pqdNjecI.lO'
+            if ! grep -q "^cy360_readonly:" "$_IU_YML" 2>/dev/null; then
+                cat >> "$_IU_YML" << CY360_RO_EOF
+
+cy360_readonly:
+  hash: "${_CY360_RO_HASH}"
+  reserved: false
+  backend_roles:
+  - "kibana_user"
+  - "wazuh_ui_user"
+  description: "CyCentra 360 viewer SSO — read-only Wazuh access"
+CY360_RO_EOF
+                _USERS_CHANGED=true
+                success "OpenSearch cy360_readonly user added"
+            else
+                success "OpenSearch cy360_readonly user already present"
+            fi
+
+            # ── Ensure rolesmapping includes both service accounts ────────────
+            if grep -q "^kibana_server:" "$_RM_YML" 2>/dev/null; then
+                python3 - "$_RM_YML" << 'RM_PY_EOF'
+import sys, re
 path = sys.argv[1]
 with open(path) as f:
     text = f.read()
-if "cy360_sso" not in text:
-    # Append cy360_sso to the users list under kibana_server
-    import re
-    text = re.sub(
-        r'(kibana_server:.*?users:\n)((?:  - "[^"]+"\n)*)',
-        lambda m: m.group(1) + m.group(2) + '  - "cy360_sso"\n',
-        text, flags=re.DOTALL
-    )
-    with open(path, "w") as f:
-        f.write(text)
-    print("cy360_sso added to kibana_server rolesmapping")
-else:
-    print("cy360_sso already in rolesmapping")
+changed = False
+for user in ("cy360_sso", "cy360_readonly"):
+    if user not in text:
+        text = re.sub(
+            r'(kibana_server:.*?users:\n)((?:  - "[^"]+"\n)*)',
+            lambda m, u=user: m.group(1) + m.group(2) + f'  - "{u}"\n',
+            text, flags=re.DOTALL
+        )
+        changed = True
+        print(f"{user} added to kibana_server rolesmapping")
+if not changed:
+    print("rolesmapping already up to date")
+with open(path, "w") as f:
+    f.write(text)
 RM_PY_EOF
-                fi
-                # Apply via securityadmin.sh
+            fi
+
+            # ── Apply via securityadmin.sh if users changed ───────────────────
+            if [[ "$_USERS_CHANGED" == "true" ]]; then
                 export JAVA_HOME=/usr/share/wazuh-indexer/jdk
                 cd / && "$_SEC_ADMIN" \
                     -f "$_IU_YML" -t internalusers \
@@ -1531,10 +1562,8 @@ RM_PY_EOF
                     -cert   "${_CERT_DIR}/admin.pem" \
                     -key    "${_CERT_DIR}/admin-key.pem" \
                     -h 127.0.0.1 2>>"$_CY_SEC_LOG" \
-                    && success "OpenSearch cy360_sso user created and applied" \
-                    || warn "securityadmin.sh failed for cy360_sso — check ${_CY_SEC_LOG}"
-            else
-                success "OpenSearch cy360_sso user already present"
+                    && success "OpenSearch SSO users applied via securityadmin" \
+                    || warn "securityadmin.sh failed — check ${_CY_SEC_LOG}"
             fi
         fi
         if false; then
@@ -1867,25 +1896,77 @@ CY_ROLES_EOF
 
         fi  # end dead-code if false block
         systemctl restart wazuh-dashboard 2>/dev/null || true
-        success "CySIEM Dashboard: basicauth mode, cy360_sso user ready"
+        success "CySIEM Dashboard: basicauth mode, SSO users ready (cy360_sso + cy360_readonly)"
     else
         info "Wazuh not installed — CySIEM SSO will run when Wazuh is deployed"
     fi
 
-    # ── Patch running nginx cysiem block: inject cy360_sso Basic Auth (idempotent) ──
-    # nginx injects Authorization: Basic cy360_sso credentials for all requests
-    # that pass the oauth2-proxy IAP gate — this is the SSO mechanism for Wazuh.
+    # ── Migrate nginx cysiem block to role-aware siem-gate auth_request (idempotent) ──
+    # Replaces the static cy360_sso Basic Auth header with a Flask auth_request that
+    # returns the credential dynamically based on the user's Cy360 role.
     _NGINX_MOD="/etc/nginx/sites-available/cycentra-modules"
-    _CY360_AUTH_HEADER='proxy_set_header Authorization "Basic Y3kzNjBfc3NvOkN5Q2VudHJhMzYwIVNpZW1TU08=";'
-    if [[ -f "$_NGINX_MOD" ]] && ! grep -q 'Y3kzNjBfc3NvOkN5Q2VudHJhMzYwIVNpZW1TU08=' "$_NGINX_MOD" 2>/dev/null; then
-        # Insert the Authorization header inside the cysiem location / block
-        sed -i '/proxy_pass https:\/\/127\.0\.0\.1:5601;/{n; s|.*|        '"$_CY360_AUTH_HEADER"'\n&|}' "$_NGINX_MOD" 2>/dev/null || \
-        sed -i '/server_name cysiem\./,/^}/{ /proxy_pass https.*5601/a\        '"$_CY360_AUTH_HEADER"' }' "$_NGINX_MOD" 2>/dev/null || true
-        nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
-            success "nginx cysiem: cy360_sso Basic Auth injection added" || \
-            warn "nginx reload after Basic Auth patch — check: nginx -t"
-    elif [[ -f "$_NGINX_MOD" ]]; then
-        success "nginx cysiem: cy360_sso Basic Auth injection already present"
+    if [[ -f "$_NGINX_MOD" ]]; then
+        if grep -q 'auth_request.*siem-gate\|siem-gate' "$_NGINX_MOD" 2>/dev/null; then
+            success "nginx cysiem: siem-gate auth_request already configured"
+        else
+            # Rewrite the entire cysiem server block in-place via Python
+            python3 - "$_NGINX_MOD" << 'NGINX_SIEM_PY'
+import sys, re
+path = sys.argv[1]
+with open(path) as f:
+    text = f.read()
+
+old_gate = (
+    r'# IAP gate[^\n]*\n'
+    r'    auth_request\s+/oauth2/auth;\n'
+    r'    error_page 401 = @error401;\n'
+    r'    auth_request_set[^\n]*\n'
+    r'    location @error401[^\n]*\n'
+    r'    location = /oauth2/auth \{[^}]+\}\n'
+)
+new_gate = (
+    '    # IAP gate — Flask validates Cy360 session and returns role-appropriate Wazuh credentials.\n'
+    '    # admin/analyst → cy360_sso (OpenSearch admin, full Wazuh access)\n'
+    '    # viewer        → cy360_readonly (OpenSearch read-only access)\n'
+    '    auth_request      /siem-gate;\n'
+    '    auth_request_set  $wazuh_auth $upstream_http_x_wazuh_auth;\n'
+    '    error_page 401 = @error401;\n'
+    '    location @error401 { return 302 https://cy360.$host_domain/oauth2/sign_in?rd=https://$host$request_uri; }\n'
+    '    location = /siem-gate {\n'
+    '        internal;\n'
+    '        proxy_pass              http://127.0.0.1:5252/api/siem/internal/auth;\n'
+    '        proxy_pass_request_body off;\n'
+    '        proxy_set_header        Content-Length "";\n'
+    '        proxy_set_header        X-Original-URI $request_uri;\n'
+    '        proxy_set_header        X-Forwarded-Proto https;\n'
+    '    }\n'
+)
+
+# Extract the base domain from the error401 line for the redirect
+domain_m = re.search(r'https://cy360\.([^/]+)/oauth2', text)
+base_domain = domain_m.group(1) if domain_m else 'cycentra.com'
+new_gate = new_gate.replace('$host_domain', base_domain)
+
+patched = re.sub(old_gate, new_gate, text, flags=re.DOTALL)
+
+# Also replace static Authorization header with dynamic $wazuh_auth
+patched = re.sub(
+    r'proxy_set_header\s+Authorization\s+"Basic [A-Za-z0-9+/=]+";',
+    'proxy_set_header Authorization $wazuh_auth;',
+    patched
+)
+
+if patched != text:
+    with open(path, 'w') as f:
+        f.write(patched)
+    print("nginx cysiem block migrated to siem-gate auth_request")
+else:
+    print("nginx cysiem block: no changes needed")
+NGINX_SIEM_PY
+            nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
+                success "nginx cysiem: migrated to role-aware siem-gate auth_request" || \
+                warn "nginx config invalid after siem-gate patch — check: nginx -t"
+        fi
     fi
 
     # ── Remove duplicate CORS headers from cyasm nginx block (added before v1.0.286) ──
@@ -2364,18 +2445,20 @@ server {
     add_header Strict-Transport-Security "max-age=31536000" always;
     add_header X-Frame-Options "" always;
     add_header Content-Security-Policy "frame-ancestors 'self' https://cy360.${BASE_DOMAIN}" always;
-    # IAP gate — only authenticated CyCentra users reach Wazuh Dashboard
-    auth_request     /oauth2/auth;
+    # IAP gate — Flask validates Cy360 session and returns role-appropriate Wazuh credentials.
+    # admin/analyst → cy360_sso (OpenSearch admin, full Wazuh access)
+    # viewer        → cy360_readonly (OpenSearch read-only access)
+    auth_request      /siem-gate;
+    auth_request_set  \$wazuh_auth \$upstream_http_x_wazuh_auth;
     error_page 401 = @error401;
-    auth_request_set \$proxy_user  \$upstream_http_x_auth_request_email;
     location @error401 { return 302 https://cy360.${BASE_DOMAIN}/oauth2/sign_in?rd=https://\$host\$request_uri; }
-    location = /oauth2/auth {
+    location = /siem-gate {
         internal;
-        proxy_pass              http://127.0.0.1:4180;
+        proxy_pass              http://127.0.0.1:5252/api/siem/internal/auth;
         proxy_pass_request_body off;
         proxy_set_header        Content-Length "";
         proxy_set_header        X-Original-URI \$request_uri;
-        proxy_set_header        X-Scheme \$scheme;
+        proxy_set_header        X-Forwarded-Proto https;
     }
     location / {
         proxy_pass https://127.0.0.1:5601;
@@ -2385,8 +2468,8 @@ server {
         proxy_set_header Connection \$connection_upgrade;
         proxy_set_header Host \$host;
         proxy_set_header X-Forwarded-Proto https;
-        # Inject cy360_sso credentials — passes IAP gate; Wazuh stays in basicauth mode
-        proxy_set_header Authorization "Basic Y3kzNjBfc3NvOkN5Q2VudHJhMzYwIVNpZW1TU08=";
+        # Role-appropriate Wazuh credential set by siem-gate auth_request
+        proxy_set_header Authorization \$wazuh_auth;
         proxy_read_timeout 120;
         proxy_buffering off;
         proxy_cookie_flags ~ samesite=none secure;

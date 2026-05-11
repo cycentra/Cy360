@@ -1,3 +1,11 @@
+## v1.0.403 -- 2026-05-11
+
+### Bug Fixes
+
+  - chat): close/resolve incident action now pre-fetches current status, surfaces engine errors, and refreshes Incidents list on success (v1.0.403
+
+---
+
 ## v1.0.402 -- 2026-05-11
 
 ### Improvements

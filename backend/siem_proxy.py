@@ -574,6 +574,36 @@ def siem_wazuh_launch():
     return jsonify({"launch_url": launch_url, "token": token})
 
 
+# ── Wazuh Basic Auth credentials for nginx siem-gate ─────────────────────────
+# Computed once at import time; passwords never appear in logs or responses.
+import base64 as _b64
+_WAZUH_ADMIN_BASIC = "Basic " + _b64.b64encode(b"cy360_sso:CyCentra360!SiemSSO").decode()
+_WAZUH_RO_BASIC    = "Basic " + _b64.b64encode(b"cy360_readonly:CyCentra360!ReadOnly").decode()
+
+
+@siem_bp.route("/internal/auth", methods=["GET"])
+def siem_internal_auth():
+    """nginx auth_request gate for cysiem.DOMAIN — called per browser request.
+
+    Validates the Cy360 session cookie forwarded by nginx, then returns the
+    role-appropriate Wazuh Basic Auth credential via the X-Wazuh-Auth header.
+    nginx picks that value up via auth_request_set and injects it into the
+    proxy_set_header Authorization for the upstream Wazuh Dashboard request.
+
+    Roles:
+      - No session              → 401  (nginx redirects to Cy360 login)
+      - admin / analyst         → cy360_sso    (OpenSearch admin — full Wazuh access)
+      - viewer / anything else  → cy360_readonly (OpenSearch read-only access)
+    """
+    email = session.get("user_email")
+    if not email:
+        return "", 401
+
+    role  = _get_role() or "viewer"
+    basic = _WAZUH_ADMIN_BASIC if role in ("admin", "analyst") else _WAZUH_RO_BASIC
+    return "", 200, {"X-Wazuh-Auth": basic, "X-Auth-Request-User": email}
+
+
 @siem_bp.route("/alerts")
 @require_siem_auth
 def siem_alerts():
