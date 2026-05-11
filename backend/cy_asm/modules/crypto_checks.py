@@ -111,6 +111,26 @@ def _get_key_info(cert: crypto.X509) -> Dict[str, Any]:
     return info
 
 
+def _get_sans_from_cert(cert: crypto.X509) -> List[str]:
+    """Extract DNS SANs directly from the OpenSSL cert object.
+
+    Using ssock.getpeercert() with ssl.CERT_NONE returns an empty dict, so SANs
+    must be parsed from the extension directly rather than from the Python ssl API.
+    """
+    sans: List[str] = []
+    try:
+        for i in range(cert.get_extension_count()):
+            ext = cert.get_extension(i)
+            if ext.get_short_name() == b"subjectAltName":
+                for entry in str(ext).split(","):
+                    entry = entry.strip()
+                    if entry.startswith("DNS:"):
+                        sans.append(entry[4:].lower())
+    except Exception:
+        pass
+    return sans
+
+
 def _get_sig_algo(cert: crypto.X509) -> str:
     try:
         return cert.get_signature_algorithm().decode(errors="ignore")
@@ -224,23 +244,24 @@ def check_ssl_status(domain: str) -> Dict[str, Any]:
                 cert_info["issuer_full"] = issuer_full
                 cert_info["ev_cert"] = issuer_full.get("ev", False)
 
-                # SAN
-                parsed_cert = ssock.getpeercert()
-                sans = parsed_cert.get("subjectAltName", [])
-                for _, val in sans:
-                    cert_info["san_details"].append(val.lower())
-                    if val.lower() == domain.lower() or (val.startswith("*.") and domain.lower().endswith(val[2:])):
+                # SAN — parse from OpenSSL cert object; getpeercert() is empty with CERT_NONE
+                sans = _get_sans_from_cert(cert)
+                domain_l = domain.lower()
+                for v in sans:
+                    cert_info["san_details"].append(v)
+                    if v == domain_l or (v.startswith("*.") and (domain_l == v[2:] or domain_l.endswith("." + v[2:]))):
                         cert_info["san_valid"] = True
-                if not cert_info["san_valid"]:
+                if sans and not cert_info["san_valid"]:
                     issues.append(f"SAN mismatch: {domain} not covered by certificate")
 
                 # Key info
                 key_info = _get_key_info(cert)
                 cert_info.update(key_info)
-                if key_info["key_type"] == "RSA" and key_info["key_bits"] and key_info["key_bits"] < 2048:
+                # ECDSA 256-bit ≈ RSA 3072-bit (NIST SP 800-57); only RSA/DSA need the 2048-bit minimum.
+                if key_info["key_type"] in ("RSA", "DSA") and key_info["key_bits"] and key_info["key_bits"] < 2048:
                     issues.append(f"Weak RSA key: {key_info['key_bits']} bits (minimum 2048)")
-                elif key_info["key_bits"] and key_info["key_bits"] < 2048:
-                    issues.append(f"Weak key: {key_info['key_bits']} bits")
+                elif key_info["key_type"] == "ECDSA" and key_info["key_bits"] and key_info["key_bits"] < 224:
+                    issues.append(f"Weak ECDSA key: {key_info['key_bits']} bits (minimum 224)")
 
                 # Signature algorithm
                 cert_info["sig_algo"] = _get_sig_algo(cert)

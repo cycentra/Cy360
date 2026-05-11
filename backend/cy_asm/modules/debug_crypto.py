@@ -83,6 +83,26 @@ def _check_ocsp_stapling(ssock: ssl.SSLSocket) -> bool:
         return False
 
 
+def _get_sans_from_cert(cert: crypto.X509) -> List[str]:
+    """Extract DNS SANs from the OpenSSL cert object.
+
+    ssock.getpeercert() returns an empty dict when ssl.CERT_NONE is used, so the
+    subjectAltName extension must be read directly from the cert object instead.
+    """
+    sans: List[str] = []
+    try:
+        for i in range(cert.get_extension_count()):
+            ext = cert.get_extension(i)
+            if ext.get_short_name() == b"subjectAltName":
+                for entry in str(ext).split(","):
+                    entry = entry.strip()
+                    if entry.startswith("DNS:"):
+                        sans.append(entry[4:].lower())
+    except Exception:
+        pass
+    return sans
+
+
 def _check_tls_compression(ssock: ssl.SSLSocket) -> bool:
     try:
         return ssock.compression() is not None
@@ -215,22 +235,19 @@ def test_module(domain: str) -> Dict[str, Any]:
                 elif days_left < 30:
                     issues.append(f"Certificate expiring soon ({days_left} days left)")
 
-                # SAN validation
-                parsed_cert = ssock.getpeercert()
-                sans = parsed_cert.get("subjectAltName", [])
+                # SAN validation — parse from OpenSSL cert object; getpeercert() is empty with CERT_NONE
+                sans = _get_sans_from_cert(cert)
                 domain_l = domain.lower()
-                for typ, val in sans:
-                    if typ == "DNS":
-                        v = val.lower()
-                        cert_info["san_details"].append(v)
-                        if v == domain_l or (
-                            v.startswith("*.") and (
-                                domain_l == v[2:] or domain_l.endswith("." + v[2:])
-                            )
-                        ):
-                            cert_info["san_valid"] = True
-                        elif not v.endswith("." + domain_l):
-                            cert_info["extraneous_sans"].append(v)
+                for v in sans:
+                    cert_info["san_details"].append(v)
+                    if v == domain_l or (
+                        v.startswith("*.") and (
+                            domain_l == v[2:] or domain_l.endswith("." + v[2:])
+                        )
+                    ):
+                        cert_info["san_valid"] = True
+                    elif not v.endswith("." + domain_l):
+                        cert_info["extraneous_sans"].append(v)
 
                 if not sans:
                     issues.append("No Subject Alternative Names (SANs) present")
