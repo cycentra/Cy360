@@ -14,6 +14,7 @@ Only triggers for critical/high incidents with ≥3 alerts.
 Falls back gracefully if the LLM service is unavailable.
 """
 from datetime import datetime, timezone
+import re
 import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,7 +28,7 @@ settings = get_settings()
 
 SYSTEM_PROMPT = """You are a senior SOC analyst assistant. You receive structured incident data from a Wazuh SIEM correlation engine and produce:
 
-1. ANALYST_SUMMARY: A concise (2–3 sentence) plain-English narrative describing what happened, who was affected, and why it matters. No jargon. Actionable.
+1. ANALYST_SUMMARY: A clear, complete plain-English narrative (3–5 sentences) describing what happened, who was affected, the attack progression observed, and why it matters. No jargon. Actionable. Include affected usernames/hosts when available.
 
 2. REMEDIATION_STEPS: Numbered list of prioritised, asset-specific remediation steps. Include exact file paths, commands, and Wazuh documentation references where relevant.
 
@@ -59,7 +60,17 @@ def _build_context(incident: Incident, alerts: list[Alert]) -> str:
     else:
         misp_section = 'Threat Intelligence: No MISP IOC matches.'
 
-    top_alerts = sorted(alerts, key=lambda a: float(a.base_score or 0), reverse=True)[:8]
+    # Include both highest-severity and most-recent alerts for comprehensive context.
+    # For cloud incidents (all alerts similar score), recency captures the attack timeline.
+    by_score  = sorted(alerts, key=lambda a: float(a.base_score or 0), reverse=True)[:5]
+    by_recent = sorted(alerts, key=lambda a: a.timestamp, reverse=True)[:5]
+    seen_ids  = set()
+    top_alerts = []
+    for a in by_score + by_recent:
+        if id(a) not in seen_ids:
+            seen_ids.add(id(a))
+            top_alerts.append(a)
+    top_alerts = top_alerts[:10]
     alert_lines = '\n'.join(
         f"  [{a.timestamp.strftime('%H:%M:%S')}] [{a.rule_id}] {a.rule_desc}"
         f" | {a.agent_name} | user:{a.username or 'N/A'} | src:{a.src_ip or 'N/A'}"
@@ -90,15 +101,28 @@ Top Alerts:
 
 
 def _parse_response(raw: str) -> tuple[str, str]:
+    """Parse LLM response — tolerates format deviations."""
     summary = ''
     remediation = ''
     try:
+        # Primary: expect exact marker format
         if 'ANALYST_SUMMARY:' in raw and 'REMEDIATION_STEPS:' in raw:
             parts = raw.split('REMEDIATION_STEPS:')
-            summary = parts[0].replace('ANALYST_SUMMARY:', '').strip()
+            summary     = parts[0].replace('ANALYST_SUMMARY:', '').strip()
             remediation = parts[1].strip() if len(parts) > 1 else ''
+        # Fallback 1: only summary marker present — rest is remediation
+        elif 'ANALYST_SUMMARY:' in raw:
+            summary = raw.replace('ANALYST_SUMMARY:', '').strip()
+        # Fallback 2: numbered list pattern — first paragraph is summary, numbered list is remediation
         else:
-            summary = raw.strip()
+            lines = raw.strip().split('\n')
+            numbered = [l for l in lines if re.match(r'^\s*\d+[\.\)]', l)]
+            if numbered:
+                first_numbered = next(i for i, l in enumerate(lines) if re.match(r'^\s*\d+[\.\)]', l))
+                summary     = '\n'.join(lines[:first_numbered]).strip()
+                remediation = '\n'.join(lines[first_numbered:]).strip()
+            else:
+                summary = raw.strip()
     except Exception:
         summary = raw.strip()
     return summary, remediation

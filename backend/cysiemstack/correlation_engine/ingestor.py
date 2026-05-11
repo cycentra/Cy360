@@ -239,12 +239,21 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
             #   (c) alert_count has reached the LLM trigger threshold — the
             #       enrichment window has closed; don't hold tickets indefinitely
             #       when MISP is disabled and CyMind is not configured.
+            # Cloud/O365 incidents are considered enriched when:
+            #   (a) any enrichment data is present (same as now), OR
+            #   (b) it is a cloud-source incident — these events are definitionally "complete"
+            #       as Microsoft provides all context in a single event payload;
+            #       waiting for 3 alerts before treating them as enriched means cloud incidents
+            #       with high-severity rule triggers would never auto-ticket.
+            _cloud_cats = frozenset({'o365', 'azure', 'aws', 'gcp', 'github'})
+            _incident_is_cloud = bool(set(incident.categories or []) & _cloud_cats)
             enriched = bool(
                 misp_result
                 or llm_result
                 or incident.llm_summary
                 or incident.misp_enrichment
                 or incident.alert_count >= LLM_TRIGGER_MIN_ALERTS
+                or _incident_is_cloud          # cloud events are self-contained; treat as enriched
             )
             new_status, iris_result = await advance_incident_status(
                 db, incident, fp_score,

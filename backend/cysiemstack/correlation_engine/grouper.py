@@ -122,6 +122,18 @@ async def find_matching_incident(
         # Same src_ip — different agents, same attacker
         if alert.get('src_ip') and alert['src_ip'] in (inc.src_ips or []):
             return inc
+        # Cloud-event correlation: same username + same cloud source category
+        # M365, Azure, AWS, GCP, GitHub events should be grouped per-user.
+        # This runs AFTER the agent_id check to ensure specificity — only group
+        # cloud events together when the identity (username) matches, preventing
+        # cross-user correlation that would mix different users' activities.
+        if (
+            alert.get('username')
+            and alert.get('category') in _SPECIFIC_CLOUD_SOURCES
+            and alert['username'] in (inc.affected_users or [])
+            and alert.get('category') in (inc.categories or [])
+        ):
+            return inc
 
     return None
 

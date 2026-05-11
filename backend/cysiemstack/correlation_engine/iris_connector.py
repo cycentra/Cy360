@@ -482,11 +482,16 @@ async def advance_incident_status(
             extra={"fp_score": fp_score},
         )
 
-    # Create IRIS ticket if conditions met and not already ticketed
+    # Create IRIS ticket if conditions met and not already ticketed.
+    # Cloud/O365 incidents: lower threshold to 1 alert since cloud events represent
+    # real user actions and rarely accumulate 3+ correlated events per session.
+    _CLOUD_CATS = frozenset({'o365', 'azure', 'aws', 'gcp', 'github'})
+    _is_cloud = bool(set(incident.categories or []) & _CLOUD_CATS)
+    _ticket_alert_floor = 1 if _is_cloud else 3
     should_ticket = (
         not incident.iris_case_id
         and incident.severity in ("critical", "high")
-        and incident.alert_count >= 3
+        and incident.alert_count >= _ticket_alert_floor
     )
     if should_ticket and cfg:
         iris_result = await create_iris_case(db, incident)
