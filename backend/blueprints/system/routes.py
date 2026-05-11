@@ -1178,6 +1178,7 @@ _MCP_TOOLS = [
     {"name": "get_vuln_summary",           "access_level": "read",  "description": "Aggregated CVE counts across all active Wazuh agents"},
     {"name": "get_compliance_status",      "access_level": "read",  "description": "Compliance control coverage grouped by framework (NIS2, ISO 27001, DORA)"},
     {"name": "get_incident_distribution",  "access_level": "read",  "description": "Exact incident counts by severity, status, and category (top 15) — never estimate"},
+    {"name": "search_incidents",           "access_level": "read",  "description": "Search incidents by affected user, agent, source IP, severity, or status — returns exact DB records"},
     # ── Write tools (require analyst confirmation before execution) ────────────
     {"name": "wazuh_active_response",      "access_level": "write", "requires_confirmation": True,  "description": "Trigger a Wazuh active-response command on an agent"},
     {"name": "update_incident",            "access_level": "write", "requires_confirmation": True,  "description": "Update incident fields: assigned_to, notes, severity (PATCH)"},
@@ -1802,7 +1803,18 @@ def _fetch_siem_context_block() -> str:
                 )
             lines.append("")
 
-    lines.append("--- END LIVE SIEM DATA ---\n")
+    lines += [
+        "[SYSTEM INSTRUCTION — CRITICAL: The data above is factual and complete for"
+        " this snapshot. Do NOT extrapolate, estimate, or fabricate any incident IDs,"
+        " descriptions, usernames, IP addresses, CVEs, or counts beyond what is shown."
+        " If the user asks about a specific user, host, or entity not visible in this"
+        " snapshot, their data will be injected below (see 'Incidents for user/entity')."
+        " If no such section appears, say you cannot find that entity in current data"
+        " — NEVER invent incidents.]",
+        "",
+        "--- END LIVE SIEM DATA ---",
+        "",
+    ]
     return "\n".join(lines)
 
 
@@ -1823,6 +1835,86 @@ import re as _re
 
 _IP_RE      = _re.compile(r'\b(\d{1,3}(?:\.\d{1,3}){3})\b')
 _INC_RE     = _re.compile(r'\b(INC-\d+)\b', _re.IGNORECASE)
+
+# ── Entity-aware context enrichment ──────────────────────────────────────────
+# Detect "incidents for/related to/by/about user X" in chat messages so the
+# proxy can pre-fetch those incidents and inject real data before forwarding.
+
+_ENTITY_IN_MSG_RE = _re.compile(
+    r'\b(?:user|account|analyst|by|for|related to|linked to|about|regarding|involving)\s+'
+    r'["\']?(\w[\w.\-@+]{1,60})["\']?',
+    _re.IGNORECASE,
+)
+_ENTITY_SKIP = {
+    "the", "a", "an", "me", "us", "all", "any", "this", "that",
+    "open", "high", "low", "critical", "medium", "admin", "user",
+    "it", "its", "which", "who", "whom",
+}
+
+
+def _fetch_entity_incidents_block(message: str) -> str:
+    """
+    If `message` references a specific user/entity, query the correlation engine
+    for that entity's incidents and return a formatted context block to append to
+    the SIEM context.  Returns empty string if no entity found or no data.
+    """
+    m = _ENTITY_IN_MSG_RE.search(message)
+    if not m:
+        return ""
+    entity = m.group(1).strip()
+    if entity.lower() in _ENTITY_SKIP:
+        return ""
+
+    engine_url = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").rstrip("/")
+    try:
+        r = http_requests.get(
+            f"{engine_url}/incidents",
+            params={"user": entity, "limit": 20},
+            timeout=4,
+        )
+        if not r.ok:
+            return ""
+        data = r.json()
+    except Exception:
+        return ""
+
+    total     = data.get("total", 0)
+    incidents = data.get("incidents", [])
+
+    lines = [
+        "",
+        f"## Incidents for entity '{entity}' (exact DB query — {total} total match)",
+    ]
+    if total == 0:
+        lines += [
+            f"No incidents in the database involve '{entity}'.",
+            "[INSTRUCTION: The user asked about this entity. Database returned 0 results."
+            " Do NOT invent any incidents. Clearly tell the user no incidents were found.]",
+        ]
+    else:
+        lines += [
+            "| ID | Severity | Status | Categories | Risk | Affected Users |",
+            "|---|---|---|---|---|---|",
+        ]
+        for inc in incidents[:20]:
+            cats  = ", ".join((inc.get("categories") or [])[:3]) or "—"
+            users = ", ".join((inc.get("affected_users") or [])[:4]) or "—"
+            lines.append(
+                f"| {inc.get('id', '?')} "
+                f"| {inc.get('severity', '?')} "
+                f"| {inc.get('status', '?')} "
+                f"| {cats} "
+                f"| {inc.get('risk_score', '?')} "
+                f"| {users} |"
+            )
+        lines += [
+            "",
+            f"[INSTRUCTION: The table above lists ALL {total} incidents involving"
+            f" '{entity}'. These are exact database records. Do NOT add or modify"
+            " any detail. Present this table to the user as-is.]",
+        ]
+    lines.append("")
+    return "\n".join(lines)
 _AGENT_RE   = _re.compile(r'\bagent[_\s]?(?:id[_\s]?)?([0-9a-zA-Z]+)\b', _re.IGNORECASE)
 _DOMAIN_RE  = _re.compile(r'\b((?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,})\b')
 _USER_RE    = _re.compile(r"""(?:user|account|username)[s]?\s+["\']?([a-zA-Z0-9._@+-]+)["\']?""", _re.IGNORECASE)
@@ -2740,6 +2832,13 @@ def cymind_chat_proxy():
         siem_block = _fetch_siem_context_block()
         existing_system = body_json.get("system", "")
         if siem_block:
+            # Entity-aware enrichment: if message mentions a user/entity, inject their incidents
+            _msgs  = body_json.get("messages", [])
+            _last  = _msgs[-1].get("content", "") if _msgs else ""
+            if _last:
+                _entity_block = _fetch_entity_incidents_block(_last)
+                if _entity_block:
+                    siem_block += _entity_block
             body_json["system"] = (existing_system + siem_block).strip()
         else:
             # No live data — inject an explicit note so CyMind never says "enable the toggle"

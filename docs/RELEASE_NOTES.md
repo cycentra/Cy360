@@ -1,3 +1,28 @@
+## v1.0.401 -- 2026-05-11
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.401 — Fix CyMind hallucination on entity/user incident queries — 2026-05-11
+
+### Bug Fixes
+
+- **CyMind hallucinating incident data for user queries**: When asked "how many incidents are related to user shibu", CyMind was fabricating incident IDs, descriptions, timestamps and counts. Root cause: the `/incidents` REST endpoint had no `user` filter, the portal proxy had no entity-aware enrichment, and no anti-hallucination guard existed in the live SIEM context block. Three-layer fix applied:
+  1. `/incidents` engine endpoint now accepts `user`, `agent`, and `src_ip` query parameters — uses PostgreSQL `array_to_string` + `ILIKE` to search `affected_users`, `affected_agents`, and `src_ips` arrays. Total count is now also correct for all filter combinations (was previously only counting status filter).
+  2. Portal chat proxy (`cymind_chat_proxy`) now detects entity/user mentions in the user message via `_ENTITY_IN_MSG_RE` regex, pre-fetches that entity's incidents from the engine, and injects a `## Incidents for entity 'X'` table directly into the SIEM context block before forwarding to CyMind — so CyMind has the real data, not a gap to fill.
+  3. `_fetch_siem_context_block()` now includes a `[SYSTEM INSTRUCTION — CRITICAL]` anti-hallucination footer that instructs the LLM to never invent incident IDs, descriptions, usernames, or counts beyond the provided data.
+- **New `search_incidents` MCP tool**: Added to correlation engine for CyMind standalone path. Accepts `user`, `agent`, `src_ip`, `status`, `severity` filters. Returns exact DB records with a grounding note. Keyword-routed in `mcp_client.py`.
+
+### Files Changed
+- `backend/cysiemstack/correlation_engine/main.py` — `/incidents` user/agent/src_ip filters; `search_incidents` MCP tool
+- `backend/blueprints/system/routes.py` — `_ENTITY_IN_MSG_RE`, `_fetch_entity_incidents_block()`, entity enrichment in proxy, anti-hallucination footer, `search_incidents` in `_MCP_TOOLS`
+- `CyMind/cymind/api/mcp_client.py` — `search_incidents` keyword routing + label
+
+---
+
 ## v1.0.400 -- 2026-05-11
 
 ### Improvements

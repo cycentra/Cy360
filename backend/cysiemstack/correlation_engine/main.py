@@ -662,19 +662,26 @@ async def stats(db: AsyncSession = Depends(get_db)):
 async def list_incidents(
     status:   Optional[str] = None,
     severity: Optional[str] = None,
+    user:     Optional[str] = None,
+    agent:    Optional[str] = None,
+    src_ip:   Optional[str] = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
 ):
+    filters = []
+    if status:   filters.append(Incident.status   == status)
+    if severity: filters.append(Incident.severity == severity)
+    if user:     filters.append(func.array_to_string(Incident.affected_users,  ',').ilike(f'%{user}%'))
+    if agent:    filters.append(func.array_to_string(Incident.affected_agents, ',').ilike(f'%{agent}%'))
+    if src_ip:   filters.append(func.array_to_string(Incident.src_ips,         ',').ilike(f'%{src_ip}%'))
+
     q = select(Incident).order_by(desc(Incident.last_seen))
-    if status:
-        q = q.where(Incident.status == status)
-    if severity:
-        q = q.where(Incident.severity == severity)
+    if filters:
+        q = q.where(*filters)
 
     total = (await db.execute(
-        select(func.count()).select_from(Incident)
-        .where(*([Incident.status == status] if status else []))
+        select(func.count()).select_from(Incident).where(*filters)
     )).scalar()
 
     q = q.offset(offset).limit(limit)
@@ -1448,6 +1455,59 @@ try:
                 r = await c.get("http://127.0.0.1:8100/incidents", params=params)
                 r.raise_for_status()
                 return _stdlib_json.dumps(r.json(), indent=2)
+
+        @_mcp.tool()
+        async def search_incidents(
+            user:     Optional[str] = None,
+            agent:    Optional[str] = None,
+            src_ip:   Optional[str] = None,
+            status:   Optional[str] = None,
+            severity: Optional[str] = None,
+            limit: int = 20,
+        ) -> str:
+            """Search incidents by affected user, agent/host, source IP, severity, or status.
+
+            Use this for questions like:
+            - "how many incidents are related to user shibu"
+            - "list incidents for user john.doe"
+            - "incidents involving host DESKTOP-ABC"
+            - "open incidents from IP 10.0.0.1"
+
+            CRITICAL GROUNDING RULE: The `total` field is the EXACT database count.
+            The `incidents` array contains REAL records only.
+            Do NOT invent, guess, or add any incident IDs, descriptions, usernames,
+            timestamps, or counts beyond what this tool returns.
+            If total is 0 — say "No incidents found" and nothing else.
+
+            Args:
+                user:     Partial username (case-insensitive) to search in affected_users.
+                agent:    Partial agent/hostname to search in affected_agents.
+                src_ip:   Partial IP address to search in src_ips.
+                status:   Filter by status: open | investigating | in_review | resolved | false_positive
+                severity: Filter by severity: low | medium | high | critical
+                limit:    Max results to return (1-100, default 20).
+            """
+            params: dict = {"limit": max(1, min(limit, 100))}
+            if user:     params["user"]     = user
+            if agent:    params["agent"]    = agent
+            if src_ip:   params["src_ip"]   = src_ip
+            if status:   params["status"]   = status
+            if severity: params["severity"] = severity
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get("http://127.0.0.1:8100/incidents", params=params)
+                r.raise_for_status()
+                data = r.json()
+            total     = data.get("total", 0)
+            incidents = data.get("incidents", [])
+            return _stdlib_json.dumps({
+                "total":     total,
+                "incidents": incidents,
+                "_note":     (
+                    f"EXACT database result: {total} incident(s) matched your query. "
+                    "These are real records. Do NOT add, invent, or modify any detail. "
+                    "If total is 0, tell the user no incidents were found — never fabricate."
+                ),
+            }, indent=2)
 
         @_mcp.tool()
         async def get_incident(incident_id: str) -> str:
