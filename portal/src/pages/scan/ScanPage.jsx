@@ -168,44 +168,50 @@ function ScanTierMatrix({ selected, onSelect, disabled }) {
 }
 
 function CTEMSyncPanel({ domain, scanType, includeSubdomains, user }) {
-  const [enabled,       setEnabled]     = useState(false);
-  const [intervalSec,   setIntervalSec] = useState(3600);
-  const [activeJob,     setActiveJob]   = useState(null);
-  const [saving,        setSaving]      = useState(false);
-  const [statusMsg,     setStatusMsg]   = useState("");
+  const [enabled,     setEnabled]    = useState(false);
+  const [intervalSec, setIntervalSec] = useState(3600);
+  const [activeJob,   setActiveJob]  = useState(null);
+  const [saving,      setSaving]     = useState(false);
+  const [loading,     setLoading]    = useState(true);   // loading state prevents premature DISABLED flicker
+  const [statusMsg,   setStatusMsg]  = useState("");
 
-  // Load any existing CTEM job for this domain
+  // Re-fetch whenever domain changes
   useEffect(() => {
+    if (!domain) { setLoading(false); return; }
+    setLoading(true);
+    setActiveJob(null);
     fetch(`${API_BASE}/api/scheduler/jobs`, { credentials: "include" })
       .then(r => r.ok ? r.json() : [])
       .then(jobs => {
-        const mine = Array.isArray(jobs) ? jobs.find(j => j.params?.domain === domain && j.type === "asm_scan") : null;
+        const mine = Array.isArray(jobs)
+          ? jobs.find(j => j.params?.domain === domain && j.type === "asm_scan")
+          : null;
         if (mine) {
           setActiveJob(mine);
           setEnabled(mine.enabled !== false);
           if (mine.schedule?.seconds) setIntervalSec(mine.schedule.seconds);
+        } else {
+          setEnabled(false);
         }
       })
-      .catch(() => {});
-  }, [domain]);
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [domain]);   // domain in deps so it re-checks on domain change
 
   const saveSync = async () => {
     if (!domain) return;
     setSaving(true);
     setStatusMsg("");
     try {
-      // Delete existing job if any
       if (activeJob?.id) {
         await fetch(`${API_BASE}/api/scheduler/jobs/${activeJob.id}`, { method: "DELETE", credentials: "include" });
       }
-
       if (!enabled) {
         setActiveJob(null);
         setStatusMsg("Continuous Sync disabled.");
         setSaving(false);
         return;
       }
-
       const res = await fetch(`${API_BASE}/api/scheduler/jobs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -221,7 +227,7 @@ function CTEMSyncPanel({ domain, scanType, includeSubdomains, user }) {
       if (res.ok) {
         setActiveJob(job);
         const iv = SYNC_INTERVALS.find(i => i.seconds === intervalSec);
-        setStatusMsg(`Continuous Sync active — refreshing ${iv?.label?.toLowerCase() || `every ${intervalSec / 3600}h`}.`);
+        setStatusMsg(`Continuous Sync saved — ${iv?.label?.toLowerCase() || `every ${intervalSec / 3600}h`}.`);
       } else {
         setStatusMsg(`Error: ${job.error || "Could not save"}`);
       }
@@ -231,65 +237,135 @@ function CTEMSyncPanel({ domain, scanType, includeSubdomains, user }) {
     setSaving(false);
   };
 
-  const syncAccentColor = enabled ? "#00e5a0" : "rgba(255,255,255,0.2)";
+  // Compute next-run display from job's last_run + interval (best-effort)
+  const nextRunLabel = (() => {
+    if (!activeJob?.last_run || !activeJob?.schedule?.seconds) return null;
+    try {
+      const next = new Date(activeJob.last_run);
+      next.setSeconds(next.getSeconds() + activeJob.schedule.seconds);
+      const diffMs = next - Date.now();
+      if (diffMs <= 0) return "Pending";
+      const diffMin = Math.round(diffMs / 60000);
+      if (diffMin < 60) return `in ${diffMin}m`;
+      return `in ${Math.round(diffMin / 60)}h`;
+    } catch { return null; }
+  })();
+
+  const syncAccentColor = activeJob && enabled ? "#00e5a0" : "rgba(255,255,255,0.2)";
+  const currentInterval = SYNC_INTERVALS.find(i => i.seconds === intervalSec);
 
   return (
-    <div style={{ marginTop: 24, background: "rgba(0,229,160,0.03)", border: "1px solid rgba(0,229,160,0.1)", borderRadius: 6, padding: "18px 20px" }}>
+    <div style={{ marginTop: 24, background: "rgba(0,229,160,0.03)", border: `1px solid ${activeJob && enabled ? "rgba(0,229,160,0.2)" : "rgba(255,255,255,0.07)"}`, borderRadius: 6, padding: "18px 20px", transition: "border-color 0.3s" }}>
+
+      {/* Header row */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {/* Toggle */}
-          <div onClick={() => setEnabled(v => !v)} style={{ width: 36, height: 20, borderRadius: 10, background: enabled ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.08)", border: `1px solid ${syncAccentColor}`, cursor: "pointer", position: "relative", flexShrink: 0, transition: "all 0.2s" }}>
-            <div style={{ position: "absolute", top: 2, left: enabled ? 17 : 2, width: 14, height: 14, borderRadius: "50%", background: enabled ? "#00e5a0" : "rgba(255,255,255,0.25)", transition: "left 0.2s", boxShadow: enabled ? "0 0 6px #00e5a0" : "none" }}/>
+          {/* Toggle — disabled while loading */}
+          <div
+            onClick={() => !loading && setEnabled(v => !v)}
+            style={{ width: 36, height: 20, borderRadius: 10,
+              background: enabled ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.08)",
+              border: `1px solid ${syncAccentColor}`,
+              cursor: loading ? "wait" : "pointer",
+              position: "relative", flexShrink: 0, opacity: loading ? 0.5 : 1, transition: "all 0.2s" }}>
+            <div style={{ position: "absolute", top: 2, left: enabled ? 17 : 2, width: 14, height: 14,
+              borderRadius: "50%", background: enabled ? "#00e5a0" : "rgba(255,255,255,0.25)",
+              transition: "left 0.2s", boxShadow: enabled ? "0 0 6px #00e5a0" : "none" }}/>
           </div>
           <div>
-            <div style={{ color: enabled ? "#00e5a0" : "rgba(255,255,255,0.5)", fontSize: 12, fontWeight: 700, letterSpacing: "0.5px" }}>Continuous Sync</div>
-            <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", marginTop: 1 }}>CTEM Refresh Interval — min. 1 hour</div>
+            <div style={{ color: enabled ? "#00e5a0" : "rgba(255,255,255,0.5)", fontSize: 12, fontWeight: 700, letterSpacing: "0.5px" }}>
+              Continuous Sync {loading ? <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontWeight: 400 }}> checking...</span> : null}
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", marginTop: 1 }}>
+              CTEM Refresh Interval — min. 1 hour
+            </div>
           </div>
         </div>
-        {activeJob && (
-          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#00e5a0", animation: "pulse 2s infinite" }}/>
-            <span style={{ color: "rgba(0,229,160,0.6)", fontSize: 10, fontFamily: "monospace" }}>ACTIVE</span>
-          </div>
+
+        {/* Status badge — shows current state clearly */}
+        {!loading && (
+          activeJob && enabled ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.2)", borderRadius: 4, padding: "4px 10px" }}>
+              <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#00e5a0", boxShadow: "0 0 6px #00e5a0" }}/>
+              <span style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>ACTIVE</span>
+            </div>
+          ) : !enabled && !activeJob ? (
+            <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 4, padding: "4px 10px" }}>
+              <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace" }}>DISABLED</span>
+            </div>
+          ) : null
         )}
       </div>
 
+      {/* Active job details banner — shown when a job is running */}
+      {activeJob && enabled && !loading && (
+        <div style={{ background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.12)", borderRadius: 4, padding: "10px 14px", marginBottom: 14, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+          <div>
+            <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 3 }}>DOMAIN</div>
+            <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 11, fontFamily: "monospace" }}>{activeJob.params?.domain || domain || "—"}</div>
+          </div>
+          <div>
+            <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 3 }}>INTERVAL</div>
+            <div style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>
+              {SYNC_INTERVALS.find(i => i.seconds === (activeJob.schedule?.seconds || intervalSec))?.label || `${(activeJob.schedule?.seconds || intervalSec) / 3600}h`}
+            </div>
+          </div>
+          <div>
+            <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 3 }}>SCAN TYPE</div>
+            <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 11, fontFamily: "monospace" }}>{(activeJob.params?.scan_type || scanType || "standard").toUpperCase()}</div>
+          </div>
+          {nextRunLabel && (
+            <div style={{ gridColumn: "1 / -1", borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: 8 }}>
+              <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace" }}>NEXT RUN: </span>
+              <span style={{ color: "rgba(0,229,160,0.6)", fontSize: 10, fontFamily: "monospace" }}>{nextRunLabel}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Interval selector — shown when toggled on */}
       {enabled && (
         <>
           <div style={{ marginBottom: 14 }}>
-            <label style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", display: "block", marginBottom: 8 }}>Refresh Interval</label>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            <label style={{ color: "rgba(255,255,255,0.4)", fontSize: 10, letterSpacing: "1.2px", fontFamily: "monospace", display: "block", marginBottom: 8 }}>REFRESH INTERVAL</label>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {SYNC_INTERVALS.map(iv => (
                 <button key={iv.seconds} onClick={() => setIntervalSec(iv.seconds)}
-                  style={{
-                    padding: "5px 12px", borderRadius: 3, fontSize: 11, fontFamily: "monospace", cursor: "pointer",
-                    background: intervalSec === iv.seconds ? "rgba(0,229,160,0.15)" : "rgba(255,255,255,0.04)",
+                  style={{ background: intervalSec === iv.seconds ? "rgba(0,229,160,0.15)" : "rgba(255,255,255,0.03)",
+                    color: intervalSec === iv.seconds ? "#00e5a0" : "rgba(255,255,255,0.4)",
                     border: `1px solid ${intervalSec === iv.seconds ? "rgba(0,229,160,0.4)" : "rgba(255,255,255,0.08)"}`,
-                    color: intervalSec === iv.seconds ? "#00e5a0" : "rgba(255,255,255,0.45)",
-                    outline: "none",
-                  }}>
+                    borderRadius: 3, padding: "5px 10px", fontSize: 11, fontFamily: "monospace", cursor: "pointer" }}>
                   {iv.label}
                 </button>
               ))}
             </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "rgba(0,0,0,0.2)", borderRadius: 3, marginBottom: 14 }}>
-            <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>NEXT SCAN TYPE</span>
-            <span style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase" }}>{scanType}</span>
-            <span style={{ color: "rgba(255,255,255,0.15)", fontSize: 10, fontFamily: "monospace", marginLeft: "auto" }}>domain: {domain}</span>
-          </div>
         </>
       )}
 
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <button onClick={saveSync} disabled={saving}
-          style={{ background: enabled ? "rgba(0,229,160,0.1)" : "rgba(255,255,255,0.04)", color: enabled ? "#00e5a0" : "rgba(255,255,255,0.3)", border: `1px solid ${enabled ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.08)"}`, borderRadius: 3, padding: "7px 16px", fontSize: 11, fontFamily: "monospace", fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", letterSpacing: "0.5px", opacity: saving ? 0.5 : 1 }}>
-          {saving ? "Saving..." : enabled ? "Apply Sync" : "Save (Disabled)"}
+      {/* Save button + status */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <button onClick={saveSync} disabled={saving || loading || !domain}
+          style={{ background: enabled ? "rgba(0,229,160,0.12)" : "rgba(255,59,59,0.08)",
+            color: enabled ? "#00e5a0" : "#ff6b6b",
+            border: `1px solid ${enabled ? "rgba(0,229,160,0.3)" : "rgba(255,59,59,0.2)"}`,
+            borderRadius: 4, padding: "8px 16px", fontSize: 11, fontFamily: "monospace",
+            fontWeight: 700, cursor: (saving || loading || !domain) ? "not-allowed" : "pointer",
+            opacity: (saving || loading || !domain) ? 0.5 : 1 }}>
+          {saving ? "Saving..." : loading ? "Checking..." : enabled ? "Save Sync Settings" : "Disable Sync"}
         </button>
         {statusMsg && (
-          <span style={{ color: statusMsg.startsWith("Error") ? "#ff6b6b" : "rgba(0,229,160,0.6)", fontSize: 11, fontFamily: "monospace" }}>{statusMsg}</span>
+          <span style={{ color: statusMsg.startsWith("Error") ? "#ff6b6b" : "rgba(0,229,160,0.6)", fontSize: 11, fontFamily: "monospace" }}>
+            {statusMsg}
+          </span>
         )}
       </div>
+
+      {!domain && (
+        <div style={{ marginTop: 8, color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+          Enter a domain above to configure Continuous Sync.
+        </div>
+      )}
     </div>
   );
 }

@@ -612,35 +612,59 @@ async def find_secrets_in_js(url: str, session: aiohttp.ClientSession) -> List[D
 
 async def analyze_exposed_paths(domain: str, session: aiohttp.ClientSession, schemes: List[str]) -> List[Dict[str, Any]]:
     paths = set(EXPOSED_PATHS)
-    for scheme in schemes:
-        for file in ["/robots.txt", "/sitemap.xml"]:
-            try:
-                async with session.get(f"{scheme}://{domain}{file}", timeout=10) as resp:
-                    if resp.status == 200:
-                        text = await resp.text()
-                        if "robots" in file:
-                            paths.update(re.findall(r"Disallow:\s*([^\s#]+)", text))
-                        elif "sitemap" in file:
-                            paths.update(re.findall(r"<loc>[^<]*" + re.escape(domain) + r"([^<]+)</loc>", text))
-            except Exception:
-                pass
+    # Only probe HTTPS for path discovery — HTTP is redundant and doubles findings
+    for file in ["/robots.txt", "/sitemap.xml"]:
+        try:
+            async with session.get(f"https://{domain}{file}", timeout=10) as resp:
+                if resp.status == 200:
+                    text = await resp.text()
+                    if "robots" in file:
+                        paths.update(re.findall(r"Disallow:\s*([^\s#]+)", text))
+                    elif "sitemap" in file:
+                        paths.update(re.findall(r"<loc>[^<]*" + re.escape(domain) + r"([^<]+)</loc>", text))
+        except Exception:
+            pass
 
     results = []
 
     async def check(p):
         p = p.rstrip("/") + "/"
-        for s in schemes:
-            url = f"{s}://{domain}{p}"
-            try:
-                async with session.head(url, timeout=8) as resp:
-                    if resp.status in [200, 301, 401, 403]:
-                        sev = "Critical" if any(x in p for x in [".env", ".git", "backup", "admin", "config"]) else "High"
-                        results.append({"path": p, "url": url, "status": resp.status, "severity": sev})
-            except Exception:
-                pass
+        # HTTPS only — HTTP is always a redirect to HTTPS, not a separate surface
+        url = f"https://{domain}{p}"
+        try:
+            async with session.head(url, allow_redirects=False, timeout=8) as resp:
+                # Only 200 and 401/403 are meaningful — 301 means "nothing here, go to HTTPS"
+                if resp.status not in (200, 401, 403):
+                    return
+                # Content-type gate: sensitive files (.git, .env, db.dump) should NOT
+                # return text/html. A text/html 200 is almost certainly a SPA soft-404.
+                content_type = resp.headers.get("content-type", "").lower()
+                is_sensitive = any(x in p for x in [".env", ".git", "db.dump", "backup", "config"])
+                if is_sensitive and "text/html" in content_type:
+                    # Likely SPA soft-404 — do a GET to check content signature before flagging
+                    try:
+                        async with session.get(url, allow_redirects=False, timeout=8) as get_resp:
+                            if get_resp.status != 200:
+                                return
+                            ct = get_resp.headers.get("content-type", "").lower()
+                            if "text/html" in ct:
+                                return  # Still HTML -> soft-404, skip entirely
+                    except Exception:
+                        return
+                sev = "Critical" if any(x in p for x in [".env", ".git", "backup", "admin", "config"]) else "High"
+                results.append({"path": p, "url": url, "status": resp.status, "severity": sev})
+        except Exception:
+            pass
 
     await asyncio.gather(*[check(p) for p in paths])
-    return sorted(results, key=lambda x: (x["severity"] == "Critical", x["severity"] == "High"), reverse=True)[:50]
+    # Deduplicate by path — keep highest-severity entry per unique path
+    seen_paths = {}
+    for r in results:
+        key = r["path"]
+        if key not in seen_paths or (r["severity"] == "Critical" and seen_paths[key]["severity"] != "Critical"):
+            seen_paths[key] = r
+    deduped = sorted(seen_paths.values(), key=lambda x: (x["severity"] == "Critical", x["severity"] == "High"), reverse=True)
+    return deduped[:50]
 
 
 async def discover_api_endpoints(domain: str, session: aiohttp.ClientSession, schemes: List[str]) -> List[str]:

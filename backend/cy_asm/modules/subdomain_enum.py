@@ -4,6 +4,8 @@ import asyncio
 import re
 import json
 import os
+import time
+from pathlib import Path
 from typing import List, Set, Dict, Any
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
@@ -11,6 +13,9 @@ from bs4 import BeautifulSoup
 import dns.asyncresolver
 
 from config import HTTP_TIMEOUT, BRUTE_FORCE_WORDLIST, SECURITYTRAILS_API_KEY, VIRUSTOTAL_API_KEY
+
+_CRTSH_CACHE_DIR = Path("/var/log/cycentra/cy-asm/state/crtsh_cache")
+_CRTSH_CACHE_TTL = 21600  # 6 hours in seconds
 async def get_subdomains_securitytrails(domain: str, session: aiohttp.ClientSession) -> List[str]:
     if not SECURITYTRAILS_API_KEY:
         return []
@@ -59,35 +64,69 @@ logger = setup_logging()
 
 
 async def get_subdomains_crtsh(domain: str, session: aiohttp.ClientSession) -> List[str]:
+    """Query crt.sh with 3-attempt retry + 6h on-disk cache."""
+    # Check cache first
+    _CRTSH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_file = _CRTSH_CACHE_DIR / f"{domain}.json"
+    if cache_file.exists():
+        try:
+            cached = json.loads(cache_file.read_text())
+            if time.time() - cached.get("ts", 0) < _CRTSH_CACHE_TTL:
+                logger.info(f"[crtsh] Cache hit for {domain} — {len(cached['subs'])} subdomains")
+                return cached["subs"]
+        except Exception:
+            pass
+
     subdomains: Set[str] = set()
-    # Use exact match + wildcard exclusion of known test domains
     url = f"https://crt.sh/?q=%.{domain}&output=json"
-    try:
-        async with session.get(url, timeout=HTTP_TIMEOUT + 15) as resp:
-            if resp.status != 200:
-                return []
-            data = await resp.json()
-            target = f".{domain}"
-            for entry in data:
-                # crt.sh name_value can contain multiple SANs separated by \n
-                # (one certificate can cover many subdomains — must split each line)
-                raw_names = entry.get("name_value", "").strip().splitlines()
-                for name in raw_names:
-                    name = name.strip()
-                    if not name:
-                        continue
-                    # Strict filter: must end exactly with .domain or be domain itself
-                    # AND must NOT contain "example." or other known test domains
-                    if name.lower().endswith(target) or name.lower() == domain:
-                        if "example." not in name.lower() and "test." not in name.lower():
-                            clean = name.lstrip("*.").split("@")[0]  # remove wildcard & email
-                            if clean.endswith(f".{domain}"):
-                                subdomains.add(clean)
-                            elif clean == domain:
-                                subdomains.add(domain)
-    except Exception as e:
-        logger.debug(f"crt.sh failed for {domain}: {e}")
-    return sorted(subdomains)
+
+    for attempt in range(3):
+        try:
+            timeout = aiohttp.ClientTimeout(total=30 + attempt * 15)  # 30s, 45s, 60s
+            async with session.get(url, timeout=timeout) as resp:
+                if resp.status != 200:
+                    logger.debug(f"[crtsh] HTTP {resp.status} for {domain} (attempt {attempt+1})")
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                text = await resp.text()
+                data = json.loads(text)
+                target = f".{domain}"
+                for entry in data:
+                    # crt.sh name_value can contain multiple SANs separated by \n
+                    # (one certificate can cover many subdomains — must split each line)
+                    raw_names = entry.get("name_value", "").strip().splitlines()
+                    for name in raw_names:
+                        name = name.strip()
+                        if not name:
+                            continue
+                        if name.lower().endswith(target) or name.lower() == domain:
+                            if "example." not in name.lower() and "test." not in name.lower():
+                                clean = name.lstrip("*.").split("@")[0]
+                                if clean.endswith(f".{domain}"):
+                                    subdomains.add(clean)
+                                elif clean == domain:
+                                    subdomains.add(domain)
+                logger.info(f"[crtsh] {len(subdomains)} subdomains for {domain} (attempt {attempt+1})")
+                break  # success — stop retrying
+        except asyncio.TimeoutError:
+            logger.warning(f"[crtsh] Timeout for {domain} (attempt {attempt+1}/3)")
+            if attempt < 2:
+                await asyncio.sleep(2 ** attempt)
+        except Exception as e:
+            logger.debug(f"[crtsh] Failed for {domain} (attempt {attempt+1}): {e}")
+            if attempt < 2:
+                await asyncio.sleep(2 ** attempt)
+
+    result = sorted(subdomains)
+
+    # Write cache only if we got results
+    if result:
+        try:
+            cache_file.write_text(json.dumps({"ts": time.time(), "subs": result}))
+        except Exception:
+            pass
+
+    return result
 
 async def get_subdomains_misp(domain: str, session: aiohttp.ClientSession) -> List[str]:
     """
