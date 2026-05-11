@@ -14,6 +14,19 @@
 
 ---
 
+## v1.0.403 — Fix close/resolve incident action via CyMind chat — 2026-05-11
+
+### Bug Fixes
+
+- **Agentic close-incident action**: Fixed silent failure where "close incident" appeared to succeed in the CyMind chat overlay but the incident status remained `investigating` in the database. Root causes addressed:
+  - Backend now pre-fetches the current incident status before attempting the `→ resolved` transition. This provides an accurate `from_status` in the audit trail and surfaces a clear "not found" error if the incident ID doesn't exist.
+  - Engine error responses (non-2xx) now pass their `detail` message back to the chat UI instead of being silently swallowed — analysts will see "Could not transition INC-XXXXX: transition not allowed from current state" rather than a false success.
+  - The `mark_false_positive` action received the same hardening (pre-fetch + error surfacing).
+- **Incidents list now refreshes immediately**: After the analyst clicks Execute on a close/FP/reopen action card in the CyMind chat overlay, a `cycentra:incident-updated` browser event is dispatched. `SiemIncidentsPage` listens for this event and calls `fetchIncidents()` immediately so the status change is visible without waiting for the 30-second polling cycle.
+- **Anti-hallucination guard extended**: The SIEM context system prompt now explicitly instructs CyMind not to claim it has closed, resolved, blocked, quarantined, or marked any incident/asset **unless the user has already clicked Execute** on a confirmation card. This prevents CyMind from saying "I've closed the incident" before the action is actually confirmed and executed.
+
+---
+
 ## v1.0.402 — Fix INC-ID lookup + ASM/SIEM incident format alignment — 2026-05-11
 
 ### Bug Fixes
