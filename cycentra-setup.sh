@@ -1341,6 +1341,24 @@ SIEMEOF
     chmod 600 /opt/cycentra/cysiemstack.env
     success "cysiemstack.env written → /opt/cycentra/cysiemstack.env"
 
+    # Propagate Wazuh credentials to Flask env so the benchmark engine can
+    # reach Wazuh directly.  Flask (cycentra-backend.service) uses
+    # EnvironmentFile=/opt/cycentra/.env while the correlation engine uses
+    # EnvironmentFile=/opt/cycentra/cysiemstack.env — without this line the
+    # benchmark blueprint cannot obtain a Wazuh token even when Wazuh is running.
+    if grep -q "^WAZUH_API_PASSWORD=" /opt/cycentra/.env 2>/dev/null; then
+        sed -i "s|^WAZUH_API_PASSWORD=.*|WAZUH_API_PASSWORD=${_WAZUH_PASS}|" /opt/cycentra/.env
+    else
+        echo "WAZUH_API_PASSWORD=${_WAZUH_PASS}" >> /opt/cycentra/.env
+    fi
+    if grep -q "^WAZUH_API_URL=" /opt/cycentra/.env 2>/dev/null; then
+        sed -i "s|^WAZUH_API_URL=.*|WAZUH_API_URL=https://127.0.0.1:55000|" /opt/cycentra/.env
+    else
+        echo "WAZUH_API_URL=https://127.0.0.1:55000" >> /opt/cycentra/.env
+        echo "WAZUH_API_USER=wazuh-wui"              >> /opt/cycentra/.env
+    fi
+    success "WAZUH_API_PASSWORD propagated to /opt/cycentra/.env (benchmark engine access)"
+
     # Create ML model persistence directory
     mkdir -p /opt/cycentra/ml_models
     chmod 755 /opt/cycentra/ml_models

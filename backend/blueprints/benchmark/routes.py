@@ -424,36 +424,49 @@ def _collect_compliance_score() -> dict:
     except Exception:
         pass   # table not yet created — fall through silently
 
-    latest = _latest_asm_scan_file()
-    if latest:
-        try:
-            data     = json.loads(latest.read_text())
-            findings = (data.get("findings") or data.get("all_findings") or [])
-            if not findings:
-                assets   = data.get("assets") or []
-                findings = [v for a in assets for v in (a.get("vulnerabilities") or [])]
-            critical = sum(1 for f in findings if str(f.get("severity","")).lower() == "critical")
-            high     = sum(1 for f in findings if str(f.get("severity","")).lower() == "high")
-            score    = max(15, min(85, round(100 - (critical * 8) - (high * 3))))
-            return {
-                "score":  score, "stale": True,
-                "detail": "Estimated from ASM findings (CyComp not yet installed)",
-            }
-        except Exception:
-            pass
-    return {"score": None, "stale": False,
-            "detail": "CyComp not installed — enable for accurate compliance scoring"}
+    # CyComp is not installed.  Do NOT fall back to ASM scan findings:
+    # those findings already drive the ASM dimension score (weight 20%).
+    # Re-using them here would count the same CVE data in two separate
+    # CSPI dimensions and artificially depress the composite score.
+    # Return None so this dimension is omitted from the weighted average
+    # until CyComp is installed and the cy_compliance_controls table exists.
+    return {
+        "score":  None,
+        "stale":  False,
+        "detail": "CyComp not installed — compliance score unavailable. "
+                  "Install the CyComp module for NIS2 / ISO 27001 / DORA coverage scoring.",
+    }
 
 
 # ── 4. Vulnerability Management (enterprise-grade) ────────────────────────────
 
 def _wazuh_token() -> Optional[str]:
-    """Obtain a Wazuh API JWT using Basic auth. Returns None on failure."""
-    if not _WAZUH_API_PASS:
+    """
+    Obtain a Wazuh API JWT using Basic auth. Returns None on failure.
+
+    Credential resolution (first non-empty wins):
+      1. WAZUH_API_PASSWORD env var (set in /opt/cycentra/.env for Flask)
+      2. WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env
+         (the correlation engine's EnvironmentFile — always has the password)
+
+    This two-source lookup ensures the benchmark engine can reach Wazuh
+    regardless of which EnvironmentFile the systemd unit uses.
+    """
+    wazuh_pass = _WAZUH_API_PASS
+    wazuh_user = _WAZUH_API_USER
+
+    # Fallback: read from cysiemstack.env (same source the correlation engine uses)
+    if not wazuh_pass:
+        siem_env   = _read_cysiemstack_env()
+        wazuh_pass = siem_env.get("WAZUH_API_PASSWORD", "").strip()
+        wazuh_user = wazuh_user or siem_env.get("WAZUH_API_USER", "wazuh-wui")
+
+    if not wazuh_pass:
+        log.debug("[benchmark] WAZUH_API_PASSWORD not found in env or cysiemstack.env")
         return None
     try:
         creds = base64.b64encode(
-            f"{_WAZUH_API_USER}:{_WAZUH_API_PASS}".encode()
+            f"{wazuh_user}:{wazuh_pass}".encode()
         ).decode()
         r = _req.get(
             f"{_WAZUH_API_URL}/security/user/authenticate",
@@ -512,8 +525,10 @@ def _collect_wazuh_vuln_subscore(token: str) -> tuple[Optional[float], str]:
         agent_id = agent.get("id")
         if not agent_id:
             continue
+        # status=Active filters out already-patched CVEs (Solved/Inactive).
+        # Wazuh vulnerability detector status values: Active | Solved | Inactive.
         vuln_data = _wazuh_get(f"/vulnerability/{agent_id}", token,
-                               {"limit": 500, "select": "severity"})
+                               {"limit": 500, "select": "severity", "status": "Active"})
         if not vuln_data:
             continue
         for vuln in vuln_data.get("data", {}).get("affected_items", []):
@@ -702,35 +717,17 @@ def _collect_vuln_score() -> dict:
             weight_sum   += w
 
     if weight_sum == 0:
-        # All Wazuh sub-scores failed — fall back to ASM heuristic
-        latest = _latest_asm_scan_file()
-        if latest:
-            try:
-                data     = json.loads(latest.read_text())
-                findings = data.get("findings") or data.get("all_findings") or []
-                if not findings:
-                    assets   = data.get("assets") or []
-                    findings = [v for a in assets for v in (a.get("vulnerabilities") or [])]
-                score = 100.0
-                for f in findings:
-                    sev  = str(f.get("severity","")).lower()
-                    epss = float(f.get("epss", 0.1))
-                    if sev == "critical": score -= 10 + (epss * 5)
-                    elif sev == "high":   score -= 5  + (epss * 2)
-                    elif sev == "medium": score -= 1.5
-                score = max(0, min(100, round(score)))
-                mtime = datetime.fromtimestamp(latest.stat().st_mtime, tz=timezone.utc)
-                stale = (datetime.now(timezone.utc) - mtime) > timedelta(hours=48)
-                return {
-                    "score":   score, "stale": stale,
-                    "detail":  "ASM fallback (Wazuh API unavailable) — configure WAZUH_API_PASSWORD",
-                    "sub_scores": sub_scores,
-                }
-            except Exception:
-                pass
-        return {"score": None, "stale": False,
-                "detail": "Wazuh API and ASM data both unavailable",
-                "sub_scores": sub_scores}
+        # Wazuh API is unavailable and no IRIS MTTR data exists.
+        # Do NOT fall back to ASM scan data: ASM findings are already captured
+        # in the ASM dimension (weight 20%).  Re-reading them here would create
+        # double-counting and inflate the CSPI with the same raw data twice.
+        return {
+            "score":      None,
+            "stale":      False,
+            "detail":     "Wazuh API unavailable — ensure WAZUH_API_PASSWORD is set in "
+                          "/opt/cycentra/cysiemstack.env and the Wazuh service is running.",
+            "sub_scores": sub_scores,
+        }
 
     # Normalise if some sub-scores were missing
     composite = round(weighted_sum / weight_sum)
@@ -950,11 +947,19 @@ def _collect_threat_intel_score() -> dict:
 def _collect_ext_benchmark_score(
     _pre_comp: Optional[dict] = None,
     _pre_asm:  Optional[dict] = None,
+    _asm_enabled:  bool = True,
+    _comp_enabled: bool = True,
 ) -> dict:
     """
     CIS Controls v8 / NIST CSF 2.0 alignment (0-100).
     Phase 1: weighted blend of compliance + ASM scores as a proxy.
     Phase 2: replace with bundled CIS JSON and nightly NVD/MITRE sync.
+
+    Source-overlap guard: if both ASM and Compliance dimensions are enabled
+    and independently scored, this dimension is suppressed to prevent their
+    data being re-weighted a second time inside the CSPI composite.
+    ext_benchmark only activates when one or both source dimensions are
+    disabled or unavailable (e.g. CyComp not installed, no ASM scan run).
 
     Accepts pre-computed results from the parallel collector run to avoid
     calling _collect_compliance_score / _collect_asm_score a second time.
@@ -962,9 +967,23 @@ def _collect_ext_benchmark_score(
     comp   = _pre_comp if _pre_comp is not None else _collect_compliance_score()
     asm    = _pre_asm  if _pre_asm  is not None else _collect_asm_score()
     comp_s, asm_s = comp.get("score"), asm.get("score")
+
+    # Source-overlap guard: both dimensions are active and scored independently.
+    # Allowing ext_benchmark to score here would re-weight the same data a
+    # second time — suppress it until one of the source dimensions is disabled.
+    if _asm_enabled and _comp_enabled and asm_s is not None and comp_s is not None:
+        return {
+            "score":  None,
+            "stale":  False,
+            "detail": "Suppressed — ASM and Compliance are both active. "
+                      "CIS/NIST would re-weight those same inputs. "
+                      "Enable only when one of the source dimensions is disabled.",
+        }
+
     if comp_s is None and asm_s is None:
         return {"score": None, "stale": False,
                 "detail": "Requires CyComp or an ASM scan"}
+
     weighted, w = 0.0, 0
     if comp_s is not None: weighted += comp_s * 0.6; w += 1
     if asm_s  is not None: weighted += asm_s  * 0.4; w += 1
@@ -1068,9 +1087,13 @@ def _compute_cspi(config: dict) -> dict:
         raw_results.setdefault(src_id, {"score": None, "stale": False, "detail": "Collector did not complete"})
 
     # ── ext_benchmark — reuse already-collected asm + compliance (no re-call) ─
+    # Pass enabled flags so the source-overlap guard can suppress ext_benchmark
+    # when both its source dimensions are active and independently scored.
     raw_results["ext_benchmark"] = _collect_ext_benchmark_score(
         _pre_comp=raw_results.get("compliance"),
         _pre_asm=raw_results.get("asm"),
+        _asm_enabled=sources.get("asm", {}).get("enabled", True),
+        _comp_enabled=sources.get("compliance", {}).get("enabled", True),
     )
 
     # ── Assemble breakdown ────────────────────────────────────────────────────
