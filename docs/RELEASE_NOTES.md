@@ -1,3 +1,11 @@
+## v1.0.397 -- 2026-05-11
+
+### Bug Fixes
+
+  - benchmark): eliminate double-counting and fix Wazuh data path
+
+---
+
 ## v1.0.396 -- 2026-05-11
 
 ### Improvements
