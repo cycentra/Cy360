@@ -62,13 +62,18 @@ If you observe a Standard scan scoring LOWER than a Deep scan, this indicates on
 
 These are fixed in v1.0.390+. Historical scan JSONs on disk will reflect the old (incorrect) scores until a rescan is performed.
 
-### Root causes fixed in v1.0.390
+### Root causes fixed in v1.0.390–v1.0.393
 
-| Bug | Root cause | Fix |
-|-----|-----------|-----|
-| `ssl_enabled=False` for working TLS | `chain_valid && san_valid` gated the flag; Python CA bundle rejects intermediate issuers | `ssl_enabled` now reflects TLS handshake success (`protocol` field populated), not cert quality |
-| False-positive Critical findings for `/.git/` and `/db.dump` | HTTP 200 was accepted at face value; CMS soft-404s return 200 for any path | Content-body verification added before assigning Critical/High; unverified paths demoted to Medium |
-| All module issue strings defaulted to Medium | `_normalise_issue()` hardcoded `"Medium"` for string issues | Keyword-based classifier `_classify_issue_severity()` maps advisory items to Low |
+| Bug | Root cause | Fix | Version |
+|-----|-----------|-----|---------|
+| `ssl_enabled=False` for working TLS | `chain_valid && san_valid` gated the flag; Python CA bundle rejects intermediate issuers | `ssl_enabled` now reflects TLS handshake success (`protocol` field populated), not cert quality | v1.0.390 |
+| False-positive Critical findings for `/.git/` and `/db.dump` | HTTP 200 was accepted at face value; CMS soft-404s return 200 for any path | Content-body verification added; unverified paths demoted to Medium | v1.0.390 |
+| All module issue strings defaulted to Medium | `_normalise_issue()` hardcoded `"Medium"` for string issues | Keyword-based classifier `_classify_issue_severity()` maps advisory items to Low | v1.0.390 |
+| `ADMIN_EXPOSED` / `DB_DUMP_EXPOSED` duplicate findings | `enrich_exposed_paths` created both verified Critical AND `_UNVERIFIED` Medium for the same path | Rebuilt as `seen: Dict[str, Dict]` keyed by CVE ref — exactly one finding per CVE | v1.0.392 |
+| crt.sh intermittent failures causing subdomain count variance | Single call, no retry, 25s timeout | 3-attempt retry with backoff (30s/45s/60s) + 6h on-disk cache | v1.0.392 |
+| `Weak key: 256 bits` false positive for ECDSA certs | Key-size check applied RSA 2048-bit minimum to all key types; ECDSA-256 ≈ RSA-3072 | Key-size check is now type-aware: RSA/DSA require ≥ 2048 bits; ECDSA requires ≥ 224 bits | v1.0.393 |
+| `SAN mismatch` / `No SANs present` false positives | `ssock.getpeercert()` returns empty dict with `ssl.CERT_NONE`; SANs appeared missing | SANs now read directly from OpenSSL cert object via `subjectAltName` extension | v1.0.393 |
+| `Chain validation failed: unable to get local issuer certificate` classified as Medium | Generic chain-validation pattern matched a scanner CA-bundle gap (not a real cert defect) | New Low-priority pattern for the specific error demotes it to informational | v1.0.393 |
 
 ## Customer FAQ
 
