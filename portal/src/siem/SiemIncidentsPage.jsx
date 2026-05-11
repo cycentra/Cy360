@@ -1116,6 +1116,14 @@ export function SiemIncidentsPage() {
     };
   }, [fetchIncidents]);
 
+  // Listen for agentic-action updates from the CyMind chat overlay so the
+  // Incidents table refreshes immediately after close/FP actions are confirmed
+  useEffect(() => {
+    const handler = () => fetchIncidents();
+    window.addEventListener("cycentra:incident-updated", handler);
+    return () => window.removeEventListener("cycentra:incident-updated", handler);
+  }, [fetchIncidents]);
+
   useEffect(() => { setCurrentPage(1); }, [filters]);
 
   const handleSort = (col) => {

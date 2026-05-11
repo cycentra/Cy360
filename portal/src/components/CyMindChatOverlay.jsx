@@ -257,6 +257,14 @@ export function CyMindChatOverlay({ onClose }) {
         ...prev,
         [msgIdx]: { status: "confirmed", result: data },
       }));
+      // If the action mutated an incident, signal other portal panels to refresh
+      if (data.success && msg.actionPending?.type &&
+          ["close_incident", "mark_false_positive", "bulk_close_false_positives",
+           "reopen_incident"].includes(msg.actionPending.type)) {
+        window.dispatchEvent(new CustomEvent("cycentra:incident-updated", {
+          detail: { action: msg.actionPending.type, new_status: data.new_status },
+        }));
+      }
       // Append result as a separate assistant message
       setMessages(prev => [
         ...prev,

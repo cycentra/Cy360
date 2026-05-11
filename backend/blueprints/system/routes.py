@@ -1827,7 +1827,13 @@ def _fetch_siem_context_block() -> str:
         " If the user asks about a specific user, host, or entity not visible in this"
         " snapshot, their data will be injected below (see 'Incidents for user/entity')."
         " If no such section appears, say you cannot find that entity in current data"
-        " — NEVER invent incidents.]",
+        " — NEVER invent incidents."
+        " IMPORTANT — ACTIONS: You MUST NOT say that you have closed, resolved,"
+        " blocked, quarantined, disabled, marked, or otherwise changed the state of"
+        " any incident, IP, user, or asset unless the user has already clicked"
+        " 'Execute' on a confirmation card and a success message was shown."
+        " If the user asks you to close/resolve/block/mark something, respond only"
+        " that you are preparing the action for confirmation — never claim it is done.]",
         "",
         "--- END LIVE SIEM DATA ---",
         "",
@@ -2511,23 +2517,39 @@ def _execute_agentic_action(action_type: str, params: dict, actor_email: str) ->
         if not inc_id:
             return {"success": False, "message": "Missing incident_id"}
         try:
+            # Fetch current status first so audit from_status is accurate
+            cur = http_requests.get(f"{engine}/incidents/{inc_id}", timeout=5)
+            if cur.status_code == 404:
+                return {"success": False,
+                        "message": f"Incident **{inc_id}** not found in the database."}
+            from_st = cur.json().get("status", "open") if cur.ok else "open"
+
             r = http_requests.post(
                 f"{engine}/incidents/{inc_id}/transition",
                 json={"to_status": "resolved", "comment": comment, "actor": actor_email},
                 timeout=_t,
             )
             if r.ok:
-                # Engine's /transition already writes its own audit entry; this is a
-                # supplemental proxy-level entry tagging the agentic source.
                 _write_action_audit(engine, inc_id, "status_change",
                                     comment=comment, actor=actor_email,
-                                    from_status="open", to_status="resolved",
+                                    from_status=from_st, to_status="resolved",
                                     extra={"source": "agentic_chat"})
+                updated = r.json()
                 return {"success": True,
-                        "message": f"Incident **{inc_id}** resolved.",
-                        "data": r.json()}
+                        "message": (
+                            f"Incident **{inc_id}** has been **resolved**. "
+                            f"Previous status was `{from_st}`. "
+                            "The Incidents list will refresh automatically."
+                        ),
+                        "data": updated,
+                        "new_status": updated.get("status", "resolved")}
+            # Surface the exact engine error so analysts know what went wrong
+            try:
+                detail = r.json().get("detail", r.text[:300])
+            except Exception:
+                detail = r.text[:300]
             return {"success": False,
-                    "message": f"Engine returned HTTP {r.status_code}: {r.text[:200]}"}
+                    "message": f"Could not transition {inc_id}: {detail}"}
         except Exception as e:
             return {"success": False, "message": f"Could not reach engine: {e}"}
 
@@ -2538,6 +2560,12 @@ def _execute_agentic_action(action_type: str, params: dict, actor_email: str) ->
         if not inc_id:
             return {"success": False, "message": "Missing incident_id"}
         try:
+            cur = http_requests.get(f"{engine}/incidents/{inc_id}", timeout=5)
+            if cur.status_code == 404:
+                return {"success": False,
+                        "message": f"Incident **{inc_id}** not found in the database."}
+            from_st = cur.json().get("status", "open") if cur.ok else "open"
+
             r = http_requests.post(
                 f"{engine}/incidents/{inc_id}/transition",
                 json={"to_status": "false_positive", "comment": comment, "actor": actor_email},
@@ -2546,13 +2574,23 @@ def _execute_agentic_action(action_type: str, params: dict, actor_email: str) ->
             if r.ok:
                 _write_action_audit(engine, inc_id, "status_change",
                                     comment=comment, actor=actor_email,
-                                    from_status="open", to_status="false_positive",
+                                    from_status=from_st, to_status="false_positive",
                                     extra={"source": "agentic_chat"})
+                updated = r.json()
                 return {"success": True,
-                        "message": f"Incident **{inc_id}** marked as false positive.",
-                        "data": r.json()}
+                        "message": (
+                            f"Incident **{inc_id}** marked as **false positive**. "
+                            f"Previous status was `{from_st}`. "
+                            "The Incidents list will refresh automatically."
+                        ),
+                        "data": updated,
+                        "new_status": updated.get("status", "false_positive")}
+            try:
+                detail = r.json().get("detail", r.text[:300])
+            except Exception:
+                detail = r.text[:300]
             return {"success": False,
-                    "message": f"Engine returned HTTP {r.status_code}: {r.text[:200]}"}
+                    "message": f"Could not transition {inc_id}: {detail}"}
         except Exception as e:
             return {"success": False, "message": f"Could not reach engine: {e}"}
 
