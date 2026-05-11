@@ -1,3 +1,11 @@
+## v1.0.392 -- 2026-05-11
+
+### New Features
+
+  - asm): eliminate false-positive path exposures, dedup vuln findings, add crt.sh retry+cache, redesign CTEMSyncPanel
+
+---
+
 ## v1.0.391 -- 2026-05-10
 
 ### Bug Fixes
