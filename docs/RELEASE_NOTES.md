@@ -1,8 +1,26 @@
 ## v1.0.403 -- 2026-05-11
 
+### New Features
+
+  - **CySIEM role-aware SSO — admin/analyst vs viewer differentiation**: Wazuh Dashboard auto-login now reflects the logged-in user's Cy360 RBAC role, replacing the previous single shared-credential approach (all users logged into Wazuh as the same admin service account).
+
+    **Architecture change — nginx siem-gate auth_request**:
+    - `auth_request /oauth2/auth` (static IAP gate) replaced with `auth_request /siem-gate` pointing to a new Flask endpoint `GET /api/siem/internal/auth`.
+    - Flask validates the Cy360 session cookie forwarded by nginx in the sub-request, looks up the user's RBAC role, and returns `X-Wazuh-Auth: Basic <credential>` in the response header.
+    - nginx captures the header via `auth_request_set $wazuh_auth $upstream_http_x_wazuh_auth` and injects it as `proxy_set_header Authorization $wazuh_auth` for the upstream Wazuh Dashboard request.
+    - `401` from Flask → nginx `error_page 401 = @error401` → redirect to Cy360 login.
+
+    **Role mapping**:
+    - `admin` / `analyst` → `cy360_sso` OpenSearch account (`backend_roles: [admin]`) — full Wazuh Dashboard access.
+    - `viewer` / any other → `cy360_readonly` OpenSearch account (`backend_roles: [kibana_user, wazuh_ui_user]`) — read-only Wazuh access.
+
+    **New OpenSearch service account**: `cy360_readonly` (password: `CyCentra360!ReadOnly`, hash: `$2y$12$0Tim1grS5kbbBdG20PFsF...`). Created via `securityadmin.sh` in `cycentra-setup.sh` Step 7. Idempotent — skipped if already present.
+
+    **Files changed**: `backend/siem_proxy.py` (new `GET /api/siem/internal/auth` endpoint + `_WAZUH_ADMIN_BASIC`/`_WAZUH_RO_BASIC` module constants), `cycentra-setup.sh` (cy360_readonly user creation, nginx template updated, idempotent migration for existing installs).
+
 ### Bug Fixes
 
-  - chat): close/resolve incident action now pre-fetches current status, surfaces engine errors, and refreshes Incidents list on success (v1.0.403
+  - **chat**: close/resolve incident action now pre-fetches current status, surfaces engine errors, and refreshes Incidents list on success.
 
 ---
 
