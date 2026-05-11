@@ -2554,8 +2554,8 @@ function SchedulerTab() {
   if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
   if (!schedules) return <div style={{ color: "#ff3b3b", fontFamily: "monospace", fontSize: 12 }}>Failed to load schedules.</div>;
 
-  const taskOrder = ["docker_maintenance", "asm_wordlist", "asm_scan", "backup"];
-  const TASK_ICONS = { docker_maintenance: "🐳", asm_wordlist: "📝", asm_scan: "🔍", backup: "💾" };
+  const taskOrder = ["docker_maintenance", "backup"];
+  const TASK_ICONS = { docker_maintenance: "🐳", backup: "💾" };
 
   return (
     <div style={{ maxWidth: 860 }}>

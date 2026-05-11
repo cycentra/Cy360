@@ -133,6 +133,67 @@ def _remove_job_from_store(job_id: str) -> bool:
     return True
 
 
+# ── Wordlist auto-sync helper ─────────────────────────────────────────────────
+
+# Fixed ID for the wordlist auto-refresh job that mirrors Continuous Sync interval.
+_WORDLIST_AUTOSYNC_ID = "asm_wordlist_autosync"
+
+
+def _sync_wordlist_schedule(interval_seconds: int | None) -> None:
+    """Upsert or remove the auto-wordlist-refresh job.
+
+    Called whenever a Continuous Sync (asm_scan interval) job is created,
+    deleted, or enabled/disabled so the subdomain wordlist stays current on
+    the same cadence as the scans that consume it.
+
+    Pass ``None`` to remove the job (no active Continuous Sync jobs remain).
+    """
+    if interval_seconds is None:
+        _remove_job_from_store(_WORDLIST_AUTOSYNC_ID)
+        if _scheduler and _scheduler_owner:
+            try:
+                _scheduler.remove_job(_WORDLIST_AUTOSYNC_ID)
+            except Exception:
+                pass
+        log.info("wordlist_autosync_removed: no active Continuous Sync jobs")
+        return
+
+    wl_job = {
+        "id":         _WORDLIST_AUTOSYNC_ID,
+        "type":       "asm_wordlist",
+        "name":       "ASM Wordlist Auto-Sync (Continuous Sync)",
+        "enabled":    True,
+        "params":     {"log": "/var/log/cycentra/wordlist-update.log"},
+        "schedule":   {"type": "interval", "seconds": interval_seconds},
+        "created_by": "system",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "last_run":   None,
+        "next_run":   None,
+    }
+    _upsert_job(wl_job)
+    if _scheduler and _scheduler_owner:
+        _add_to_apscheduler(_scheduler, wl_job)
+    log.info("wordlist_autosync_updated interval_seconds=%d", interval_seconds)
+
+
+def _recalc_wordlist_schedule() -> None:
+    """Recompute the wordlist auto-sync interval from all remaining active
+    Continuous Sync jobs and call _sync_wordlist_schedule accordingly.
+    Uses the shortest (most frequent) interval so the wordlist is never stale."""
+    active = [
+        j for j in _load_jobs()
+        if j.get("type") == "asm_scan"
+        and j.get("enabled", True)
+        and j.get("schedule", {}).get("type") == "interval"
+        and j.get("id") != _WORDLIST_AUTOSYNC_ID
+    ]
+    if active:
+        min_sec = min(int(j["schedule"].get("seconds", 3600)) for j in active)
+        _sync_wordlist_schedule(min_sec)
+    else:
+        _sync_wordlist_schedule(None)
+
+
 # ── Scheduler init (called once per worker; only one acquires lock) ────────────
 
 def _run_command(command: str, log_path: str):
@@ -439,6 +500,10 @@ def scheduler_jobs_create():
         sj = _scheduler.get_job(job["id"])
         job["next_run"] = sj.next_run_time.isoformat() if sj and sj.next_run_time else None
 
+    # Auto-sync the wordlist refresh to the same interval as Continuous Sync
+    if stype == "interval":
+        _sync_wordlist_schedule(int(schedule.get("seconds", 3600)))
+
     log.info("scheduler_job_created id=%s name=%s by=%s", job["id"], job["name"], actor_email)
     return jsonify(job), 201
 
@@ -449,6 +514,10 @@ def scheduler_jobs_delete(job_id):
     if err:
         return err
 
+    # Load job before removal so we can inspect its type/schedule
+    all_jobs  = _load_jobs()
+    dying_job = next((j for j in all_jobs if j.get("id") == job_id), None)
+
     removed = _remove_job_from_store(job_id)
     if not removed:
         return jsonify({"error": "Job not found"}), 404
@@ -458,6 +527,12 @@ def scheduler_jobs_delete(job_id):
             _scheduler.remove_job(job_id)
         except Exception:
             pass
+
+    # If a Continuous Sync (asm_scan interval) job was deleted, recalculate
+    # the wordlist auto-sync — use shortest remaining interval or remove it.
+    if dying_job and dying_job.get("type") == "asm_scan" \
+            and dying_job.get("schedule", {}).get("type") == "interval":
+        _recalc_wordlist_schedule()
 
     log.info("scheduler_job_deleted id=%s by=%s", job_id, session.get("user_email"))
     return jsonify({"deleted": job_id})
@@ -487,6 +562,11 @@ def scheduler_jobs_patch(job_id):
                     _scheduler.remove_job(job_id)
                 except Exception:
                     pass
+
+        # Recalculate wordlist auto-sync when a Continuous Sync job is toggled
+        if job.get("type") == "asm_scan" \
+                and job.get("schedule", {}).get("type") == "interval":
+            _recalc_wordlist_schedule()
 
     return jsonify(job)
 
