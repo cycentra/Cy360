@@ -1224,6 +1224,8 @@ def main():
         import re as _re
         _ISSUE_SEVERITY_RE = [
             # (pattern, severity)
+            # Specific: scanner CA bundle gap — local issuer not in bundle, TLS may still be valid
+            (r"unable.to.get.local.issuer|local.issuer.certificate",          "Low"),
             (r"chain.invalid|chain.validation.fail|trust.chain",              "Medium"),
             (r"san.mismatch|no.*subject.alt|san.*not.covered|not covered by", "Medium"),
             (r"email.spoofing.risk.*high|spoofing.*high",                     "High"),
