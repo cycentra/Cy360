@@ -1,8 +1,38 @@
-## v1.0.404 -- 2026-05-11
+## v1.0.405 -- 2026-05-11
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.404 -- 2026-05-12
+
+### New Features
+
+  - **CySIEM OIDC SSO — individual user identity in Wazuh Dashboard**: Replaced the nginx siem-gate Basic Auth injection approach with native OIDC authentication in Wazuh Dashboard, giving each user their own identity instead of sharing a service account.
+
+    **Root cause of the previous limitation**: When a user authenticated via nginx Basic Auth injection, Wazuh Dashboard set a `security_authentication` session cookie (Iron-sealed, HttpOnly). On subsequent requests, Wazuh used the cookie session — ignoring the `Authorization` header entirely. All users therefore appeared as the shared `cy360_sso` service account regardless of which Cy360 role they held.
+
+    **Architecture — Wazuh OIDC via CyCentra IdP**:
+    - `opensearch_dashboards.yml` now uses `opensearch_security.auth.type: openid` pointing to `https://cyasm.DOMAIN/oidc/.well-known/openid-configuration`.
+    - The `cysiem` OIDC client (already registered in the CyCentra OIDC provider) issues RS256 ID tokens containing `email` (user identity) and `roles: ["admin"|"analyst"|"viewer"]` (Cy360 RBAC role).
+    - OpenSearch Security `config.yml` has a new `openid_auth_domain` (order: 0, `subject_key: email`, `roles_key: roles`) that maps the OIDC token roles claim to OpenSearch backend roles.
+    - SSO flow: user visits `cysiem.DOMAIN` → Wazuh Dashboard redirects to OIDC IdP → IdP checks existing Cy360 Flask session cookie (`.cycentra.com` domain, so shared across all subdomains) → issues auth code silently if logged in → Wazuh establishes individual session. No double login required.
+
+    **Role mapping in OpenSearch Security**:
+    - `all_access` backend_roles → `["admin", "analyst", "all_access"]` — full Wazuh Dashboard access.
+    - `kibana_user` backend_roles → `["viewer", "kibanauser"]` — read-only dashboard.
+    - `wazuh_ui_user` backend_roles → `["viewer", "wazuh_ui_user"]` — Wazuh UI panels.
+
+    **nginx cysiem block simplified**: Removed `auth_request /siem-gate`, `auth_request_set $wazuh_auth`, `location = /siem-gate`, and `proxy_set_header Authorization $wazuh_auth`. The cysiem server block now has a simple `location /` proxy_pass to `127.0.0.1:5601` with no auth_request gate — Wazuh Dashboard OIDC handles authentication end-to-end.
+
+    **`cycentra-setup.sh` changes**:
+    - Step 4.1: Now clears stale auth settings only (OIDC config applied later in step 4.3b).
+    - Step 4.3b: New `CySIEM OIDC Authentication` step: (1) writes OIDC settings to `opensearch_dashboards.yml` from `CYSIEM_OIDC_SECRET`; (2) idempotent Python script inserts `openid_auth_domain` block into `config.yml` (detects indent from `basic_internal_auth_domain`); (3) applies via `securityadmin.sh`; (4) updates `all_access`, `kibana_user`, `wazuh_ui_user` rolesmapping via REST API.
+    - Idempotent nginx migration: detects existing siem-gate blocks and removes them, replacing with simple proxy_pass.
+
+    **Files changed**: `cycentra-setup.sh` (step 4.1, step 4.3b, nginx cysiem template, idempotent migration), `docs/RELEASE_NOTES.md`.
 
 ---
 

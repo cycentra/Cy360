@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.404 -- 2026-05-11 23:20 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.405 -- 2026-05-11 23:53 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -634,10 +634,9 @@ if [[ -f "$WAZUH_YML" ]]; then
         fi
     fi
 
-    # ── Strip any leftover proxy auth settings (idempotent) ─────────────────
-    # Wazuh Dashboard uses basicauth mode — nginx injects cy360_sso Basic Auth
-    # credentials for all oauth2-proxy-gated requests, so no proxy auth config
-    # in opensearch_dashboards.yml is needed or wanted.
+    # ── Strip any stale auth settings (idempotent early cleanup) ────────────
+    # Clears proxy/OIDC/basicauth overrides so step 4.3b can write the canonical
+    # OIDC settings from scratch.  Runs before .env is available on fresh install.
     python3 - "$WAZUH_YML" << 'WAZUH_EARLY_PROXY_EOF'
 import sys
 path = sys.argv[1]
@@ -649,7 +648,7 @@ remove_prefixes = [
     "opensearch_security.proxycache.",
     "opensearch_security.openid.",
     "opensearch.requestHeadersAllowlist",
-    "# CyCentra 360 IAP proxy auth",
+    "# CyCentra 360",
     "# Authentication gate:",
     "# Wazuh trusts",
 ]
@@ -659,19 +658,16 @@ cleaned = "\n".join(
 ).rstrip() + "\n"
 with open(path, "w") as f:
     f.write(cleaned)
-print("Wazuh basicauth mode ensured — proxy auth settings removed if present")
+print("Stale auth settings removed — OIDC config will be applied in step 4.3b")
 WAZUH_EARLY_PROXY_EOF
 
     systemctl restart wazuh-dashboard 2>/dev/null || true
-    success "CySIEM Dashboard configured: host=127.0.0.1, port=5601, basicauth mode"
+    success "CySIEM Dashboard configured: host=127.0.0.1, port=5601 (OIDC settings applied in step 4.3b)"
 
 fi
 
-# ── Step 4.3: CySIEM proxy auth (IAP mode) ───────────────────────────────────
-# Wazuh Dashboard is gated by oauth2-proxy (auth_request in nginx).
-# Dashboard auth.type is set to "proxy" — it trusts X-Proxy-User from nginx.
-# This replaces the old OIDC + securityadmin.sh approach entirely.
-# Configured after .env is written (step 4.3b below).
+# ── Step 4.3: CySIEM Dashboard variable reference ────────────────────────────
+# OIDC auth is configured in step 4.3b after .env is available.
 _WAZUH_DASH_YML="/etc/wazuh-dashboard/opensearch_dashboards.yml"
 
 # ── Step 4.2: Auto-detect CySIEM API password ─────────────────────────────────
@@ -1366,14 +1362,13 @@ SIEMEOF
 
 fi  # end full env block
 
-# ── Step 4.3b: IAP Gateway — oauth2-proxy + Wazuh proxy auth ─────────────────
+# ── Step 4.3b: IAP Gateway + CySIEM OIDC ────────────────────────────────────
 # Runs in all modes (full / update). Idempotent.
-# oauth2-proxy: single OIDC gate for cyiris, cysoar, cysiem subdomains.
-# Wazuh: switches Dashboard to proxy auth mode (reads X-Proxy-User from nginx).
-# OpenSearch Security also needs proxy_auth_domain enabled and rolesmapping updated
-# (all_access backend role → all_access OpenSearch role) for Dashboard proxy auth to
-# work end-to-end.  Both are applied below via REST API (primary) and
-# securityadmin.sh (fallback).
+# oauth2-proxy: single OIDC gate for cyiris, cysoar subdomains.
+# Wazuh Dashboard: configured for native OIDC auth via cyasm.DOMAIN/oidc.
+#   - Individual user identity from OIDC token email claim
+#   - OpenSearch Security backend roles from OIDC token roles claim
+#   - admin/analyst → all_access; viewer → kibana_user + wazuh_ui_user
 
 step_header "IAP GATEWAY (oauth2-proxy)"
 
@@ -1385,6 +1380,8 @@ BASE_DOMAIN="${BASE_DOMAIN:-cycentra.com}"
     OAUTH2PROXY_SECRET=$(grep "^OAUTH2PROXY_SECRET=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2- || true)
 [[ -z "${OAUTH2PROXY_COOKIE_SECRET:-}" ]] && \
     OAUTH2PROXY_COOKIE_SECRET=$(grep "^OAUTH2PROXY_COOKIE_SECRET=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2- || true)
+[[ -z "${CYSIEM_OIDC_SECRET:-}" ]] && \
+    CYSIEM_OIDC_SECRET=$(grep "^CYSIEM_OIDC_SECRET=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2- || true)
 
 if [[ -z "$OAUTH2PROXY_SECRET" || -z "$OAUTH2PROXY_COOKIE_SECRET" ]]; then
     warn "oauth2-proxy secrets missing in .env — IAP setup skipped; re-run --update"
@@ -1443,18 +1440,21 @@ else
              ERRORS+=("oauth2-proxy failed to start"); }
     fi
 
-    # ── Wazuh Dashboard: ensure basicauth mode + cy360_sso SSO user ─────────────
-    # SSO mechanism: nginx injects Authorization: Basic <cy360_sso:pass> for all
-    # requests that pass the oauth2-proxy IAP gate. Wazuh stays in basicauth mode.
-    # cy360_sso is an OpenSearch admin user created below via REST API (idempotent).
+    # ── Wazuh Dashboard: configure OIDC authentication ───────────────────────────
+    # SSO mechanism: Wazuh Dashboard authenticates via the CyCentra OIDC IdP at
+    # cyasm.DOMAIN. Each user gets their individual identity; the `roles` OIDC
+    # claim maps to OpenSearch Security backend roles:
+    #   admin / analyst → all_access (full Wazuh Dashboard access)
+    #   viewer          → kibana_user + wazuh_ui_user (read-only)
     if [[ -f "$_WAZUH_DASH_YML" ]]; then
-        step_header "CySIEM SSO (nginx Basic Auth injection)"
-        cp "$_WAZUH_DASH_YML" "${_WAZUH_DASH_YML}.pre-iap-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+        step_header "CySIEM OIDC Authentication"
+        cp "$_WAZUH_DASH_YML" "${_WAZUH_DASH_YML}.pre-oidc-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
 
-        # Strip any leftover proxy auth config — keep dashboard in basicauth mode.
-        python3 - "$_WAZUH_DASH_YML" << 'WAZUH_PY_EOF'
+        # ── Inject OIDC settings into opensearch_dashboards.yml ─────────────────
+        if [[ -n "${CYSIEM_OIDC_SECRET:-}" ]]; then
+            python3 - "$_WAZUH_DASH_YML" "$CYSIEM_OIDC_SECRET" "$BASE_DOMAIN" << 'WAZUH_OIDC_PY'
 import sys
-path = sys.argv[1]
+path, secret, domain = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path, "rb") as f:
     raw = f.read().replace(b"\x00", b"")
 text = raw.decode("utf-8")
@@ -1463,34 +1463,45 @@ remove_prefixes = [
     "opensearch_security.proxycache.",
     "opensearch_security.openid.",
     "opensearch.requestHeadersAllowlist",
-    "# CyCentra 360 IAP proxy auth",
+    "# CyCentra 360",
     "# Authentication gate:",
     "# Wazuh trusts",
 ]
 cleaned = "\n".join(
     line for line in text.splitlines()
     if not any(line.strip().startswith(p) for p in remove_prefixes)
-).rstrip() + "\n"
+).rstrip()
+oidc = (
+    "\n# ── CyCentra 360 OIDC SSO ─────────────────────────────────────────────────────\n"
+    "opensearch_security.auth.type: openid\n"
+    f'opensearch_security.openid.connect_url: "https://cyasm.{domain}/oidc/.well-known/openid-configuration"\n'
+    'opensearch_security.openid.client_id: "cysiem"\n'
+    f'opensearch_security.openid.client_secret: "{secret}"\n'
+    'opensearch_security.openid.scope: "openid email profile"\n'
+    f'opensearch_security.openid.base_redirect_url: "https://cysiem.{domain}"\n'
+    f'opensearch_security.openid.logout_url: "https://cyasm.{domain}/auth/logout"\n'
+    "opensearch_security.openid.verify_hostnames: false\n"
+)
 with open(path, "w") as f:
-    f.write(cleaned)
-print("Wazuh basicauth mode confirmed — proxy/OIDC settings removed")
-WAZUH_PY_EOF
+    f.write(cleaned + oidc)
+print("Wazuh Dashboard OIDC settings applied")
+WAZUH_OIDC_PY
+            success "CySIEM Dashboard: OIDC settings written"
+        else
+            warn "CYSIEM_OIDC_SECRET not available — OIDC settings not written; re-run --update"
+        fi
 
-        # ── OpenSearch Security: create cy360_sso service account (idempotent) ──
-        # cy360_sso is an admin user whose credentials nginx injects via Basic Auth
-        # for every request that passes the oauth2-proxy IAP gate.  This is the SSO
-        # mechanism: one shared service account, gated by the oauth2-proxy cookie.
         _OS_SEC_CFG="/etc/wazuh-indexer/opensearch-security/config.yml"
         _CY_SEC_LOG="/var/log/cycentra/securityadmin.log"
         _CERT_DIR="/etc/wazuh-indexer/certs"
         _SEC_ADMIN="/usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh"
         _IU_YML="/etc/wazuh-indexer/opensearch-security/internal_users.yml"
-        _RM_YML="/etc/wazuh-indexer/opensearch-security/roles_mapping.yml"
         mkdir -p /var/log/cycentra 2>/dev/null || true
+
+        # ── Keep cy360_sso / cy360_readonly as internal users (legacy compat) ────
         if [[ -f "$_IU_YML" && -f "${_CERT_DIR}/admin.pem" ]]; then
-            # ── cy360_sso: admin account for admin/analyst Cy360 users ─────────
-            # Hash for CyCentra360!SiemSSO — generated with OpenSearch hash.sh ($2y prefix)
             _CY360_SSO_HASH='$2y$12$nv335OI0o5tb4dnYtda8OeQastkTuiivxpkzh0nAYoxoZpMrJZ40S'
+            _CY360_RO_HASH='$2y$12$0Tim1grS5kbbBdG20PFsF.WF2eovIc23rrYO2D0E92pqdNjecI.lO'
             _USERS_CHANGED=false
             if ! grep -q "^cy360_sso:" "$_IU_YML" 2>/dev/null; then
                 cat >> "$_IU_YML" << CY360_SSO_EOF
@@ -1500,17 +1511,13 @@ cy360_sso:
   reserved: false
   backend_roles:
   - "admin"
-  description: "CyCentra 360 admin/analyst SSO — nginx siem-gate injection"
+  description: "CyCentra 360 admin SSO service account (legacy)"
 CY360_SSO_EOF
                 _USERS_CHANGED=true
                 success "OpenSearch cy360_sso user added"
             else
                 success "OpenSearch cy360_sso user already present"
             fi
-
-            # ── cy360_readonly: read-only account for viewer Cy360 users ───────
-            # Hash for CyCentra360!ReadOnly — generated with OpenSearch hash.sh ($2y prefix)
-            _CY360_RO_HASH='$2y$12$0Tim1grS5kbbBdG20PFsF.WF2eovIc23rrYO2D0E92pqdNjecI.lO'
             if ! grep -q "^cy360_readonly:" "$_IU_YML" 2>/dev/null; then
                 cat >> "$_IU_YML" << CY360_RO_EOF
 
@@ -1518,41 +1525,14 @@ cy360_readonly:
   hash: "${_CY360_RO_HASH}"
   reserved: false
   backend_roles:
-  - "kibana_user"
-  - "wazuh_ui_user"
-  description: "CyCentra 360 viewer SSO — read-only Wazuh access"
+  - "viewer"
+  description: "CyCentra 360 viewer SSO service account (legacy)"
 CY360_RO_EOF
                 _USERS_CHANGED=true
                 success "OpenSearch cy360_readonly user added"
             else
                 success "OpenSearch cy360_readonly user already present"
             fi
-
-            # ── Ensure rolesmapping includes both service accounts ────────────
-            if grep -q "^kibana_server:" "$_RM_YML" 2>/dev/null; then
-                python3 - "$_RM_YML" << 'RM_PY_EOF'
-import sys, re
-path = sys.argv[1]
-with open(path) as f:
-    text = f.read()
-changed = False
-for user in ("cy360_sso", "cy360_readonly"):
-    if user not in text:
-        text = re.sub(
-            r'(kibana_server:.*?users:\n)((?:  - "[^"]+"\n)*)',
-            lambda m, u=user: m.group(1) + m.group(2) + f'  - "{u}"\n',
-            text, flags=re.DOTALL
-        )
-        changed = True
-        print(f"{user} added to kibana_server rolesmapping")
-if not changed:
-    print("rolesmapping already up to date")
-with open(path, "w") as f:
-    f.write(text)
-RM_PY_EOF
-            fi
-
-            # ── Apply via securityadmin.sh if users changed ───────────────────
             if [[ "$_USERS_CHANGED" == "true" ]]; then
                 export JAVA_HOME=/usr/share/wazuh-indexer/jdk
                 cd / && "$_SEC_ADMIN" \
@@ -1562,410 +1542,175 @@ RM_PY_EOF
                     -cert   "${_CERT_DIR}/admin.pem" \
                     -key    "${_CERT_DIR}/admin-key.pem" \
                     -h 127.0.0.1 2>>"$_CY_SEC_LOG" \
-                    && success "OpenSearch SSO users applied via securityadmin" \
+                    && success "OpenSearch internal users applied via securityadmin" \
                     || warn "securityadmin.sh failed — check ${_CY_SEC_LOG}"
             fi
         fi
-        if false; then
-        # dead code block — original proxy_auth_domain section replaced
-        if [[ -f "$_OS_SEC_CFG" ]]; then
-            # Patch config.yml on disk: enable proxy_auth_domain.http_enabled.
-            # Bugs in the previous state-machine:
-            #   1. Exit condition "indent <= 4" never fired for blocks at indent 6
-            #      (siblings were not detected, other domains got patched too).
-            #   2. Script always printed "enabled" even when the block was absent
-            #      (file written back unchanged, securityadmin then uploaded a
-            #      config that still had http_enabled: false — silent no-op).
-            # Fixed: use indent-relative exit; create the block if absent; exit 1
-            # when no change was made so the caller can report a real warning.
-            python3 - "$_OS_SEC_CFG" << 'OS_SEC_PY_EOF'
-import sys
-path = sys.argv[1]
+
+        # ── OpenSearch Security: add openid_auth_domain to config.yml ────────────
+        if [[ -f "$_OS_SEC_CFG" && -f "${_CERT_DIR}/admin.pem" ]]; then
+            python3 - "$_OS_SEC_CFG" "$BASE_DOMAIN" << 'OS_OIDC_PY'
+import sys, re
+path, domain = sys.argv[1], sys.argv[2]
 with open(path, "r") as f:
-    text = f.read()
-lines = text.splitlines()
-out = []
-in_proxy_domain   = False
-proxy_dom_indent  = -1
-found             = False
-patched           = False
-for line in lines:
-    stripped = line.lstrip()
-    indent   = len(line) - len(stripped)
-    if stripped.startswith("proxy_auth_domain:"):
-        in_proxy_domain  = True
-        proxy_dom_indent = indent
-        found            = True
-        out.append(line)
-        continue
-    if in_proxy_domain:
-        # Exit when we reach a sibling key (same indent) or a parent (shallower).
-        # This replaces the previous "indent <= 4" heuristic which never fired
-        # for blocks indented at 6+ spaces and caused unintended side-effects on
-        # sibling auth domains (e.g. jwt_auth_domain, ldap).
-        if stripped and not stripped.startswith("#") and indent <= proxy_dom_indent:
-            in_proxy_domain = False
-            # fall through to normal append below
-        elif stripped.startswith("http_enabled:") and not patched:
-            out.append(line.replace("http_enabled: false", "http_enabled: true"))
-            patched = True
-            continue
-    out.append(line)
-# If the block was absent altogether, inject it just before
-# basic_internal_auth_domain so the indentation matches the rest of authc.
-if not found:
-    new_lines = []
-    for line in out:
-        if line.lstrip().startswith("basic_internal_auth_domain:") and not patched:
-            base_indent = " " * (len(line) - len(line.lstrip()))
-            child_indent = base_indent + "  "
-            new_lines += [
-                base_indent + "proxy_auth_domain:",
-                child_indent + 'description: "CyCentra 360 IAP proxy authentication"',
-                child_indent + "http_enabled: true",
-                child_indent + "transport_enabled: false",
-                child_indent + "order: 1",
-                child_indent + "http_authenticator:",
-                child_indent + "  type: proxy",
-                child_indent + "  challenge: false",
-                child_indent + "  config:",
-                child_indent + '    user_header: "x-proxy-user"',
-                child_indent + '    roles_header: "x-proxy-roles"',
-                child_indent + "authentication_backend:",
-                child_indent + "  type: noop",
-            ]
-            patched = True
-        new_lines.append(line)
-    out = new_lines
-with open(path, "w") as f:
-    f.write("\n".join(out) + "\n")
-if patched:
-    print("OpenSearch proxy_auth_domain patched in config.yml")
-    sys.exit(0)
-else:
-    print("WARNING: proxy_auth_domain not found and basic_internal_auth_domain "
-          "anchor missing — config.yml not modified", file=sys.stderr)
+    lines = f.read().splitlines()
+if any("openid_auth_domain:" in ln for ln in lines):
+    print("openid_auth_domain already present in config.yml")
+    sys.exit(2)  # 2 = already present, no change needed
+anchor_idx = None
+anchor_indent = 0
+for i, ln in enumerate(lines):
+    m = re.match(r'^(\s+)basic_internal_auth_domain:', ln)
+    if m:
+        anchor_idx    = i
+        anchor_indent = len(m.group(1))
+        break
+if anchor_idx is None:
+    print("WARNING: basic_internal_auth_domain not found — config.yml unchanged", file=sys.stderr)
     sys.exit(1)
-OS_SEC_PY_EOF
+block_end = anchor_idx + 1
+while block_end < len(lines):
+    ln = lines[block_end]
+    stripped = ln.lstrip()
+    if stripped and not stripped.startswith("#"):
+        if len(ln) - len(stripped) <= anchor_indent:
+            break
+    block_end += 1
+p  = " " * anchor_indent
+c  = " " * (anchor_indent + 2)
+g  = " " * (anchor_indent + 4)
+gg = " " * (anchor_indent + 6)
+oidc = [
+    "",
+    f"{p}openid_auth_domain:",
+    f"{c}http_enabled: true",
+    f"{c}transport_enabled: false",
+    f"{c}order: 0",
+    f"{c}http_authenticator:",
+    f"{g}type: openid",
+    f"{g}challenge: false",
+    f"{g}config:",
+    f"{gg}subject_key: email",
+    f"{gg}roles_key: roles",
+    f'{gg}openid_connect_url: "https://cyasm.{domain}/oidc/.well-known/openid-configuration"',
+    f"{gg}jwt_clock_skew_tolerance_seconds: 30",
+    f"{c}authentication_backend:",
+    f"{g}type: noop",
+]
+result = lines[:block_end] + oidc + lines[block_end:]
+with open(path, "w") as f:
+    f.write("\n".join(result) + "\n")
+print("openid_auth_domain added to config.yml")
+OS_OIDC_PY
             _cfg_py_rc=$?
 
-            # ── Apply OpenSearch Security changes for proxy auth ──────────────────
-            # Two changes are required:
-            #   1. proxy_auth_domain http_enabled: true  — allows Dashboard to forward
-            #      proxy headers to OpenSearch Security for user authentication.
-            #   2. all_access rolesmapping               — maps the "all_access" backend
-            #      role (sent by nginx as X-Proxy-Roles) to the all_access OpenSearch role.
-            # Without both, the Wazuh Dashboard shows the native login screen for ALL
-            # proxy-authenticated users instead of logging them in automatically.
-            #
-            # Strategy: wait for the indexer to be ready, then try:
-            #   (a) REST API securityconfig GET+PATCH+PUT (primary — no JVM required)
-            #   (b) securityadmin.sh with the on-disk config.yml (fallback)
-            _SEC_ADMIN="/usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh"
-            _CERT_DIR="/etc/wazuh-indexer/certs"
+            # Wait for OpenSearch indexer (up to 90 s)
+            info "Waiting for OpenSearch indexer to be ready (up to 90 s)..."
+            _INDEXER_READY=false
+            for _n in $(seq 1 18); do
+                _code=$(curl -sk -o /dev/null -w '%{http_code}' \
+                    --cert "${_CERT_DIR}/admin.pem" \
+                    --key  "${_CERT_DIR}/admin-key.pem" \
+                    "https://127.0.0.1:9200/_cluster/health" 2>/dev/null || true)
+                [[ "$_code" =~ ^2 ]] && { _INDEXER_READY=true; success "OpenSearch indexer ready"; break; }
+                sleep 5
+            done
 
-            if [[ -f "${_CERT_DIR}/admin.pem" ]]; then
-                # ── 1. Wait for OpenSearch indexer (up to 90 s) ──────────────────────
-                # securityadmin.sh silently fails when the indexer hasn't finished
-                # starting.  A readiness check prevents the silent failure that leaves
-                # proxy_auth_domain disabled and causes the login-screen loop.
-                info "Waiting for OpenSearch indexer to be ready (up to 90 s)..."
-                _INDEXER_READY=false
-                for _idx_n in $(seq 1 18); do
-                    _idx_code=$(curl -sk -o /dev/null -w '%{http_code}' \
-                        --cert "${_CERT_DIR}/admin.pem" \
-                        --key  "${_CERT_DIR}/admin-key.pem" \
-                        "https://127.0.0.1:9200/_cluster/health" 2>/dev/null || true)
-                    # Accept only 2xx — 3xx redirects indicate misconfiguration
-                    if [[ "$_idx_code" =~ ^2 ]]; then
-                        _INDEXER_READY=true
-                        success "OpenSearch indexer ready (HTTP ${_idx_code})"
-                        break
-                    fi
-                    sleep 5
-                done
-
-                if [[ "$_INDEXER_READY" != "true" ]]; then
-                    warn "OpenSearch indexer not reachable after 90 s — security config skipped; re-run --update once Wazuh is healthy"
+            if [[ "$_INDEXER_READY" == "true" ]]; then
+                # Apply config.yml (openid_auth_domain) via securityadmin.sh
+                # rc=0: file updated; rc=2: already present; rc=1: error
+                if [[ "$_cfg_py_rc" -eq 0 && -x "$_SEC_ADMIN" ]]; then
+                    export JAVA_HOME=/usr/share/wazuh-indexer/jdk
+                    cd / && "$_SEC_ADMIN" \
+                        -f "$_OS_SEC_CFG" -t config \
+                        -icl -nhnv \
+                        -cacert "${_CERT_DIR}/root-ca.pem" \
+                        -cert   "${_CERT_DIR}/admin.pem" \
+                        -key    "${_CERT_DIR}/admin-key.pem" \
+                        -h 127.0.0.1 2>>"$_CY_SEC_LOG" \
+                        && success "OpenSearch openid_auth_domain applied via securityadmin" \
+                        || warn "securityadmin.sh failed — see ${_CY_SEC_LOG}"
+                elif [[ "$_cfg_py_rc" -eq 2 ]]; then
+                    success "openid_auth_domain already in config.yml — securityadmin not needed"
                 else
-                    # ── 2a. Enable proxy_auth_domain via REST API (primary) ───────────
-                    # GET the live security config, patch proxy_auth_domain.http_enabled
-                    # in Python, then PUT it back.  This is more reliable than
-                    # securityadmin.sh (no JVM dependency, no "cd /" requirement, no
-                    # Java heap / timeout issues).  Falls back to securityadmin.sh when
-                    # the endpoint returns a non-200 or the PUT is rejected.
-                    _CONFIG_APPLIED=false
-                    _cfg_get_code=$(curl -sk -o /tmp/_cy_sec_cfg.json -w '%{http_code}' \
-                        --cert "${_CERT_DIR}/admin.pem" \
-                        --key  "${_CERT_DIR}/admin-key.pem" \
-                        "https://127.0.0.1:9200/_plugins/_security/api/securityconfig" \
-                        2>/dev/null || true)
-                    if [[ "$_cfg_get_code" == "200" && -s /tmp/_cy_sec_cfg.json ]]; then
-                        python3 - /tmp/_cy_sec_cfg.json /tmp/_cy_sec_patch.json << 'SEC_REST_PY'
-import json, sys
-src, dst = sys.argv[1], sys.argv[2]
-try:
-    with open(src) as f:
-        raw = json.load(f)
-    dynamic = raw.get("config", {}).get("dynamic", {})
-    authc   = dynamic.setdefault("authc", {})
-    if "proxy_auth_domain" not in authc:
-        authc["proxy_auth_domain"] = {
-            "http_enabled": True,
-            "transport_enabled": False,
-            "order": 1,
-            "http_authenticator": {
-                "type": "proxy",
-                "challenge": False,
-                "config": {
-                    "user_header": "x-proxy-user",
-                    "roles_header": "x-proxy-roles",
-                },
-            },
-            "authentication_backend": {"type": "noop"},
-        }
-        print("proxy_auth_domain block created via REST patch")
-    else:
-        authc["proxy_auth_domain"]["http_enabled"] = True
-        print("proxy_auth_domain http_enabled set via REST patch")
-    with open(dst, "w") as f:
-        json.dump({"dynamic": dynamic}, f)
-    sys.exit(0)
-except Exception as exc:
-    print(f"REST patch error: {exc}", file=sys.stderr)
-    sys.exit(1)
-SEC_REST_PY
-                        if [[ $? -eq 0 && -s /tmp/_cy_sec_patch.json ]]; then
-                            _cfg_put_code=$(curl -sk -o /dev/null -w '%{http_code}' \
-                                --cert "${_CERT_DIR}/admin.pem" \
-                                --key  "${_CERT_DIR}/admin-key.pem" \
-                                -X PUT \
-                                "https://127.0.0.1:9200/_plugins/_security/api/securityconfig/config" \
-                                -H "Content-Type: application/json" \
-                                -d @/tmp/_cy_sec_patch.json \
-                                2>/dev/null || true)
-                            if [[ "$_cfg_put_code" =~ ^(200|201)$ ]]; then
-                                _CONFIG_APPLIED=true
-                                success "OpenSearch proxy_auth_domain enabled via REST API"
-                            else
-                                info "REST API securityconfig PUT returned ${_cfg_put_code} — trying securityadmin fallback"
-                            fi
-                            rm -f /tmp/_cy_sec_patch.json
-                        fi
-                        rm -f /tmp/_cy_sec_cfg.json
-                    else
-                        info "GET securityconfig returned ${_cfg_get_code} — trying securityadmin fallback"
-                        rm -f /tmp/_cy_sec_cfg.json
-                    fi
-
-                    # ── 2b. Enable proxy_auth_domain via securityadmin.sh (fallback) ──
-                    # Stderr is written to $_CY_SEC_LOG instead of /dev/null so any
-                    # JVM or YAML errors are visible for post-install diagnosis.
-                    if [[ "$_CONFIG_APPLIED" != "true" ]]; then
-                        if [[ -x "$_SEC_ADMIN" && "$_cfg_py_rc" -eq 0 ]]; then
-                            export JAVA_HOME=/usr/share/wazuh-indexer/jdk
-                            cd /
-                            "$_SEC_ADMIN" \
-                                -f "$_OS_SEC_CFG" -t config \
-                                -icl -nhnv \
-                                -cacert "${_CERT_DIR}/root-ca.pem" \
-                                -cert   "${_CERT_DIR}/admin.pem" \
-                                -key    "${_CERT_DIR}/admin-key.pem" \
-                                -h 127.0.0.1 2>>"$_CY_SEC_LOG" \
-                                && { _CONFIG_APPLIED=true; \
-                                     success "OpenSearch proxy_auth_domain applied via securityadmin"; } \
-                                || warn "securityadmin.sh failed for config.yml — see ${_CY_SEC_LOG} for details"
-                        elif [[ ! -x "$_SEC_ADMIN" ]]; then
-                            warn "securityadmin.sh not found — proxy_auth_domain config skipped"
-                        else
-                            warn "config.yml patch failed (Python exit ${_cfg_py_rc}) — securityadmin skipped; check ${_OS_SEC_CFG}"
-                        fi
-                    fi
-
-                    [[ "$_CONFIG_APPLIED" != "true" ]] && \
-                        warn "proxy_auth_domain NOT enabled in OpenSearch — Wazuh SSO will show a login screen; re-run --update to retry"
-
-                    # ── 3. Apply rolesmapping: REST API (primary) or securityadmin (fallback) ─
-                    # The REST API PUT per-role endpoint is preferred: it patches only the
-                    # target roles without wiping the full rolesmapping, requires no JVM,
-                    # and uses the same admin certs via mTLS.
-                    # CRITICAL roles:
-                    #   all_access   — backend_roles ["admin","all_access"] lets nginx
-                    #                  X-Proxy-Roles: all_access grant full Dashboard access.
-                    #   kibana_server — maps kibanaserver service account (Dashboard→OpenSearch).
-                    _RM_APPLIED=false
-
-                    _rm_aa_code=$(curl -sk -o /dev/null -w '%{http_code}' \
-                        --cert "${_CERT_DIR}/admin.pem" \
-                        --key  "${_CERT_DIR}/admin-key.pem" \
-                        -X PUT "https://127.0.0.1:9200/_plugins/_security/api/rolesmapping/all_access" \
-                        -H 'Content-Type: application/json' \
-                        -d '{"backend_roles":["admin","all_access"],"hosts":[],"users":[]}' \
-                        2>/dev/null || true)
-                    _rm_ks_code=$(curl -sk -o /dev/null -w '%{http_code}' \
-                        --cert "${_CERT_DIR}/admin.pem" \
-                        --key  "${_CERT_DIR}/admin-key.pem" \
-                        -X PUT "https://127.0.0.1:9200/_plugins/_security/api/rolesmapping/kibana_server" \
-                        -H 'Content-Type: application/json' \
-                        -d '{"backend_roles":[],"hosts":[],"users":["kibanaserver"]}' \
-                        2>/dev/null || true)
-
-                    if [[ "$_rm_aa_code" =~ ^(200|201)$ && "$_rm_ks_code" =~ ^(200|201)$ ]]; then
-                        # REST API returns 200 when updating an existing mapping,
-                        # 201 when creating a new one — both are success.
-                        _RM_APPLIED=true
-                        success "OpenSearch rolesmapping applied via REST API (all_access + kibana_server)"
-                    else
-                        warn "REST API rolesmapping returned ${_rm_aa_code}/${_rm_ks_code} — trying securityadmin fallback"
-                    fi
-
-                    # Fallback: securityadmin.sh -t rolesmapping (replaces entire mapping —
-                    # must include all critical entries to avoid wiping kibana_server)
-                    if [[ "$_RM_APPLIED" != "true" && -x "$_SEC_ADMIN" ]]; then
-                        cat > /tmp/_cy_rolesmapping.yml << 'CY_ROLES_EOF'
-_meta:
-  type: "rolesmapping"
-  config_version: 2
-
-all_access:
-  reserved: false
-  hidden: false
-  backend_roles:
-  - "admin"
-  - "all_access"
-  hosts: []
-  users: []
-  and_backend_roles: []
-
-kibana_server:
-  reserved: true
-  hidden: false
-  backend_roles: []
-  hosts: []
-  users:
-  - "kibanaserver"
-  and_backend_roles: []
-
-kibana_user:
-  reserved: false
-  hidden: false
-  backend_roles:
-  - "kibanauser"
-  hosts: []
-  users: []
-  and_backend_roles: []
-
-wazuh_ui_user:
-  reserved: false
-  backend_roles:
-  - "wazuh_ui_user"
-  users: []
-
-wazuh_ui_admin:
-  reserved: false
-  backend_roles:
-  - "wazuh_ui_admin"
-  users: []
-
-own_index:
-  reserved: false
-  users:
-  - "*"
-  and_backend_roles: []
-CY_ROLES_EOF
-                        "$_SEC_ADMIN" \
-                            -f /tmp/_cy_rolesmapping.yml -t rolesmapping \
-                            -icl -nhnv \
-                            -cacert "${_CERT_DIR}/root-ca.pem" \
-                            -cert   "${_CERT_DIR}/admin.pem" \
-                            -key    "${_CERT_DIR}/admin-key.pem" \
-                            -h 127.0.0.1 2>/dev/null \
-                            && { _RM_APPLIED=true; \
-                                 success "OpenSearch rolesmapping applied via securityadmin (all_access + kibana_server)"; } \
-                            || warn "rolesmapping apply failed — Wazuh SSO users may lack access; re-run --update"
-                        rm -f /tmp/_cy_rolesmapping.yml
-                    fi
-
-                    [[ "$_RM_APPLIED" != "true" ]] && \
-                        warn "OpenSearch rolesmapping not applied — X-Proxy-Roles: all_access will not grant Dashboard access until rolesmapping is updated"
+                    warn "config.yml patch failed (rc=${_cfg_py_rc}) — check ${_OS_SEC_CFG}"
                 fi
+
+                # ── Roles mapping via REST API ────────────────────────────────────
+                # admin + analyst OIDC roles → all_access; viewer → kibana_user + wazuh_ui_user
+                _rm_aa=$(curl -sk -o /dev/null -w '%{http_code}' \
+                    --cert "${_CERT_DIR}/admin.pem" --key "${_CERT_DIR}/admin-key.pem" \
+                    -X PUT "https://127.0.0.1:9200/_plugins/_security/api/rolesmapping/all_access" \
+                    -H 'Content-Type: application/json' \
+                    -d '{"backend_roles":["admin","analyst","all_access"],"hosts":[],"users":[]}' \
+                    2>/dev/null || true)
+                _rm_ku=$(curl -sk -o /dev/null -w '%{http_code}' \
+                    --cert "${_CERT_DIR}/admin.pem" --key "${_CERT_DIR}/admin-key.pem" \
+                    -X PUT "https://127.0.0.1:9200/_plugins/_security/api/rolesmapping/kibana_user" \
+                    -H 'Content-Type: application/json' \
+                    -d '{"backend_roles":["viewer","kibanauser"],"hosts":[],"users":[]}' \
+                    2>/dev/null || true)
+                _rm_wu=$(curl -sk -o /dev/null -w '%{http_code}' \
+                    --cert "${_CERT_DIR}/admin.pem" --key "${_CERT_DIR}/admin-key.pem" \
+                    -X PUT "https://127.0.0.1:9200/_plugins/_security/api/rolesmapping/wazuh_ui_user" \
+                    -H 'Content-Type: application/json' \
+                    -d '{"backend_roles":["viewer","wazuh_ui_user"],"hosts":[],"users":[]}' \
+                    2>/dev/null || true)
+                [[ "$_rm_aa" =~ ^(200|201)$ ]] && success "all_access rolesmapping updated (admin+analyst)" \
+                    || warn "all_access rolesmapping REST PUT returned ${_rm_aa}"
+                [[ "$_rm_ku" =~ ^(200|201)$ ]] && success "kibana_user rolesmapping updated (viewer)" \
+                    || warn "kibana_user rolesmapping REST PUT returned ${_rm_ku}"
+                [[ "$_rm_wu" =~ ^(200|201)$ ]] && success "wazuh_ui_user rolesmapping updated (viewer)" \
+                    || warn "wazuh_ui_user rolesmapping REST PUT returned ${_rm_wu}"
             else
-                warn "admin.pem not found at ${_CERT_DIR} — OpenSearch security config skipped"
+                warn "OpenSearch not reachable — security config skipped; re-run --update once Wazuh is healthy"
             fi
         fi
 
-        fi  # end dead-code if false block
         systemctl restart wazuh-dashboard 2>/dev/null || true
-        success "CySIEM Dashboard: basicauth mode, SSO users ready (cy360_sso + cy360_readonly)"
+        success "CySIEM OIDC: Dashboard configured, OpenSearch security updated"
     else
-        info "Wazuh not installed — CySIEM SSO will run when Wazuh is deployed"
+        info "Wazuh not installed — CySIEM OIDC will run when Wazuh is deployed"
     fi
 
-    # ── Migrate nginx cysiem block to role-aware siem-gate auth_request (idempotent) ──
-    # Replaces the static cy360_sso Basic Auth header with a Flask auth_request that
-    # returns the credential dynamically based on the user's Cy360 role.
+    # ── Migrate nginx cysiem block to OIDC mode (idempotent) ─────────────────────
+    # Removes the siem-gate auth_request + Authorization header injection.
+    # Wazuh Dashboard OIDC now handles authentication natively.
     _NGINX_MOD="/etc/nginx/sites-available/cycentra-modules"
     if [[ -f "$_NGINX_MOD" ]]; then
-        if grep -q 'auth_request.*siem-gate\|siem-gate' "$_NGINX_MOD" 2>/dev/null; then
-            success "nginx cysiem: siem-gate auth_request already configured"
+        if ! grep -q 'siem-gate\|Authorization.*wazuh_auth\|proxy_set_header.*Authorization.*wazuh' "$_NGINX_MOD" 2>/dev/null; then
+            success "nginx cysiem: already in OIDC mode"
         else
-            # Rewrite the entire cysiem server block in-place via Python
-            python3 - "$_NGINX_MOD" << 'NGINX_SIEM_PY'
+            python3 - "$_NGINX_MOD" << 'NGINX_OIDC_PY'
 import sys, re
 path = sys.argv[1]
 with open(path) as f:
     text = f.read()
 
-old_gate = (
-    r'# IAP gate[^\n]*\n'
-    r'    auth_request\s+/oauth2/auth;\n'
-    r'    error_page 401 = @error401;\n'
+# Remove IAP comments + siem-gate auth_request lines
+text = re.sub(
+    r'    # IAP gate[^\n]*\n(?:    # [^\n]*\n)*'
+    r'    auth_request\s+/siem-gate[^\n]*\n'
     r'    auth_request_set[^\n]*\n'
-    r'    location @error401[^\n]*\n'
-    r'    location = /oauth2/auth \{[^}]+\}\n'
+    r'    error_page 401 = @error401;\n',
+    '    # Authentication handled by Wazuh Dashboard OIDC (cyasm.DOMAIN/oidc)\n',
+    text
 )
-new_gate = (
-    '    # IAP gate — Flask validates Cy360 session and returns role-appropriate Wazuh credentials.\n'
-    '    # admin/analyst → cy360_sso (OpenSearch admin, full Wazuh access)\n'
-    '    # viewer        → cy360_readonly (OpenSearch read-only access)\n'
-    '    auth_request      /siem-gate;\n'
-    '    auth_request_set  $wazuh_auth $upstream_http_x_wazuh_auth;\n'
-    '    error_page 401 = @error401;\n'
-    '    location @error401 { return 302 https://cy360.$host_domain/oauth2/sign_in?rd=https://$host$request_uri; }\n'
-    '    location = /siem-gate {\n'
-    '        internal;\n'
-    '        proxy_pass              http://127.0.0.1:5252/api/siem/internal/auth;\n'
-    '        proxy_pass_request_body off;\n'
-    '        proxy_set_header        Content-Length "";\n'
-    '        proxy_set_header        X-Original-URI $request_uri;\n'
-    '        proxy_set_header        X-Forwarded-Proto https;\n'
-    '    }\n'
-)
+# Remove location @error401 block pointing to cysiem
+text = re.sub(r'    location @error401 \{ return 302[^\n]*cysiem[^\n]*\n', '', text)
+# Remove location = /siem-gate { ... } block
+text = re.sub(r'    location = /siem-gate \{[^}]+\}\n', '', text, flags=re.DOTALL)
+# Remove Role-appropriate comment + Authorization $wazuh_auth header
+text = re.sub(r'        # Role-appropriate[^\n]*\n', '', text)
+text = re.sub(r'        proxy_set_header Authorization \$wazuh_auth;\n', '', text)
 
-# Extract the base domain from the error401 line for the redirect
-domain_m = re.search(r'https://cy360\.([^/]+)/oauth2', text)
-base_domain = domain_m.group(1) if domain_m else 'cycentra.com'
-new_gate = new_gate.replace('$host_domain', base_domain)
-
-patched = re.sub(old_gate, new_gate, text, flags=re.DOTALL)
-
-# Also replace static Authorization header with dynamic $wazuh_auth
-patched = re.sub(
-    r'proxy_set_header\s+Authorization\s+"Basic [A-Za-z0-9+/=]+";',
-    'proxy_set_header Authorization $wazuh_auth;',
-    patched
-)
-
-if patched != text:
-    with open(path, 'w') as f:
-        f.write(patched)
-    print("nginx cysiem block migrated to siem-gate auth_request")
-else:
-    print("nginx cysiem block: no changes needed")
-NGINX_SIEM_PY
+with open(path, 'w') as f:
+    f.write(text)
+print("nginx cysiem: migrated to OIDC mode (siem-gate removed)")
+NGINX_OIDC_PY
             nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
-                success "nginx cysiem: migrated to role-aware siem-gate auth_request" || \
-                warn "nginx config invalid after siem-gate patch — check: nginx -t"
+                success "nginx cysiem: migrated to OIDC mode" || \
+                warn "nginx config invalid after OIDC migration — check: nginx -t"
         fi
     fi
 
@@ -2445,21 +2190,9 @@ server {
     add_header Strict-Transport-Security "max-age=31536000" always;
     add_header X-Frame-Options "" always;
     add_header Content-Security-Policy "frame-ancestors 'self' https://cy360.${BASE_DOMAIN}" always;
-    # IAP gate — Flask validates Cy360 session and returns role-appropriate Wazuh credentials.
-    # admin/analyst → cy360_sso (OpenSearch admin, full Wazuh access)
-    # viewer        → cy360_readonly (OpenSearch read-only access)
-    auth_request      /siem-gate;
-    auth_request_set  \$wazuh_auth \$upstream_http_x_wazuh_auth;
-    error_page 401 = @error401;
-    location @error401 { return 302 https://cy360.${BASE_DOMAIN}/oauth2/sign_in?rd=https://\$host\$request_uri; }
-    location = /siem-gate {
-        internal;
-        proxy_pass              http://127.0.0.1:5252/api/siem/internal/auth;
-        proxy_pass_request_body off;
-        proxy_set_header        Content-Length "";
-        proxy_set_header        X-Original-URI \$request_uri;
-        proxy_set_header        X-Forwarded-Proto https;
-    }
+    # Authentication handled by Wazuh Dashboard OIDC (cyasm.${BASE_DOMAIN}/oidc).
+    # Individual user identity is established per OIDC token; roles claim maps to
+    # OpenSearch Security backend roles (admin/analyst → all_access; viewer → read-only).
     location / {
         proxy_pass https://127.0.0.1:5601;
         proxy_ssl_verify off;
@@ -2468,8 +2201,6 @@ server {
         proxy_set_header Connection \$connection_upgrade;
         proxy_set_header Host \$host;
         proxy_set_header X-Forwarded-Proto https;
-        # Role-appropriate Wazuh credential set by siem-gate auth_request
-        proxy_set_header Authorization \$wazuh_auth;
         proxy_read_timeout 120;
         proxy_buffering off;
         proxy_cookie_flags ~ samesite=none secure;
