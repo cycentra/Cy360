@@ -248,21 +248,6 @@ export function LoginPage() {
               </div>
             ))}
           </div>
-          <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-            {[
-              { icon: "👁️", label: "CySIEM", sub: "Endpoint & Log Intelligence" },
-              { icon: "🎫", label: "CyIRIS", sub: "Incident Response" },
-              { icon: "🛡️", label: "CySOAR", sub: "Security Automation" },
-            ].map(m => (
-              <div key={m.label} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span style={{ fontSize: 16 }}>{m.icon}</span>
-                <div>
-                  <div style={{ color: "white", fontSize: 12, fontWeight: 600 }}>{m.label}</div>
-                  <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10 }}>{m.sub}</div>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
       </div>
 

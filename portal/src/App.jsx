@@ -54,6 +54,7 @@ import { Sidebar } from './sidebar/Sidebar.jsx';
 import { SiemIncidentsPage } from './siem/SiemIncidentsPage';
 import { SiemRiskScoresPage } from './siem/SiemRiskScoresPage';
 import { SiemUebaPage }       from './siem/SiemUebaPage';
+import { InternalExposureDashboard } from './siem/InternalExposureDashboard';
 
 import { LoginPage }         from './pages/login/LoginPage.jsx';
 import { ScanPage }          from './pages/scan/ScanPage.jsx';
@@ -340,6 +341,7 @@ export default function App() {
             {activeTab==="siem-incidents" && <SiemIncidentsPage/>}
             {activeTab==="siem-risk"      && <SiemRiskScoresPage/>}
             {activeTab==="siem-ueba"      && <SiemUebaPage/>}
+            {activeTab==="internal-dashboard" && <InternalExposureDashboard setActiveTab={setActiveTab}/>}
             {activeTab==="marketplace"    && <MarketplacePage user={user} installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
             {activeTab==="benchmark"            && <BenchmarkPage />}
             {activeTab==="system-settings"     && <SystemSettingsPage />}

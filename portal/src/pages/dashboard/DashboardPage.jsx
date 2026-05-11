@@ -714,11 +714,6 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
         </div>
       )}
 
-      {/* Incident State Widget */}
-      <div style={{ marginBottom: 14 }}>
-        <IncidentStateWidget onViewAll={() => setActiveTab("siem")} />
-      </div>
-
       {/* Critical & High vuln list */}
       <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:4, padding:"18px 22px" }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
