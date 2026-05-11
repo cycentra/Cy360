@@ -1,3 +1,40 @@
+## v1.0.398 -- 2026-05-11
+
+### Bug Fixes
+
+  - M365 correlation by username, cloud incident enriched-gate bypass, lower cloud IRIS ticket threshold, robust LLM parse fallback, richer AI context
+  - vuln/incident rendering bugs — missing remediation steps, [object Object] in http_analysis and remediation, missing compliance impact, AI summary truncation
+
+---
+
+## v1.0.398 — Bug Fixes — 2026-05-11
+
+### Bug Fixes
+
+#### Vulnerabilities Page
+- **BUG-1 — Missing "Steps to Remediate"**: `adapter.js` now injects severity-aware fallback remediation text when the ASM scanner returns an empty `recommendation` field, ensuring the Remediation card always renders.
+- **BUG-2 — HTTP Analysis rendering `[object Object]`**: Technology entries in `VulnerabilityPage.jsx` and `AssetsPage.jsx` are now rendered via property extraction (`name → technology → product → JSON fallback`), correctly displaying technology names such as "jQuery 1.12.4" instead of `[object Object]`.
+- **BUG-3 — Remediation Action rendering `[object Object]`**: `parseSteps()` in `VulnerabilityPage.jsx` rewritten to safely unwrap arrays-of-objects, plain objects, and AI-enriched nested structures — all remediation shapes now display as readable text.
+- **BUG-4 — Compliance Impact field missing**: `adapter.js` applies a client-side NIS2/DORA/ISO 27001 keyword-matching fallback when the backend enrichment lookup yields no compliance tags, ensuring every vulnerability entry displays a compliance impact.
+
+#### Active Incidents (SIEM)
+- **BUG-5 — AI enrichment quality**: `llm_enricher.py` — `_parse_response()` now uses a 3-tier fallback (both markers → summary-only marker → numbered-list heuristic) so `llm_remediation` is populated even when the LLM omits the `REMEDIATION_STEPS:` header. `_build_context()` now supplies a union of top-5-by-score and top-5-by-recency alerts (up to 10) for richer attack timeline context.
+- **BUG-6 — M365 incidents not correlating**: `grouper.py` `find_matching_incident()` gained a third match criterion — cloud-source events (`o365`, `azure`, `aws`, `gcp`, `github`) are now correlated by `username + category`, correctly grouping all M365 user activity into a single incident regardless of agent ID variance.
+- **BUG-7 — CyIRIS ticket creation not triggering for low-FP incidents**: `iris_connector.py` lowers the `alert_count` threshold to `1` for cloud-source incidents (vs. `3` for on-prem). `ingestor.py` marks cloud incidents as `enriched=True` immediately, preventing them from stalling in Band 2 ("investigating") and allowing Band 3 ticket creation to fire.
+- **BUG-8 — Truncated incident details / incomplete AI summaries**: `SiemIncidentsPage.jsx` — `llm_summary` block now renders with `whiteSpace: pre-wrap`, preserving multi-paragraph AI narratives. `llm_enricher.py` SYSTEM_PROMPT expanded from 2–3 to 3–5 sentences with explicit instruction to include affected usernames/hosts and describe attack progression.
+
+### Files Changed
+- `portal/src/core/adapter.js`
+- `portal/src/pages/vulnerabilities/VulnerabilityPage.jsx`
+- `portal/src/pages/assets/AssetsPage.jsx`
+- `portal/src/siem/SiemIncidentsPage.jsx`
+- `backend/cysiemstack/correlation_engine/grouper.py`
+- `backend/cysiemstack/correlation_engine/iris_connector.py`
+- `backend/cysiemstack/correlation_engine/ingestor.py`
+- `backend/cysiemstack/correlation_engine/llm_enricher.py`
+
+---
+
 ## v1.0.397 -- 2026-05-11
 
 ### Bug Fixes
