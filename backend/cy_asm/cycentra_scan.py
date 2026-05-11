@@ -613,14 +613,32 @@ async def store_to_cymind_memory(findings: list, domain: str, provider: str) -> 
                     f"ASM-{domain}-{finding.get('module', 'UNKNOWN')}-{i}".upper()
                 )[:60]
 
+                # Use SIEM-consistent field names so CyMind presents ASM findings
+                # in the same format as INC-XXXXX incidents from the correlation engine.
+                vuln_name = str(finding.get("vulnerability", finding.get("module", "ASM Finding")) or "ASM Finding")[:200]
                 payload = {
-                    "incident_id":   incident_id,
-                    "alert_type":    str(finding.get("vulnerability", finding.get("module", "ASM Finding")) or "ASM Finding")[:200],
+                    # Primary identity — matches Incident.id convention
+                    "id":            incident_id,
+                    "incident_id":   incident_id,    # kept for legacy RAG queries
+                    # Summary fields matching SIEM incident display
+                    "llm_summary":   vuln_name,
+                    "alert_type":    vuln_name,       # legacy alias
                     "severity":      severity,
-                    "source_ip":     domain,
-                    "description":   str(finding.get("description", "") or ""),
-                    "analyst_notes": str(finding.get("recommendation", "") or ""),
-                    "outcome":       "open",
+                    "status":        "open",
+                    "outcome":       "open",          # legacy alias
+                    # Entity fields — match Incident.{src_ips, affected_agents}
+                    "src_ips":       [],
+                    "affected_agents": [domain],
+                    "affected_users":  [],
+                    "source_ip":     domain,          # legacy alias
+                    # Classification — match Incident.categories
+                    "categories":    ["asm", finding.get("module", "").lower()],
+                    # Description and remediation — match Incident.{llm_summary, llm_remediation}
+                    "description":       str(finding.get("description", "") or ""),
+                    "llm_remediation":   str(finding.get("recommendation", "") or ""),
+                    "analyst_notes":     str(finding.get("recommendation", "") or ""),  # legacy
+                    # Extras
+                    "risk_score":    None,
                     "resolution":    None,
                     "tags":          ["asm", domain, finding.get("module", "").lower(), provider.lower()],
                     "ttps":          [],

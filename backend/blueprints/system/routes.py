@@ -1740,7 +1740,17 @@ def _fetch_siem_context_block() -> str:
     now = _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     lines = [
         "\n--- LIVE SIEM DATA ---",
-        f"Source: CyCentra 360 (direct) | Timestamp: {now}\n",
+        f"Source: CyCentra 360 (direct) | Timestamp: {now}",
+        "",
+        "## Incident ID Formats",
+        "| Format | Source | Example |",
+        "|---|---|---|",
+        "| INC-XXXXX | SIEM correlation engine (Wazuh alerts → correlated) | INC-00708 |",
+        "| ASM-DOMAIN-MODULE-N | ASM attack surface scan (stored in RAG memory) | ASM-CYCENTRA.COM-CRYPTO-8 |",
+        "[INSTRUCTION: When presenting incidents from either source, always use the same"
+        " table format: ID | Severity | Status | Summary | Affected Assets."
+        " Never mix up the two ID namespaces or claim one is the other.]",
+        "",
     ]
 
     if "stats" in ctx:
@@ -1758,16 +1768,23 @@ def _fetch_siem_context_block() -> str:
         raw  = ctx["open_incidents"]
         rows = raw if isinstance(raw, list) else raw.get("incidents", raw.get("data", []))
         if rows:
-            lines += ["## Open Incidents",
-                      "| ID | Title | Severity | Risk Score | Created |",
-                      "|---|---|---|---|---|"]
+            lines += ["## Open Incidents (SIEM — INC-XXXXX format)",
+                      "| ID | Summary | Severity | Risk | Status | Affected Users |",
+                      "|---|---|---|---|---|---|"]
             for inc in rows[:10]:
+                # Synthesize a readable summary: prefer llm_summary snippet, fall back to categories
+                _llm = inc.get("llm_summary") or ""
+                _cats = ", ".join((inc.get("categories") or [])[:3])
+                _agents = ", ".join((inc.get("affected_agents") or [])[:2]) or "—"
+                _users  = ", ".join((inc.get("affected_users")  or [])[:3]) or "—"
+                _summary = (_llm[:80] + "…") if len(_llm) > 80 else (_llm or _cats or "—")
                 lines.append(
-                    f"| {inc.get('id', inc.get('incident_id', '?'))} "
-                    f"| {inc.get('title', '?')} "
+                    f"| {inc.get('id', '?')} "
+                    f"| {_summary} "
                     f"| {inc.get('severity', '?')} "
                     f"| {inc.get('risk_score', '?')} "
-                    f"| {inc.get('created_at', '?')} |"
+                    f"| {inc.get('status', '?')} "
+                    f"| {_users} |"
                 )
             lines.append("")
 
@@ -1915,6 +1932,103 @@ def _fetch_entity_incidents_block(message: str) -> str:
         ]
     lines.append("")
     return "\n".join(lines)
+
+
+def _fetch_incident_detail_block(message: str) -> str:
+    """
+    Scan `message` for explicit incident IDs (INC-XXXXX).
+    For each found, fetch full details from the correlation engine and inject
+    a structured block so CyMind never has to guess.
+    Returns empty string if no INC-ID found or engine unreachable.
+    """
+    ids = _re.findall(r'\b(INC-\d+)\b', message, _re.IGNORECASE)
+    if not ids:
+        return ""
+
+    engine_url = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").rstrip("/")
+    blocks: list[str] = []
+    for inc_id in dict.fromkeys(ids):           # deduplicate, preserve order
+        try:
+            r = http_requests.get(
+                f"{engine_url}/incidents/{inc_id.upper()}",
+                timeout=4,
+            )
+        except Exception:
+            blocks.append(
+                f"\n## Incident {inc_id}\n"
+                "[INSTRUCTION: Could not reach the correlation engine to fetch"
+                f" {inc_id}. Tell the user the engine is temporarily unavailable"
+                " — do NOT fabricate any details.]\n"
+            )
+            continue
+
+        if r.status_code == 404:
+            blocks.append(
+                f"\n## Incident {inc_id}\n"
+                f"[INSTRUCTION: {inc_id} does NOT exist in the database."
+                " Tell the user exactly that — do NOT invent any details.]\n"
+            )
+            continue
+
+        if not r.ok:
+            blocks.append(
+                f"\n## Incident {inc_id}\n"
+                f"[INSTRUCTION: Engine returned HTTP {r.status_code} for {inc_id}."
+                " Inform the user and do NOT fabricate.]\n"
+            )
+            continue
+
+        inc = r.json()
+        cats    = ", ".join((inc.get("categories")    or [])[:5])  or "—"
+        users   = ", ".join((inc.get("affected_users") or [])[:5]) or "—"
+        agents  = ", ".join((inc.get("affected_agents") or [])[:5]) or "—"
+        ips     = ", ".join((inc.get("src_ips") or [])[:5])        or "—"
+        tactics = ", ".join((inc.get("mitre_tactics") or [])[:5])  or "—"
+        mitres  = ", ".join((inc.get("mitre_ids")    or [])[:5])   or "—"
+        rules   = "; ".join(
+            str(r_.get("name", r_.get("id", "?")))
+            for r_ in (inc.get("correlated_rules") or [])[:3]
+        ) or "—"
+        ueba = "; ".join(
+            str(u_.get("type", u_)) for u_ in (inc.get("ueba_flags") or [])[:3]
+        ) or "—"
+        summary     = inc.get("llm_summary")     or "—"
+        remediation = inc.get("llm_remediation") or "—"
+
+        b = [
+            f"\n## Incident {inc_id.upper()} — Full Detail",
+            f"- **Severity**: {inc.get('severity', '?')}",
+            f"- **Status**: {inc.get('status', '?')}",
+            f"- **Risk Score**: {inc.get('risk_score', '?')}",
+            f"- **First Seen**: {inc.get('first_seen', '?')}",
+            f"- **Last Seen**: {inc.get('last_seen', '?')}",
+            f"- **Alert Count**: {inc.get('alert_count', '?')}",
+            f"- **Categories**: {cats}",
+            f"- **Affected Users**: {users}",
+            f"- **Affected Agents**: {agents}",
+            f"- **Source IPs**: {ips}",
+            f"- **MITRE Tactics**: {tactics}",
+            f"- **MITRE IDs**: {mitres}",
+            f"- **Kill Chain Stage**: {inc.get('kill_chain_stage_name') or inc.get('kill_chain_stage', '?')}",
+            f"- **Correlated Rules**: {rules}",
+            f"- **UEBA Flags**: {ueba}",
+            f"- **Assigned To**: {inc.get('assigned_to') or 'Unassigned'}",
+            f"- **CyIRIS Case**: {inc.get('iris_case_id') or 'None'}",
+            f"- **FP Probability**: {inc.get('fp_probability', '?')}%",
+            "",
+            f"**AI Summary**: {summary}",
+            "",
+            f"**Recommended Remediation**: {remediation}",
+            "",
+            "[INSTRUCTION: The data above is the complete, exact database record for"
+            f" {inc_id.upper()}. Present it to the user without modification."
+            " Do NOT add, invent, or change any field.]",
+        ]
+        blocks.append("\n".join(b))
+
+    return "\n".join(blocks)
+
+
 _AGENT_RE   = _re.compile(r'\bagent[_\s]?(?:id[_\s]?)?([0-9a-zA-Z]+)\b', _re.IGNORECASE)
 _DOMAIN_RE  = _re.compile(r'\b((?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,})\b')
 _USER_RE    = _re.compile(r"""(?:user|account|username)[s]?\s+["\']?([a-zA-Z0-9._@+-]+)["\']?""", _re.IGNORECASE)
@@ -2839,6 +2953,9 @@ def cymind_chat_proxy():
                 _entity_block = _fetch_entity_incidents_block(_last)
                 if _entity_block:
                     siem_block += _entity_block
+                _inc_block = _fetch_incident_detail_block(_last)
+                if _inc_block:
+                    siem_block += _inc_block
             body_json["system"] = (existing_system + siem_block).strip()
         else:
             # No live data — inject an explicit note so CyMind never says "enable the toggle"

@@ -1,3 +1,11 @@
+## v1.0.402 -- 2026-05-11
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
 ## v1.0.401 -- 2026-05-11
 
 ### Improvements
@@ -6,7 +14,20 @@
 
 ---
 
-## v1.0.401 — Fix CyMind hallucination on entity/user incident queries — 2026-05-11
+## v1.0.402 — Fix INC-ID lookup + ASM/SIEM incident format alignment — 2026-05-11
+
+### Bug Fixes
+
+- **"show me details of INC-00708" returning not found**: Root cause — the proxy only injected a top-10 open incidents snapshot. Any incident not in that slice was invisible to CyMind. Added `_fetch_incident_detail_block(message)` to `routes.py`: scans the user message for `INC-\d+` patterns, fetches each incident from `GET /incidents/{id}` on the correlation engine, and injects the **full record** (severity, status, risk score, categories, affected users/agents/IPs, MITRE tactics, kill chain, UEBA flags, correlated rules, AI summary and remediation). If the ID does not exist in the DB, injects a clear "not found" instruction so CyMind says exactly that instead of confabulating.
+- **ASM incidents (`ASM-DOMAIN-MODULE-N`) in different format than SIEM incidents (`INC-XXXXX`)**: Root cause — ASM scan findings are stored into CyMind's Qdrant RAG memory by `store_to_cymind_memory` (in `cycentra_scan.py`) with different field names (`alert_type`, `source_ip`, `outcome`, `analyst_notes`) than the SIEM correlation engine incidents (`llm_summary`, `src_ips`, `status`, `llm_remediation`). CyMind presented them differently because they literally were different. Fixed by aligning the RAG payload to include both old (legacy) keys for existing queries AND new SIEM-consistent keys (`id`, `llm_summary`, `status`, `src_ips`, `affected_agents`, `categories`, `llm_remediation`).
+- **Incident context table showing `?` for title and created**: The SIEM context block used `inc.get('title')` and `inc.get('created_at')` but neither field exists on the `Incident` model. Replaced with synthesized summary from `llm_summary` or `categories`, and added `affected_users` column.
+- **Added ID format guide** to SIEM context header so CyMind always knows the two namespaces (INC-XXXXX = correlation engine, ASM-... = RAG/scan findings) and presents both in a consistent table format.
+
+### Files Changed
+- `backend/blueprints/system/routes.py` — `_fetch_incident_detail_block()`, proxy wiring, incident table fix, SIEM context format guide
+- `backend/cy_asm/cycentra_scan.py` — aligned `store_to_cymind_memory` payload fields
+
+---
 
 ### Bug Fixes
 
