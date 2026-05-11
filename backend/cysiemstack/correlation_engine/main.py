@@ -1957,6 +1957,62 @@ try:
                     "message": "Run the compliance scanner or check the cy_compliance_controls table.",
                 }, indent=2)
 
+
+        @_mcp.tool()
+        async def get_incident_distribution() -> str:
+            """Return the real count of incidents broken down by severity, status, and category.
+
+            Use this tool whenever the analyst asks about:
+            - how many critical/high/medium/low incidents there are
+            - incident severity distribution or breakdown
+            - incident status split (open, investigating, resolved, false positive, etc.)
+            - which attack categories or incident types are most common
+            - any question containing 'distribution', 'breakdown', 'how many', 'count by',
+              'by severity', 'by status', 'by category', 'by type'
+
+            Returns exact database counts — never estimate or guess when this tool is available.
+            """
+            from sqlalchemy import func, text as _sa_text
+            async with AsyncSessionLocal() as db:
+                # Severity
+                sev_rows = (await db.execute(
+                    select(Incident.severity, func.count().label("n"))
+                    .group_by(Incident.severity)
+                )).all()
+                by_severity = {str(s or "unknown").lower(): int(n) for s, n in sev_rows}
+
+                # Status
+                sta_rows = (await db.execute(
+                    select(Incident.status, func.count().label("n"))
+                    .group_by(Incident.status)
+                )).all()
+                by_status = {str(s or "unknown").lower(): int(n) for s, n in sta_rows}
+
+                # Category (unnest ARRAY, top 15)
+                cat_rows = (await db.execute(_sa_text("""
+                    SELECT cat, COUNT(*) AS n
+                    FROM incidents, UNNEST(categories) AS cat
+                    WHERE categories IS NOT NULL
+                      AND array_length(categories, 1) > 0
+                    GROUP BY cat
+                    ORDER BY n DESC
+                    LIMIT 15
+                """))).all()
+                by_category = {str(c): int(n) for c, n in cat_rows}
+
+            total = sum(by_severity.values())
+            return _stdlib_json.dumps({
+                "total_incidents":  total,
+                "by_severity":      by_severity,
+                "by_status":        by_status,
+                "by_category":      by_category,
+                "note": (
+                    "These are exact database counts. "
+                    "Use them directly — do not guess or estimate."
+                ),
+            }, indent=2)
+
+
         # Mount the MCP sub-application — SSE endpoint: /mcp/sse
         # FastMCP >=1.6 removed get_application(); fall back to the ASGI app directly.
         _mcp_asgi = (

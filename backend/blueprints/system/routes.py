@@ -1177,6 +1177,7 @@ _MCP_TOOLS = [
     {"name": "get_threat_intel",           "access_level": "read",  "description": "MISP IOC cache + risk scores for a specific indicator value"},
     {"name": "get_vuln_summary",           "access_level": "read",  "description": "Aggregated CVE counts across all active Wazuh agents"},
     {"name": "get_compliance_status",      "access_level": "read",  "description": "Compliance control coverage grouped by framework (NIS2, ISO 27001, DORA)"},
+    {"name": "get_incident_distribution",  "access_level": "read",  "description": "Exact incident counts by severity, status, and category (top 15) — never estimate"},
     # ── Write tools (require analyst confirmation before execution) ────────────
     {"name": "wazuh_active_response",      "access_level": "write", "requires_confirmation": True,  "description": "Trigger a Wazuh active-response command on an agent"},
     {"name": "update_incident",            "access_level": "write", "requires_confirmation": True,  "description": "Update incident fields: assigned_to, notes, severity (PATCH)"},

@@ -1,8 +1,27 @@
-## v1.0.399 -- 2026-05-11
+## v1.0.400 -- 2026-05-11
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.400 — Incident Distribution MCP Tool — 2026-05-11
+
+### Bug Fixes
+
+- **MCP chat returning "?" for incident distributions**: Added `get_incident_distribution` as a dedicated MCP tool in the correlation engine. The tool queries the DB directly (severity, status, category GROUP BY) and returns exact counts. CyMind now auto-invokes it on any distribution/breakdown/count-by question instead of estimating from the limited `list_incidents` preview.
+
+### Files Changed
+- `backend/cysiemstack/correlation_engine/main.py` — new `get_incident_distribution` MCP tool
+- `backend/blueprints/system/routes.py` — added to `_MCP_TOOLS` registry
+- `CyMind/cymind/api/mcp_client.py` — keyword routing + label entry
+
+---
+
+## v1.0.399 -- 2026-05-11
+
+
 
 ---
 
