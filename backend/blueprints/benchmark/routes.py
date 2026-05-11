@@ -374,13 +374,31 @@ def _collect_siem_score() -> dict:
         if not detail_parts:
             detail_parts.append("Engine healthy — no active threats")
 
+        # ── Distribution data ─────────────────────────────────────────────────
+        severity_distribution: dict = {}
+        status_distribution:   dict = {}
+        category_distribution: dict = {}
+        try:
+            r_dist = _req.get(f"{_SIEM_ENGINE}/incidents/distribution",
+                              timeout=_SIEM_TIMEOUT)
+            if r_dist.status_code == 200:
+                dist = r_dist.json()
+                severity_distribution = dist.get("by_severity", {})
+                status_distribution   = dist.get("by_status",   {})
+                category_distribution = dist.get("by_category", {})
+        except Exception as _dist_err:
+            log.debug("[benchmark] distribution fetch failed: %s", _dist_err)
+
         return {
-            "score":            score,
-            "stale":            False,
-            "detail":           " · ".join(detail_parts),
-            "active_agents":    active_agents,
-            "open_incidents":   open_incidents,
-            "critical_alerts":  critical_alerts,
+            "score":                 score,
+            "stale":                 False,
+            "detail":                " · ".join(detail_parts),
+            "active_agents":         active_agents,
+            "open_incidents":        open_incidents,
+            "critical_alerts":       critical_alerts,
+            "severity_distribution": severity_distribution,
+            "status_distribution":   status_distribution,
+            "category_distribution": category_distribution,
         }
 
     except _req.exceptions.ConnectionError:

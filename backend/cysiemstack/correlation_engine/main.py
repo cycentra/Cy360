@@ -1249,6 +1249,112 @@ async def bulk_false_positive(req: BulkFPReq, db: AsyncSession = Depends(get_db)
     return {"results": results, "success_count": success_count, "total": len(req.incident_ids)}
 
 
+# ── Audit write endpoint (used by external callers: Flask proxy agentic actions) ─
+class AuditWriteReq(BaseModel):
+    entity_type: str
+    entity_id:   str
+    action:      str
+    comment:     Optional[str] = None
+    actor:       str = "analyst"
+    from_status: Optional[str] = None
+    to_status:   Optional[str] = None
+    extra:       Optional[dict] = None
+
+
+@app.post("/audit")
+async def write_audit_entry(req: AuditWriteReq, db: AsyncSession = Depends(get_db)):
+    """Write an audit log entry for an externally-confirmed action.
+
+    Called by the CyCentra 360 Flask proxy after every confirmed agentic action
+    (assign, note, escalate, SOAR trigger, enrich, etc.) so that all chat-driven
+    operations have a persisted audit trail in the correlation engine DB.
+
+    This endpoint accepts any entity_type but validation is intentionally loose —
+    the Flask proxy is trusted loopback; it never accepts user-controlled payloads
+    directly without session authentication.
+    """
+    from iris_connector import write_audit
+    try:
+        await write_audit(
+            db,
+            entity_type = req.entity_type,
+            entity_id   = req.entity_id,
+            action      = req.action,
+            actor       = req.actor,
+            from_status = req.from_status,
+            to_status   = req.to_status,
+            comment     = req.comment,
+            extra       = req.extra or {},
+        )
+        await db.commit()
+        log.info("audit_entry_written", entity=req.entity_id, action=req.action, actor=req.actor)
+        return {"ok": True}
+    except Exception as e:
+        log.error("audit_entry_failed", error=str(e))
+        return {"ok": False, "error": str(e)}
+
+
+# ── Incident distribution endpoint (severity / status / category) ──────────────
+
+@app.get("/incidents/distribution")
+async def get_incident_distribution(db: AsyncSession = Depends(get_db)):
+    """
+    Return pre-aggregated incident counts grouped by severity, status, and
+    category.  Used by the Benchmark Intelligence Engine to populate the
+    distribution charts on the Posture Benchmark page.
+
+    Response:
+      {
+        "by_severity": {"critical": N, "high": N, "medium": N, "low": N},
+        "by_status":   {"open": N, "investigating": N, "in_review": N, ...},
+        "by_category": {"Malware": N, "Brute Force": N, ...},  // top 15
+        "total":       N
+      }
+    """
+    from sqlalchemy import func, text as sa_text
+
+    # ── Severity distribution ─────────────────────────────────────────────────
+    sev_rows = (await db.execute(
+        select(Incident.severity, func.count().label("n"))
+        .group_by(Incident.severity)
+    )).all()
+    by_severity: dict[str, int] = {}
+    for sev, n in sev_rows:
+        by_severity[str(sev or "unknown").lower()] = int(n)
+
+    # ── Status distribution ───────────────────────────────────────────────────
+    sta_rows = (await db.execute(
+        select(Incident.status, func.count().label("n"))
+        .group_by(Incident.status)
+    )).all()
+    by_status: dict[str, int] = {}
+    for sta, n in sta_rows:
+        by_status[str(sta or "unknown").lower()] = int(n)
+
+    # ── Category distribution (unnest ARRAY column, top 15) ──────────────────
+    cat_rows = (await db.execute(sa_text("""
+        SELECT cat, COUNT(*) AS n
+        FROM incidents, UNNEST(categories) AS cat
+        WHERE categories IS NOT NULL
+          AND array_length(categories, 1) > 0
+        GROUP BY cat
+        ORDER BY n DESC
+        LIMIT 15
+    """))).all()
+    by_category: dict[str, int] = {str(cat): int(n) for cat, n in cat_rows}
+
+    total = sum(by_severity.values())
+    log.info("incident_distribution_fetched", total=total,
+             severities=list(by_severity.keys()), statuses=list(by_status.keys()))
+
+    return {
+        "by_severity": by_severity,
+        "by_status":   by_status,
+        "by_category": by_category,
+        "total":       total,
+    }
+
+
 # ── Security MCP bridge (mounted at /mcp) ─────────────────────────────────────
 # Enabled when the mcp package is installed (installed alongside the engine).
 # AI clients connect to: http://127.0.0.1:8100/mcp/sse
@@ -1511,6 +1617,346 @@ try:
             data = await _wazuh_get(f"/vulnerability/{agent_id}", params=params)
             return _stdlib_json.dumps(data.get("data", {}), indent=2)
 
+        # ── MCP tools — extended read tools ────────────────────────────────────
+
+        @_mcp.tool()
+        async def get_alert(alert_id: str) -> str:
+            """Get full details for a single alert by its internal ID.
+
+            Returns agent, rule, MITRE mapping, MISP IOC match flag, risk score,
+            source IP, username, file path, and the incident it belongs to.
+
+            Args:
+                alert_id: Internal alert ID (integer as string, e.g. "4821").
+            """
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get("http://127.0.0.1:8100/alerts",
+                                params={"limit": 500})
+                r.raise_for_status()
+                data = r.json()
+                alerts = data if isinstance(data, list) else data.get("alerts", data)
+                for a in alerts:
+                    if str(a.get("id")) == str(alert_id):
+                        return _stdlib_json.dumps(a, indent=2)
+                return _stdlib_json.dumps({"error": f"Alert {alert_id} not found"}, indent=2)
+
+        @_mcp.tool()
+        async def search_alerts(
+            agent_id: Optional[str] = None,
+            rule_id: Optional[str] = None,
+            severity_min: Optional[int] = None,
+            has_misp_match: Optional[bool] = None,
+            limit: int = 30,
+        ) -> str:
+            """Search alerts with multiple filter criteria.
+
+            Filters are applied client-side against the most recent alerts.
+            Useful for hunting across rule IDs or specific endpoints.
+
+            Args:
+                agent_id:       Filter alerts from this Wazuh agent ID.
+                rule_id:        Filter alerts matching this Wazuh rule ID.
+                severity_min:   Minimum rule_level (Wazuh severity, 1–15).
+                has_misp_match: If true, return only alerts with a MISP IOC match.
+                limit:          Maximum results to return (1–200, default 30).
+            """
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get("http://127.0.0.1:8100/alerts",
+                                params={"limit": 500})
+                r.raise_for_status()
+                data = r.json()
+                alerts = data if isinstance(data, list) else data.get("alerts", data)
+
+            results = []
+            for a in alerts:
+                if agent_id and str(a.get("agent_id")) != str(agent_id):
+                    continue
+                if rule_id and str(a.get("rule_id")) != str(rule_id):
+                    continue
+                if severity_min is not None and (a.get("rule_level") or 0) < severity_min:
+                    continue
+                if has_misp_match is True and not a.get("misp_ioc_match"):
+                    continue
+                results.append(a)
+                if len(results) >= max(1, min(limit, 200)):
+                    break
+            return _stdlib_json.dumps({"alerts": results, "total": len(results)}, indent=2)
+
+        @_mcp.tool()
+        async def update_incident(
+            incident_id: str,
+            assigned_to: Optional[str] = None,
+            notes: Optional[str] = None,
+            severity: Optional[str] = None,
+        ) -> str:
+            """Update an incident's assignee, analyst notes, or severity.
+
+            Use this to assign incidents to analysts, add investigation notes,
+            or change severity when initial auto-classification was incorrect.
+            This is a write operation — analyst confirmation is required.
+
+            Args:
+                incident_id: Incident identifier (e.g. INC-0042).
+                assigned_to: Email or username of the analyst to assign.
+                notes:       Free-text analyst notes to append (replaces existing notes).
+                severity:    New severity level. Values: low | medium | high | critical
+            """
+            body: dict = {}
+            if assigned_to is not None:
+                body["assigned_to"] = assigned_to
+            if notes is not None:
+                body["notes"] = notes
+            # severity is stored as part of the patch on the incident model
+            if severity is not None:
+                body["severity"] = severity
+            if not body:
+                return _stdlib_json.dumps({"error": "No fields to update — provide at least one of assigned_to, notes, or severity"}, indent=2)
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.patch(
+                    f"http://127.0.0.1:8100/incidents/{incident_id}",
+                    json=body,
+                )
+                r.raise_for_status()
+                return _stdlib_json.dumps(r.json(), indent=2)
+
+        @_mcp.tool()
+        async def list_campaigns(limit: int = 10) -> str:
+            """List correlated attack campaigns — groups of open incidents that share
+            attacker infrastructure (common source IPs or affected users).
+
+            Each campaign entry shows its campaign_id, the linked incident IDs,
+            shared indicators, and the earliest/latest activity timestamps.
+
+            Args:
+                limit: Maximum number of campaigns to return (1–50, default 10).
+            """
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get("http://127.0.0.1:8100/incidents",
+                                params={"limit": 200, "status": "open"})
+                r.raise_for_status()
+                data = r.json()
+                incidents = data if isinstance(data, list) else data.get("incidents", [])
+
+            # Group by campaign_id
+            campaigns: dict[str, dict] = {}
+            ungrouped = []
+            for inc in incidents:
+                cid = inc.get("campaign_id")
+                if not cid:
+                    ungrouped.append(inc.get("id"))
+                    continue
+                if cid not in campaigns:
+                    campaigns[cid] = {
+                        "campaign_id":      cid,
+                        "incident_count":   0,
+                        "incident_ids":     [],
+                        "severities":       [],
+                        "earliest_seen":    inc.get("first_seen"),
+                        "latest_seen":      inc.get("last_seen"),
+                    }
+                entry = campaigns[cid]
+                entry["incident_count"] += 1
+                entry["incident_ids"].append(inc.get("id"))
+                entry["severities"].append(inc.get("severity"))
+                if inc.get("first_seen") and (not entry["earliest_seen"] or inc["first_seen"] < entry["earliest_seen"]):
+                    entry["earliest_seen"] = inc["first_seen"]
+                if inc.get("last_seen") and (not entry["latest_seen"] or inc["last_seen"] > entry["latest_seen"]):
+                    entry["latest_seen"] = inc["last_seen"]
+
+            result = sorted(campaigns.values(), key=lambda x: x["incident_count"], reverse=True)
+            return _stdlib_json.dumps({
+                "campaigns":          result[:max(1, min(limit, 50))],
+                "total_campaigns":    len(campaigns),
+                "ungrouped_incidents": len(ungrouped),
+            }, indent=2)
+
+        @_mcp.tool()
+        async def get_threat_intel(
+            ioc_value: str,
+            ioc_type: Optional[str] = None,
+        ) -> str:
+            """Look up a threat indicator (IP, domain, SHA256 hash) against MISP
+            and the entity risk score database.
+
+            Returns MISP event matches, threat level, associated tags, and the
+            entity's current risk score from the correlation engine.
+
+            Args:
+                ioc_value: The indicator value to look up (IP address, domain, or SHA256 hash).
+                ioc_type:  Optional type hint. Values: ip | domain | sha256
+                           If omitted the type is inferred from the value format.
+            """
+            from models import AsyncSessionLocal, MISPIOCCache, RiskScore
+            from sqlalchemy import select as _select
+            result: dict = {"ioc_value": ioc_value, "ioc_type": ioc_type, "misp": None, "risk_score": None}
+
+            # Infer type if not provided
+            if not ioc_type:
+                import re as _re
+                if _re.match(r'^\d{1,3}(\.\d{1,3}){3}$', ioc_value):
+                    ioc_type = "ip"
+                elif _re.match(r'^[0-9a-fA-F]{64}$', ioc_value):
+                    ioc_type = "sha256"
+                else:
+                    ioc_type = "domain"
+                result["ioc_type"] = ioc_type
+
+            async with AsyncSessionLocal() as db:
+                # MISP cache lookup
+                row = (await db.execute(
+                    _select(MISPIOCCache)
+                    .where(MISPIOCCache.ioc_value == ioc_value,
+                           MISPIOCCache.ioc_type == ioc_type)
+                )).scalar_one_or_none()
+                if row:
+                    result["misp"] = {
+                        "is_hit":      row.is_hit,
+                        "threat_level": row.threat_level,
+                        "tags":        row.tags or [],
+                        "events":      row.misp_events or [],
+                        "cached_at":   row.cached_at.isoformat() if row.cached_at else None,
+                    }
+
+                # Risk score lookup (IP or hostname)
+                if ioc_type in ("ip", "domain"):
+                    rs = (await db.execute(
+                        _select(RiskScore).where(RiskScore.entity_id == ioc_value)
+                    )).scalar_one_or_none()
+                    if rs:
+                        result["risk_score"] = {
+                            "score":     float(rs.score or 0),
+                            "level":     rs.level,
+                            "trend":     rs.trend,
+                            "breakdown": rs.score_breakdown or {},
+                        }
+
+            return _stdlib_json.dumps(result, indent=2)
+
+        @_mcp.tool()
+        async def get_vuln_summary(
+            severity: Optional[str] = None,
+            limit: int = 10,
+        ) -> str:
+            """Return an aggregated vulnerability summary across all Wazuh agents.
+
+            Groups CVEs by severity, counts affected agents, and surfaces the
+            top open findings. Useful for understanding overall exposure at a glance.
+
+            Args:
+                severity: Filter results. Values: Critical | High | Medium | Low
+                limit:    Maximum number of top findings to return (1–50, default 10).
+            """
+            # Pull all active agents
+            try:
+                agents_data = await _wazuh_get("/agents", params={
+                    "status": "active", "limit": 500,
+                    "select": "id,name",
+                })
+                agent_ids = [
+                    a["id"]
+                    for a in agents_data.get("data", {}).get("affected_items", [])
+                ]
+            except Exception:
+                agent_ids = ["000"]
+
+            counts: dict[str, int] = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
+            top_findings: list[dict] = []
+
+            for aid in agent_ids[:20]:  # cap at 20 agents to avoid timeout
+                try:
+                    params: dict = {"limit": 100}
+                    if severity:
+                        params["severity"] = severity
+                    data = await _wazuh_get(f"/vulnerability/{aid}", params=params)
+                    vulns = data.get("data", {}).get("affected_items", [])
+                    for v in vulns:
+                        sev = v.get("severity", "Unknown")
+                        if sev in counts:
+                            counts[sev] += 1
+                        top_findings.append({
+                            "agent_id": aid,
+                            "cve":      v.get("cve"),
+                            "severity": sev,
+                            "cvss3":    v.get("cvss3_score"),
+                            "package":  v.get("name"),
+                            "version":  v.get("version"),
+                        })
+                except Exception:
+                    continue
+
+            # Sort by severity weight
+            _weight = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1}
+            top_findings.sort(key=lambda x: _weight.get(x["severity"], 0), reverse=True)
+
+            return _stdlib_json.dumps({
+                "summary_by_severity": counts,
+                "total_findings":      sum(counts.values()),
+                "agents_scanned":      len(agent_ids[:20]),
+                "top_findings":        top_findings[:max(1, min(limit, 50))],
+            }, indent=2)
+
+        @_mcp.tool()
+        async def get_compliance_status() -> str:
+            """Return the current compliance posture across all active control frameworks.
+
+            Reads from the CyCentra 360 compliance controls database and returns
+            pass/fail counts, overall compliance percentage, and the top failing
+            control areas by framework (NIS2, ISO 27001, DORA, GDPR, CIS).
+
+            Falls back to an ASM-derived estimate if the compliance DB is unavailable.
+            """
+            try:
+                import asyncpg as _asyncpg
+                from config import get_settings as _gs
+                s = _gs()
+                conn = await _asyncpg.connect(
+                    host=s.postgres_host,
+                    port=int(s.postgres_port or 5432),
+                    database=s.postgres_db,
+                    user=s.postgres_user,
+                    password=s.postgres_password,
+                )
+                rows = await conn.fetch(
+                    "SELECT framework, control_id, title, status, last_checked "
+                    "FROM cy_compliance_controls ORDER BY framework, control_id"
+                )
+                await conn.close()
+
+                by_framework: dict[str, dict] = {}
+                for row in rows:
+                    fw = row["framework"] or "General"
+                    if fw not in by_framework:
+                        by_framework[fw] = {"pass": 0, "fail": 0, "total": 0, "failing_controls": []}
+                    entry = by_framework[fw]
+                    entry["total"] += 1
+                    if row["status"] == "pass":
+                        entry["pass"] += 1
+                    else:
+                        entry["fail"] += 1
+                        if len(entry["failing_controls"]) < 5:
+                            entry["failing_controls"].append({
+                                "id":    row["control_id"],
+                                "title": row["title"],
+                            })
+
+                total_pass  = sum(v["pass"]  for v in by_framework.values())
+                total_total = sum(v["total"] for v in by_framework.values())
+                pct = round(100 * total_pass / total_total, 1) if total_total else 0
+
+                return _stdlib_json.dumps({
+                    "overall_compliance_pct": pct,
+                    "total_controls":         total_total,
+                    "passing":                total_pass,
+                    "failing":                total_total - total_pass,
+                    "by_framework":           by_framework,
+                }, indent=2)
+
+            except Exception as exc:
+                return _stdlib_json.dumps({
+                    "error":   f"Compliance DB unavailable: {exc}",
+                    "message": "Run the compliance scanner or check the cy_compliance_controls table.",
+                }, indent=2)
+
         # Mount the MCP sub-application — SSE endpoint: /mcp/sse
         # FastMCP >=1.6 removed get_application(); fall back to the ASGI app directly.
         _mcp_asgi = (
@@ -1564,7 +2010,7 @@ if _cymind_key:
             if not provided:
                 provided = raw_headers.get(b"x-cymind-key", b"").decode("utf-8", errors="ignore")
             if provided not in _load_valid_mcp_keys():
-                body = b'{"error":"Unauthorized \u2014 valid MCP API key required"}'
+                body = b'{"error":"Unauthorized - valid MCP API key required"}'
                 await send({
                     "type": "http.response.start",
                     "status": 401,

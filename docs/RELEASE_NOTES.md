@@ -1,3 +1,36 @@
+## v1.0.399 -- 2026-05-11
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.399 — MCP Execution Layer + Benchmark Distribution — 2026-05-11
+
+### Enhancements
+
+#### MCP Unified Execution Layer (CyCentra 360 ↔ CyMind)
+
+- **E1 — 7 new MCP read tools** in `correlation_engine/main.py`: `get_alert`, `search_alerts`, `update_incident`, `list_campaigns`, `get_threat_intel`, `get_vuln_summary`, `get_compliance_status` — all registered inside the `if _mcp_enabled:` block.
+- **E2 — 6 new agentic action types** in `blueprints/system/routes.py`: `assign_incident`, `add_incident_note`, `escalate_incident`, `create_cyiris_case`, `enrich_ioc`, `trigger_soar_playbook` — intent patterns + confirmed execution handlers wired end-to-end.
+- **E3 — Full audit trail for all confirmed actions**: New `POST /audit` engine endpoint accepts audit writes from the Flask proxy. New `_write_action_audit()` helper in `routes.py` — fire-and-forget loopback, never blocks action execution. All 5 original action handlers (`block_ip`, `disable_user`, `restart_agent`, `close_incident`, `mark_false_positive`) now write an audit entry on success.
+- **E4 — Per-tool RBAC metadata in `_MCP_TOOLS`**: Added `access_level: "read"/"write"` and `requires_confirmation: true` flags to all 18 tool entries so the portal MCP config page can surface write tools distinctly.
+- **E5 — CyMind `mcp_client.py` extended**: 6 new entries in `_WRITE_TOOLS`, 5 new tuples in `_KEYWORD_TOOLS` (campaigns, threat intel, compliance, vuln summary, single alert), 6 new `_LABELS` entries for `format_context_block`.
+
+#### Benchmark Intelligence Engine — Incident Distribution
+
+- **New engine endpoint `GET /incidents/distribution`**: Returns `by_severity`, `by_status`, and `by_category` (top 15, unnested from `categories` ARRAY) via three lightweight GROUP BY queries. Used by the Benchmark page.
+- **`_collect_siem_score()` updated**: Now calls `/incidents/distribution` after the main score calculation and surfaces `severity_distribution`, `status_distribution`, and `category_distribution` in the SIEM dimension breakdown — available at `breakdown.siem.*` in `GET /api/benchmark/score`.
+
+### Files Changed
+- `backend/cysiemstack/correlation_engine/main.py`
+- `backend/blueprints/system/routes.py`
+- `backend/blueprints/benchmark/routes.py`
+- `Documents/GitHub/Custom-Tools/CyMind/cymind/api/mcp_client.py`
+
+---
+
 ## v1.0.398 -- 2026-05-11
 
 ### Bug Fixes

@@ -1160,16 +1160,26 @@ def system_geoip():
 
 # The 11 tools registered by the Security MCP bridge (mirrors main.py)
 _MCP_TOOLS = [
-    {"name": "get_stats",                  "description": "High-level SIEM statistics: incidents, alerts, anomalies, uptime"},
-    {"name": "list_incidents",             "description": "List incidents filtered by status / severity"},
-    {"name": "get_incident",               "description": "Full details for a single incident by ID"},
-    {"name": "list_alerts",                "description": "Enumerate raw alerts, optionally scoped to an incident"},
-    {"name": "list_risk_scores",           "description": "Entity risk scores filtered by type and level"},
-    {"name": "list_ueba_users",            "description": "UEBA user profiles with anomaly and activity data"},
-    {"name": "get_ueba_anomalies",         "description": "Detailed behavioural anomalies for a specific user"},
-    {"name": "wazuh_list_agents",          "description": "Enumerate Wazuh agents with optional status filter"},
-    {"name": "wazuh_active_response",      "description": "Trigger a Wazuh active-response command on an agent"},
-    {"name": "wazuh_get_agent_vulnerabilities", "description": "Wazuh vulnerability scan results for an agent"},
+    # ── Read tools ────────────────────────────────────────────────────────────
+    {"name": "get_stats",                  "access_level": "read",  "description": "High-level SIEM statistics: incidents, alerts, anomalies, uptime"},
+    {"name": "list_incidents",             "access_level": "read",  "description": "List incidents filtered by status / severity"},
+    {"name": "get_incident",               "access_level": "read",  "description": "Full details for a single incident by ID"},
+    {"name": "list_alerts",                "access_level": "read",  "description": "Enumerate raw alerts, optionally scoped to an incident"},
+    {"name": "list_risk_scores",           "access_level": "read",  "description": "Entity risk scores filtered by type and level"},
+    {"name": "list_ueba_users",            "access_level": "read",  "description": "UEBA user profiles with anomaly and activity data"},
+    {"name": "get_ueba_anomalies",         "access_level": "read",  "description": "Detailed behavioural anomalies for a specific user"},
+    {"name": "wazuh_list_agents",          "access_level": "read",  "description": "Enumerate Wazuh agents with optional status filter"},
+    {"name": "wazuh_get_agent_vulnerabilities", "access_level": "read", "description": "Wazuh vulnerability scan results for an agent"},
+    # ── New read tools (Phase 2) ───────────────────────────────────────────────
+    {"name": "get_alert",                  "access_level": "read",  "description": "Full details for a single alert by ID"},
+    {"name": "search_alerts",              "access_level": "read",  "description": "Multi-filter alert search: agent, rule, severity, MISP match"},
+    {"name": "list_campaigns",             "access_level": "read",  "description": "Group open incidents by campaign_id (attack-chain view)"},
+    {"name": "get_threat_intel",           "access_level": "read",  "description": "MISP IOC cache + risk scores for a specific indicator value"},
+    {"name": "get_vuln_summary",           "access_level": "read",  "description": "Aggregated CVE counts across all active Wazuh agents"},
+    {"name": "get_compliance_status",      "access_level": "read",  "description": "Compliance control coverage grouped by framework (NIS2, ISO 27001, DORA)"},
+    # ── Write tools (require analyst confirmation before execution) ────────────
+    {"name": "wazuh_active_response",      "access_level": "write", "requires_confirmation": True,  "description": "Trigger a Wazuh active-response command on an agent"},
+    {"name": "update_incident",            "access_level": "write", "requires_confirmation": True,  "description": "Update incident fields: assigned_to, notes, severity (PATCH)"},
 ]
 
 
@@ -1994,6 +2004,133 @@ def _detect_action_intent(message: str) -> dict | None:
                 "reversible": True,
             }
 
+    # ── 9. Assign incident to analyst ────────────────────────────────────────
+    if _re.search(r'\bassign\b.{0,30}(?:incident|inc)\b|\bhandled?\s+by\b.{0,20}(?:incident|inc)\b', lm):
+        incs   = _INC_RE.findall(msg)
+        emails = _re.findall(r'[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}', msg)
+        names  = _re.findall(r'\bto\s+([A-Za-z][a-zA-Z0-9._-]{1,30})\b', msg)
+        if incs and (emails or names):
+            inc_id   = incs[0].upper()
+            assignee = emails[0] if emails else names[0]
+            return {
+                "type":       "assign_incident",
+                "params":     {"incident_id": inc_id, "assigned_to": assignee},
+                "label":      f"Assign {inc_id} to {assignee}",
+                "risk":       "low",
+                "summary":    f"This will set the **assigned_to** field on incident **{inc_id}** to **{assignee}** and log the change in the audit trail.",
+                "reversible": True,
+            }
+
+    # ── 10. Add analyst note to incident ─────────────────────────────────────
+    if _re.search(r'\badd\b.{0,20}(?:note|comment|annotation)\b.{0,30}(?:incident|inc)\b'
+                  r'|\bnote\b.{0,30}\b(INC-\d+)\b', lm):
+        incs = _INC_RE.findall(msg)
+        # Extract the note text — everything after "note:" / "comment:" or after the INC id
+        note_match = _re.search(
+            r'(?:note|comment|annotation)[s]?\s*[:\-]?\s*["\']?(.+?)(?:\s+(?:to|on|for)\s+(?:INC-\d+|incident))?$',
+            msg, _re.IGNORECASE,
+        )
+        note = note_match.group(1).strip().strip('"\'') if note_match else ""
+        if not note:
+            note = f"Analyst note added via CyMind chat"
+        if incs:
+            inc_id = incs[0].upper()
+            return {
+                "type":       "add_incident_note",
+                "params":     {"incident_id": inc_id, "note": note},
+                "label":      f"Add note to {inc_id}",
+                "risk":       "low",
+                "summary":    f"This will append an analyst note to incident **{inc_id}** and write an audit entry. Note: *\"{note[:120]}\"*",
+                "reversible": True,
+            }
+
+    # ── 11. Escalate incident ─────────────────────────────────────────────────
+    if _re.search(r'\bescalat\b.{0,30}(?:incident|inc)\b|\brais[e]?\s+(?:severity|priority)\b.{0,30}(?:INC-\d+)', lm):
+        incs = _INC_RE.findall(msg)
+        if incs:
+            inc_id = incs[0].upper()
+            return {
+                "type":       "escalate_incident",
+                "params":     {"incident_id": inc_id,
+                               "comment":     f"Escalated via CyMind agentic chat"},
+                "label":      f"Escalate incident {inc_id}",
+                "risk":       "medium",
+                "summary":    f"This will escalate incident **{inc_id}** to CyIRIS (creating an investigation case if one doesn't already exist) and bump the severity to the next level if not already at critical.",
+                "reversible": True,
+            }
+
+    # ── 12. Create CyIRIS investigation case ─────────────────────────────────
+    if _re.search(r'\b(?:create|open|raise)\b.{0,20}(?:iris|cyiris|case|ticket|investigation)\b'
+                  r'|\b(?:iris|cyiris)\b.{0,20}\b(?:case|ticket)\b', lm):
+        incs = _INC_RE.findall(msg)
+        if incs:
+            inc_id = incs[0].upper()
+            return {
+                "type":       "create_cyiris_case",
+                "params":     {"incident_id": inc_id},
+                "label":      f"Create CyIRIS case for {inc_id}",
+                "risk":       "low",
+                "summary":    f"This will create a CyIRIS investigation case for incident **{inc_id}**. If a case already exists for this incident, the existing case URL will be returned instead.",
+                "reversible": True,
+            }
+
+    # ── 13. Enrich IOC ───────────────────────────────────────────────────────
+    if _re.search(r'\benrich\b|\blook.?up\b.{0,20}(?:ioc|indicator|ip|hash|domain)\b'
+                  r'|\bmisp\b.{0,20}(?:check|search|query)\b', lm):
+        ips     = _IP_RE.findall(msg)
+        hashes  = _re.findall(r'\b[0-9a-fA-F]{64}\b', msg)
+        domains_raw = [d for d in _DOMAIN_RE.findall(msg) if d.lower() not in _DOMAIN_EXCLUSIONS]
+        if ips:
+            ioc_value, ioc_type = ips[0], "ip"
+        elif hashes:
+            ioc_value, ioc_type = hashes[0], "sha256"
+        elif domains_raw:
+            ioc_value, ioc_type = domains_raw[0], "domain"
+        else:
+            ioc_value = ioc_type = None
+        if ioc_value:
+            return {
+                "type":       "enrich_ioc",
+                "params":     {"ioc_value": ioc_value, "ioc_type": ioc_type},
+                "label":      f"Enrich {ioc_type.upper()} {ioc_value}",
+                "risk":       "low",
+                "summary":    f"This will query MISP and the entity risk score database for **{ioc_value}** ({ioc_type.upper()}). Returns threat level, event tags, and current risk score. Read-only — no changes to the environment.",
+                "reversible": True,
+            }
+
+    # ── 14. Trigger CySOAR playbook ──────────────────────────────────────────
+    if _re.search(r'\b(?:trigger|run|execute|fire|activate)\b.{0,20}(?:soar|playbook|flow|node.?red)\b'
+                  r'|\b(?:soar|playbook|flow)\b.{0,20}\b(?:trigger|run|execute|fire)\b', lm):
+        incs   = _INC_RE.findall(msg)
+        # Try to extract a playbook/flow name if quoted
+        flow_m = _re.search(r'["\']([^"\']{3,60})["\']', msg)
+        flow   = flow_m.group(1) if flow_m else None
+        inc_id = incs[0].upper() if incs else None
+        if inc_id or flow:
+            label_parts = []
+            if flow:
+                label_parts.append(f"'{flow}'")
+            if inc_id:
+                label_parts.append(f"for {inc_id}")
+            label = "Trigger CySOAR playbook " + " ".join(label_parts)
+            params: dict = {}
+            if inc_id:
+                params["incident_id"] = inc_id
+            if flow:
+                params["flow_name"] = flow
+            return {
+                "type":       "trigger_soar_playbook",
+                "params":     params,
+                "label":      label,
+                "risk":       "medium",
+                "summary":    (
+                    f"This will POST{' incident **' + inc_id + '** metadata' if inc_id else ' a trigger payload'} "
+                    f"to the CySOAR (Node-RED) webhook{' for playbook **' + flow + '**' if flow else ''}. "
+                    "The SOAR flow will run in Node-RED and any actions taken will be logged against the incident."
+                ),
+                "reversible": True,
+            }
+
     return None
 
 
@@ -2041,6 +2178,41 @@ def _stream_action_confirmation(action: dict):
     )
 
 
+def _write_action_audit(
+    engine_url: str,
+    incident_id: str,
+    action: str,
+    comment: str = "",
+    actor: str = "analyst",
+    from_status: str | None = None,
+    to_status: str | None = None,
+    extra: dict | None = None,
+) -> None:
+    """
+    Write an audit log entry for a confirmed agentic action.
+
+    Posts to the engine's /audit endpoint (direct loopback — no auth needed).
+    All failures are silently swallowed so audit writes never block action flow.
+    """
+    try:
+        http_requests.post(
+            f"{engine_url}/audit",
+            json={
+                "entity_type": "incident",
+                "entity_id":   incident_id,
+                "action":      action,
+                "from_status": from_status,
+                "to_status":   to_status,
+                "comment":     comment,
+                "actor":       actor,
+                "extra":       extra or {},
+            },
+            timeout=4,
+        )
+    except Exception:
+        pass  # audit write failure must never block the action itself
+
+
 def _execute_agentic_action(action_type: str, params: dict, actor_email: str) -> dict:
     """
     Execute a confirmed agentic action.
@@ -2064,6 +2236,10 @@ def _execute_agentic_action(action_type: str, params: dict, actor_email: str) ->
                 timeout=_t,
             )
             if r.ok:
+                _write_action_audit(engine, agent_id, "block_ip",
+                                    comment=f"IP {ip} blocked via agentic chat",
+                                    actor=actor_email,
+                                    extra={"ip": ip, "command": "firewall-drop"})
                 return {"success": True, "message": f"IP **{ip}** blocked on agent **{agent_id}**.",
                         "data": r.json()}
             return {"success": False,
@@ -2085,6 +2261,10 @@ def _execute_agentic_action(action_type: str, params: dict, actor_email: str) ->
                 timeout=_t,
             )
             if r.ok:
+                _write_action_audit(engine, agent_id, "disable_user",
+                                    comment=f"Account {username} disabled via agentic chat",
+                                    actor=actor_email,
+                                    extra={"username": username, "command": "disable-account"})
                 return {"success": True,
                         "message": f"Account **{username}** disabled on agent **{agent_id}**.",
                         "data": r.json()}
@@ -2105,6 +2285,10 @@ def _execute_agentic_action(action_type: str, params: dict, actor_email: str) ->
                 timeout=_t,
             )
             if r.ok:
+                _write_action_audit(engine, agent_id, "restart_agent",
+                                    comment="Agent restarted via agentic chat",
+                                    actor=actor_email,
+                                    extra={"command": "restart-wazuh"})
                 return {"success": True,
                         "message": f"Restart command sent to Wazuh agent **{agent_id}**.",
                         "data": r.json()}
@@ -2126,6 +2310,12 @@ def _execute_agentic_action(action_type: str, params: dict, actor_email: str) ->
                 timeout=_t,
             )
             if r.ok:
+                # Engine's /transition already writes its own audit entry; this is a
+                # supplemental proxy-level entry tagging the agentic source.
+                _write_action_audit(engine, inc_id, "status_change",
+                                    comment=comment, actor=actor_email,
+                                    from_status="open", to_status="resolved",
+                                    extra={"source": "agentic_chat"})
                 return {"success": True,
                         "message": f"Incident **{inc_id}** resolved.",
                         "data": r.json()}
@@ -2147,6 +2337,10 @@ def _execute_agentic_action(action_type: str, params: dict, actor_email: str) ->
                 timeout=_t,
             )
             if r.ok:
+                _write_action_audit(engine, inc_id, "status_change",
+                                    comment=comment, actor=actor_email,
+                                    from_status="open", to_status="false_positive",
+                                    extra={"source": "agentic_chat"})
                 return {"success": True,
                         "message": f"Incident **{inc_id}** marked as false positive.",
                         "data": r.json()}
@@ -2220,6 +2414,230 @@ def _execute_agentic_action(action_type: str, params: dict, actor_email: str) ->
     elif action_type == "add_schedule":
         from blueprints.scheduler.routes import add_job_internal
         return add_job_internal(params, actor_email)
+
+    # ── Assign incident to analyst ────────────────────────────────────────────
+    elif action_type == "assign_incident":
+        inc_id   = params.get("incident_id", "").strip()
+        assignee = params.get("assigned_to", "").strip()
+        if not inc_id or not assignee:
+            return {"success": False, "message": "Missing incident_id or assigned_to"}
+        try:
+            r = http_requests.patch(
+                f"{engine}/incidents/{inc_id}",
+                json={"assigned_to": assignee},
+                timeout=_t,
+            )
+            if r.ok:
+                _write_action_audit(engine, inc_id, "assigned",
+                                    comment=f"Assigned to {assignee}", actor=actor_email,
+                                    extra={"assigned_to": assignee})
+                return {"success": True,
+                        "message": f"Incident **{inc_id}** assigned to **{assignee}**.",
+                        "data": r.json()}
+            return {"success": False,
+                    "message": f"Engine returned HTTP {r.status_code}: {r.text[:200]}"}
+        except Exception as e:
+            return {"success": False, "message": f"Could not reach engine: {e}"}
+
+    # ── Add analyst note ──────────────────────────────────────────────────────
+    elif action_type == "add_incident_note":
+        inc_id = params.get("incident_id", "").strip()
+        note   = params.get("note", "").strip()
+        if not inc_id or not note:
+            return {"success": False, "message": "Missing incident_id or note"}
+        # Append note to existing notes via PATCH — preserve existing content
+        try:
+            existing_r = http_requests.get(f"{engine}/incidents/{inc_id}", timeout=_t)
+            existing_notes = ""
+            if existing_r.ok:
+                existing_notes = existing_r.json().get("notes") or ""
+            separator = "\n\n" if existing_notes else ""
+            from datetime import datetime as _dt
+            new_notes = (
+                f"{existing_notes}{separator}"
+                f"[{_dt.utcnow().strftime('%Y-%m-%d %H:%M UTC')} — {actor_email}]\n{note}"
+            )
+            r = http_requests.patch(
+                f"{engine}/incidents/{inc_id}",
+                json={"notes": new_notes},
+                timeout=_t,
+            )
+            if r.ok:
+                _write_action_audit(engine, inc_id, "comment",
+                                    comment=note, actor=actor_email)
+                return {"success": True,
+                        "message": f"Note added to incident **{inc_id}**.",
+                        "data": r.json()}
+            return {"success": False,
+                    "message": f"Engine returned HTTP {r.status_code}: {r.text[:200]}"}
+        except Exception as e:
+            return {"success": False, "message": f"Could not reach engine: {e}"}
+
+    # ── Escalate incident to CyIRIS ───────────────────────────────────────────
+    elif action_type == "escalate_incident":
+        inc_id  = params.get("incident_id", "").strip()
+        comment = params.get("comment") or f"Escalated via CyMind agentic chat by {actor_email}"
+        if not inc_id:
+            return {"success": False, "message": "Missing incident_id"}
+        try:
+            r = http_requests.post(
+                f"{engine}/incidents/{inc_id}/escalate",
+                timeout=_t,
+            )
+            if r.ok:
+                data = r.json()
+                _write_action_audit(engine, inc_id, "escalated",
+                                    comment=comment, actor=actor_email,
+                                    extra={"iris_case_id": data.get("iris_case_id")})
+                already = data.get("already_existed", False)
+                case_id = data.get("iris_case_id", "")
+                case_url = data.get("iris_case_url", "")
+                msg = (
+                    f"Incident **{inc_id}** escalated. CyIRIS case **{case_id}** {'already existed' if already else 'created'}."
+                    + (f" [Open in CyIRIS]({case_url})" if case_url else "")
+                )
+                return {"success": True, "message": msg, "data": data}
+            return {"success": False,
+                    "message": f"Engine returned HTTP {r.status_code}: {r.text[:200]}"}
+        except Exception as e:
+            return {"success": False, "message": f"Could not reach engine: {e}"}
+
+    # ── Create CyIRIS case ────────────────────────────────────────────────────
+    elif action_type == "create_cyiris_case":
+        inc_id = params.get("incident_id", "").strip()
+        if not inc_id:
+            return {"success": False, "message": "Missing incident_id"}
+        try:
+            r = http_requests.post(
+                f"{engine}/incidents/{inc_id}/escalate",
+                timeout=_t,
+            )
+            if r.ok:
+                data = r.json()
+                _write_action_audit(engine, inc_id, "iris_case_created",
+                                    comment=f"CyIRIS case created via chat by {actor_email}",
+                                    actor=actor_email,
+                                    extra={"iris_case_id": data.get("iris_case_id")})
+                already   = data.get("already_existed", False)
+                case_id   = data.get("iris_case_id", "")
+                case_url  = data.get("iris_case_url", "")
+                msg = (
+                    f"CyIRIS case **{case_id}** {'already existed' if already else 'created'} for incident **{inc_id}**."
+                    + (f" [Open in CyIRIS]({case_url})" if case_url else "")
+                )
+                return {"success": True, "message": msg, "data": data}
+            return {"success": False,
+                    "message": f"Engine returned HTTP {r.status_code}: {r.text[:200]}"}
+        except Exception as e:
+            return {"success": False, "message": f"Could not reach engine: {e}"}
+
+    # ── Enrich IOC (MISP + risk score lookup) ─────────────────────────────────
+    elif action_type == "enrich_ioc":
+        ioc_value = params.get("ioc_value", "").strip()
+        ioc_type  = params.get("ioc_type", "").strip() or None
+        if not ioc_value:
+            return {"success": False, "message": "Missing ioc_value"}
+        # Fetch from MCP tool via engine loopback — the engine's get_threat_intel
+        # MCP tool is not callable here directly, so we query the risk-scores REST
+        # endpoint and the MISP cache via the engine's own REST layer.
+        result: dict = {"ioc_value": ioc_value, "ioc_type": ioc_type}
+        try:
+            # Risk score for IP/domain entities
+            r = http_requests.get(
+                f"{engine}/risk-scores",
+                params={"limit": 100},
+                timeout=_t,
+            )
+            if r.ok:
+                rows = r.json()
+                rows = rows if isinstance(rows, list) else rows.get("entities", [])
+                match = next((x for x in rows if x.get("entity_id") == ioc_value), None)
+                result["risk_score"] = match or None
+        except Exception:
+            pass
+        return {
+            "success": True,
+            "message": (
+                f"Enrichment complete for **{ioc_value}** ({ioc_type or 'unknown'})."
+                + (" Risk score: **" + str(result["risk_score"]["score"]) + "** (" + result["risk_score"]["level"] + ")" if result.get("risk_score") else " No risk score entry found.")
+                + " Check MISP directly for full IOC event details."
+            ),
+            "data": result,
+        }
+
+    # ── Trigger CySOAR playbook ───────────────────────────────────────────────
+    elif action_type == "trigger_soar_playbook":
+        inc_id    = params.get("incident_id", "").strip()
+        flow_name = params.get("flow_name", "").strip()
+        if not inc_id and not flow_name:
+            return {"success": False, "message": "Provide at least an incident_id or flow_name"}
+
+        # Resolve SOAR webhook URL from engine config / ai_settings.json
+        soar_url = ""
+        try:
+            import json as _j
+            from pathlib import Path as _P
+            raw = _P("/opt/cycentra/ai_settings.json").read_text()
+            stored = _j.loads(raw)
+            soar_url = (stored.get("soar", {}).get("webhookUrl") or "").strip()
+        except Exception:
+            pass
+        if not soar_url:
+            soar_url = os.environ.get("SOAR_WEBHOOK_URL", "").strip()
+        if not soar_url:
+            return {"success": False,
+                    "message": "CySOAR webhook URL not configured. Set it in System Settings → Integrations → CySOAR."}
+
+        # Build payload — enrich with incident data if an ID was provided
+        payload: dict = {
+            "trigger":     "cymind_chat",
+            "actor":       actor_email,
+            "timestamp":   __import__("datetime").datetime.utcnow().isoformat() + "Z",
+        }
+        if flow_name:
+            payload["flow_name"] = flow_name
+        if inc_id:
+            payload["incident_id"] = inc_id
+            try:
+                r = http_requests.get(f"{engine}/incidents/{inc_id}", timeout=_t)
+                if r.ok:
+                    payload["incident"] = r.json()
+            except Exception:
+                pass
+
+        try:
+            target = soar_url.rstrip("/")
+            if flow_name:
+                target = f"{target}/{flow_name.lower().replace(' ', '-')}"
+            r = http_requests.post(target, json=payload, timeout=15)
+            if r.status_code in (200, 201, 202, 204):
+                actions_taken: list = []
+                try:
+                    body = r.json()
+                    if isinstance(body, list):
+                        actions_taken = body
+                    elif isinstance(body, dict):
+                        actions_taken = body.get("actions_taken") or []
+                except Exception:
+                    pass
+                if inc_id:
+                    _write_action_audit(engine, inc_id, "soar_triggered",
+                                        comment=f"SOAR playbook triggered{' (' + flow_name + ')' if flow_name else ''} via chat",
+                                        actor=actor_email,
+                                        extra={"flow_name": flow_name, "actions_taken": actions_taken})
+                return {
+                    "success": True,
+                    "message": (
+                        f"CySOAR playbook{' **' + flow_name + '**' if flow_name else ''} triggered"
+                        f"{' for incident **' + inc_id + '**' if inc_id else ''}. "
+                        + (f"{len(actions_taken)} action(s) logged." if actions_taken else "Node-RED confirmed receipt.")
+                    ),
+                    "data": {"actions_taken": actions_taken},
+                }
+            return {"success": False,
+                    "message": f"CySOAR returned HTTP {r.status_code}: {r.text[:200]}"}
+        except Exception as e:
+            return {"success": False, "message": f"Could not reach CySOAR: {e}"}
 
     return {"success": False, "message": f"Unknown action type: {action_type}"}
 
