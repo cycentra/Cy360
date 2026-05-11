@@ -182,10 +182,10 @@ function CTEMSyncPanel({ domain, scanType, includeSubdomains, user }) {
     setActiveJob(null);
     fetch(`${API_BASE}/api/scheduler/jobs`, { credentials: "include" })
       .then(r => r.ok ? r.json() : [])
-      .then(jobs => {
-        const mine = Array.isArray(jobs)
-          ? jobs.find(j => j.params?.domain === domain && j.type === "asm_scan")
-          : null;
+      .then(response => {
+        // GET returns {jobs: [...], count: N}; handle both that and a plain array for safety
+        const jobs = Array.isArray(response) ? response : (response?.jobs ?? []);
+        const mine = jobs.find(j => j.params?.domain === domain && j.type === "asm_scan");
         if (mine) {
           setActiveJob(mine);
           setEnabled(mine.enabled !== false);
