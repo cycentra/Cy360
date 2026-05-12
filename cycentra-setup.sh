@@ -1667,6 +1667,56 @@ OS_OIDC_PY
             fi
         fi
 
+        # ── Wazuh Manager API RBAC rules (maps OIDC backend_roles → Wazuh roles) ────
+        # OpenSearch Security gives dashboard access; the Wazuh Manager API has its own
+        # RBAC layer that controls Wazuh operations (agent mgmt, policies, etc.).
+        # Map OIDC backend_roles to Wazuh roles via the security/rules + roles API.
+        #   admin   → administrator (id 1) — full Wazuh access incl. agent management
+        #   analyst → agents_admin (id 5)  — manage agents, no user/role administration
+        #   viewer  → readonly (id 2)       — read-only access to all Wazuh resources
+        # Idempotent: skips rule creation if a rule with the same name already exists.
+        if [[ -n "${_WAZUH_PASS:-}" ]]; then
+            _WAPI_TOKEN=$(curl -sk -u "wazuh-wui:${_WAZUH_PASS}" \
+                -X POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' 2>/dev/null)
+            if [[ -n "$_WAPI_TOKEN" && "$_WAPI_TOKEN" != *"error"* ]]; then
+                _existing_rules=$(curl -sk \
+                    -H "Authorization: Bearer ${_WAPI_TOKEN}" \
+                    'https://127.0.0.1:55000/security/rules' 2>/dev/null)
+
+                _make_wazuh_rule() {
+                    local name="$1" field="$2" value="$3" role_id="$4"
+                    if echo "$_existing_rules" | grep -q "\"$name\"" 2>/dev/null; then
+                        info "Wazuh rule '$name' already exists — skipping"
+                        return
+                    fi
+                    local new_rule
+                    new_rule=$(curl -sk -H "Authorization: Bearer ${_WAPI_TOKEN}" \
+                        -H 'Content-Type: application/json' \
+                        -X POST 'https://127.0.0.1:55000/security/rules' \
+                        -d "{\"name\":\"${name}\",\"rule\":{\"FIND\":{\"${field}\":\"${value}\"}}}" 2>/dev/null)
+                    local new_id
+                    new_id=$(echo "$new_rule" | python3 -c \
+                        'import sys,json; d=json.load(sys.stdin); print(d["data"]["affected_items"][0]["id"])' 2>/dev/null)
+                    if [[ -n "$new_id" ]]; then
+                        curl -sk -H "Authorization: Bearer ${_WAPI_TOKEN}" \
+                            -X POST "https://127.0.0.1:55000/security/roles/${role_id}/rules?rule_ids=${new_id}" \
+                            >/dev/null 2>&1
+                        success "Wazuh rule '$name' → Wazuh role ${role_id} (id ${new_id})"
+                    else
+                        warn "Wazuh rule '$name' creation failed: $new_rule"
+                    fi
+                }
+
+                _make_wazuh_rule "cy360_oidc_admin"   "backend_roles" "admin"   1
+                _make_wazuh_rule "cy360_oidc_analyst"  "backend_roles" "analyst" 5
+                _make_wazuh_rule "cy360_oidc_viewer"   "backend_roles" "viewer"  2
+            else
+                warn "Wazuh API auth failed — RBAC rules skipped; check WAZUH_API_PASSWORD"
+            fi
+        else
+            warn "WAZUH_API_PASSWORD not set — Wazuh API RBAC rules skipped"
+        fi
+
         systemctl restart wazuh-dashboard 2>/dev/null || true
         success "CySIEM OIDC: Dashboard configured, OpenSearch security updated"
     else

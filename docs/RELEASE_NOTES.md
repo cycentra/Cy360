@@ -1,3 +1,15 @@
+## v1.0.407 -- 2026-05-12
+
+### Bug Fixes
+
+  - **CySIEM OIDC — admin users not mapped to Wazuh `administrator` role**: OIDC authentication gave users an OpenSearch `all_access` session (dashboard access) but Wazuh has a second, independent RBAC layer in the Wazuh Manager API that controls Wazuh operations (agent management, policies, etc.). Without explicit rules in the Wazuh API, OIDC users landed with only `own_index` and `all_access` — enough to see the dashboard but no agent management. Three security rules are now created via the Wazuh Manager API during setup, mapping OIDC `backend_roles` to Wazuh API roles:
+    - `cy360_oidc_admin`: `backend_roles: "admin"` → Wazuh `administrator` (full access, agent management)
+    - `cy360_oidc_analyst`: `backend_roles: "analyst"` → Wazuh `agents_admin` (agent management, no user/role admin)
+    - `cy360_oidc_viewer`: `backend_roles: "viewer"` → Wazuh `readonly`
+    The rules are idempotent — skipped if a rule with the same name already exists. **Files changed**: `cycentra-setup.sh` (Wazuh API RBAC rules block after OpenSearch rolesmapping step), `docs/RELEASE_NOTES.md`.
+
+---
+
 ## v1.0.406 -- 2026-05-12
 
 ### Bug Fixes
