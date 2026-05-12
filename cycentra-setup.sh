@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.411 -- 2026-05-12 18:40 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.412 -- 2026-05-12 18:46 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -40,6 +40,9 @@ divider() { echo -e "${DIM}  ─────────────────
 gen_secret() { openssl rand -hex 24; }
 gen_pass()   { openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 20; }
 _port_up()   { ss -tlnp 2>/dev/null | grep -q ":${1} "; }
+# Escape a string for use as the replacement field in a sed s|...|...|  expression.
+# Handles: \ (escape char), | (our delimiter), & (sed backreference).
+_escape_sed_repl() { local s="$1"; s="${s//\\/\\\\}"; s="${s//|/\\|}"; s="${s//&/\\&}"; printf '%s' "$s"; }
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
 MODE="full"
@@ -665,7 +668,7 @@ if [[ -f "/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml" ]]; then
         # Patch cysiemstack.env immediately — handles update mode (step 10 is skipped)
         if [[ -f "/opt/cycentra/cysiemstack.env" ]]; then
             if grep -q "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env; then
-                sed -i "s|^WAZUH_API_PASSWORD=.*|WAZUH_API_PASSWORD=${_detected}|" /opt/cycentra/cysiemstack.env
+                sed -i "s|^WAZUH_API_PASSWORD=.*|WAZUH_API_PASSWORD=$(_escape_sed_repl "${_detected}")|" /opt/cycentra/cysiemstack.env
             else
                 echo "WAZUH_API_PASSWORD=${_detected}" >> /opt/cycentra/cysiemstack.env
             fi
@@ -1166,7 +1169,7 @@ PATCHEOF
         _wp="$(grep "^WAZUH_API_PASSWORD=" "$_siem_env_path" 2>/dev/null | cut -d= -f2)"
         if [[ -n "$_wp" ]]; then
             if grep -q "^WAZUH_API_PASSWORD=" "$_env" 2>/dev/null; then
-                sed -i "s|^WAZUH_API_PASSWORD=.*|WAZUH_API_PASSWORD=${_wp}|"\ "$_env"
+                sed -i "s|^WAZUH_API_PASSWORD=.*|WAZUH_API_PASSWORD=$(_escape_sed_repl "${_wp}")|" "$_env"
             else
                 echo "WAZUH_API_PASSWORD=${_wp}" >> "$_env"
             fi
@@ -1346,7 +1349,7 @@ SIEMEOF
     # EnvironmentFile=/opt/cycentra/.env while the correlation engine loads only
     # EnvironmentFile=/opt/cycentra/cysiemstack.env, so both files must carry these vars.
     if grep -q "^WAZUH_API_PASSWORD=" /opt/cycentra/.env 2>/dev/null; then
-        sed -i "s|^WAZUH_API_PASSWORD=.*|WAZUH_API_PASSWORD=${_WAZUH_PASS}|" /opt/cycentra/.env
+        sed -i "s|^WAZUH_API_PASSWORD=.*|WAZUH_API_PASSWORD=$(_escape_sed_repl "${_WAZUH_PASS}")|" /opt/cycentra/.env
     else
         echo "WAZUH_API_PASSWORD=${_WAZUH_PASS}" >> /opt/cycentra/.env
     fi
