@@ -634,9 +634,12 @@ if [[ -f "$WAZUH_YML" ]]; then
         fi
     fi
 
-    # ── Strip any stale auth settings (idempotent early cleanup) ────────────
-    # Clears proxy/OIDC/basicauth overrides so step 4.3b can write the canonical
-    # OIDC settings from scratch.  Runs before .env is available on fresh install.
+    # ── Strip legacy proxy-auth settings (idempotent early cleanup) ─────────
+    # Removes proxy-cache and requestHeadersAllowlist overrides left by older
+    # proxy_auth_domain installs. OIDC settings (auth.type, openid.*) are NOT
+    # stripped here — step 4.3b handles those idempotently. Stripping OIDC keys
+    # here without re-writing them (when step 4.3b is gated on oauth2proxy
+    # secrets) leaves the dashboard in basic-auth mode on every --update.
     python3 - "$WAZUH_YML" << 'WAZUH_EARLY_PROXY_EOF'
 import sys
 path = sys.argv[1]
@@ -644,11 +647,8 @@ with open(path, "rb") as f:
     raw = f.read().replace(b"\x00", b"")
 text = raw.decode("utf-8")
 remove_prefixes = [
-    "opensearch_security.auth.type",
     "opensearch_security.proxycache.",
-    "opensearch_security.openid.",
     "opensearch.requestHeadersAllowlist",
-    "# CyCentra 360",
     "# Authentication gate:",
     "# Wazuh trusts",
 ]
@@ -658,7 +658,7 @@ cleaned = "\n".join(
 ).rstrip() + "\n"
 with open(path, "w") as f:
     f.write(cleaned)
-print("Stale auth settings removed — OIDC config will be applied in step 4.3b")
+print("Legacy proxy-auth settings removed — OIDC config preserved for step 4.3b")
 WAZUH_EARLY_PROXY_EOF
 
     systemctl restart wazuh-dashboard 2>/dev/null || true
@@ -1383,8 +1383,9 @@ BASE_DOMAIN="${BASE_DOMAIN:-cycentra.com}"
 [[ -z "${CYSIEM_OIDC_SECRET:-}" ]] && \
     CYSIEM_OIDC_SECRET=$(grep "^CYSIEM_OIDC_SECRET=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2- || true)
 
+# ── oauth2-proxy container (gated on its own secrets) ────────────────────────
 if [[ -z "$OAUTH2PROXY_SECRET" || -z "$OAUTH2PROXY_COOKIE_SECRET" ]]; then
-    warn "oauth2-proxy secrets missing in .env — IAP setup skipped; re-run --update"
+    warn "oauth2-proxy secrets missing in .env — oauth2-proxy container skipped; re-run --update"
 else
     # ── Pull and start oauth2-proxy container ───────────────────────────────────
     # Runs on 127.0.0.1:4180. nginx uses it as an internal auth_request backend.
@@ -1439,16 +1440,18 @@ else
         || { warn "oauth2-proxy container failed to start — check: docker logs cy-proxy"; \
              ERRORS+=("oauth2-proxy failed to start"); }
     fi
+fi  # end oauth2proxy gate
 
-    # ── Wazuh Dashboard: configure OIDC authentication ───────────────────────────
-    # SSO mechanism: Wazuh Dashboard authenticates via the CyCentra OIDC IdP at
-    # cyasm.DOMAIN. Each user gets their individual identity; the `roles` OIDC
-    # claim maps to OpenSearch Security backend roles:
-    #   admin / analyst → all_access (full Wazuh Dashboard access)
-    #   viewer          → kibana_user + wazuh_ui_user (read-only)
-    if [[ -f "$_WAZUH_DASH_YML" ]]; then
-        step_header "CySIEM OIDC Authentication"
-        cp "$_WAZUH_DASH_YML" "${_WAZUH_DASH_YML}.pre-oidc-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+# ── Wazuh Dashboard: configure OIDC authentication ───────────────────────────
+# Runs in all modes regardless of oauth2proxy secrets — Wazuh OIDC is
+# independent of oauth2proxy. The SSO mechanism: Wazuh Dashboard authenticates
+# via the CyCentra OIDC IdP at cyasm.DOMAIN. Each user gets their individual
+# identity; the `roles` OIDC claim maps to OpenSearch Security backend roles:
+#   admin / analyst → all_access (full Wazuh Dashboard access)
+#   viewer          → kibana_user + wazuh_ui_user (read-only)
+if [[ -f "$_WAZUH_DASH_YML" ]]; then
+    step_header "CySIEM OIDC Authentication"
+    cp "$_WAZUH_DASH_YML" "${_WAZUH_DASH_YML}.pre-oidc-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
 
         # ── Inject OIDC settings into opensearch_dashboards.yml ─────────────────
         if [[ -n "${CYSIEM_OIDC_SECRET:-}" ]]; then
@@ -1807,7 +1810,6 @@ NGINX_OIDC_PY
                 info "nginx: sites-enabled replaced with symlink to sites-available" || true
         fi
     fi
-fi  # end IAP setup
 
 # ── Step 11: Deploy portal static files ──────────────────────────────────────
 step_header "DEPLOYING PORTAL"

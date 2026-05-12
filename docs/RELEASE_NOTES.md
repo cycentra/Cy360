@@ -1,8 +1,8 @@
 ## v1.0.408 -- 2026-05-12
 
-### Improvements
+### Bug Fixes
 
-  - Stability and performance improvements.
+  - **CySIEM OIDC — `--update` strips OIDC settings and doesn't restore them when oauth2-proxy secrets are absent**: Step 4.1 unconditionally removed `opensearch_security.auth.type` and all `opensearch_security.openid.*` keys from `opensearch_dashboards.yml` to "clean before re-write". The re-write (Step 4.3b) was nested inside the oauth2-proxy secrets gate (`if OAUTH2PROXY_SECRET && OAUTH2PROXY_COOKIE_SECRET`). On any `--update` run where those secrets were empty or not loaded in time, the entire Step 4.3b was skipped — leaving the dashboard permanently in basic-auth mode (Wazuh login screen shown instead of OIDC redirect). Two fixes applied: (1) Step 4.1 no longer strips OIDC keys — only legacy proxy-auth settings (`proxycache.*`, `requestHeadersAllowlist`) are removed; (2) the Wazuh Dashboard OIDC block is now structurally separated from the oauth2-proxy gate so it always runs when Wazuh is installed, regardless of oauth2-proxy secret availability. **Files changed**: `cycentra-setup.sh`, `docs/RELEASE_NOTES.md`.
 
 ---
 
