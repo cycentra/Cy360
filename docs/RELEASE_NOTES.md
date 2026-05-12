@@ -1,3 +1,11 @@
+## v1.0.415 -- 2026-05-12
+
+### Bug Fixes
+
+  - backfill Host Name and Host OS for existing incidents on engine restart
+
+---
+
 ## v1.0.414 -- 2026-05-12
 
 ### New Features

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.414 -- 2026-05-12 20:58 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.415 -- 2026-05-12 22:05 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
