@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.412 -- 2026-05-12 18:46 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.413 -- 2026-05-12 18:52 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1558,7 +1558,8 @@ CY360_RO_EOF
 
         # ── OpenSearch Security: add openid_auth_domain to config.yml ────────────
         if [[ -f "$_OS_SEC_CFG" && -f "${_CERT_DIR}/admin.pem" ]]; then
-            python3 - "$_OS_SEC_CFG" "$BASE_DOMAIN" << 'OS_OIDC_PY'
+            _cfg_py_rc=0
+            python3 - "$_OS_SEC_CFG" "$BASE_DOMAIN" << 'OS_OIDC_PY' || _cfg_py_rc=$?
 import sys, re
 path, domain = sys.argv[1], sys.argv[2]
 with open(path, "r") as f:
@@ -1611,7 +1612,6 @@ with open(path, "w") as f:
     f.write("\n".join(result) + "\n")
 print("openid_auth_domain added to config.yml")
 OS_OIDC_PY
-            _cfg_py_rc=$?
 
             # Wait for OpenSearch indexer (up to 90 s)
             info "Waiting for OpenSearch indexer to be ready (up to 90 s)..."
