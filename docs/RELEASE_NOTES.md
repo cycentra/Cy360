@@ -1,3 +1,11 @@
+## v1.0.406 -- 2026-05-12
+
+### Bug Fixes
+
+  - **CySIEM OIDC — nginx `sites-enabled` symlink not recreated on `--update`**: On servers where `/etc/nginx/sites-enabled/cycentra-modules` existed as a hardcopy file (not a symlink), running `--update` would migrate the siem-gate proxy headers out of `sites-available/cycentra-modules` but nginx kept reading the untouched hardcopy in `sites-enabled`. This caused the old `auth_request /siem-gate`, `proxy_set_header Authorization $wazuh_auth`, and `X-Proxy-User`/`X-Proxy-Roles` injection to remain active after every update — preventing OIDC from taking effect. The `--update` path now explicitly re-creates `sites-enabled/cycentra-modules` as a symlink to `sites-available/cycentra-modules` whenever it detects a hardcopy (non-symlink) file, ensuring all nginx migrations are immediately visible to the running nginx process.
+
+---
+
 ## v1.0.405 -- 2026-05-11
 
 ### Improvements

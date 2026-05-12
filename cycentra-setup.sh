@@ -1743,6 +1743,20 @@ NGINX_OIDC_PY
             success "nginx cyasm: OPTIONS intercept removed — Flask handles CORS preflight" || \
             warn "nginx reload failed after OPTIONS patch — check: nginx -t"
     fi
+
+    # ── Ensure sites-enabled is a symlink to sites-available ─────────────────────
+    # On servers where sites-enabled/cycentra-modules is a hardcopy file (not a
+    # symlink), all nginx migration edits above are invisible to nginx because it
+    # reads sites-enabled directly. Force-recreate the symlink so sites-enabled
+    # always reflects sites-available. This is idempotent — ln -sf is safe to
+    # repeat and the full-install step also runs this same command.
+    if [[ -f "/etc/nginx/sites-available/cycentra-modules" ]]; then
+        _SE="/etc/nginx/sites-enabled/cycentra-modules"
+        if [[ ! -L "$_SE" ]]; then
+            ln -sf /etc/nginx/sites-available/cycentra-modules "$_SE" 2>/dev/null && \
+                info "nginx: sites-enabled replaced with symlink to sites-available" || true
+        fi
+    fi
 fi  # end IAP setup
 
 # ── Step 11: Deploy portal static files ──────────────────────────────────────
