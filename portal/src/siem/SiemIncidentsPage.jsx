@@ -1368,12 +1368,12 @@ export function SiemIncidentsPage() {
             {/* Table header */}
             {(() => {
               const COL_KEY = { "ID": "id", "SEVERITY": "severity", "HOST ID": "source",
-                "HOST NAME": null, "HOST OS": null,
+                "HOST NAME": null,
                 "TYPE / CATEGORY": "category", "ALERTS": "alerts", "STATUS": "status",
                 "INTEL": null, "LAST SEEN": "last_seen" };
               return (
                 <div style={{ display: "grid",
-                  gridTemplateColumns: "130px 75px 140px 130px 110px 110px 60px 75px 80px 100px",
+                  gridTemplateColumns: "130px 75px 140px 130px 110px 60px 75px 80px 100px",
                   gap: 10, padding: "10px 16px",
                   background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                   {Object.entries(COL_KEY).map(([h, key]) => {
@@ -1404,7 +1404,7 @@ export function SiemIncidentsPage() {
               <div key={inc.id}
                 onClick={() => setSelected(inc)}
                 style={{ display: "grid",
-                  gridTemplateColumns: "130px 75px 140px 130px 110px 110px 60px 75px 80px 100px",
+                  gridTemplateColumns: "130px 75px 140px 130px 110px 60px 75px 80px 100px",
                   gap: 10, padding: "12px 16px", cursor: "pointer",
                   borderBottom: "1px solid rgba(255,255,255,0.04)",
                   background: selected?.id === inc.id ? "rgba(0,229,160,0.04)" : "transparent",
@@ -1442,12 +1442,6 @@ export function SiemIncidentsPage() {
                   color: "rgba(255,255,255,0.7)", fontSize: 12 }}
                   title={(inc.affected_agent_names || []).join(", ") || undefined}>
                   {(inc.affected_agent_names || []).join(", ") || <span style={{ color: "rgba(255,255,255,0.25)" }}>—</span>}
-                </div>
-                {/* HOST OS */}
-                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                  color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace" }}
-                  title={(inc.affected_agent_os || []).join(", ") || undefined}>
-                  {(inc.affected_agent_os || []).join(", ") || <span style={{ color: "rgba(255,255,255,0.25)" }}>—</span>}
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
                   {(inc.categories || []).slice(0, 2).map(cat => (

@@ -321,18 +321,8 @@ async def lifespan(app: FastAPI):
             """))
             log.info("migration_4_fp_incidents_closed_complete", threshold=_fp_thresh)
 
-            # Migration 5: backfill affected_agent_names and affected_agent_os for
-            # all incidents that predate the host-column feature (v1.0.xxx).
-            # First, backfill alerts.agent_os from JSONB for existing alert rows that
-            # were written before the agent_os column was added.
-            await _db.execute(_text("""
-                UPDATE alerts
-                SET agent_os = full_alert->'agent'->'os'->>'name'
-                WHERE agent_os IS NULL
-                  AND full_alert->'agent'->'os'->>'name' IS NOT NULL
-                  AND full_alert->'agent'->'os'->>'name' <> ''
-            """))
-            # Backfill incident host names from alerts.agent_name column
+            # Migration 5: backfill affected_agent_names for all incidents that
+            # predate the host-column feature (v1.0.xxx).
             await _db.execute(_text("""
                 UPDATE incidents i
                 SET affected_agent_names = sub.names
@@ -348,23 +338,7 @@ async def lifespan(app: FastAPI):
                   AND (i.affected_agent_names IS NULL OR i.affected_agent_names = '{}')
                   AND sub.names IS NOT NULL
             """))
-            # Backfill incident host OS from alerts.agent_os column
-            await _db.execute(_text("""
-                UPDATE incidents i
-                SET affected_agent_os = sub.os_vals
-                FROM (
-                    SELECT incident_id,
-                           array_agg(DISTINCT agent_os)
-                               FILTER (WHERE agent_os IS NOT NULL AND agent_os <> '') AS os_vals
-                    FROM alerts
-                    WHERE incident_id IS NOT NULL
-                    GROUP BY incident_id
-                ) sub
-                WHERE i.id = sub.incident_id
-                  AND (i.affected_agent_os IS NULL OR i.affected_agent_os = '{}')
-                  AND sub.os_vals IS NOT NULL
-            """))
-            log.info("migration_5_host_columns_backfill_complete")
+            log.info("migration_5_host_name_backfill_complete")
 
             await _db.commit()
             log.info("all_startup_migrations_complete")
@@ -464,7 +438,6 @@ def _incident_to_dict(i: Incident) -> dict:
         "alert_count":       i.alert_count,
         "affected_agents":       i.affected_agents      or [],
         "affected_agent_names":  i.affected_agent_names or [],
-        "affected_agent_os":     i.affected_agent_os    or [],
         "affected_users":        i.affected_users       or [],
         "src_ips":           [str(ip) for ip in (i.src_ips or [])],
         "categories":        i.categories   or [],

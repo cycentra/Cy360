@@ -1,9 +1,8 @@
 -- =============================================================================
--- 004_host_columns.sql — Add host name and OS columns to incidents table
+-- 004_host_columns.sql — Add host name column to incidents table
 -- =============================================================================
--- Adds affected_agent_names and affected_agent_os arrays so the portal can
--- display Host Name and Host OS columns in the Active Incidents table without
--- requiring a separate agent lookup.
+-- Adds affected_agent_names array so the portal can display Host Name in the
+-- Active Incidents table without requiring a separate agent lookup.
 --
 -- Idempotent — safe to re-run on any existing or fresh installation.
 --
@@ -14,7 +13,3 @@
 -- =============================================================================
 
 ALTER TABLE incidents ADD COLUMN IF NOT EXISTS affected_agent_names TEXT[];
-ALTER TABLE incidents ADD COLUMN IF NOT EXISTS affected_agent_os    TEXT[];
-
--- Store OS on the alert row so backfill and future queries avoid JSONB extraction
-ALTER TABLE alerts ADD COLUMN IF NOT EXISTS agent_os TEXT;

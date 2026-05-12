@@ -151,7 +151,6 @@ async def create_incident(db: AsyncSession, alert: dict) -> Incident:
         alert_count      = 1,
         affected_agents      = [alert['agent_id']] if alert.get('agent_id') else [],
         affected_agent_names = [alert['agent_name']] if alert.get('agent_name') else [],
-        affected_agent_os    = [alert['agent_os']] if alert.get('agent_os') else [],
         affected_users   = [alert['username']] if alert.get('username') else [],
         src_ips          = [alert['src_ip']] if alert.get('src_ip') else [],
         categories       = [alert['category']] if alert.get('category') else [],
@@ -181,7 +180,6 @@ async def merge_alert_into_incident(
 
     incident.affected_agents      = _merge_unique(incident.affected_agents      or [], alert.get('agent_id'))
     incident.affected_agent_names = _merge_unique(incident.affected_agent_names or [], alert.get('agent_name'))
-    incident.affected_agent_os    = _merge_unique(incident.affected_agent_os    or [], alert.get('agent_os'))
     incident.affected_users  = _merge_unique(incident.affected_users  or [], alert.get('username'))
     incident.src_ips         = _merge_unique(incident.src_ips         or [], alert.get('src_ip'))
     incident.categories      = _merge_categories(incident.categories or [], alert.get('category'))
@@ -212,7 +210,6 @@ async def group_alert(db: AsyncSession, alert: dict) -> Tuple[Incident, bool]:
         agent_id      = alert['agent_id'],
         agent_name    = alert.get('agent_name'),
         agent_ip      = alert.get('agent_ip'),
-        agent_os      = alert.get('agent_os'),
         rule_id       = alert['rule_id'],
         rule_desc     = alert.get('rule_desc'),
         rule_level    = alert.get('rule_level'),
