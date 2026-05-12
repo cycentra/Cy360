@@ -1,3 +1,11 @@
+## v1.0.409 -- 2026-05-12
+
+### Bug Fixes
+
+  - setup): stop stripping OIDC settings in step 4.1 and decouple Wazuh OIDC from oauth2proxy gate
+
+---
+
 ## v1.0.408 -- 2026-05-12
 
 ### Bug Fixes
