@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.409 -- 2026-05-12 15:46 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.410 -- 2026-05-12 16:13 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -224,7 +224,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.255"
+_SCRIPT_VERSION="v1.0.409"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -323,24 +323,6 @@ success "System packages installed"
 # Detect support once and store in _PIP_BSP for reuse everywhere.
 _PIP_BSP=""
 pip3 install --break-system-packages --dry-run pip 2>&1 | grep -q "no such option" || _PIP_BSP="--break-system-packages"
-
-# ── Python reporting prerequisites ────────────────────────────────────────────
-_PY_REPORT_PKGS=(reportlab matplotlib numpy pillow)
-declare -A _PY_IMPORT_MAP=([reportlab]=reportlab [matplotlib]=matplotlib [numpy]=numpy [pillow]=PIL)
-_PY_MISSING=()
-for _pkg in "${_PY_REPORT_PKGS[@]}"; do
-    _import="${_PY_IMPORT_MAP[$_pkg]:-${_pkg,,}}"
-    python3 -c "import $_import" 2>/dev/null || _PY_MISSING+=("$_pkg")
-done
-if [[ ${#_PY_MISSING[@]} -eq 0 ]]; then
-    success "Python reporting packages already installed — skipping"
-else
-    info "Installing Python reporting packages: ${_PY_MISSING[*]} ..."
-    PIP_ROOT_USER_ACTION=ignore pip3 install "${_PY_MISSING[@]}" \
-        ${_PIP_BSP} -q \
-        && success "Installed: ${_PY_MISSING[*]}" \
-        || { error "Failed to install Python reporting packages"; ERRORS+=("pip reporting prereqs failed"); }
-fi
 
 # ── Docker install ─────────────────────────────────────────────────────────────
 if command -v docker >/dev/null 2>&1 && docker --version | grep -q "2[4-9]\.\|[3-9][0-9]\."; then
@@ -1057,6 +1039,7 @@ if [[ "$MODE" == "full" ]]; then
     CYIRIS_OIDC_SECRET=$(gen_secret)
     CYSOAR_OIDC_SECRET=$(gen_secret)
     CYSIEM_OIDC_SECRET=$(gen_secret)
+    CY360SSO_OIDC_SECRET=$(gen_secret)
     # oauth2-proxy: client secret (used by CyCentra OIDC) + 32-byte cookie secret
     OAUTH2PROXY_SECRET=$(gen_secret)
     OAUTH2PROXY_COOKIE_SECRET=$(openssl rand -base64 32 | tr -d '\n' | head -c 32)
