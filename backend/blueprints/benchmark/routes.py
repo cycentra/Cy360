@@ -461,26 +461,15 @@ def _collect_compliance_score() -> dict:
 def _wazuh_token() -> Optional[str]:
     """
     Obtain a Wazuh API JWT using Basic auth. Returns None on failure.
-
-    Credential resolution (first non-empty wins):
-      1. WAZUH_API_PASSWORD env var (set in /opt/cycentra/.env for Flask)
-      2. WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env
-         (the correlation engine's EnvironmentFile — always has the password)
-
-    This two-source lookup ensures the benchmark engine can reach Wazuh
-    regardless of which EnvironmentFile the systemd unit uses.
+    Credentials are read from /opt/cycentra/.env (EnvironmentFile for Flask).
+    setup.sh propagates WAZUH_API_PASSWORD from cysiemstack.env into .env at
+    install and update time, so .env is always the single source of truth.
     """
     wazuh_pass = _WAZUH_API_PASS
     wazuh_user = _WAZUH_API_USER
 
-    # Fallback: read from cysiemstack.env (same source the correlation engine uses)
     if not wazuh_pass:
-        siem_env   = _read_cysiemstack_env()
-        wazuh_pass = siem_env.get("WAZUH_API_PASSWORD", "").strip()
-        wazuh_user = wazuh_user or siem_env.get("WAZUH_API_USER", "wazuh-wui")
-
-    if not wazuh_pass:
-        log.debug("[benchmark] WAZUH_API_PASSWORD not found in env or cysiemstack.env")
+        log.debug("[benchmark] WAZUH_API_PASSWORD not set in /opt/cycentra/.env")
         return None
     try:
         creds = base64.b64encode(

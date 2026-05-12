@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.410 -- 2026-05-12 16:13 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.411 -- 2026-05-12 18:40 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1151,6 +1151,31 @@ PATCHEOF
         info "Added ASM scanner tuning vars to .env"
     fi
 
+    # Add MAXMIND_KEY if missing (hardcoded default shipped with setup.sh)
+    if ! grep -q "^MAXMIND_KEY=" "$_env" 2>/dev/null; then
+        echo "MAXMIND_KEY=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" >> "$_env"
+        info "Added MAXMIND_KEY to .env"
+    fi
+
+    # Sync Wazuh API vars from cysiemstack.env → .env.
+    # cycentra-backend.service loads EnvironmentFile=/opt/cycentra/.env only;
+    # cysiemstack-engine.service loads EnvironmentFile=/opt/cycentra/cysiemstack.env only.
+    # Both services need Wazuh creds — .env is the Flask copy, cysiemstack.env is the master.
+    _siem_env_path="/opt/cycentra/cysiemstack.env"
+    if [[ -f "$_siem_env_path" ]]; then
+        _wp="$(grep "^WAZUH_API_PASSWORD=" "$_siem_env_path" 2>/dev/null | cut -d= -f2)"
+        if [[ -n "$_wp" ]]; then
+            if grep -q "^WAZUH_API_PASSWORD=" "$_env" 2>/dev/null; then
+                sed -i "s|^WAZUH_API_PASSWORD=.*|WAZUH_API_PASSWORD=${_wp}|"\ "$_env"
+            else
+                echo "WAZUH_API_PASSWORD=${_wp}" >> "$_env"
+            fi
+            grep -q "^WAZUH_API_URL="  "$_env" || echo "WAZUH_API_URL=https://127.0.0.1:55000" >> "$_env"
+            grep -q "^WAZUH_API_USER=" "$_env" || echo "WAZUH_API_USER=wazuh-wui"              >> "$_env"
+            info "Wazuh API vars synced from cysiemstack.env → .env"
+        fi
+    fi
+
     chmod 600 "$_env"
     success ".env patched"
 fi
@@ -1254,8 +1279,7 @@ CLOUD_IRIS_CUSTOMER_ID=${CLOUD_IRIS_CUSTOMER_ID:-1}
 # Auth: Managed Identity (Azure VM) or AZURE_CLIENT_ID/SECRET/TENANT_ID env vars.
 AZURE_KEYVAULT_URL=${AZURE_KEYVAULT_URL:-}
 ENVEOF
-    # MAXMIND_KEY pulled from Key Vault at runtime — not written here
-    echo "MAXMIND_KEY=${MAXMIND_KEY:-}" >> /opt/cycentra/.env
+    echo "MAXMIND_KEY=${MAXMIND_KEY:-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}" >> /opt/cycentra/.env
 
     # ── ASM Scanner tuning (optional — defaults are safe for most deployments) ──
     cat >> /opt/cycentra/.env << ASMEOF
@@ -1309,9 +1333,6 @@ UEBA_ML_SHADOW_MODE=true
 UEBA_ML_MIN_TRAIN_DAYS=7
 UEBA_ML_MODEL_DIR=/opt/cycentra/ml_models
 MISP_ENABLED=false
-# Security MCP bridge — exposes 11 SIEM/Wazuh tools to AI clients at /mcp/sse
-# Set to false to disable the bridge without uninstalling the mcp package.
-MCP_ENABLED=true
 # Standalone key so --update mode can read the password without parsing DATABASE_URL
 POSTGRES_PASSWORD=${CORR_DB_PASS}
 # Azure Key Vault — engine fetches WAZUH_API_PASSWORD from KV when set
@@ -1320,11 +1341,10 @@ SIEMEOF
     chmod 600 /opt/cycentra/cysiemstack.env
     success "cysiemstack.env written → /opt/cycentra/cysiemstack.env"
 
-    # Propagate Wazuh credentials to Flask env so the benchmark engine can
-    # reach Wazuh directly.  Flask (cycentra-backend.service) uses
-    # EnvironmentFile=/opt/cycentra/.env while the correlation engine uses
-    # EnvironmentFile=/opt/cycentra/cysiemstack.env — without this line the
-    # benchmark blueprint cannot obtain a Wazuh token even when Wazuh is running.
+    # Propagate Wazuh credentials to Flask env (full install; --update mode does the same
+    # in the update-mode patch section above).  Flask (cycentra-backend.service) loads only
+    # EnvironmentFile=/opt/cycentra/.env while the correlation engine loads only
+    # EnvironmentFile=/opt/cycentra/cysiemstack.env, so both files must carry these vars.
     if grep -q "^WAZUH_API_PASSWORD=" /opt/cycentra/.env 2>/dev/null; then
         sed -i "s|^WAZUH_API_PASSWORD=.*|WAZUH_API_PASSWORD=${_WAZUH_PASS}|" /opt/cycentra/.env
     else
@@ -2602,30 +2622,44 @@ if [[ -d "/var/ossec" ]]; then
         success "geoip2 already installed"
     fi
 
-    # ── 19.2 GeoLite2-City.mmdb download (requires MAXMIND_KEY in .env) ──────
+    # ── 19.2 GeoLite2-City.mmdb download (always refreshed — MaxMind updates monthly) ──
     GEOIP_DIR="/opt/cycentra/geoip"
     mkdir -p "$GEOIP_DIR"
     GEOLITE_DB="$GEOIP_DIR/GeoLite2-City.mmdb"
-    if [[ ! -f "$GEOLITE_DB" ]]; then
-        MAXMIND_KEY="$(grep "^MAXMIND_KEY=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2)"
-        if [[ -n "$MAXMIND_KEY" ]]; then
-            info "Downloading GeoLite2-City.mmdb..."
-            GEOURL="https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${MAXMIND_KEY}&suffix=tar.gz"
-            TMP_GEO=$(mktemp /tmp/geolite2_XXXXXX.tar.gz)
-            curl -sL "$GEOURL" -o "$TMP_GEO" \
-                && tar -xzf "$TMP_GEO" -C "$GEOIP_DIR" --strip-components=1 --wildcards "*.mmdb" 2>/dev/null || true
-            find "$GEOIP_DIR" -name "*.mmdb" ! -name "GeoLite2-City.mmdb" -exec mv {} "$GEOLITE_DB" \; 2>/dev/null || true
-            rm -f "$TMP_GEO"
-            [[ -f "$GEOLITE_DB" ]] \
-                && success "GeoLite2-City.mmdb downloaded" \
-                || warn "GeoLite2 download failed — check MAXMIND_KEY in /opt/cycentra/.env"
+    _MMKEY="$(grep "^MAXMIND_KEY=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2)"
+    if [[ -n "$_MMKEY" ]]; then
+        info "Downloading/refreshing GeoLite2-City.mmdb..."
+        GEOURL="https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${_MMKEY}&suffix=tar.gz"
+        TMP_GEO=$(mktemp /tmp/geolite2_XXXXXX.tar.gz)
+        curl -sL "$GEOURL" -o "$TMP_GEO" \
+            && tar -xzf "$TMP_GEO" -C "$GEOIP_DIR" --strip-components=1 --wildcards "*.mmdb" 2>/dev/null || true
+        find "$GEOIP_DIR" -name "*.mmdb" ! -name "GeoLite2-City.mmdb" -exec mv {} "$GEOLITE_DB" \; 2>/dev/null || true
+        rm -f "$TMP_GEO"
+        if [[ -f "$GEOLITE_DB" ]]; then
+            success "GeoLite2-City.mmdb downloaded/refreshed"
+            # Install monthly cron to keep the DB current (MaxMind releases a new DB every month)
+            cat > /etc/cron.monthly/cycentra-geoip-refresh << 'GEOCRON'
+#!/bin/bash
+# Refresh GeoLite2-City.mmdb — MaxMind releases an updated DB monthly.
+MMKEY="$(grep "^MAXMIND_KEY=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2)"
+[[ -z "$MMKEY" ]] && exit 0
+GEOIP_DIR="/opt/cycentra/geoip"
+GEOLITE_DB="$GEOIP_DIR/GeoLite2-City.mmdb"
+TMP=$(mktemp /tmp/geolite2_XXXXXX.tar.gz)
+curl -sL "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${MMKEY}&suffix=tar.gz" -o "$TMP" \
+    && tar -xzf "$TMP" -C "$GEOIP_DIR" --strip-components=1 --wildcards "*.mmdb" 2>/dev/null || true
+find "$GEOIP_DIR" -name "*.mmdb" ! -name "GeoLite2-City.mmdb" -exec mv {} "$GEOLITE_DB" \; 2>/dev/null || true
+rm -f "$TMP"
+# Restart the correlation engine so it reloads the updated DB from disk
+systemctl restart cycentra-siem 2>/dev/null || true
+GEOCRON
+            chmod +x /etc/cron.monthly/cycentra-geoip-refresh
+            success "Monthly GeoIP refresh cron installed → /etc/cron.monthly/cycentra-geoip-refresh"
         else
-            warn "MAXMIND_KEY not in /opt/cycentra/.env — GeoLite2 DB skipped"
-            warn "Add MAXMIND_KEY=<your_key> to .env and re-run to enable GeoIP enrichment"
-            warn "Free signup: https://www.maxmind.com/en/geolite2/signup"
+            warn "GeoLite2 download failed — GeoIP enrichment disabled until next refresh"
         fi
     else
-        success "GeoLite2-City.mmdb already present"
+        warn "MAXMIND_KEY not set — GeoLite2 DB skipped (GeoIP enrichment disabled)"
     fi
 
     # ── Reload Wazuh after config/decoder/agent changes ───────────────────────
@@ -2637,8 +2671,7 @@ if [[ -d "/var/ossec" ]]; then
     info "Post-install manual steps for cloud telemetry:"
     info "  1. Edit /var/ossec/etc/ossec.conf — replace PLACEHOLDER_ values in cloud wodles,"
     info "     then change <disabled>yes</disabled> → <disabled>no</disabled>"
-    info "  2. GeoIP: add MAXMIND_KEY=<key> to /opt/cycentra/.env and re-run --update"
-    info "     Free signup: https://www.maxmind.com/en/geolite2/signup"
+    info "  2. GeoIP DB is refreshed automatically every month (MAXMIND_KEY is pre-configured)"
     info "  3. Sysmon: copy /opt/cycentra/sysmon/ to Windows endpoints + run deploy_sysmon.ps1"
     info "  4. Audit policy: run apply_audit_policy.ps1 on Domain Controllers"
     info "  5. Agent config: agent.conf is deployed automatically above (pushed to agents via remoted)"

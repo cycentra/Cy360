@@ -1363,15 +1363,12 @@ async def get_incident_distribution(db: AsyncSession = Depends(get_db)):
 
 
 # ── Security MCP bridge (mounted at /mcp) ─────────────────────────────────────
-# Enabled when the mcp package is installed (installed alongside the engine).
+# Always enabled when the mcp package is installed (installed alongside the engine).
 # AI clients connect to: http://127.0.0.1:8100/mcp/sse
-# To disable, set MCP_ENABLED=false in cysiemstack.env.
 try:
     from mcp.server.fastmcp import FastMCP as _FastMCP
 
-    _mcp_enabled = str(settings.__dict__.get("mcp_enabled", "true")).lower() != "false"
-
-    if _mcp_enabled:
+    if True:
         _mcp = _FastMCP(
             "CySIEM Security MCP",
             instructions=(
