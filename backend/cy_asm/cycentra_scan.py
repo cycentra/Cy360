@@ -608,10 +608,11 @@ async def store_to_cymind_memory(findings: list, domain: str, provider: str) -> 
             for i, finding in enumerate(findings):
                 severity_raw = str(finding.get("severity", "medium")).lower()
                 severity = severity_raw if severity_raw in ("low", "medium", "high", "critical") else "medium"
-                incident_id = re.sub(
-                    r'[^A-Z0-9._-]', '_',
-                    f"ASM-{domain}-{finding.get('module', 'UNKNOWN')}-{i}".upper()
-                )[:60]
+                incident_id = _asm_finding_id(
+                    domain,
+                    finding.get("module", "UNKNOWN"),
+                    str(finding.get("vulnerability", finding.get("module", str(i)))),
+                )
 
                 # Use SIEM-consistent field names so CyMind presents ASM findings
                 # in the same format as INC-XXXXX incidents from the correlation engine.

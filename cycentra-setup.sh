@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.405 -- 2026-05-11 23:53 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.408 -- 2026-05-12 11:37 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -2768,9 +2768,12 @@ ufw default allow outgoing >/dev/null 2>&1 || true
 # Allow public-facing ports
 # NOTE: port 22 is opened temporarily here; Step 26 (SSH hardening) moves SSH
 # to port 2026 and removes this rule at the very end of setup.
-ufw allow 22/tcp  comment "SSH (temp — moved to 2026 by Step 26)" >/dev/null 2>&1 || true
-ufw allow 80/tcp  comment "HTTP (nginx)"  >/dev/null 2>&1 || true
-ufw allow 443/tcp comment "HTTPS (nginx)" >/dev/null 2>&1 || true
+ufw allow 22/tcp   comment "SSH (temp — moved to 2026 by Step 26)" >/dev/null 2>&1 || true
+ufw allow 80/tcp   comment "HTTP (nginx)"   >/dev/null 2>&1 || true
+ufw allow 443/tcp  comment "HTTPS (nginx)"  >/dev/null 2>&1 || true
+# Wazuh agent ports — cannot be proxied through nginx (binary protocol)
+ufw allow 1514/tcp comment "Wazuh remoted (agent ↔ manager encrypted comms)" >/dev/null 2>&1 || true
+ufw allow 1515/tcp comment "Wazuh authd (agent enrollment/registration)"      >/dev/null 2>&1 || true
 
 # Remove any legacy rules that expose internal services directly
 for _p in 5252 8100 5433 6379 5601 4180 4433 1880 11434 6333; do
@@ -2779,8 +2782,9 @@ for _p in 5252 8100 5433 6379 5601 4180 4433 1880 11434 6333; do
 done
 
 echo "y" | ufw enable >/dev/null 2>&1 || ufw --force enable >/dev/null 2>&1 || true
-success "UFW: ports 22 (temp), 80, 443 open — all other ports blocked externally"
+success "UFW: ports 22 (temp), 80, 443, 1514, 1515 open — all other ports blocked externally"
 info    "Internal services (Flask 5252, engine 8100, Redis, PG) bind to loopback only"
+info    "Wazuh agent ports 1514 (remoted) and 1515 (authd) open for external agent enrollment"
 info    "SSH will be moved from port 22 → 2026 in Step 26 (last step)"
 
 # ── Step 24: Health checks ────────────────────────────────────────────────────

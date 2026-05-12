@@ -11,6 +11,7 @@ Routes:
 """
 
 import glob
+import hashlib
 import os
 import re
 import subprocess
@@ -25,6 +26,14 @@ from core.config import SCANS_DIR, ASM_LOGS, ASM_DIR, ASM_REPORTS_DIR
 from core.helpers import add_cors_headers
 
 asm_bp = Blueprint("asm", __name__)
+
+
+def _asm_id(asset: str, module: str) -> str:
+    """Generate a deterministic ASM-XXXXX ID from asset+module (mirrors cycentra_scan._asm_finding_id)."""
+    raw = f"{asset}|{module}".lower().encode()
+    digest = hashlib.sha256(raw).hexdigest()
+    return f"ASM-{digest[:5].upper()}"
+
 
 # Module progress keywords — must match log output from cycentra_scan.py
 _MODULE_KEYWORDS = [
@@ -559,7 +568,7 @@ def asm_escalate_to_iris():
         "case_description": case_body,
         "case_customer":    cfg["customerId"],
         "case_severity_id": _ASM_SEV_MAP[severity],
-        "case_soc_id":      f"ASM-{asset or domain}-{module}".upper()[:60],
+        "case_soc_id":      _asm_id(asset or domain, module),
     }
     try:
         resp = _r.post(
