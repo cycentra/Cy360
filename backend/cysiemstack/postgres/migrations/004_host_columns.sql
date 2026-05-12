@@ -15,3 +15,6 @@
 
 ALTER TABLE incidents ADD COLUMN IF NOT EXISTS affected_agent_names TEXT[];
 ALTER TABLE incidents ADD COLUMN IF NOT EXISTS affected_agent_os    TEXT[];
+
+-- Store OS on the alert row so backfill and future queries avoid JSONB extraction
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS agent_os TEXT;

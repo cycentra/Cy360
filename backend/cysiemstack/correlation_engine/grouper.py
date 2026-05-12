@@ -212,6 +212,7 @@ async def group_alert(db: AsyncSession, alert: dict) -> Tuple[Incident, bool]:
         agent_id      = alert['agent_id'],
         agent_name    = alert.get('agent_name'),
         agent_ip      = alert.get('agent_ip'),
+        agent_os      = alert.get('agent_os'),
         rule_id       = alert['rule_id'],
         rule_desc     = alert.get('rule_desc'),
         rule_level    = alert.get('rule_level'),

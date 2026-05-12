@@ -34,6 +34,7 @@ class Alert(Base):
     agent_id        = Column(Text, nullable=False)
     agent_name      = Column(Text)
     agent_ip        = Column(Text)
+    agent_os        = Column(Text)
     rule_id         = Column(Integer, nullable=False)
     rule_desc       = Column(Text)
     rule_level      = Column(Integer)
