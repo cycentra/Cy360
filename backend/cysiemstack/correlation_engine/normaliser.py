@@ -275,12 +275,17 @@ def normalise(raw: dict) -> Optional[dict]:
     # GeoIP lookup (no-op if DB not present)
     geo = _lookup_geoip(src_ip) if src_ip else {}
 
+    # Host OS: prefer os.name, fall back to os.platform
+    agent_os_raw = agent.get('os') or {}
+    agent_os = agent_os_raw.get('name') or agent_os_raw.get('platform') or None
+
     return {
         'wazuh_id':     raw.get('id'),
         'timestamp':    ts,
         'agent_id':     agent_id,
         'agent_name':   agent.get('name', agent_id),
         'agent_ip':     agent.get('ip'),
+        'agent_os':     agent_os,
         'rule_id':      rule_id,
         'rule_desc':    rule_desc,
         'rule_level':   rule_level,
