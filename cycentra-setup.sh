@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.413 -- 2026-05-12 18:52 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.414 -- 2026-05-12 20:58 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -595,27 +595,45 @@ if [[ -f "$WAZUH_YML" ]]; then
     # proxy auth config.
     # Priority: (1) uncomment existing real password, (2) inject from installer
     # tar, (3) fall-back to checking if tar is available from a previous install.
-    _ks_line_user=$(grep -E "^#?\s*opensearch\.username:" "$WAZUH_YML" | head -1 || true)
-    _ks_line_pass=$(grep -E "^#?\s*opensearch\.password:" "$WAZUH_YML" | head -1 || true)
-    _ks_pass_val=$(echo "$_ks_line_pass" | awk '{print $NF}' | tr -d '"')
-    if [[ -n "$_ks_line_user" && -n "$_ks_pass_val" && "$_ks_pass_val" != "kibanaserver" ]]; then
-        # Lines exist with a real (non-placeholder) password — uncomment if needed
-        sed -i 's|^#\s*\(opensearch\.username:\)|\1|' "$WAZUH_YML" || true
-        sed -i 's|^#\s*\(opensearch\.password:\)|\1|' "$WAZUH_YML" || true
-        success "CySIEM Dashboard: kibanaserver credentials uncommented"
+    #
+    # NOTE: On a CyCentra 360 installation, step 4.3b (further in this script)
+    # configures opensearch_security.auth.type: openid, which replaces the
+    # kibanaserver username/password auth entirely.  If OIDC is already active
+    # (re-run / --update) or will be configured this run (CYSIEM_OIDC_SECRET is
+    # set), the kibanaserver credential block is not needed and its absence is
+    # not an error.  Skip with an info message in those cases.
+    _oidc_already_active=$(grep -c "^opensearch_security.auth.type: openid" "$WAZUH_YML" 2>/dev/null || echo "0")
+    if [[ "$_oidc_already_active" -gt 0 ]]; then
+        info "CySIEM Dashboard: OIDC auth already active — kibanaserver credentials not required"
     else
-        # Try to obtain the real password: installer variable, then fall back to tar
-        if [[ -z "$_CYSIEM_KS_PASS" && -f ~/wazuh-install-files.tar ]]; then
-            _pwfile2=$(tar -xOf ~/wazuh-install-files.tar wazuh-install-files/wazuh-passwords.txt 2>/dev/null || true)
-            _CYSIEM_KS_PASS=$(echo "$_pwfile2" | grep -A 1 "^username: kibanaserver$" | grep "^password:" | awk '{print $2}' || true)
-        fi
-        if [[ -n "$_CYSIEM_KS_PASS" ]]; then
-            # Remove any existing (commented or not) username/password lines and rewrite
-            sed -i '/^#\?\s*opensearch\.username:/d; /^#\?\s*opensearch\.password:/d' "$WAZUH_YML" || true
-            printf 'opensearch.username: kibanaserver\nopensearch.password: "%s"\n' "$_CYSIEM_KS_PASS" >> "$WAZUH_YML"
-            success "CySIEM Dashboard: kibanaserver credentials set from installer"
+        _ks_line_user=$(grep -E "^#?\s*opensearch\.username:" "$WAZUH_YML" | head -1 || true)
+        _ks_line_pass=$(grep -E "^#?\s*opensearch\.password:" "$WAZUH_YML" | head -1 || true)
+        _ks_pass_val=$(echo "$_ks_line_pass" | awk '{print $NF}' | tr -d '"')
+        if [[ -n "$_ks_line_user" && -n "$_ks_pass_val" && "$_ks_pass_val" != "kibanaserver" ]]; then
+            # Lines exist with a real (non-placeholder) password — uncomment if needed
+            sed -i 's|^#\s*\(opensearch\.username:\)|\1|' "$WAZUH_YML" || true
+            sed -i 's|^#\s*\(opensearch\.password:\)|\1|' "$WAZUH_YML" || true
+            success "CySIEM Dashboard: kibanaserver credentials uncommented"
         else
-            warn "kibanaserver password unknown — opensearch.username/password may be missing from opensearch_dashboards.yml. Dashboard→OpenSearch auth will fail if so."
+            # Try to obtain the real password: installer variable, then fall back to tar
+            if [[ -z "$_CYSIEM_KS_PASS" && -f ~/wazuh-install-files.tar ]]; then
+                _pwfile2=$(tar -xOf ~/wazuh-install-files.tar wazuh-install-files/wazuh-passwords.txt 2>/dev/null || true)
+                _CYSIEM_KS_PASS=$(echo "$_pwfile2" | grep -A 1 "^username: kibanaserver$" | grep "^password:" | awk '{print $2}' || true)
+            fi
+            if [[ -n "$_CYSIEM_KS_PASS" ]]; then
+                # Remove any existing (commented or not) username/password lines and rewrite
+                sed -i '/^#\?\s*opensearch\.username:/d; /^#\?\s*opensearch\.password:/d' "$WAZUH_YML" || true
+                printf 'opensearch.username: kibanaserver\nopensearch.password: "%s"\n' "$_CYSIEM_KS_PASS" >> "$WAZUH_YML"
+                success "CySIEM Dashboard: kibanaserver credentials set from installer"
+            else
+                # CYSIEM_OIDC_SECRET being set means step 4.3b will configure OIDC this
+                # run, making kibanaserver credentials irrelevant.  Demote to info.
+                if [[ -n "${CYSIEM_OIDC_SECRET:-}" ]]; then
+                    info "kibanaserver password not found — not required (step 4.3b will configure OIDC auth)"
+                else
+                    warn "kibanaserver password unknown — opensearch.username/password may be missing from opensearch_dashboards.yml. Re-run once CYSIEM_OIDC_SECRET is set to switch to OIDC auth."
+                fi
+            fi
         fi
     fi
 
@@ -964,11 +982,23 @@ if [[ -f "$_MAINT_SRC" ]]; then
         success "docker-maintenance.sh already at ${_MAINT_DEST} — no copy needed"
     fi
 else
-    warn "docker-maintenance.sh not found in bundle — skipping deployment"
+    # Not in bundle — check if a previous install already deployed it.
+    # If so, keep the existing copy silently.
+    # If not, this is a fresh server: the Flask backend generates and writes
+    # docker-maintenance.sh automatically the first time the Scheduler is saved
+    # in System Settings → Scheduler (via _write_docker_maintenance_script()).
+    # No manual action is required.
+    if [[ -f "$_MAINT_DEST" ]]; then
+        success "docker-maintenance.sh already present at ${_MAINT_DEST} — keeping existing copy"
+    else
+        info "docker-maintenance.sh not in bundle — will be created automatically when Scheduler is saved in System Settings"
+    fi
 fi
 
 # NOTE: Docker maintenance schedule is managed by the CyCentra 360 Scheduler
-# (System Settings → Scheduler tab). The script is deployed above and
+# (System Settings → Scheduler tab). When the schedule is enabled and saved,
+# the Flask backend generates and writes docker-maintenance.sh to /opt/cycentra/
+# automatically (via _write_docker_maintenance_script() in blueprints/system/routes.py).
 # cron entries are written by the portal's /api/system/schedules endpoint.
 
 # Deploy license validator + watchdog scripts
@@ -982,7 +1012,21 @@ elif [[ -f "$BUNDLE_DIR/license_validator.py" ]]; then
     chmod 755 /opt/cycentra/license_validator.py
     success "License validator deployed from bundle"
 else
-    warn "license_validator.py not found — license enforcement disabled"
+    # Not in bundle or alongside installer.
+    # Two self-healing mechanisms exist — no action required:
+    #   1. If /opt/cycentra/license_validator.py already exists (previous install
+    #      or prior --update), it is used as-is by the Flask backend.
+    #   2. If it does not exist, the Flask license endpoint (_run_validator() in
+    #      blueprints/system/routes.py) automatically falls back to the copy
+    #      inside the installed cycentra-backend wheel at:
+    #      backend/core/license_validator.py
+    # The deployed copy at /opt/cycentra/ is only required for the daily watchdog
+    # cron. It is deployed on the next --update once the file is in the bundle.
+    if [[ -f "/opt/cycentra/license_validator.py" ]]; then
+        success "license_validator.py already present at /opt/cycentra/ — keeping existing copy"
+    else
+        info "license_validator.py not in bundle — license UI uses in-package fallback; daily watchdog will use it once deployed via --update"
+    fi
 fi
 
 # If a license file is present alongside the installer, copy it in

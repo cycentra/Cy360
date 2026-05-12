@@ -1,3 +1,11 @@
+## v1.0.414 -- 2026-05-12
+
+### New Features
+
+  - add Host Name and Host OS columns to Active Incidents table
+
+---
+
 ## v1.0.413 -- 2026-05-12
 
 ### Improvements
