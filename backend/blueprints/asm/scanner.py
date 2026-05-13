@@ -22,7 +22,7 @@ from pathlib import Path
 
 from flask import Blueprint, request, jsonify, make_response, session
 
-from core.config import SCANS_DIR, ASM_LOGS, ASM_DIR, ASM_REPORTS_DIR
+from core.config import SCANS_DIR, ASM_LOGS, ASM_DIR, ASM_REPORTS_DIR, GUEST_SCANS_DIR, GUEST_REPORTS_DIR
 from core.helpers import add_cors_headers
 
 asm_bp = Blueprint("asm", __name__)
@@ -88,10 +88,12 @@ def trigger_scan():
     if notify_email and not _EMAIL_RE.match(notify_email):
         return jsonify({"error": "Invalid notify_email address"}), 400
 
-    # Guest users share a common directory — no per-session isolation or state history.
-    # Authenticated users get their own isolated sub-directory.
+    # Guest users write to a completely separate directory tree (GUEST_SCANS_DIR)
+    # that is structurally isolated from the internal SCANS_DIR.  No authenticated
+    # endpoint imports or references GUEST_SCANS_DIR, so guest results can never
+    # appear on the internal dashboard, benchmark, or scan history.
     is_guest = uid.startswith("guest_")
-    user_dir = SCANS_DIR / "guest" if is_guest else SCANS_DIR / uid
+    user_dir = GUEST_SCANS_DIR if is_guest else SCANS_DIR / uid
     user_dir.mkdir(parents=True, exist_ok=True)
     ASM_LOGS.mkdir(parents=True, exist_ok=True)
 
@@ -208,14 +210,20 @@ def scan_status():
 @asm_bp.route("/api/scans/latest")
 def get_latest_scan():
     uid = request.args.get("uid", "")
-    # Guest UIDs share the common guest directory — never look in a uid-named folder
+    # Guest UIDs are served from the isolated guest tree — never touch SCANS_DIR.
+    # The no-uid wildcard is only called by the authenticated dashboard and must
+    # stay within SCANS_DIR so guest results can never appear as "latest" there.
     if uid.startswith("guest_"):
-        search = SCANS_DIR / "guest" / "scan_*.json"
+        search    = str(GUEST_SCANS_DIR / "scan_*.json")
+        all_files = glob.glob(search)
     elif uid:
-        search = SCANS_DIR / uid / "scan_*.json"
+        search    = str(SCANS_DIR / uid / "scan_*.json")
+        all_files = glob.glob(search)
     else:
-        search = SCANS_DIR / "**" / "scan_*.json"
-    all_files = glob.glob(str(search), recursive=True)
+        # Authenticated-dashboard fallback: all internal user dirs + scheduler.
+        # GUEST_SCANS_DIR is a separate sibling — unreachable by this glob.
+        search    = str(SCANS_DIR / "**" / "scan_*.json")
+        all_files = glob.glob(search, recursive=True)
 
     if not all_files:
         return jsonify({"error": "No scans found"}), 404
@@ -234,7 +242,7 @@ def get_latest_scan():
 def _scans_dir_for_uid(uid: str) -> Path:
     """Map a uid to its scans directory, matching scan-trigger storage logic."""
     if uid.startswith("guest_"):
-        return SCANS_DIR / "guest"
+        return GUEST_SCANS_DIR  # isolated; never a subdirectory of SCANS_DIR
     return SCANS_DIR / uid
 
 
@@ -337,7 +345,7 @@ _SHARED_REPORT_DIRS = ("scheduler",)
 def _reports_dir_for_uid(uid: str) -> Path:
     """Map a uid to its reports directory, mirroring scan-trigger logic."""
     if uid.startswith("guest_"):
-        return ASM_REPORTS_DIR / "guest"
+        return GUEST_REPORTS_DIR  # isolated; never a subdirectory of ASM_REPORTS_DIR
     return ASM_REPORTS_DIR / uid
 
 

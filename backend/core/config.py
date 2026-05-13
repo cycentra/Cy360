@@ -116,6 +116,12 @@ MODULES_STATE = Path("/opt/cycentra/modules_state.json")
 SCANS_DIR        = Path("/var/log/cycentra/cy-asm/scans")
 ASM_LOGS         = Path("/var/log/cycentra/cy-asm/logs")
 ASM_REPORTS_DIR  = Path("/var/log/cycentra/cy-asm/reports")
+# Guest scans live in a completely separate tree — structurally isolated from
+# the internal authenticated paths.  No authenticated endpoint should ever
+# import or reference these paths; they exist solely to satisfy the scan engine
+# which requires an output directory even for anonymous public scans.
+GUEST_SCANS_DIR   = Path("/var/log/cycentra/cy-asm-guest/scans")
+GUEST_REPORTS_DIR = Path("/var/log/cycentra/cy-asm-guest/reports")
 AI_SETTINGS_FILE = Path("/opt/cycentra/ai_settings.json")
 
 # ── User management DB ────────────────────────────────────────────────────────

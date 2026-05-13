@@ -223,14 +223,16 @@ def _save_config(cfg: dict) -> None:
 
 def _latest_asm_scan_file() -> Optional[Path]:
     """
-    Newest scan_*.json across all non-guest subdirectories of SCANS_DIR.
+    Newest scan_*.json across all subdirectories of SCANS_DIR.
     Covers both SCANS_DIR/<user_uid>/ and SCANS_DIR/scheduler/.
+    Guest scans live in GUEST_SCANS_DIR (a completely separate tree) and are
+    therefore structurally excluded — no name-filter needed.
     Mirrors the glob strategy in scanner.py list_scans().
     """
     all_files: list[str] = []
     try:
         for entry in SCANS_DIR.iterdir():
-            if entry.is_dir() and entry.name != "guest":
+            if entry.is_dir():
                 all_files.extend(glob.glob(str(entry / "scan_*.json")))
     except Exception as exc:
         log.warning("[benchmark] ASM directory scan failed: %s", exc)
