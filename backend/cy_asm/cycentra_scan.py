@@ -592,7 +592,13 @@ async def store_to_cymind_memory(findings: list, domain: str, provider: str) -> 
     so analysts can query them from the CyMind chat window.
     Each finding becomes a separate incident record in soc-episodic-memory.
     Fire-and-forget — never blocks the scan result from being saved.
+    Guest scans are never stored — only authenticated user scans go to RAG.
     """
+    # Guard: guest scans must never pollute the shared RAG with unauthenticated data.
+    if os.environ.get("CYCENTRA_IS_GUEST", "false").strip().lower() == "true":
+        logger.info("⏭️  [CyMind Memory] Skipped — guest scan excluded from RAG storage.")
+        return
+
     config = _get_cymind_memory_config()
     if config is None:
         return   # CyMind memory not configured — skip silently

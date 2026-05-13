@@ -1713,10 +1713,17 @@ def _fetch_siem_context_block() -> str:
     except Exception:
         pass
     try:
+        # Fetch all active incidents — status='investigating' is the working
+        # status; 'open' is the initial state before triage begins.
+        # We exclude resolved/closed/false_positive to show only actionable incidents.
         r = http_requests.get(f"{engine_url}/incidents",
-                              params={"status": "open", "limit": 20}, timeout=_t)
+                              params={"limit": 20}, timeout=_t)
         if r.ok:
-            ctx["open_incidents"] = r.json()
+            raw = r.json()
+            rows = raw if isinstance(raw, list) else raw.get("incidents", [])
+            active = [i for i in rows
+                      if i.get("status") not in ("resolved", "false_positive", "closed")]
+            ctx["open_incidents"] = active
     except Exception:
         pass
     try:
@@ -1746,8 +1753,11 @@ def _fetch_siem_context_block() -> str:
         "| Format | Source | Example |",
         "|---|---|---|",
         "| INC-XXXXX | SIEM correlation engine (Wazuh alerts → correlated) | INC-00708 |",
-        "| ASM-DOMAIN-MODULE-N | ASM attack surface scan (stored in RAG memory) | ASM-CYCENTRA.COM-CRYPTO-8 |",
-        "[INSTRUCTION: When presenting incidents from either source, always use the same"
+        "| ASM-NNNNN | ASM attack surface scan (stored in RAG memory, 5-char hex) | ASM-1A2B3 |",
+        "[INSTRUCTION: ASM IDs always use the short 5-char hex format ASM-NNNNN."
+        " If you encounter legacy long-format IDs (e.g. ASM-DOMAIN-MODULE-N) in RAG memory,"
+        " treat them as historical data but note the new format is ASM-NNNNN."
+        " When presenting incidents from either source, always use the same"
         " table format: ID | Severity | Status | Summary | Affected Assets."
         " Never mix up the two ID namespaces or claim one is the other.]",
         "",
@@ -1758,7 +1768,7 @@ def _fetch_siem_context_block() -> str:
         lines += [
             "## Overview",
             f"- Total alerts (24h): {s.get('total_alerts_24h', 'N/A')}",
-            f"- Open incidents: {s.get('open_incidents', 'N/A')}",
+            f"- Active incidents (open + investigating): {s.get('open_incidents', 'N/A')}",
             f"- Active agents: {s.get('active_agents', 'N/A')}",
             f"- Critical alerts: {s.get('critical_alerts', 'N/A')}",
             "",
@@ -1767,8 +1777,11 @@ def _fetch_siem_context_block() -> str:
     if ctx.get("open_incidents"):
         raw  = ctx["open_incidents"]
         rows = raw if isinstance(raw, list) else raw.get("incidents", raw.get("data", []))
+        # Strip any closed/resolved that slipped through
+        rows = [i for i in rows
+                if i.get("status") not in ("resolved", "false_positive", "closed")]
         if rows:
-            lines += ["## Open Incidents (SIEM — INC-XXXXX format)",
+            lines += ["## Active Incidents (SIEM — INC-XXXXX format, open + investigating)",
                       "| ID | Summary | Severity | Risk | Status | Affected Users |",
                       "|---|---|---|---|---|---|"]
             for inc in rows[:20]:
@@ -3152,11 +3165,16 @@ def cymind_context():
     try:
         r = http_requests.get(
             f"{engine_url}/incidents",
-            params={"status": "open", "limit": limit_inc},
+            params={"limit": limit_inc},
             timeout=timeout,
         )
         if r.ok:
-            context["open_incidents"] = r.json()
+            raw_inc = r.json()
+            rows_inc = raw_inc if isinstance(raw_inc, list) else raw_inc.get("incidents", [])
+            context["open_incidents"] = [
+                i for i in rows_inc
+                if i.get("status") not in ("resolved", "false_positive", "closed")
+            ]
     except Exception:
         pass
 
