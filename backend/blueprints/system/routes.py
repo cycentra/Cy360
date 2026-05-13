@@ -2003,6 +2003,35 @@ def _fetch_incident_detail_block(message: str) -> str:
             summary     = inc.get("llm_summary")     or "—"
             remediation = inc.get("llm_remediation") or "—"
 
+            # ── Format top alerts (sorted by rule_level desc, capped at 15) ──
+            raw_alerts = inc.get("alerts") or []
+            sorted_alerts = sorted(
+                raw_alerts,
+                key=lambda a: int(a.get("rule_level") or 0),
+                reverse=True,
+            )[:15]
+
+            alert_lines: list[str] = []
+            for a in sorted_alerts:
+                ts       = (a.get("timestamp") or "")[:16].replace("T", " ")
+                agent    = a.get("agent_name") or a.get("agent_id") or "?"
+                user     = a.get("username") or "—"
+                rule     = a.get("rule_desc") or "?"
+                mitre    = a.get("mitre_id") or "—"
+                src_ip   = a.get("src_ip") or "—"
+                fpath    = a.get("file_path") or "—"
+                lvl      = a.get("rule_level") or "?"
+                alert_lines.append(
+                    f"  - [{ts}] agent={agent} user={user} level={lvl}"
+                    f" rule=\"{rule}\" mitre={mitre} src_ip={src_ip} file={fpath}"
+                )
+
+            alerts_block = (
+                "\n".join(alert_lines)
+                if alert_lines
+                else "  (no alerts linked to this incident)"
+            )
+
             b = [
                 f"\n## Incident {inc_id.upper()} — Full Detail",
                 f"- **Severity**: {inc.get('severity', '?')}",
@@ -2028,9 +2057,15 @@ def _fetch_incident_detail_block(message: str) -> str:
                 "",
                 f"**Recommended Remediation**: {remediation}",
                 "",
+                f"### Linked Alerts (top {len(sorted_alerts)} by severity)",
+                alerts_block,
+                "",
                 "[INSTRUCTION: The data above is the complete, exact database record for"
-                f" {inc_id.upper()}. Present it to the user without modification."
-                " Do NOT add, invent, or change any field.]",
+                f" {inc_id.upper()}, including the raw alerts with per-event user,"
+                " agent, MITRE technique, rule, source IP, and file path."
+                " Use the alerts to answer specific questions about which user was"
+                " involved, which technique was used, and what exactly happened."
+                " Present it to the user accurately — do NOT fabricate any field.]",
             ]
             blocks.append("\n".join(b))
         except Exception as _parse_err:
