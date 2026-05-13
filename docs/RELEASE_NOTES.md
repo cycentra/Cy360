@@ -1,3 +1,11 @@
+## v1.0.417 -- 2026-05-13
+
+### Bug Fixes
+
+  - scheduler): scheduled scans write to shared scheduler/ dir
+
+---
+
 ## v1.0.416 -- 2026-05-13
 
 ### Bug Fixes
