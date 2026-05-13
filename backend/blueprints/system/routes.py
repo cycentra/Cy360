@@ -1714,7 +1714,7 @@ def _fetch_siem_context_block() -> str:
         pass
     try:
         r = http_requests.get(f"{engine_url}/incidents",
-                              params={"status": "open", "limit": 10}, timeout=_t)
+                              params={"status": "open", "limit": 20}, timeout=_t)
         if r.ok:
             ctx["open_incidents"] = r.json()
     except Exception:
@@ -1771,8 +1771,7 @@ def _fetch_siem_context_block() -> str:
             lines += ["## Open Incidents (SIEM — INC-XXXXX format)",
                       "| ID | Summary | Severity | Risk | Status | Affected Users |",
                       "|---|---|---|---|---|---|"]
-            for inc in rows[:10]:
-                # Synthesize a readable summary: prefer llm_summary snippet, fall back to categories
+            for inc in rows[:20]:
                 _llm = inc.get("llm_summary") or ""
                 _cats = ", ".join((inc.get("categories") or [])[:3])
                 _agents = ", ".join((inc.get("affected_agents") or [])[:2]) or "—"
@@ -1985,52 +1984,61 @@ def _fetch_incident_detail_block(message: str) -> str:
             continue
 
         inc = r.json()
-        cats    = ", ".join((inc.get("categories")    or [])[:5])  or "—"
-        users   = ", ".join((inc.get("affected_users") or [])[:5]) or "—"
-        agents  = ", ".join((inc.get("affected_agents") or [])[:5]) or "—"
-        ips     = ", ".join((inc.get("src_ips") or [])[:5])        or "—"
-        tactics = ", ".join((inc.get("mitre_tactics") or [])[:5])  or "—"
-        mitres  = ", ".join((inc.get("mitre_ids")    or [])[:5])   or "—"
-        rules   = "; ".join(
-            str(r_.get("name", r_.get("id", "?")))
-            for r_ in (inc.get("correlated_rules") or [])[:3]
-        ) or "—"
-        ueba = "; ".join(
-            str(u_.get("type", u_)) for u_ in (inc.get("ueba_flags") or [])[:3]
-        ) or "—"
-        summary     = inc.get("llm_summary")     or "—"
-        remediation = inc.get("llm_remediation") or "—"
+        try:
+            cats    = ", ".join((inc.get("categories")    or [])[:5])  or "—"
+            users   = ", ".join((inc.get("affected_users") or [])[:5]) or "—"
+            agents  = ", ".join((inc.get("affected_agents") or [])[:5]) or "—"
+            ips     = ", ".join((inc.get("src_ips") or [])[:5])        or "—"
+            tactics = ", ".join((inc.get("mitre_tactics") or [])[:5])  or "—"
+            mitres  = ", ".join((inc.get("mitre_ids")    or [])[:5])   or "—"
+            rules   = "; ".join(
+                (r_.get("name", r_.get("id", "?")) if isinstance(r_, dict) else str(r_))
+                for r_ in (inc.get("correlated_rules") or [])[:3]
+            ) or "—"
+            # ueba_flags stores plain strings (anomaly type names), not dicts
+            ueba = "; ".join(
+                (u_.get("type", "?") if isinstance(u_, dict) else str(u_))
+                for u_ in (inc.get("ueba_flags") or [])[:3]
+            ) or "—"
+            summary     = inc.get("llm_summary")     or "—"
+            remediation = inc.get("llm_remediation") or "—"
 
-        b = [
-            f"\n## Incident {inc_id.upper()} — Full Detail",
-            f"- **Severity**: {inc.get('severity', '?')}",
-            f"- **Status**: {inc.get('status', '?')}",
-            f"- **Risk Score**: {inc.get('risk_score', '?')}",
-            f"- **First Seen**: {inc.get('first_seen', '?')}",
-            f"- **Last Seen**: {inc.get('last_seen', '?')}",
-            f"- **Alert Count**: {inc.get('alert_count', '?')}",
-            f"- **Categories**: {cats}",
-            f"- **Affected Users**: {users}",
-            f"- **Affected Agents**: {agents}",
-            f"- **Source IPs**: {ips}",
-            f"- **MITRE Tactics**: {tactics}",
-            f"- **MITRE IDs**: {mitres}",
-            f"- **Kill Chain Stage**: {inc.get('kill_chain_stage_name') or inc.get('kill_chain_stage', '?')}",
-            f"- **Correlated Rules**: {rules}",
-            f"- **UEBA Flags**: {ueba}",
-            f"- **Assigned To**: {inc.get('assigned_to') or 'Unassigned'}",
-            f"- **CyIRIS Case**: {inc.get('iris_case_id') or 'None'}",
-            f"- **FP Probability**: {inc.get('fp_probability', '?')}%",
-            "",
-            f"**AI Summary**: {summary}",
-            "",
-            f"**Recommended Remediation**: {remediation}",
-            "",
-            "[INSTRUCTION: The data above is the complete, exact database record for"
-            f" {inc_id.upper()}. Present it to the user without modification."
-            " Do NOT add, invent, or change any field.]",
-        ]
-        blocks.append("\n".join(b))
+            b = [
+                f"\n## Incident {inc_id.upper()} — Full Detail",
+                f"- **Severity**: {inc.get('severity', '?')}",
+                f"- **Status**: {inc.get('status', '?')}",
+                f"- **Risk Score**: {inc.get('risk_score', '?')}",
+                f"- **First Seen**: {inc.get('first_seen', '?')}",
+                f"- **Last Seen**: {inc.get('last_seen', '?')}",
+                f"- **Alert Count**: {inc.get('alert_count', '?')}",
+                f"- **Categories**: {cats}",
+                f"- **Affected Users**: {users}",
+                f"- **Affected Agents**: {agents}",
+                f"- **Source IPs**: {ips}",
+                f"- **MITRE Tactics**: {tactics}",
+                f"- **MITRE IDs**: {mitres}",
+                f"- **Kill Chain Stage**: {inc.get('kill_chain_stage_name') or inc.get('kill_chain_stage', '?')}",
+                f"- **Correlated Rules**: {rules}",
+                f"- **UEBA Flags**: {ueba}",
+                f"- **Assigned To**: {inc.get('assigned_to') or 'Unassigned'}",
+                f"- **CyIRIS Case**: {inc.get('iris_case_id') or 'None'}",
+                f"- **FP Probability**: {inc.get('fp_probability', '?')}%",
+                "",
+                f"**AI Summary**: {summary}",
+                "",
+                f"**Recommended Remediation**: {remediation}",
+                "",
+                "[INSTRUCTION: The data above is the complete, exact database record for"
+                f" {inc_id.upper()}. Present it to the user without modification."
+                " Do NOT add, invent, or change any field.]",
+            ]
+            blocks.append("\n".join(b))
+        except Exception as _parse_err:
+            blocks.append(
+                f"\n## Incident {inc_id.upper()}\n"
+                f"[INSTRUCTION: Incident fetched but detail parsing failed: {_parse_err}."
+                " Present whatever is known and do NOT fabricate missing fields.]\n"
+            )
 
     return "\n".join(blocks)
 
