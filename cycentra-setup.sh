@@ -1146,6 +1146,16 @@ PATCHEOF
         info "Added CLOUD_IRIS_* to .env"
     fi
 
+    # Deduplicate CLOUD_IRIS_URL — can accumulate on CyIRIS reinstall (platform/routes.py
+    # appended rather than replaced in versions before v1.0.414).
+    _dup_count=$(grep -c "^CLOUD_IRIS_URL=" "$_env" 2>/dev/null || echo 0)
+    if [[ "$_dup_count" -gt 1 ]]; then
+        _iris_url_val=$(grep "^CLOUD_IRIS_URL=" "$_env" | tail -1 | cut -d= -f2-)
+        sed -i "/^CLOUD_IRIS_URL=/d" "$_env"
+        echo "CLOUD_IRIS_URL=${_iris_url_val}" >> "$_env"
+        info "Deduplicated CLOUD_IRIS_URL in .env (kept: ${_iris_url_val})"
+    fi
+
     # Add CYSIEM_OIDC_SECRET if missing (SSO v1 — introduced with full OIDC)
     if ! grep -q "^CYSIEM_OIDC_SECRET=" "$_env" 2>/dev/null; then
         echo "CYSIEM_OIDC_SECRET=$(openssl rand -hex 32)" >> "$_env"
