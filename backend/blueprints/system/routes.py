@@ -1713,17 +1713,25 @@ def _fetch_siem_context_block() -> str:
     except Exception:
         pass
     try:
-        # Fetch all active incidents — status='investigating' is the working
-        # status; 'open' is the initial state before triage begins.
-        # We exclude resolved/closed/false_positive to show only actionable incidents.
-        r = http_requests.get(f"{engine_url}/incidents",
-                              params={"limit": 20}, timeout=_t)
-        if r.ok:
-            raw = r.json()
-            rows = raw if isinstance(raw, list) else raw.get("incidents", [])
-            active = [i for i in rows
-                      if i.get("status") not in ("resolved", "false_positive", "closed")]
-            ctx["open_incidents"] = active
+        # Fetch investigating incidents first (the dominant active status in
+        # this deployment); then fall back to a broader query if that returns
+        # nothing (covers the early 'open' triage state).
+        _active: list = []
+        for _status in ("investigating", "open"):
+            try:
+                _r = http_requests.get(f"{engine_url}/incidents",
+                                       params={"status": _status, "limit": 50},
+                                       timeout=_t)
+                if _r.ok:
+                    _raw = _r.json()
+                    _rows = _raw if isinstance(_raw, list) else _raw.get("incidents", [])
+                    # Deduplicate by ID across both queries
+                    seen_ids = {i["id"] for i in _active}
+                    _active += [i for i in _rows if i.get("id") not in seen_ids]
+            except Exception:
+                pass
+        if _active:
+            ctx["open_incidents"] = _active
     except Exception:
         pass
     try:
@@ -3147,9 +3155,9 @@ def cymind_context():
     engine_url = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").rstrip("/")
     timeout    = 10
 
-    limit_inc  = min(int(request.args.get("incidents", 5)), 20)
-    limit_risk = min(int(request.args.get("risk",      5)), 20)
-    limit_ueba = min(int(request.args.get("ueba",      5)), 20)
+    limit_inc  = min(int(request.args.get("incidents", 20)), 50)
+    limit_risk = min(int(request.args.get("risk",       5)), 20)
+    limit_ueba = min(int(request.args.get("ueba",       5)), 20)
 
     context = {}
 
@@ -3161,20 +3169,25 @@ def cymind_context():
     except Exception:
         pass
 
-    # ── Open incidents ─────────────────────────────────────────────────────────
+    # ── Active incidents (investigating + open) ───────────────────────────────
     try:
-        r = http_requests.get(
-            f"{engine_url}/incidents",
-            params={"limit": limit_inc},
-            timeout=timeout,
-        )
-        if r.ok:
-            raw_inc = r.json()
-            rows_inc = raw_inc if isinstance(raw_inc, list) else raw_inc.get("incidents", [])
-            context["open_incidents"] = [
-                i for i in rows_inc
-                if i.get("status") not in ("resolved", "false_positive", "closed")
-            ]
+        _active_m2m: list = []
+        for _status in ("investigating", "open"):
+            try:
+                _r = http_requests.get(
+                    f"{engine_url}/incidents",
+                    params={"status": _status, "limit": limit_inc},
+                    timeout=timeout,
+                )
+                if _r.ok:
+                    _raw = _r.json()
+                    _rows = _raw if isinstance(_raw, list) else _raw.get("incidents", [])
+                    seen_ids = {i["id"] for i in _active_m2m}
+                    _active_m2m += [i for i in _rows if i.get("id") not in seen_ids]
+            except Exception:
+                pass
+        if _active_m2m:
+            context["open_incidents"] = _active_m2m
     except Exception:
         pass
 
