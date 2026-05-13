@@ -3004,11 +3004,25 @@ def cymind_chat_proxy():
     # ── Agentic intent detection ───────────────────────────────────────────────
     # Check if the user's last message contains a confirmed action intent.
     # Only analyst/admin reach here; no role re-check needed.
+    _ACTION_VERB_RE = _re.compile(
+        r'\b(?:close|resolve|mark\s+(?:as\s+)?(?:fp|false.positive)|assign|escalate)\b',
+        _re.IGNORECASE,
+    )
     if body_json is not None:
         messages = body_json.get("messages", [])
         last_msg = messages[-1].get("content", "") if messages else ""
         if last_msg:
-            action = _detect_action_intent(last_msg)
+            # If the message has an action verb but no explicit INC-ID, look back
+            # through recent conversation history to find the most recently referenced
+            # incident (e.g. user said "close the incident" after discussing INC-00490).
+            resolve_msg = last_msg
+            if _ACTION_VERB_RE.search(last_msg) and not _INC_RE.search(last_msg):
+                for _prev in reversed(messages[:-1]):
+                    _found = _INC_RE.findall(_prev.get("content", ""))
+                    if _found:
+                        resolve_msg = last_msg.rstrip() + f" {_found[-1]}"
+                        break
+            action = _detect_action_intent(resolve_msg)
             if action is not None:
                 return _stream_action_confirmation(action)
 
