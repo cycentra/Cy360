@@ -1059,7 +1059,7 @@ export function SiemIncidentsPage() {
   const [incidents, setIncidents]   = useState([]);
   const [total, setTotal]           = useState(0);
   const [loading, setLoading]       = useState(true);
-  const [filters, setFilters]       = useState({ status: "", severity: "" });
+  const [filters, setFilters]       = useState({ status: "active", severity: "" });
   const [selected, setSelected]     = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [closeConfirm, setCloseConfirm] = useState(false); // close FP+resolved → closed
@@ -1074,13 +1074,27 @@ export function SiemIncidentsPage() {
   const wsDebounce  = useRef(null); // timer ref for WS-triggered refetch debounce
 
   const fetchIncidents = useCallback(async () => {
-    const data = await siemFetch(siemApi.getIncidents({ ...filters, limit: 200 }));
-    if (data._offline || data._error) {
-      setLoading(false);   // don't leave the spinner up on engine error / offline
-      return;
+    let merged;
+    if (filters.status === "active") {
+      // Fetch all non-terminal statuses explicitly — avoids the engine's
+      // last_seen-sorted default burying active incidents behind 500+ closed ones.
+      const active = [];
+      let anyOffline = false;
+      for (const s of ["investigating", "open", "in_review", "held"]) {
+        const d = await siemFetch(siemApi.getIncidents({ severity: filters.severity, status: s, limit: 200 }));
+        if (d._offline || d._error) { anyOffline = true; continue; }
+        const rows = d.incidents || [];
+        const existing = new Set(active.map(i => i.id));
+        active.push(...rows.filter(i => !existing.has(i.id)));
+      }
+      if (anyOffline && active.length === 0) { setLoading(false); return; }
+      merged = { incidents: active, total: active.length };
+    } else {
+      merged = await siemFetch(siemApi.getIncidents({ ...filters, limit: 500 }));
+      if (merged._offline || merged._error) { setLoading(false); return; }
     }
-    setIncidents(data.incidents || []);
-    setTotal(data.total || 0);
+    setIncidents(merged.incidents || []);
+    setTotal(merged.total || 0);
     setLoading(false);
   }, [filters]);
 
@@ -1270,8 +1284,8 @@ export function SiemIncidentsPage() {
         {/* Filters */}
         <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
           {[
-            { key: "status", opts: ["", "open", "investigating", "in-review", "resolved", "false_positive"],
-              labels: ["All Statuses", "Open", "Investigating", "In Review", "Resolved", "False Positive"] },
+            { key: "status", opts: ["", "active", "open", "investigating", "in-review", "resolved", "false_positive", "closed"],
+              labels: ["All Statuses", "Active (non-closed)", "Open", "Investigating", "In Review", "Resolved", "False Positive", "Closed"] },
             { key: "severity", opts: ["", "critical", "high", "medium", "low"],
               labels: ["All Severities", "Critical", "High", "Medium", "Low"] },
           ].map(({ key, opts, labels }) => (
