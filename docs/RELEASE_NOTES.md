@@ -1,3 +1,11 @@
+## v1.0.419 -- 2026-05-13
+
+### Bug Fixes
+
+  - ueba_flags AttributeError crash in _fetch_incident_detail_block
+
+---
+
 ## v1.0.418 -- 2026-05-13
 
 ### Bug Fixes
