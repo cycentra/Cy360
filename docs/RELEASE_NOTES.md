@@ -1,3 +1,11 @@
+## v1.0.418 -- 2026-05-13
+
+### Bug Fixes
+
+  - guest-isolation): move guest scans/reports to separate dir tree
+
+---
+
 ## v1.0.417 -- 2026-05-13
 
 ### Bug Fixes
