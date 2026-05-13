@@ -1,3 +1,12 @@
+## v1.0.416 -- 2026-05-13
+
+### Bug Fixes
+
+  - setup): deduplicate CLOUD_IRIS_URL in --update .env patch
+  - deduplicate CLOUD_IRIS_URL in .env when CyIRIS is installed
+
+---
+
 ## v1.0.415 -- 2026-05-12
 
 ### Bug Fixes
