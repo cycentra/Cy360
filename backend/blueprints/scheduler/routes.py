@@ -472,7 +472,10 @@ def scheduler_jobs_create():
         return jsonify({"error": "schedule.type must be 'cron' or 'interval'"}), 400
 
     actor_email = session["user_email"]
-    actor_uid   = actor_email.replace("@", "_").replace(".", "_")
+    # Scheduled jobs always write to the shared 'scheduler' directory so results
+    # are visible to all authenticated users on the dashboard, regardless of which
+    # user created the job.  'created_by' still records the originating user.
+    actor_uid   = "scheduler"
 
     job = {
         "id":          str(uuid.uuid4()),
@@ -583,7 +586,8 @@ def add_job_internal(params: dict, actor_email: str) -> dict:
     scan_type      = params.get("scan_type", "standard").lower()
     schedule       = params.get("schedule", {"type": "cron", "hour": "2", "minute": "0"})
     name           = params.get("name", f"Scheduled scan — {domain}")
-    actor_uid      = actor_email.replace("@", "_").replace(".", "_")
+    # Always write to the shared scheduler directory — same as scheduler_jobs_create()
+    actor_uid      = "scheduler"
 
     if not domain or "." not in domain:
         return {"success": False, "message": "Invalid domain"}
