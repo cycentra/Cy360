@@ -43,18 +43,41 @@ def _load_cymind_settings() -> dict:
     return {}
 
 
+def _cymind_integration(settings: dict) -> dict:
+    """Return the cymind_integration sub-object written by Platform Extensions."""
+    return settings.get("cymind_integration", {})
+
+
 def get_cymind_url() -> str:
     settings = _load_cymind_settings()
-    return settings.get("cymind_url") or settings.get("CYMIND_API_URL") or _CYMIND_DEFAULT_URL
+    ci = _cymind_integration(settings)
+    return (
+        ci.get("cymindUrl")
+        or settings.get("fields", {}).get("baseUrl")
+        or settings.get("cymind_url")
+        or settings.get("CYMIND_API_URL")
+        or _CYMIND_DEFAULT_URL
+    )
 
 
-def get_admin_key() -> str:
+def get_cymind_api_key() -> str:
+    """
+    Return the best available CyMind API key for RAG operations.
+    Priority: explicit cymind_admin_key (set in GRC Settings) →
+              M2M service key (cymk_…) → chat key (pak_…).
+    """
     settings = _load_cymind_settings()
-    return settings.get("cymind_admin_key") or settings.get("CYMIND_API_KEY") or ""
+    ci = _cymind_integration(settings)
+    return (
+        settings.get("cymind_admin_key")   # admin key set explicitly in GRC Settings
+        or ci.get("apiKey")                # M2M service-to-service key
+        or ci.get("chatApiKey")            # chat/user key fallback
+        or ""
+    )
 
 
 def _headers() -> dict:
-    key = get_admin_key()
+    key = get_cymind_api_key()
     h = {"Content-Type": "application/json"}
     if key:
         h["Authorization"] = f"Bearer {key}"

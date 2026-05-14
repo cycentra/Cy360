@@ -846,9 +846,17 @@ def get_comp_settings():
         except Exception:
             pass
 
-    # Global CyMind integration is enabled when an apiKey is present in ai_settings.json
-    global_cymind_enabled  = bool(settings.get("apiKey") or settings.get("cymind_api_key"))
-    global_cymind_url      = settings.get("serverUrl") or settings.get("cymind_url") or ""
+    # CyMind integration is stored under cymind_integration{} by the Platform Extensions flow
+    cymind_int = settings.get("cymind_integration", {})
+    global_cymind_enabled = bool(cymind_int.get("enabled")) and bool(
+        cymind_int.get("apiKey") or cymind_int.get("chatApiKey")
+    )
+    global_cymind_url = (
+        cymind_int.get("cymindUrl")
+        or settings.get("fields", {}).get("baseUrl")
+        or settings.get("cymind_url")
+        or ""
+    )
 
     return jsonify({
         # If global CyMind is enabled, URL is inherited and we surface it read-only
