@@ -359,7 +359,6 @@ export default function App() {
 
             {/* ── Security Compliance (GRC) ─────────────────────────────── */}
             {activeTab==="comp-dashboard"   && <ComplianceDashboardPage setActiveTab={setActiveTab}/>}
-            {activeTab==="comp-alerts"      && <ComplianceLiveAlertsPage/>}
             {activeTab==="comp-assessment"  && <ComplianceAssessmentPage/>}
             {activeTab==="comp-findings"    && <ComplianceFindingsPage/>}
             {activeTab==="comp-risks"       && <RiskRegisterPage setActiveTab={setActiveTab}/>}

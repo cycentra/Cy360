@@ -96,6 +96,31 @@ def get_framework_scores():
     return jsonify({"scores": scores})
 
 
+@comp_bp.route("/dashboard/score-history", methods=["GET"])
+@require_viewer
+def get_score_history():
+    from cy_comp.services.compliance import get_score_history as _hist
+    framework = request.args.get("framework")
+    limit     = int(request.args.get("limit", 10))
+    return jsonify({"history": _hist(framework=framework or None, limit=limit)})
+
+
+@comp_bp.route("/dashboard/alerts-by-day", methods=["GET"])
+@require_viewer
+def get_alerts_by_day():
+    from cy_comp.services.compliance import get_alerts_by_day as _abd
+    days = int(request.args.get("days", 14))
+    return jsonify({"days": _abd(days=days)})
+
+
+@comp_bp.route("/controls-view/<framework>", methods=["GET"])
+@require_viewer
+def get_controls_view(framework):
+    """Merged controls list: questionnaire + auto-findings + alerts for one framework."""
+    from cy_comp.services.compliance import get_controls_view as _cv
+    return jsonify({"controls": _cv(framework)})
+
+
 # ── Compliance Alerts (query existing alerts table — no duplicate storage) ─────
 
 def _severity_from_level(level: int) -> str:
@@ -202,6 +227,19 @@ def trigger_siem_sync():
 
 
 # ── Risk Register ─────────────────────────────────────────────────────────────
+
+@comp_bp.route("/risks/auto-populate", methods=["POST"])
+@require_analyst
+def auto_populate_risks():
+    """Create risk register entries from breach/warning findings."""
+    from cy_comp.services.risk import auto_populate_from_findings
+    try:
+        result = auto_populate_from_findings(created_by=_email())
+        return jsonify({"status": "ok", "result": result})
+    except Exception as exc:
+        log.error("auto_populate_risks: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
 
 @comp_bp.route("/risks", methods=["GET"])
 @require_viewer

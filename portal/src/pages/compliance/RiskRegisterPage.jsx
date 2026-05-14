@@ -270,6 +270,7 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
   const [aiMap, setAiMap]         = useState({});
   const [aiLoading, setAiLoading] = useState({});
   const [msg, setMsg]             = useState("");
+  const [populating, setPopulating] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -330,12 +331,27 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
             {heatmap?.summary && ` · ${heatmap.summary.critical || 0} critical · ${heatmap.summary.high || 0} high`}
           </div>
         </div>
-        <button onClick={() => { setEditing(null); setShowForm(s => !s); }}
-          style={{ background: `${C.accent}10`, border: `1px solid ${C.accent}40`,
-            color: C.accent, padding: "8px 18px", borderRadius: 4, fontFamily: "monospace",
-            fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-          + Add Risk
-        </button>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={() => {
+            setPopulating(true); setMsg("");
+            fetch(`${API_BASE}/api/comp/risks/auto-populate`, { method: "POST", credentials: "include" })
+              .then(r => r.ok ? r.json() : Promise.reject(r.status))
+              .then(d => { setMsg(`Auto-populated: ${d.result?.created || 0} risks added`); load(); })
+              .catch(e => setMsg(`Failed: ${e}`))
+              .finally(() => setPopulating(false));
+          }} disabled={populating}
+            style={{ background: `${C.blue}10`, border: `1px solid ${C.blue}40`,
+              color: C.blue, padding: "8px 16px", borderRadius: 4, fontFamily: "monospace",
+              fontSize: 11, fontWeight: 700, cursor: "pointer", opacity: populating ? 0.6 : 1 }}>
+            {populating ? "Populating…" : "Auto-Populate from Findings"}
+          </button>
+          <button onClick={() => { setEditing(null); setShowForm(s => !s); }}
+            style={{ background: `${C.accent}10`, border: `1px solid ${C.accent}40`,
+              color: C.accent, padding: "8px 18px", borderRadius: 4, fontFamily: "monospace",
+              fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            + Add Risk
+          </button>
+        </div>
       </div>
 
       {/* Score legend */}
@@ -406,7 +422,13 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
                 </div>
               ))}
               {!Object.keys(heatmap?.summary?.by_category || {}).length && (
-                <div style={{ color: C.muted, fontSize: 12, fontFamily: "monospace" }}>No risks yet</div>
+                <div style={{ color: C.muted, fontSize: 10, fontFamily: "monospace",
+                  lineHeight: 1.6 }}>
+                  No risks yet.
+                  <br />To populate: go to <strong style={{ color: C.blue }}>Findings</strong> →
+                  generate findings from alerts, then click
+                  <strong style={{ color: C.blue }}> "Auto-Populate from Findings"</strong> above.
+                </div>
               )}
             </div>
           </div>

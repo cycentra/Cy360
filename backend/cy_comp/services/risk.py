@@ -196,6 +196,76 @@ def delete_risk(risk_id: str) -> bool:
         return False
 
 
+def auto_populate_from_findings(created_by: Optional[str] = None) -> dict:
+    """
+    Create cy_comp_risks entries from open breach/warning findings that have no risk yet.
+    Dedup: checks title similarity to avoid exact duplicates.
+    Returns {created, skipped}.
+    """
+    created = 0
+    skipped = 0
+    SEV_TO_LI = {"critical": (5, 5), "high": (4, 4), "medium": (3, 3), "low": (2, 2)}
+    VERDICT_TO_TREATMENT = {"breach": "mitigate", "warning": "mitigate", "compliant": "accept"}
+
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, framework, control_id, severity, title, description, verdict
+                FROM cy_comp_findings
+                WHERE status IN ('open','in_progress')
+                  AND verdict IN ('breach','warning')
+                  AND auto_generated = TRUE
+                ORDER BY
+                    CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END
+                LIMIT 50;
+                """
+            )
+            findings = cur.fetchall()
+            for f in findings:
+                fid, fw, cid, sev, title, desc, verdict = f
+                likelihood, impact = SEV_TO_LI.get(sev, (3, 3))
+                risk_score = likelihood * impact
+
+                # Dedup by title prefix
+                short = title[:60]
+                cur.execute(
+                    "SELECT id FROM cy_comp_risks WHERE title LIKE %s LIMIT 1;",
+                    (f"{short}%",)
+                )
+                if cur.fetchone():
+                    skipped += 1
+                    continue
+
+                rid = str(uuid.uuid4())
+                cur.execute(
+                    """
+                    INSERT INTO cy_comp_risks
+                        (id, title, description, category, owner, likelihood, impact,
+                         risk_score, appetite, status, treatment, frameworks, created_by)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'medium','open',%s,%s,%s);
+                    """,
+                    (
+                        rid,
+                        title[:200],
+                        (desc or "")[:500] + f"\n\nSource: {fw} finding ({cid})",
+                        "IT",
+                        created_by or "system",
+                        likelihood, impact, risk_score,
+                        VERDICT_TO_TREATMENT.get(verdict, "mitigate"),
+                        [fw] if fw else [],
+                        created_by,
+                    )
+                )
+                created += 1
+    except Exception as exc:
+        log.error("auto_populate_from_findings: %s", exc)
+        raise
+
+    return {"created": created, "skipped": skipped}
+
+
 # ── Heatmap ───────────────────────────────────────────────────────────────────
 
 def get_heatmap() -> dict:

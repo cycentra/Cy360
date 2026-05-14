@@ -1,11 +1,17 @@
 /**
- * ComplianceDashboardPage.jsx
- * ============================
- * GRC Compliance posture overview.
- * Data: alerts + incidents tables (compliance_* columns) — no cy_comp_alerts.
+ * ComplianceDashboardPage.jsx  —  GRC Posture Dashboard
+ * =======================================================
+ * Graphical compliance posture overview:
+ *   - Overall score donut
+ *   - Per-framework score bars (show/hide toggles)
+ *   - Findings severity pie
+ *   - Alerts-by-day bar chart (14 days)
+ *   - Score trend line chart
+ *   - Breach incidents + findings verdict summary
+ *   - Getting Started flow guide
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { API_BASE } from "../../core/constants.js";
 
 const C = {
@@ -13,301 +19,606 @@ const C = {
   text: "rgba(255,255,255,0.82)", muted: "rgba(255,255,255,0.45)",
   accent: "#00e5a0", red: "#ff3b3b", orange: "#ff8c00", blue: "#4d9eff", purple: "#b06eff",
 };
-
 const CARD = {
-  background: "rgba(255,255,255,0.02)",
-  border: `1px solid ${C.border}`,
-  borderRadius: 8,
-  padding: "20px 24px",
+  background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}`,
+  borderRadius: 8, padding: "20px 24px",
 };
 
-const FW_LABELS = {
-  nis2: "NIS2", dora: "DORA", iso27001: "ISO 27001",
-  soc2: "SOC 2", nist_csf: "NIST CSF", pci_dss: "PCI DSS", avg: "GDPR/AVG",
-};
-const FW_COLORS = {
-  nis2: "#6378ff", iso27001: "#00e5c0", dora: "#ffd166",
-  soc2: "#ff6b6b", avg: "#a78bfa", nist_csf: "#38bdf8", pci_dss: "#f97316",
+const FW_META = {
+  nis2:     { label: "NIS2",      color: "#6378ff" },
+  dora:     { label: "DORA",      color: "#ffd166" },
+  iso27001: { label: "ISO 27001", color: "#00e5c0" },
+  soc2:     { label: "SOC 2",     color: "#ff6b6b" },
+  nist_csf: { label: "NIST CSF",  color: "#38bdf8" },
+  pci_dss:  { label: "PCI DSS",   color: "#f97316" },
 };
 
-function scoreColor(score) {
-  if (score >= 80) return C.accent;
-  if (score >= 60) return C.orange;
+const SEV_COLORS = {
+  critical: C.red, high: C.orange, medium: C.blue, low: C.muted,
+};
+const VERDICT_COLORS = {
+  breach: C.red, warning: C.orange, compliant: C.accent, open: C.muted,
+};
+
+function scoreColor(s) {
+  if (s >= 80) return C.accent;
+  if (s >= 60) return C.orange;
   return C.red;
 }
 
-function ScoreCard({ fw }) {
-  const color = scoreColor(fw.score);
-  const pct   = Math.round(fw.score);
-  const fwColor = FW_COLORS[fw.framework] || C.blue;
+// ── SVG Chart Components ───────────────────────────────────────────────────────
+
+function DonutChart({ score, size = 140, stroke = 18 }) {
+  const r   = (size - stroke) / 2;
+  const cx  = size / 2;
+  const circ = 2 * Math.PI * r;
+  const dash = (score / 100) * circ;
+  const color = scoreColor(score);
   return (
-    <div style={{ ...CARD, position: "relative", overflow: "hidden" }}>
-      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3,
-        background: `linear-gradient(90deg, ${fwColor}80, ${fwColor}10)` }} />
-      <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px",
-        fontFamily: "monospace", textTransform: "uppercase", marginBottom: 10 }}>
-        {FW_LABELS[fw.framework] || fw.framework}
-      </div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 6, marginBottom: 10 }}>
-        <div style={{ color, fontSize: 38, fontFamily: "monospace", fontWeight: 700, lineHeight: 1 }}>{pct}</div>
-        <div style={{ color, fontSize: 16, fontFamily: "monospace", marginBottom: 3 }}>%</div>
-      </div>
-      <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2, marginBottom: 12 }}>
-        <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 2, transition: "width 1s ease" }} />
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between" }}>
-        {[
-          { label: "Passing",   val: fw.passing,       color: C.accent },
-          { label: "Failing",   val: fw.failing,       color: fw.failing > 0 ? C.red : C.muted },
-          { label: "Crit Gaps", val: fw.critical_gaps, color: fw.critical_gaps > 0 ? C.red : C.muted },
-        ].map(({ label, val, color: vc }) => (
-          <div key={label} style={{ textAlign: "center" }}>
-            <div style={{ color: vc, fontSize: 13, fontFamily: "monospace", fontWeight: 700 }}>{val}</div>
-            <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace" }}>{label}</div>
+    <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+      <circle cx={cx} cy={cx} r={r} fill="none"
+        stroke="rgba(255,255,255,0.06)" strokeWidth={stroke} />
+      <circle cx={cx} cy={cx} r={r} fill="none"
+        stroke={color} strokeWidth={stroke}
+        strokeDasharray={`${dash} ${circ}`}
+        strokeLinecap="round"
+        style={{ transition: "stroke-dasharray 1.2s ease" }} />
+    </svg>
+  );
+}
+
+function PieChart({ data, size = 130 }) {
+  // data = [{label, value, color}]
+  const total = data.reduce((s, d) => s + d.value, 0);
+  if (!total) {
+    return (
+      <svg width={size} height={size}>
+        <circle cx={size/2} cy={size/2} r={size/2 - 4}
+          fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.06)" strokeWidth={1}/>
+        <text x={size/2} y={size/2 + 4} textAnchor="middle"
+          fill="rgba(255,255,255,0.25)" fontSize={9} fontFamily="monospace">no data</text>
+      </svg>
+    );
+  }
+  let angle = -Math.PI / 2;
+  const cx = size / 2, cy = size / 2, r = size / 2 - 6;
+  const paths = data.map(d => {
+    if (!d.value) return null;
+    const sweep = (d.value / total) * 2 * Math.PI;
+    const x1 = cx + r * Math.cos(angle);
+    const y1 = cy + r * Math.sin(angle);
+    angle += sweep;
+    const x2 = cx + r * Math.cos(angle);
+    const y2 = cy + r * Math.sin(angle);
+    const large = sweep > Math.PI ? 1 : 0;
+    return (
+      <path key={d.label}
+        d={`M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} Z`}
+        fill={d.color} opacity={0.85}
+        stroke="#090b10" strokeWidth={1.5} />
+    );
+  });
+  return <svg width={size} height={size}>{paths}</svg>;
+}
+
+function BarChart({ data, height = 100 }) {
+  // data = [{date, total, critical, high, medium, low}]
+  if (!data || !data.length) return (
+    <div style={{ height, display: "flex", alignItems: "center",
+      color: "rgba(255,255,255,0.15)", fontFamily: "monospace", fontSize: 10 }}>
+      No alert data yet — run compliance enrichment to populate.
+    </div>
+  );
+  const max = Math.max(...data.map(d => d.total), 1);
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height, width: "100%" }}>
+      {data.map((d, i) => {
+        const barH = Math.max(2, (d.total / max) * height);
+        const date  = d.date ? d.date.slice(5) : "";  // MM-DD
+        const color = d.critical > 0 ? C.red : d.high > 0 ? C.orange : d.medium > 0 ? C.blue : C.muted;
+        return (
+          <div key={i} title={`${d.date}: ${d.total} alerts (crit:${d.critical} high:${d.high})`}
+            style={{ flex: 1, display: "flex", flexDirection: "column",
+              alignItems: "center", gap: 3, cursor: "default" }}>
+            <div style={{ width: "100%", height: barH, background: color,
+              borderRadius: "2px 2px 0 0", opacity: 0.8, minHeight: 2 }} />
+            {data.length <= 10 && (
+              <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 7,
+                fontFamily: "monospace", whiteSpace: "nowrap" }}>{date}</div>
+            )}
           </div>
-        ))}
+        );
+      })}
+    </div>
+  );
+}
+
+function LineChart({ history, height = 90 }) {
+  // history = [{framework, score, computed_at}]
+  if (!history || !history.length) return (
+    <div style={{ height, display: "flex", alignItems: "center",
+      color: "rgba(255,255,255,0.15)", fontFamily: "monospace", fontSize: 10 }}>
+      No score history yet — scores are saved each time you refresh framework scores.
+    </div>
+  );
+
+  // Group by framework
+  const byFw = {};
+  history.forEach(h => {
+    if (!byFw[h.framework]) byFw[h.framework] = [];
+    byFw[h.framework].push(h.score);
+  });
+
+  const W = 400, H = height;
+  const lines = Object.entries(byFw).map(([fw, scores]) => {
+    if (scores.length < 2) return null;
+    const color = FW_META[fw]?.color || C.blue;
+    const pts = scores.map((s, i) => {
+      const x = (i / (scores.length - 1)) * W;
+      const y = H - (s / 100) * H;
+      return `${x},${y}`;
+    }).join(" ");
+    return (
+      <polyline key={fw} points={pts}
+        fill="none" stroke={color} strokeWidth={1.5}
+        strokeLinecap="round" strokeLinejoin="round" opacity={0.8}/>
+    );
+  }).filter(Boolean);
+
+  if (!lines.length) return null;
+
+  return (
+    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+      {/* Grid lines */}
+      {[0, 25, 50, 75, 100].map(v => (
+        <line key={v} x1={0} y1={H - (v/100)*H} x2={W} y2={H - (v/100)*H}
+          stroke="rgba(255,255,255,0.04)" strokeWidth={1}/>
+      ))}
+      {lines}
+    </svg>
+  );
+}
+
+// ── Framework Score Bar ───────────────────────────────────────────────────────
+
+function FwScoreBar({ fw, visible, onToggle, onClick }) {
+  const meta  = FW_META[fw.framework] || { label: fw.framework.toUpperCase(), color: C.blue };
+  const color = meta.color;
+  const score = Math.round(fw.score || 0);
+  const sc    = scoreColor(score);
+
+  return (
+    <div style={{ opacity: visible ? 1 : 0.3, transition: "opacity 0.2s" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+        <button onClick={onToggle}
+          title={visible ? "Hide" : "Show"}
+          style={{ width: 12, height: 12, borderRadius: 2, border: "none", cursor: "pointer",
+            background: visible ? color : "rgba(255,255,255,0.1)", flexShrink: 0, padding: 0 }} />
+        <span style={{ color: visible ? color : C.muted, fontSize: 10, fontFamily: "monospace",
+          fontWeight: 700, width: 80, flexShrink: 0 }}>{meta.label}</span>
+        <div style={{ flex: 1, height: 6, background: "rgba(255,255,255,0.05)", borderRadius: 3,
+          cursor: "pointer" }} onClick={onClick}>
+          <div style={{ height: "100%", width: `${score}%`, background: visible ? color : "rgba(255,255,255,0.1)",
+            borderRadius: 3, transition: "width 1s ease" }} />
+        </div>
+        <div style={{ display: "flex", gap: 12, flexShrink: 0 }}>
+          <span style={{ color: sc, fontSize: 12, fontFamily: "monospace", fontWeight: 700, width: 32, textAlign: "right" }}>
+            {score}%
+          </span>
+          <span style={{ color: C.muted, fontSize: 9, fontFamily: "monospace", width: 70 }}>
+            {fw.passing || 0}/{fw.total_controls || 0} ctl
+          </span>
+          <span style={{ color: (fw.critical_gaps || 0) > 0 ? C.red : C.muted,
+            fontSize: 9, fontFamily: "monospace", width: 48 }}>
+            {fw.critical_gaps || 0} crit
+          </span>
+        </div>
       </div>
     </div>
   );
 }
 
-function AlertSeverityBar({ bySeverity }) {
-  const total = Object.values(bySeverity).reduce((s, v) => s + v, 0);
-  const items = [
-    { key: "critical", label: "Critical", color: C.red },
-    { key: "high",     label: "High",     color: C.orange },
-    { key: "medium",   label: "Medium",   color: C.blue },
-    { key: "low",      label: "Low",      color: C.muted },
-  ];
-  return (
-    <div style={CARD}>
-      <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px", fontFamily: "monospace", textTransform: "uppercase", marginBottom: 16 }}>
-        Alert Severity Distribution (7 days)
-      </div>
-      <div style={{ display: "flex", gap: 4, height: 8, borderRadius: 4, overflow: "hidden", marginBottom: 16 }}>
-        {items.map(({ key, color }) => {
-          const cnt = bySeverity[key] || 0;
-          const pct = total > 0 ? (cnt / total) * 100 : 0;
-          return pct > 0 ? (
-            <div key={key} style={{ width: `${pct}%`, background: color, minWidth: 2 }} title={`${key}: ${cnt}`} />
-          ) : null;
-        })}
-        {total === 0 && <div style={{ width: "100%", background: "rgba(255,255,255,0.05)" }} />}
-      </div>
-      <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
-        {items.map(({ key, label, color }) => (
-          <div key={key} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <div style={{ width: 8, height: 8, borderRadius: 2, background: color }} />
-            <span style={{ color: C.muted, fontSize: 10, fontFamily: "monospace" }}>{label}: </span>
-            <span style={{ color: color, fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>
-              {bySeverity[key] || 0}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
+// ── Main Page ─────────────────────────────────────────────────────────────────
 
-function FrameworkBreakdown({ breakdown }) {
-  const entries = Object.entries(breakdown || {}).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  const max = entries.length > 0 ? entries[0][1] : 1;
-  return (
-    <div style={CARD}>
-      <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px", fontFamily: "monospace", textTransform: "uppercase", marginBottom: 16 }}>
-        Alerts by Framework (7 days)
-      </div>
-      {entries.length === 0 ? (
-        <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 11, fontFamily: "monospace" }}>
-          No compliance alerts yet. Run enrichment from Live Alerts page.
-        </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {entries.map(([fw, cnt]) => {
-            const color = FW_COLORS[fw] || C.blue;
-            return (
-              <div key={fw}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ color, fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>
-                    {FW_LABELS[fw] || fw.toUpperCase()}
-                  </span>
-                  <span style={{ color: C.muted, fontSize: 10, fontFamily: "monospace" }}>{cnt}</span>
-                </div>
-                <div style={{ height: 4, background: "rgba(255,255,255,0.05)", borderRadius: 2 }}>
-                  <div style={{ height: "100%", width: `${(cnt / max) * 100}%`, background: color, borderRadius: 2 }} />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function RecentIncidents({ incidents }) {
-  return (
-    <div style={CARD}>
-      <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px", fontFamily: "monospace", textTransform: "uppercase", marginBottom: 16 }}>
-        Compliance-Breaching Incidents
-      </div>
-      {incidents.length === 0 ? (
-        <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 11, fontFamily: "monospace" }}>
-          No compliance-tagged incidents found.
-        </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {incidents.slice(0, 8).map(inc => {
-            const sevColor = { critical: C.red, high: C.orange, medium: C.blue, low: C.muted }[inc.severity] || C.muted;
-            return (
-              <div key={inc.id} style={{ display: "flex", alignItems: "center", gap: 10,
-                padding: "8px 10px", borderRadius: 4, background: "rgba(255,255,255,0.02)",
-                border: `1px solid rgba(255,255,255,0.04)` }}>
-                <span style={{ color: sevColor, fontFamily: "monospace", fontSize: 9, fontWeight: 700,
-                  background: `${sevColor}15`, padding: "1px 5px", borderRadius: 3, textTransform: "uppercase",
-                  whiteSpace: "nowrap" }}>
-                  {inc.severity}
-                </span>
-                <span style={{ color: C.orange, fontFamily: "monospace", fontSize: 10, fontWeight: 700 }}>
-                  {inc.id}
-                </span>
-                <div style={{ display: "flex", gap: 3, flexWrap: "wrap", flex: 1 }}>
-                  {(inc.frameworks || []).slice(0, 3).map(fw => (
-                    <span key={fw} style={{ fontSize: 8, color: FW_COLORS[fw] || C.blue,
-                      background: `${FW_COLORS[fw] || C.blue}15`, border: `1px solid ${FW_COLORS[fw] || C.blue}30`,
-                      padding: "1px 4px", borderRadius: 2, fontFamily: "monospace", fontWeight: 700 }}>
-                      {fw.toUpperCase()}
-                    </span>
-                  ))}
-                </div>
-                <span style={{ color: C.muted, fontSize: 9, fontFamily: "monospace", whiteSpace: "nowrap" }}>
-                  {inc.alert_count} alerts
-                </span>
-                <span style={{ color: "rgba(255,255,255,0.15)", fontSize: 9, fontFamily: "monospace",
-                  whiteSpace: "nowrap" }}>
-                  {inc.status}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
+const STORAGE_KEY = "grc_hidden_frameworks";
 
 export function ComplianceDashboardPage({ setActiveTab }) {
-  const [summary, setSummary] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState(null);
+  const [summary, setSummary]       = useState(null);
+  const [loading, setLoading]       = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError]           = useState(null);
+  const [hidden, setHidden]         = useState(() => {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
+    catch { return []; }
+  });
 
-  useEffect(() => {
-    setLoading(true);
-    fetch(`${API_BASE}/api/comp/dashboard`, { credentials: "include" })
+  const load = useCallback((force = false) => {
+    if (force) setRefreshing(true); else setLoading(true);
+    const url = force
+      ? `${API_BASE}/api/comp/framework-scores?refresh=true`
+      : `${API_BASE}/api/comp/dashboard`;
+    fetch(force ? url : `${API_BASE}/api/comp/dashboard`, { credentials: "include" })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(d => { setSummary(d); setLoading(false); })
-      .catch(e => { setError(`Failed to load compliance data (${e})`); setLoading(false); });
+      .then(d => { setSummary(d); setLoading(false); setRefreshing(false); })
+      .catch(e => { setError(`Failed (${e})`); setLoading(false); setRefreshing(false); });
   }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const toggleFw = fw => {
+    setHidden(prev => {
+      const next = prev.includes(fw) ? prev.filter(x => x !== fw) : [...prev, fw];
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
 
   if (loading) return (
     <div style={{ color: C.muted, fontFamily: "monospace", fontSize: 12, padding: 40 }}>
-      Loading compliance dashboard...
+      Loading GRC posture…
     </div>
   );
   if (error) return (
     <div style={{ color: C.red, fontFamily: "monospace", fontSize: 12, padding: 40 }}>{error}</div>
   );
 
-  const scores        = summary?.framework_scores    || [];
-  const findSumm      = summary?.findings_summary    || {};
-  const activeAlerts  = summary?.active_alerts       || 0;
-  const breachInc     = summary?.breach_incidents    || 0;
-  const overall       = summary?.overall_score       || 0;
-  const bySeverity    = summary?.alert_by_severity   || {};
-  const fwBreakdown   = summary?.framework_breakdown || {};
-  const recentInc     = summary?.recent_incidents    || [];
+  const scores       = summary?.framework_scores    || [];
+  const findSumm     = summary?.findings_summary    || {};
+  const findVerdict  = summary?.findings_by_verdict || {};
+  const activeAlerts = summary?.active_alerts       || 0;
+  const breachInc    = summary?.breach_incidents    || 0;
+  const overall      = summary?.overall_score       || 0;
+  const recentInc    = summary?.recent_incidents    || [];
+  const alertsByDay  = summary?.alerts_by_day       || [];
+  const scoreHist    = summary?.score_history       || [];
+
+  const visibleScores = scores.filter(fw => !hidden.includes(fw.framework));
+
+  // Pie chart data — findings by severity
+  const pieData = [
+    { label: "Critical", value: findSumm.critical || 0, color: C.red },
+    { label: "High",     value: findSumm.high     || 0, color: C.orange },
+    { label: "Medium",   value: findSumm.medium   || 0, color: C.blue },
+    { label: "Low",      value: findSumm.low       || 0, color: C.muted },
+  ].filter(d => d.value > 0);
+
+  const totalFindings = Object.values(findSumm).reduce((s, v) => s + v, 0);
 
   return (
     <div>
-      {/* Header */}
-      <div style={{ marginBottom: 28 }}>
-        <div style={{ color: C.muted, fontSize: 9, letterSpacing: "2px", fontFamily: "monospace", textTransform: "uppercase", marginBottom: 6 }}>
-          SECURITY COMPLIANCE
+      {/* ── Header ────────────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "flex-start",
+        justifyContent: "space-between", marginBottom: 28 }}>
+        <div>
+          <div style={{ color: C.muted, fontSize: 9, letterSpacing: "2px",
+            fontFamily: "monospace", textTransform: "uppercase", marginBottom: 6 }}>
+            SECURITY COMPLIANCE
+          </div>
+          <h1 style={{ color: C.text, fontSize: 22, fontWeight: 700, margin: 0 }}>
+            GRC Posture Dashboard
+          </h1>
+          <div style={{ color: C.muted, fontSize: 11, marginTop: 4, fontFamily: "monospace" }}>
+            Live posture derived from questionnaire assessments, alerts &amp; incidents
+          </div>
         </div>
-        <h1 style={{ color: C.text, fontSize: 22, fontWeight: 700, margin: 0 }}>GRC Compliance Dashboard</h1>
-        <div style={{ color: C.muted, fontSize: 12, marginTop: 4, fontFamily: "monospace" }}>
-          Live posture derived from correlation engine alerts &amp; incidents
+        <button onClick={() => load(true)} disabled={refreshing}
+          style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`,
+            color: C.muted, padding: "7px 16px", borderRadius: 4, fontFamily: "monospace",
+            fontSize: 10, cursor: "pointer", opacity: refreshing ? 0.6 : 1 }}>
+          {refreshing ? "Refreshing…" : "↻ Refresh Scores"}
+        </button>
+      </div>
+
+      {/* ── Row 1: Overall donut + Framework bars ─────────────────────────── */}
+      <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 16, marginBottom: 16 }}>
+
+        {/* Overall donut */}
+        <div style={{ ...CARD, display: "flex", flexDirection: "column",
+          alignItems: "center", justifyContent: "center", gap: 12 }}>
+          <div style={{ position: "relative", width: 140, height: 140 }}>
+            <DonutChart score={overall} />
+            <div style={{ position: "absolute", inset: 0, display: "flex",
+              flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+              <span style={{ color: scoreColor(overall), fontSize: 32,
+                fontFamily: "monospace", fontWeight: 800, lineHeight: 1 }}>
+                {Math.round(overall)}
+              </span>
+              <span style={{ color: scoreColor(overall), fontSize: 13,
+                fontFamily: "monospace" }}>%</span>
+            </div>
+          </div>
+          <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px",
+            fontFamily: "monospace", textTransform: "uppercase", textAlign: "center" }}>
+            Overall Posture
+          </div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", justifyContent: "center" }}>
+            {[
+              { label: "Alerts 7d", val: activeAlerts, color: activeAlerts > 50 ? C.red : C.orange },
+              { label: "Incidents", val: breachInc,    color: breachInc > 0 ? C.red : C.muted },
+            ].map(({ label, val, color }) => (
+              <div key={label} style={{ textAlign: "center" }}>
+                <div style={{ color, fontSize: 18, fontFamily: "monospace", fontWeight: 700 }}>{val}</div>
+                <div style={{ color: C.muted, fontSize: 8, fontFamily: "monospace" }}>{label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Framework bars + show/hide */}
+        <div style={CARD}>
+          <div style={{ display: "flex", justifyContent: "space-between",
+            alignItems: "center", marginBottom: 16 }}>
+            <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px",
+              fontFamily: "monospace", textTransform: "uppercase" }}>
+              Framework Posture Scores
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => { setHidden([]); localStorage.removeItem(STORAGE_KEY); }}
+                style={{ background: "none", border: "none", color: C.accent,
+                  fontFamily: "monospace", fontSize: 9, cursor: "pointer", padding: 0 }}>
+                Show All
+              </button>
+              <button onClick={() => {
+                const all = scores.map(s => s.framework);
+                setHidden(all); localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+              }}
+                style={{ background: "none", border: "none", color: C.muted,
+                  fontFamily: "monospace", fontSize: 9, cursor: "pointer", padding: 0 }}>
+                Hide All
+              </button>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {scores.map(fw => (
+              <FwScoreBar key={fw.framework}
+                fw={fw}
+                visible={!hidden.includes(fw.framework)}
+                onToggle={() => toggleFw(fw.framework)}
+                onClick={() => setActiveTab && setActiveTab("comp-assessment")}
+              />
+            ))}
+          </div>
+          {scores.length === 0 && (
+            <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 11, fontFamily: "monospace" }}>
+              No scores yet. Click ↻ Refresh Scores to compute.
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Overall score hero */}
-      <div style={{ ...CARD, display: "flex", alignItems: "center", gap: 32, marginBottom: 24 }}>
-        <div>
-          <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px", fontFamily: "monospace", textTransform: "uppercase", marginBottom: 8 }}>
-            Overall Compliance Posture
+      {/* ── Row 2: Findings pie + Verdicts + Alerts bar ───────────────────── */}
+      <div style={{ display: "grid", gridTemplateColumns: "200px 1fr 1fr", gap: 16, marginBottom: 16 }}>
+
+        {/* Findings pie */}
+        <div style={{ ...CARD, display: "flex", flexDirection: "column",
+          alignItems: "center", gap: 12 }}>
+          <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px",
+            fontFamily: "monospace", textTransform: "uppercase", alignSelf: "flex-start" }}>
+            Findings by Severity
           </div>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 6 }}>
-            <span style={{ color: scoreColor(overall), fontSize: 64, fontFamily: "monospace", fontWeight: 700, lineHeight: 1 }}>
-              {Math.round(overall)}
-            </span>
-            <span style={{ color: scoreColor(overall), fontSize: 28, fontFamily: "monospace", marginBottom: 8 }}>%</span>
+          <PieChart data={pieData} size={110} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, alignSelf: "stretch" }}>
+            {[
+              { label: "Critical", key: "critical", color: C.red },
+              { label: "High",     key: "high",     color: C.orange },
+              { label: "Medium",   key: "medium",   color: C.blue },
+              { label: "Low",      key: "low",      color: C.muted },
+            ].map(({ label, key, color }) => (
+              <div key={key} style={{ display: "flex", justifyContent: "space-between",
+                alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <div style={{ width: 8, height: 8, borderRadius: 2, background: color }} />
+                  <span style={{ color: C.muted, fontSize: 9, fontFamily: "monospace" }}>{label}</span>
+                </div>
+                <span style={{ color, fontSize: 11, fontFamily: "monospace",
+                  fontWeight: 700 }}>{findSumm[key] || 0}</span>
+              </div>
+            ))}
+            <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 6, marginTop: 2,
+              display: "flex", justifyContent: "space-between" }}>
+              <span style={{ color: C.muted, fontSize: 9, fontFamily: "monospace" }}>Total</span>
+              <span style={{ color: C.text, fontSize: 11, fontFamily: "monospace",
+                fontWeight: 700 }}>{totalFindings}</span>
+            </div>
           </div>
         </div>
-        <div style={{ flex: 1, borderLeft: `1px solid ${C.border}`, paddingLeft: 32,
-          display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 20 }}>
+
+        {/* Verdict summary */}
+        <div style={CARD}>
+          <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px",
+            fontFamily: "monospace", textTransform: "uppercase", marginBottom: 16 }}>
+            Findings by Verdict
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {[
+              { key: "breach",    label: "Breach",    color: C.red },
+              { key: "warning",   label: "Warning",   color: C.orange },
+              { key: "compliant", label: "Compliant", color: C.accent },
+              { key: "open",      label: "Unscored",  color: C.muted },
+            ].map(({ key, label, color }) => {
+              const cnt = findVerdict[key] || 0;
+              const tot = Object.values(findVerdict).reduce((s, v) => s + v, 0) || 1;
+              return (
+                <div key={key}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: color }} />
+                      <span style={{ color, fontSize: 10, fontFamily: "monospace",
+                        fontWeight: 700 }}>{label}</span>
+                    </div>
+                    <span style={{ color, fontSize: 12, fontFamily: "monospace",
+                      fontWeight: 700 }}>{cnt}</span>
+                  </div>
+                  <div style={{ height: 4, background: "rgba(255,255,255,0.04)", borderRadius: 2 }}>
+                    <div style={{ height: "100%", borderRadius: 2,
+                      width: `${(cnt / tot) * 100}%`, background: color,
+                      transition: "width 1s ease" }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <button onClick={() => setActiveTab && setActiveTab("comp-findings")}
+              style={{ background: "none", border: "none", color: C.orange,
+                fontFamily: "monospace", fontSize: 9, cursor: "pointer", padding: 0,
+                fontWeight: 700, letterSpacing: "0.5px" }}>
+              VIEW ALL FINDINGS →
+            </button>
+          </div>
+        </div>
+
+        {/* Alerts-by-day bar chart */}
+        <div style={CARD}>
+          <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px",
+            fontFamily: "monospace", textTransform: "uppercase", marginBottom: 16 }}>
+            Compliance Alerts — Last 14 Days
+          </div>
+          <BarChart data={alertsByDay} height={100} />
+          {alertsByDay.length > 0 && (
+            <div style={{ display: "flex", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
+              {[
+                { label: "Critical", color: C.red },
+                { label: "High",     color: C.orange },
+                { label: "Medium",   color: C.blue },
+                { label: "Low",      color: C.muted },
+              ].map(({ label, color }) => (
+                <div key={label} style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                  <div style={{ width: 8, height: 8, borderRadius: 2, background: color }} />
+                  <span style={{ color: C.muted, fontSize: 9, fontFamily: "monospace" }}>{label}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Row 3: Score trend line chart ─────────────────────────────────── */}
+      {scoreHist.length > 0 && (
+        <div style={{ ...CARD, marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between",
+            alignItems: "center", marginBottom: 16 }}>
+            <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px",
+              fontFamily: "monospace", textTransform: "uppercase" }}>
+              Score Trend (per framework)
+            </div>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {Object.entries(FW_META).map(([fw, m]) => (
+                <div key={fw} style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                  <div style={{ width: 20, height: 2, borderRadius: 1, background: m.color }} />
+                  <span style={{ color: C.muted, fontSize: 8, fontFamily: "monospace" }}>{m.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          {/* Y axis labels */}
+          <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-between",
+              height: 90, paddingBottom: 0 }}>
+              {[100, 75, 50, 25, 0].map(v => (
+                <span key={v} style={{ color: "rgba(255,255,255,0.15)", fontSize: 8,
+                  fontFamily: "monospace", lineHeight: 1 }}>{v}</span>
+              ))}
+            </div>
+            <div style={{ flex: 1 }}>
+              <LineChart history={scoreHist} height={90} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Row 4: Recent breach incidents ────────────────────────────────── */}
+      {recentInc.length > 0 && (
+        <div style={{ ...CARD, marginBottom: 16 }}>
+          <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px",
+            fontFamily: "monospace", textTransform: "uppercase", marginBottom: 16 }}>
+            Compliance-Breaching Incidents ({recentInc.length})
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {recentInc.slice(0, 6).map(inc => {
+              const sevColor = { critical: C.red, high: C.orange, medium: C.blue, low: C.muted }[inc.severity] || C.muted;
+              return (
+                <div key={inc.id} style={{ display: "flex", alignItems: "center", gap: 10,
+                  padding: "8px 10px", borderRadius: 4,
+                  background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.04)" }}>
+                  <span style={{ color: sevColor, fontFamily: "monospace", fontSize: 9,
+                    fontWeight: 700, background: `${sevColor}15`, padding: "1px 5px",
+                    borderRadius: 3, textTransform: "uppercase", whiteSpace: "nowrap" }}>
+                    {inc.severity}
+                  </span>
+                  <span style={{ color: C.orange, fontFamily: "monospace",
+                    fontSize: 10, fontWeight: 700 }}>{inc.id}</span>
+                  <div style={{ display: "flex", gap: 3, flexWrap: "wrap", flex: 1 }}>
+                    {(inc.frameworks || []).slice(0, 3).map(fw => (
+                      <span key={fw} style={{ fontSize: 8, color: FW_META[fw]?.color || C.blue,
+                        background: `${FW_META[fw]?.color || C.blue}15`,
+                        border: `1px solid ${FW_META[fw]?.color || C.blue}30`,
+                        padding: "1px 4px", borderRadius: 2, fontFamily: "monospace",
+                        fontWeight: 700 }}>{fw.toUpperCase()}</span>
+                    ))}
+                  </div>
+                  <span style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+                    whiteSpace: "nowrap" }}>{inc.alert_count} alerts</span>
+                  <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9,
+                    fontFamily: "monospace", whiteSpace: "nowrap" }}>{inc.status}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── Getting Started Flow ──────────────────────────────────────────── */}
+      <div style={CARD}>
+        <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px",
+          fontFamily: "monospace", textTransform: "uppercase", marginBottom: 16 }}>
+          Getting Started — GRC Setup Flow
+        </div>
+        <div style={{ display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 12 }}>
           {[
-            { label: "Active Alerts (7d)",  val: activeAlerts, color: activeAlerts > 50 ? C.red : C.orange },
-            { label: "Breach Incidents",    val: breachInc,    color: breachInc > 0 ? C.red : C.muted },
-            { label: "Critical Findings",   val: findSumm.critical || 0, color: (findSumm.critical || 0) > 0 ? C.red : C.muted },
-            { label: "High Findings",       val: findSumm.high || 0,     color: (findSumm.high || 0) > 0 ? C.orange : C.muted },
-          ].map(({ label, val, color }) => (
-            <div key={label}>
-              <div style={{ color, fontSize: 24, fontFamily: "monospace", fontWeight: 700 }}>{val}</div>
-              <div style={{ color: C.muted, fontSize: 10, fontFamily: "monospace" }}>{label}</div>
+            { step: "1", label: "Upload Policy Docs",    tab: "comp-policy",
+              desc: "Create a collection per framework, upload security policies & framework docs.",
+              color: C.blue },
+            { step: "2", label: "Run Enrichment",        tab: null,
+              desc: "Enrichment runs automatically and tags alerts with MITRE → framework controls.",
+              color: C.muted },
+            { step: "3", label: "Complete Assessments",  tab: "comp-assessment",
+              desc: "Answer questionnaire for each framework — NO = automatic gap finding.",
+              color: C.purple },
+            { step: "4", label: "Generate Findings",     tab: "comp-findings",
+              desc: "Auto-generate findings from enriched alerts with BREACH / WARNING verdicts.",
+              color: C.orange },
+            { step: "5", label: "Populate Risk Register", tab: "comp-risks",
+              desc: "Auto-populate heatmap from breach findings, set risk appetite per category.",
+              color: C.red },
+            { step: "6", label: "Generate Report",       tab: "comp-reports",
+              desc: "Export compliance report with scores, gaps and remediation roadmap.",
+              color: C.accent },
+          ].map(({ step, label, tab, desc, color }) => (
+            <div key={step}
+              onClick={() => tab && setActiveTab && setActiveTab(tab)}
+              style={{ padding: "14px 16px", borderRadius: 6,
+                background: `${color}06`, border: `1px solid ${color}20`,
+                cursor: tab ? "pointer" : "default",
+                transition: "background 0.15s" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <span style={{ width: 22, height: 22, borderRadius: "50%",
+                  background: `${color}25`, border: `1px solid ${color}50`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 9, fontFamily: "monospace", fontWeight: 700,
+                  color, flexShrink: 0 }}>{step}</span>
+                <span style={{ color, fontSize: 10, fontFamily: "monospace",
+                  fontWeight: 700, letterSpacing: "0.3px" }}>{label}</span>
+              </div>
+              <div style={{ color: C.muted, fontSize: 10, lineHeight: 1.5 }}>{desc}</div>
+              {tab && (
+                <div style={{ color, fontSize: 9, fontFamily: "monospace",
+                  fontWeight: 700, marginTop: 8 }}>GO →</div>
+              )}
             </div>
           ))}
         </div>
-      </div>
-
-      {/* Severity bar + Framework breakdown */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }}>
-        <AlertSeverityBar bySeverity={bySeverity} />
-        <FrameworkBreakdown breakdown={fwBreakdown} />
-      </div>
-
-      {/* Framework score cards */}
-      <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px", fontFamily: "monospace", textTransform: "uppercase", marginBottom: 14 }}>
-        Framework Posture Scores
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 14, marginBottom: 24 }}>
-        {scores.map(fw => <ScoreCard key={fw.framework} fw={fw} />)}
-      </div>
-
-      {/* Recent breaching incidents */}
-      <div style={{ marginBottom: 24 }}>
-        <RecentIncidents incidents={recentInc} />
-      </div>
-
-      {/* Quick actions */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
-        {[
-          { label: "Assessments",      tab: "comp-assessment", color: "#6378ff" },
-          { label: "View Findings",    tab: "comp-findings",   color: C.red },
-          { label: "Risk Register",    tab: "comp-risks",      color: C.orange },
-          { label: "Live Alerts",      tab: "comp-alerts",     color: C.blue },
-          { label: "Generate Report",  tab: "comp-reports",    color: C.purple },
-          { label: "Policy Documents", tab: "comp-policy",     color: C.accent },
-        ].map(({ label, tab, color }) => (
-          <button key={tab} onClick={() => setActiveTab && setActiveTab(tab)}
-            style={{
-              background: `${color}10`, border: `1px solid ${color}30`,
-              color, borderRadius: 6, padding: "10px 14px", fontFamily: "monospace",
-              fontSize: 11, fontWeight: 700, cursor: "pointer", textAlign: "left",
-              letterSpacing: "0.8px", textTransform: "uppercase",
-            }}>
-            {label}
-          </button>
-        ))}
       </div>
     </div>
   );
