@@ -1,3 +1,11 @@
+## v1.1.1 -- 2026-05-14
+
+### New Features
+
+  - cy-comp): add cy_comp* to wheel package include list
+
+---
+
 ## v1.1.0 -- 2026-05-14
 
 ### New Features
