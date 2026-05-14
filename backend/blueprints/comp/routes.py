@@ -897,6 +897,7 @@ def upload_document(collection_id):
     file     = request.files["file"]
     metadata = {
         "framework": request.form.get("framework") or collection_id.replace("policy-", ""),
+        "tag":       request.form.get("tag") or None,
     }
     try:
         doc = _upload(collection_id, file, metadata, uploaded_by=_email())
@@ -920,6 +921,60 @@ def delete_document(doc_id):
 def reindex_collection(collection_id):
     from cy_comp.services.policy_rag import reindex_collection as _reindex
     return jsonify(_reindex(collection_id))
+
+
+# ── Framework Documents (System Settings → Security Compliance) ───────────────
+
+@comp_bp.route("/framework-docs/frameworks", methods=["GET"])
+@require_admin
+def list_framework_folders():
+    from cy_comp.services.policy_rag import ensure_framework_collections as _ensure
+    return jsonify({"frameworks": _ensure()})
+
+
+@comp_bp.route("/framework-docs/<framework>/documents", methods=["GET"])
+@require_viewer
+def list_framework_docs(framework):
+    from cy_comp.services.policy_rag import list_framework_docs as _list
+    return jsonify({"documents": _list(framework)})
+
+
+@comp_bp.route("/framework-docs/<framework>/documents", methods=["POST"])
+@require_admin
+def upload_framework_doc(framework):
+    from cy_comp.services.policy_rag import upload_framework_doc as _upload
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    locked = request.form.get("locked", "false").lower() == "true"
+    try:
+        doc = _upload(framework, request.files["file"], locked, uploaded_by=_email())
+        return jsonify(doc), 201
+    except Exception as exc:
+        log.error("upload_framework_doc: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/framework-docs/documents/<doc_id>/lock", methods=["PUT"])
+@require_admin
+def toggle_framework_lock(doc_id):
+    from cy_comp.services.policy_rag import toggle_framework_doc_lock as _toggle
+    data   = request.get_json() or {}
+    locked = bool(data.get("locked", False))
+    if _toggle(doc_id, locked):
+        return jsonify({"status": "ok", "locked": locked})
+    return jsonify({"error": "Document not found"}), 404
+
+
+@comp_bp.route("/framework-docs/documents/<doc_id>", methods=["DELETE"])
+@require_admin
+def delete_framework_doc(doc_id):
+    from cy_comp.services.policy_rag import delete_framework_doc as _delete
+    ok, reason = _delete(doc_id)
+    if ok:
+        return jsonify({"status": "deleted", "id": doc_id})
+    if "locked" in reason.lower():
+        return jsonify({"error": reason}), 409
+    return jsonify({"error": reason}), 404
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────

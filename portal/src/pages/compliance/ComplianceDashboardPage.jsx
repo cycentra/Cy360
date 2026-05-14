@@ -578,10 +578,10 @@ export function ComplianceDashboardPage({ setActiveTab }) {
           gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 12 }}>
           {[
             { step: "1", label: "Upload Policy Docs",    tab: "comp-policy",
-              desc: "Create a collection per framework, upload security policies & framework docs.",
+              desc: "Upload your organisation's operational and business policy documents for RAG indexing.",
               color: C.blue },
             { step: "2", label: "Run Enrichment",        tab: null,
-              desc: "Enrichment runs automatically and tags alerts with MITRE → framework controls.",
+              desc: "Enrichment runs automatically and tags alerts with MITRE → framework controls. Framework reference docs are managed in System Settings → Security Compliance.",
               color: C.muted },
             { step: "3", label: "Complete Assessments",  tab: "comp-assessment",
               desc: "Answer questionnaire for each framework — NO = automatic gap finding.",

@@ -80,7 +80,6 @@ export function buildNavSections({ installedModules = {}, data = null }) {
         { id: "comp-findings",   label: "Findings",             icon: SvgRisk,   accent: "#ff3b3b" },
         { id: "comp-risks",      label: "Risk Management",      icon: SvgRisk,   accent: "#ff8c00" },
         { id: "comp-reports",    label: "Reports",              icon: SvgReport, accent: "#b06eff" },
-        { id: "comp-policy",     label: "Policy Documents",     icon: SvgDoc,    accent: "#4d9eff" },
       ],
     },
     {

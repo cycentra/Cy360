@@ -93,6 +93,22 @@ def _collection_name(framework: str) -> str:
     return f"policy-{slug}"
 
 
+def _framework_collection_name(framework: str) -> str:
+    """RAG collection name for framework reference docs: framework-{slug}."""
+    slug = framework.lower().replace(" ", "").replace("_", "").replace("-", "")
+    return f"framework-{slug}"
+
+
+SUPPORTED_FRAMEWORKS = [
+    {"id": "iso27001", "label": "ISO/IEC 27001",  "color": "#00e5a0"},
+    {"id": "nis2",     "label": "NIS2",            "color": "#4d9eff"},
+    {"id": "dora",     "label": "DORA",            "color": "#b06eff"},
+    {"id": "soc2",     "label": "SOC 2 Type II",   "color": "#ff8c00"},
+    {"id": "nist_csf", "label": "NIST CSF 2.0",   "color": "#6378ff"},
+    {"id": "pci_dss",  "label": "PCI DSS 4.0",    "color": "#ff3b3b"},
+]
+
+
 # ── Collection management ─────────────────────────────────────────────────────
 
 def list_collections() -> list[dict]:
@@ -156,14 +172,18 @@ def upload_document(collection_id: str, file_storage, metadata: dict, uploaded_b
     """
     Upload a document to a CyMind RAG collection.
     file_storage: Werkzeug FileStorage object from Flask request.files.
+    metadata may contain: framework, tag
     """
-    doc_id   = str(uuid.uuid4())
-    filename = file_storage.filename or "document"
-    fw       = metadata.get("framework") or collection_id.replace("policy-", "")
+    doc_id    = str(uuid.uuid4())
+    filename  = file_storage.filename or "document"
+    fw        = metadata.get("framework") or collection_id.replace("policy-", "")
+    tag       = metadata.get("tag") or None
+    file_size = None
 
     cymind_doc_id = None
     try:
         file_bytes = file_storage.read()
+        file_size  = len(file_bytes)
         file_storage.seek(0)
         files = {
             "file": (filename, file_bytes, file_storage.content_type or "application/octet-stream")
@@ -191,15 +211,15 @@ def upload_document(collection_id: str, file_storage, metadata: dict, uploaded_b
                 """
                 INSERT INTO cy_comp_policy_docs
                     (id, name, file_type, collection_id, cymind_doc_id,
-                     framework, indexed, uploaded_by, created_at, updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW());
+                     framework, indexed, uploaded_by, doc_type, tag, file_size, created_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'policy',%s,%s,NOW(),NOW());
                 """,
                 (
                     doc_id, filename,
                     filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin",
                     collection_id, cymind_doc_id, fw,
                     bool(cymind_doc_id),
-                    uploaded_by,
+                    uploaded_by, tag, file_size,
                 )
             )
     except Exception as exc:
@@ -211,13 +231,16 @@ def upload_document(collection_id: str, file_storage, metadata: dict, uploaded_b
         "collection_id": collection_id,
         "cymind_doc_id": cymind_doc_id,
         "framework":     fw,
+        "tag":           tag,
+        "file_size":     file_size,
         "indexed":       bool(cymind_doc_id),
         "uploaded_by":   uploaded_by,
+        "doc_type":      "policy",
     }
 
 
 def list_documents(collection_id: str) -> list[dict]:
-    """Return documents for a collection from local metadata."""
+    """Return policy documents (doc_type='policy') for a collection from local metadata."""
     rows = []
     try:
         with db() as conn:
@@ -225,9 +248,10 @@ def list_documents(collection_id: str) -> list[dict]:
             cur.execute(
                 """
                 SELECT id, name, file_type, collection_id, cymind_doc_id,
-                       framework, indexed, uploaded_by, created_at
+                       framework, indexed, uploaded_by, tag, file_size, created_at
                 FROM cy_comp_policy_docs
                 WHERE collection_id = %s
+                  AND COALESCE(doc_type, 'policy') = 'policy'
                 ORDER BY created_at DESC;
                 """,
                 (collection_id,)
@@ -242,7 +266,9 @@ def list_documents(collection_id: str) -> list[dict]:
                     "framework":     r[5],
                     "indexed":       r[6],
                     "uploaded_by":   r[7],
-                    "created_at":    r[8].isoformat() if r[8] else None,
+                    "tag":           r[8],
+                    "file_size":     r[9],
+                    "created_at":    r[10].isoformat() if r[10] else None,
                 })
     except Exception as exc:
         log.error("list_documents(%s): %s", collection_id, exc)
@@ -282,6 +308,187 @@ def delete_document(doc_id: str) -> bool:
     except Exception as exc:
         log.error("delete_document DB: %s", exc)
         return False
+
+
+# ── Framework Document Management (admin — System Settings) ───────────────────
+
+def ensure_framework_collections() -> list[dict]:
+    """
+    Ensure all supported frameworks have a CyMind RAG collection (framework-{id}).
+    Returns list of {id, label, color, collection_id, doc_count, doc_locked_count}.
+    """
+    result = []
+    for fw in SUPPORTED_FRAMEWORKS:
+        col_id = _framework_collection_name(fw["id"])
+        try:
+            requests.post(
+                _rag_url("collections"),
+                headers=_auth_header(),
+                params={"name": col_id, "scope": "all", "color": fw["color"]},
+                timeout=8,
+            )
+        except Exception as exc:
+            log.debug("ensure_framework_collections(%s): %s", col_id, exc)
+
+        doc_count = 0
+        locked_count = 0
+        try:
+            with db() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT COUNT(*), COUNT(*) FILTER (WHERE locked) "
+                    "FROM cy_comp_policy_docs WHERE collection_id = %s AND doc_type = 'framework';",
+                    (col_id,)
+                )
+                row = cur.fetchone()
+                if row:
+                    doc_count, locked_count = row[0] or 0, row[1] or 0
+        except Exception as exc:
+            log.error("ensure_framework_collections count(%s): %s", col_id, exc)
+
+        result.append({
+            **fw,
+            "collection_id": col_id,
+            "doc_count": doc_count,
+            "locked_count": locked_count,
+        })
+    return result
+
+
+def upload_framework_doc(framework: str, file_storage, locked: bool, uploaded_by: str) -> dict:
+    """Upload a reference document to a framework's RAG collection."""
+    col_id   = _framework_collection_name(framework)
+    doc_id   = str(uuid.uuid4())
+    filename = file_storage.filename or "document"
+    file_size = None
+
+    cymind_doc_id = None
+    try:
+        file_bytes = file_storage.read()
+        file_size  = len(file_bytes)
+        file_storage.seek(0)
+        files = {"file": (filename, file_bytes, file_storage.content_type or "application/octet-stream")}
+        resp = requests.post(
+            _rag_url(f"collections/{col_id}/upload"),
+            headers=_auth_header(),
+            files=files,
+            params={"chunk_size": 512, "overlap": 64},
+            timeout=60,
+        )
+        if resp.ok:
+            rd = resp.json()
+            cymind_doc_id = rd.get("doc_id") or rd.get("id")
+        else:
+            log.warning("upload_framework_doc: CyMind %s %s", resp.status_code, resp.text[:200])
+    except Exception as exc:
+        log.error("upload_framework_doc CyMind: %s", exc)
+
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO cy_comp_policy_docs
+                    (id, name, file_type, collection_id, cymind_doc_id,
+                     framework, indexed, uploaded_by, doc_type, locked, file_size, created_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'framework',%s,%s,NOW(),NOW());
+                """,
+                (
+                    doc_id, filename,
+                    filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin",
+                    col_id, cymind_doc_id, framework,
+                    bool(cymind_doc_id), uploaded_by, locked, file_size,
+                )
+            )
+    except Exception as exc:
+        log.error("upload_framework_doc DB: %s", exc)
+
+    return {
+        "id": doc_id, "name": filename, "collection_id": col_id,
+        "cymind_doc_id": cymind_doc_id, "framework": framework,
+        "indexed": bool(cymind_doc_id), "locked": locked,
+        "file_size": file_size, "uploaded_by": uploaded_by, "doc_type": "framework",
+    }
+
+
+def list_framework_docs(framework: str) -> list[dict]:
+    """List framework reference documents (doc_type='framework')."""
+    col_id = _framework_collection_name(framework)
+    rows = []
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, name, file_type, cymind_doc_id, framework,
+                       indexed, locked, file_size, uploaded_by, created_at
+                FROM cy_comp_policy_docs
+                WHERE collection_id = %s AND doc_type = 'framework'
+                ORDER BY created_at DESC;
+                """,
+                (col_id,)
+            )
+            for r in cur.fetchall():
+                rows.append({
+                    "id": r[0], "name": r[1], "file_type": r[2], "cymind_doc_id": r[3],
+                    "framework": r[4], "indexed": r[5], "locked": r[6],
+                    "file_size": r[7], "uploaded_by": r[8],
+                    "created_at": r[9].isoformat() if r[9] else None,
+                })
+    except Exception as exc:
+        log.error("list_framework_docs(%s): %s", framework, exc)
+    return rows
+
+
+def toggle_framework_doc_lock(doc_id: str, locked: bool) -> bool:
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE cy_comp_policy_docs SET locked = %s, updated_at = NOW() "
+                "WHERE id = %s AND doc_type = 'framework';",
+                (locked, doc_id)
+            )
+            return cur.rowcount > 0
+    except Exception as exc:
+        log.error("toggle_framework_doc_lock(%s): %s", doc_id, exc)
+        return False
+
+
+def delete_framework_doc(doc_id: str) -> tuple[bool, str]:
+    """Returns (success, reason). Fails if document is locked."""
+    cymind_doc_id = None
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT cymind_doc_id, locked FROM cy_comp_policy_docs WHERE id = %s AND doc_type = 'framework';",
+                (doc_id,)
+            )
+            row = cur.fetchone()
+            if not row:
+                return False, "Document not found"
+            cymind_doc_id, is_locked = row
+            if is_locked:
+                return False, "Document is locked. Unlock it first before deleting."
+    except Exception as exc:
+        log.error("delete_framework_doc lookup: %s", exc)
+        return False, str(exc)
+
+    if cymind_doc_id:
+        try:
+            requests.delete(_rag_url(f"documents/{cymind_doc_id}"), headers=_auth_header(), timeout=8)
+        except Exception as exc:
+            log.warning("delete_framework_doc CyMind: %s", exc)
+
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM cy_comp_policy_docs WHERE id = %s;", (doc_id,))
+            return cur.rowcount > 0, "ok"
+    except Exception as exc:
+        log.error("delete_framework_doc DB: %s", exc)
+        return False, str(exc)
 
 
 def query_for_compliance(description: str, top_k: int = 3) -> dict:

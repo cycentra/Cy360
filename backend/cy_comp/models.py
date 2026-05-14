@@ -345,6 +345,13 @@ _MIGRATE_COLUMNS: list[str] = [
     "ALTER TABLE cy_comp_findings ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;",
     "ALTER TABLE cy_comp_findings ADD COLUMN IF NOT EXISTS questionnaire_gap BOOLEAN DEFAULT FALSE;",
 
+    # Policy docs: doc_type distinguishes 'policy' (org) vs 'framework' (reference), locked prevents deletion
+    "ALTER TABLE cy_comp_policy_docs ADD COLUMN IF NOT EXISTS doc_type TEXT DEFAULT 'policy';",
+    "ALTER TABLE cy_comp_policy_docs ADD COLUMN IF NOT EXISTS locked BOOLEAN DEFAULT FALSE;",
+    "ALTER TABLE cy_comp_policy_docs ADD COLUMN IF NOT EXISTS tag TEXT;",
+    "ALTER TABLE cy_comp_policy_docs ADD COLUMN IF NOT EXISTS file_size BIGINT;",
+    "CREATE INDEX IF NOT EXISTS idx_cy_comp_pdocs_type ON cy_comp_policy_docs(doc_type, framework);",
+
     # Indexes for compliance queries
     "CREATE INDEX IF NOT EXISTS idx_cy_comp_findings_auto ON cy_comp_findings(auto_generated, framework);",
     "CREATE INDEX IF NOT EXISTS idx_alerts_is_compliance ON alerts(is_compliance_relevant, timestamp DESC) WHERE is_compliance_relevant = TRUE;",

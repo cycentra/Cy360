@@ -3017,6 +3017,268 @@ function CompNotificationsTab() {
   );
 }
 
+// ── Framework Documents Tab (Security Compliance) ─────────────────────────────
+
+const FW_INFO = {
+  iso27001: { label: "ISO/IEC 27001",  color: "#00e5a0" },
+  nis2:     { label: "NIS2",           color: "#4d9eff" },
+  dora:     { label: "DORA",           color: "#b06eff" },
+  soc2:     { label: "SOC 2 Type II",  color: "#ff8c00" },
+  nist_csf: { label: "NIST CSF 2.0",  color: "#6378ff" },
+  pci_dss:  { label: "PCI DSS 4.0",   color: "#ff3b3b" },
+};
+
+function FrameworkDropZone({ framework, onUploaded, locked }) {
+  const [dragging, setDragging] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [lockUpload, setLockUpload] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const ref = useRef(null);
+
+  const uploadFile = (file) => {
+    if (!file || locked) return;
+    setUploading(true); setMsg(null);
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("locked", lockUpload ? "true" : "false");
+    fetch(`${API_BASE}/api/comp/framework-docs/${framework}/documents`, {
+      method: "POST", credentials: "include", body: fd,
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(() => { setMsg({ ok: true, text: "Uploaded and queued for indexing" }); onUploaded(); })
+      .catch(e => setMsg({ ok: false, text: `Upload failed (${e})` }))
+      .finally(() => setUploading(false));
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6,
+          color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", cursor: "pointer" }}>
+          <input type="checkbox" checked={lockUpload} onChange={e => setLockUpload(e.target.checked)}
+            style={{ accentColor: "#ff8c00" }} />
+          Lock after upload (base doc — prevent deletion)
+        </label>
+      </div>
+      <div
+        onDragEnter={() => setDragging(true)}
+        onDragLeave={() => setDragging(false)}
+        onDragOver={e => e.preventDefault()}
+        onDrop={e => { e.preventDefault(); setDragging(false); uploadFile(e.dataTransfer.files[0]); }}
+        onClick={() => ref.current?.click()}
+        style={{
+          border: `2px dashed ${dragging ? "#00e5a0" : "rgba(255,255,255,0.12)"}`,
+          borderRadius: 6, padding: "20px 16px", textAlign: "center", cursor: "pointer",
+          background: dragging ? "rgba(0,229,160,0.04)" : "rgba(255,255,255,0.01)",
+          transition: "all 0.2s",
+        }}>
+        <input ref={ref} type="file" style={{ display: "none" }}
+          accept=".pdf,.docx,.txt,.md"
+          onChange={e => uploadFile(e.target.files[0])} />
+        <div style={{ color: uploading ? "#00e5a0" : "rgba(255,255,255,0.3)",
+          fontSize: 11, fontFamily: "monospace" }}>
+          {uploading ? "Uploading..." : "Drop document or click to browse · PDF, DOCX, TXT, MD"}
+        </div>
+      </div>
+      {msg && <div style={{ color: msg.ok ? "#00e5a0" : "#ff3b3b",
+        fontSize: 10, fontFamily: "monospace", marginTop: 6 }}>{msg.text}</div>}
+    </div>
+  );
+}
+
+function CompFrameworkDocsTab() {
+  const [frameworks, setFrameworks] = useState([]);
+  const [activeFw, setActiveFw]    = useState("iso27001");
+  const [docs, setDocs]            = useState([]);
+  const [loadingFws, setLoadingFws] = useState(true);
+  const [loadingDocs, setLoadingDocs] = useState(false);
+  const [locking, setLocking]      = useState(null);
+  const [deleting, setDeleting]    = useState(null);
+
+  const loadFrameworks = () => {
+    setLoadingFws(true);
+    fetch(`${API_BASE}/api/comp/framework-docs/frameworks`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { setFrameworks(d.frameworks || []); setLoadingFws(false); })
+      .catch(() => setLoadingFws(false));
+  };
+
+  const loadDocs = (fw) => {
+    setLoadingDocs(true);
+    fetch(`${API_BASE}/api/comp/framework-docs/${fw}/documents`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { setDocs(d.documents || []); setLoadingDocs(false); })
+      .catch(() => setLoadingDocs(false));
+  };
+
+  useEffect(() => { loadFrameworks(); }, []);
+  useEffect(() => { if (activeFw) loadDocs(activeFw); }, [activeFw]);
+
+  const handleToggleLock = (docId, currentLocked) => {
+    setLocking(docId);
+    fetch(`${API_BASE}/api/comp/framework-docs/documents/${docId}/lock`, {
+      method: "PUT", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ locked: !currentLocked }),
+    })
+      .then(r => r.ok ? loadDocs(activeFw) : alert("Failed to update lock"))
+      .finally(() => setLocking(null));
+  };
+
+  const handleDelete = (doc) => {
+    if (doc.locked) { alert("This document is locked. Unlock it first."); return; }
+    if (!confirm(`Delete "${doc.name}" from ${activeFw.toUpperCase()} reference library?`)) return;
+    setDeleting(doc.id);
+    fetch(`${API_BASE}/api/comp/framework-docs/documents/${doc.id}`, {
+      method: "DELETE", credentials: "include" })
+      .then(r => {
+        if (r.ok) { loadDocs(activeFw); loadFrameworks(); }
+        else r.json().then(d => alert(d.error || "Delete failed"));
+      })
+      .finally(() => setDeleting(null));
+  };
+
+  const fwInfo = FW_INFO[activeFw] || { label: activeFw.toUpperCase(), color: "#00e5a0" };
+
+  return (
+    <div>
+      <div style={{ ...LABEL, marginBottom: 4 }}>Framework Reference Documents</div>
+      <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace",
+        marginBottom: 20, lineHeight: 1.6 }}>
+        Each supported compliance framework has a dedicated reference library in the CyMind RAG pipeline.
+        Upload framework standards, controls lists, and official guidance documents here.
+        Locked documents (base docs) cannot be deleted without first unlocking them.
+      </div>
+
+      {loadingFws ? (
+        <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 11 }}>
+          Initialising framework collections...
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 20 }}>
+          {/* Framework selector */}
+          <div style={{ width: 200, flexShrink: 0 }}>
+            {frameworks.map(fw => {
+              const info = FW_INFO[fw.id] || fw;
+              return (
+                <button key={fw.id} onClick={() => setActiveFw(fw.id)}
+                  style={{
+                    width: "100%", padding: "10px 14px", borderRadius: 6, marginBottom: 6,
+                    background: activeFw === fw.id ? `${info.color}0e` : "rgba(255,255,255,0.02)",
+                    border: `1px solid ${activeFw === fw.id ? `${info.color}40` : "rgba(255,255,255,0.06)"}`,
+                    color: activeFw === fw.id ? info.color : "rgba(255,255,255,0.45)",
+                    fontFamily: "monospace", fontSize: 11, cursor: "pointer", textAlign: "left",
+                  }}>
+                  <div style={{ fontWeight: 700 }}>{info.label || fw.id.toUpperCase()}</div>
+                  <div style={{ fontSize: 9, marginTop: 2, opacity: 0.7 }}>
+                    {fw.doc_count} doc{fw.doc_count !== 1 ? "s" : ""}
+                    {fw.locked_count > 0 ? ` · ${fw.locked_count} locked` : ""}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Document panel */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ color: fwInfo.color, fontSize: 14, fontFamily: "monospace",
+              fontWeight: 700, marginBottom: 14 }}>
+              {fwInfo.label} Reference Library
+            </div>
+
+            <div style={{ ...CARD, marginBottom: 16 }}>
+              <FrameworkDropZone framework={activeFw} onUploaded={() => { loadDocs(activeFw); loadFrameworks(); }} />
+            </div>
+
+            {loadingDocs ? (
+              <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 11 }}>
+                Loading documents...
+              </div>
+            ) : docs.length === 0 ? (
+              <div style={{ ...CARD, textAlign: "center", color: "rgba(255,255,255,0.3)",
+                fontFamily: "monospace", fontSize: 11, padding: 24 }}>
+                No reference documents yet. Upload the {fwInfo.label} standard, controls list, or official guidance above.
+              </div>
+            ) : (
+              <div style={{ background: "#0d1117", border: "1px solid rgba(255,255,255,0.07)",
+                borderRadius: 8, overflow: "hidden" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                      {["Document", "Status", "Lock", "Uploaded", ""].map(h => (
+                        <th key={h} style={{ padding: "9px 14px", textAlign: "left",
+                          color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace",
+                          letterSpacing: "1px", textTransform: "uppercase" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {docs.map((d, i) => (
+                      <tr key={d.id} style={{
+                        borderBottom: "1px solid rgba(255,255,255,0.03)",
+                        background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
+                      }}>
+                        <td style={{ padding: "10px 14px" }}>
+                          <div style={{ color: "rgba(255,255,255,0.82)", fontSize: 11 }}>{d.name}</div>
+                          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 9,
+                            fontFamily: "monospace", marginTop: 1 }}>
+                            {d.file_type?.toUpperCase() || "—"}
+                          </div>
+                        </td>
+                        <td style={{ padding: "10px 14px" }}>
+                          <span style={{ color: d.indexed ? "#00e5a0" : "#ff8c00",
+                            fontSize: 10, fontFamily: "monospace" }}>
+                            {d.indexed ? "✓ Indexed" : "⧗ Pending"}
+                          </span>
+                        </td>
+                        <td style={{ padding: "10px 14px" }}>
+                          <button
+                            onClick={() => handleToggleLock(d.id, d.locked)}
+                            disabled={locking === d.id}
+                            title={d.locked ? "Click to unlock" : "Click to lock (base doc)"}
+                            style={{
+                              background: d.locked ? "rgba(255,140,0,0.12)" : "rgba(255,255,255,0.04)",
+                              border: `1px solid ${d.locked ? "rgba(255,140,0,0.35)" : "rgba(255,255,255,0.1)"}`,
+                              color: d.locked ? "#ff8c00" : "rgba(255,255,255,0.35)",
+                              padding: "3px 10px", borderRadius: 4, fontFamily: "monospace",
+                              fontSize: 9, cursor: "pointer", fontWeight: 700,
+                              opacity: locking === d.id ? 0.5 : 1,
+                            }}>
+                            {d.locked ? "🔒 Locked" : "🔓 Unlocked"}
+                          </button>
+                        </td>
+                        <td style={{ padding: "10px 14px",
+                          color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace" }}>
+                          {d.created_at ? new Date(d.created_at).toLocaleDateString("en-US",
+                            { month: "short", day: "2-digit", year: "numeric" }) : "—"}
+                        </td>
+                        <td style={{ padding: "10px 14px" }}>
+                          <button
+                            onClick={() => handleDelete(d)}
+                            disabled={d.locked || deleting === d.id}
+                            title={d.locked ? "Unlock first" : "Delete"}
+                            style={{
+                              background: "rgba(255,59,59,0.1)", border: "1px solid rgba(255,59,59,0.25)",
+                              color: "#ff3b3b", padding: "4px 10px", borderRadius: 3,
+                              fontFamily: "monospace", fontSize: 9, cursor: d.locked ? "not-allowed" : "pointer",
+                              fontWeight: 700, opacity: d.locked || deleting === d.id ? 0.35 : 1,
+                            }}>
+                            {deleting === d.id ? "..." : "Delete"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Two-column Settings layout ────────────────────────────────────────────────
 
 const PLATFORM_TABS = [
@@ -3028,9 +3290,10 @@ const PLATFORM_TABS = [
 ];
 
 const COMP_TABS = [
-  { id: "comp-siem",          label: "SIEM Sources" },
-  { id: "comp-grc-settings",  label: "GRC Settings" },
-  { id: "comp-notifications", label: "Notifications" },
+  { id: "comp-siem",           label: "SIEM Sources"        },
+  { id: "comp-framework-docs", label: "Framework Documents" },
+  { id: "comp-grc-settings",   label: "GRC Settings"        },
+  { id: "comp-notifications",  label: "Notifications"       },
 ];
 
 const MODULES = [
@@ -3129,9 +3392,10 @@ export function SystemSettingsPage() {
           {/* Security Compliance (GRC) Settings tabs */}
           {module === "comp" && (
             <>
-              {compTab === "comp-siem"          && <CompSIEMSourcesTab />}
-              {compTab === "comp-grc-settings"  && <CompGRCSettingsTab />}
-              {compTab === "comp-notifications" && <CompNotificationsTab />}
+              {compTab === "comp-siem"           && <CompSIEMSourcesTab />}
+              {compTab === "comp-framework-docs" && <CompFrameworkDocsTab />}
+              {compTab === "comp-grc-settings"   && <CompGRCSettingsTab />}
+              {compTab === "comp-notifications"  && <CompNotificationsTab />}
             </>
           )}
         </div>
