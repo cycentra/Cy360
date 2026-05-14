@@ -1,3 +1,11 @@
+## v1.1.3 -- 2026-05-14
+
+### Bug Fixes
+
+  - cy-comp): read cymind_integration nested object from ai_settings.json
+
+---
+
 ## v1.1.2 -- 2026-05-14
 
 ### Bug Fixes
