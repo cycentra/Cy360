@@ -3,24 +3,22 @@ cy_comp/services/policy_rag.py
 ================================
 CyMind RAG HTTP client for policy document management.
 
-Reads CYMIND_API_URL and CYMIND_ADMIN_KEY from ai_settings.json.
+Reads CYMIND_API_URL and API key from ai_settings.json (cymind_integration{} object).
 Sub-collection naming: policy-{framework}  e.g. policy-iso27001, policy-dora
 
-Methods:
-  create_collection(framework)
-  list_collections()
-  upload_document(collection_id, file_storage, metadata)
-  list_documents(collection_id)
-  delete_document(doc_id)
-  reindex_collection(collection_id)
-  get_admin_key() -> str
+CyMind RAG API base: /api/v1/rag/
+  GET  /api/v1/rag/collections                         → list collections
+  POST /api/v1/rag/collections?name=&scope=&color=     → create collection
+  GET  /api/v1/rag/collections/{id}/documents          → list documents
+  POST /api/v1/rag/collections/{id}/upload             → upload document (multipart)
+  DEL  /api/v1/rag/documents/{doc_id}                  → delete document
+  GET  /api/v1/rag/query/multi?collections=&query=     → multi-collection RAG query
 """
 
 import json
 import logging
 import uuid
 from pathlib import Path
-from typing import Optional
 
 import requests
 
@@ -33,18 +31,15 @@ _CYMIND_DEFAULT_URL = "http://127.0.0.1:8200"
 
 
 def _load_cymind_settings() -> dict:
-    """Load ai_settings.json and return relevant CyMind fields."""
     try:
         if AI_SETTINGS_FILE.exists():
-            raw = json.loads(AI_SETTINGS_FILE.read_text())
-            return raw
+            return json.loads(AI_SETTINGS_FILE.read_text())
     except Exception as exc:
         log.warning("_load_cymind_settings: %s", exc)
     return {}
 
 
 def _cymind_integration(settings: dict) -> dict:
-    """Return the cymind_integration sub-object written by Platform Extensions."""
     return settings.get("cymind_integration", {})
 
 
@@ -62,16 +57,14 @@ def get_cymind_url() -> str:
 
 def get_cymind_api_key() -> str:
     """
-    Return the best available CyMind API key for RAG operations.
-    Priority: explicit cymind_admin_key (set in GRC Settings) →
-              M2M service key (cymk_…) → chat key (pak_…).
+    Priority: explicit cymind_admin_key → M2M cymk_ key → chat pak_ key.
     """
     settings = _load_cymind_settings()
     ci = _cymind_integration(settings)
     return (
-        settings.get("cymind_admin_key")   # admin key set explicitly in GRC Settings
-        or ci.get("apiKey")                # M2M service-to-service key
-        or ci.get("chatApiKey")            # chat/user key fallback
+        settings.get("cymind_admin_key")
+        or ci.get("apiKey")
+        or ci.get("chatApiKey")
         or ""
     )
 
@@ -84,8 +77,18 @@ def _headers() -> dict:
     return h
 
 
+def _auth_header() -> dict:
+    """Auth-only header (no Content-Type) for multipart file uploads."""
+    key = get_cymind_api_key()
+    return {"Authorization": f"Bearer {key}"} if key else {}
+
+
+def _rag_url(path: str) -> str:
+    """Build full CyMind RAG API URL."""
+    return f"{get_cymind_url()}/api/v1/rag/{path.lstrip('/')}"
+
+
 def _collection_name(framework: str) -> str:
-    """Normalize framework to collection name: policy-iso27001, policy-dora, etc."""
     slug = framework.lower().replace(" ", "").replace("_", "").replace("-", "")
     return f"policy-{slug}"
 
@@ -95,21 +98,17 @@ def _collection_name(framework: str) -> str:
 def list_collections() -> list[dict]:
     """
     Return all CyMind collections whose name starts with 'policy-'.
-    Falls back to listing from cy_comp_policy_docs if CyMind is unreachable.
+    Falls back to local cy_comp_policy_docs metadata if CyMind unreachable.
     """
     try:
-        resp = requests.get(
-            f"{get_cymind_url()}/api/collections",
-            headers=_headers(),
-            timeout=8,
-        )
+        resp = requests.get(_rag_url("collections"), headers=_headers(), timeout=8)
         if resp.ok:
-            all_cols = resp.json() if isinstance(resp.json(), list) else resp.json().get("collections", [])
+            data = resp.json()
+            all_cols = data.get("collections", data) if isinstance(data, dict) else data
             return [c for c in all_cols if str(c.get("name", "")).startswith("policy-")]
     except Exception as exc:
         log.warning("list_collections: CyMind unreachable (%s) — reading local DB", exc)
 
-    # Fallback: distinct collection_ids from local metadata table
     rows = []
     try:
         with db() as conn:
@@ -123,42 +122,40 @@ def list_collections() -> list[dict]:
                 """
             )
             for cid, fw, cnt in cur.fetchall():
-                rows.append({"id": cid, "name": cid, "framework": fw, "doc_count": cnt})
+                rows.append({"id": cid, "name": cid, "framework": fw, "file_count": cnt})
     except Exception as exc:
         log.error("list_collections fallback DB: %s", exc)
     return rows
 
 
 def create_collection(framework: str) -> dict:
-    """
-    Create a new policy-{framework} collection in CyMind RAG.
-    Returns {collection_id, name, framework}.
-    """
+    """Create policy-{framework} collection in CyMind."""
     name = _collection_name(framework)
     result = {"id": name, "name": name, "framework": framework}
-
     try:
         resp = requests.post(
-            f"{get_cymind_url()}/api/collections",
-            headers=_headers(),
-            json={"name": name, "description": f"Policy documents for {framework}"},
+            _rag_url("collections"),
+            headers=_auth_header(),
+            params={"name": name, "scope": "all", "color": "#00D9FF"},
             timeout=8,
         )
         if resp.ok:
             data = resp.json()
-            result["id"] = data.get("id") or data.get("collection_id") or name
+            result["id"] = data.get("id") or name
+        elif resp.status_code == 400:
+            # Collection already exists — treat as success
+            log.info("create_collection(%s): already exists", name)
+        else:
+            log.warning("create_collection(%s): CyMind returned %s %s", name, resp.status_code, resp.text[:200])
     except Exception as exc:
         log.error("create_collection(%s): %s", framework, exc)
-
     return result
 
 
 def upload_document(collection_id: str, file_storage, metadata: dict, uploaded_by: str) -> dict:
     """
-    Upload a document to a CyMind collection.
+    Upload a document to a CyMind RAG collection.
     file_storage: Werkzeug FileStorage object from Flask request.files.
-
-    Returns the created policy_doc metadata dict.
     """
     doc_id   = str(uuid.uuid4())
     filename = file_storage.filename or "document"
@@ -166,27 +163,27 @@ def upload_document(collection_id: str, file_storage, metadata: dict, uploaded_b
 
     cymind_doc_id = None
     try:
-        files = {"file": (filename, file_storage.stream, file_storage.content_type or "application/octet-stream")}
-        data  = {
-            "collection_id": collection_id,
-            "metadata":      json.dumps({"framework": fw, "doc_id": doc_id}),
+        file_bytes = file_storage.read()
+        file_storage.seek(0)
+        files = {
+            "file": (filename, file_bytes, file_storage.content_type or "application/octet-stream")
         }
-        key = get_admin_key()
-        auth_header = {"Authorization": f"Bearer {key}"} if key else {}
         resp = requests.post(
-            f"{get_cymind_url()}/api/documents",
-            headers=auth_header,
+            _rag_url(f"collections/{collection_id}/upload"),
+            headers=_auth_header(),
             files=files,
-            data=data,
-            timeout=30,
+            params={"chunk_size": 512, "overlap": 64},
+            timeout=60,
         )
         if resp.ok:
-            rd          = resp.json()
+            rd = resp.json()
             cymind_doc_id = rd.get("doc_id") or rd.get("id")
+            log.info("upload_document: CyMind accepted %s → doc_id=%s", filename, cymind_doc_id)
+        else:
+            log.warning("upload_document: CyMind %s %s", resp.status_code, resp.text[:300])
     except Exception as exc:
         log.error("upload_document: CyMind upload failed: %s", exc)
 
-    # Save metadata to local DB
     try:
         with db() as conn:
             cur = conn.cursor()
@@ -220,7 +217,7 @@ def upload_document(collection_id: str, file_storage, metadata: dict, uploaded_b
 
 
 def list_documents(collection_id: str) -> list[dict]:
-    """Return documents for a collection (from local metadata + CyMind index status)."""
+    """Return documents for a collection from local metadata."""
     rows = []
     try:
         with db() as conn:
@@ -253,7 +250,6 @@ def list_documents(collection_id: str) -> list[dict]:
 
 
 def delete_document(doc_id: str) -> bool:
-    """Delete a document from CyMind and local metadata."""
     cymind_doc_id = None
     try:
         with db() as conn:
@@ -268,18 +264,16 @@ def delete_document(doc_id: str) -> bool:
     except Exception as exc:
         log.error("delete_document lookup: %s", exc)
 
-    # Remove from CyMind
     if cymind_doc_id:
         try:
             requests.delete(
-                f"{get_cymind_url()}/api/documents/{cymind_doc_id}",
-                headers=_headers(),
+                _rag_url(f"documents/{cymind_doc_id}"),
+                headers=_auth_header(),
                 timeout=8,
             )
         except Exception as exc:
-            log.warning("delete_document CyMind delete: %s", exc)
+            log.warning("delete_document CyMind: %s", exc)
 
-    # Remove from local metadata
     try:
         with db() as conn:
             cur = conn.cursor()
@@ -290,17 +284,26 @@ def delete_document(doc_id: str) -> bool:
         return False
 
 
-def reindex_collection(collection_id: str) -> dict:
-    """Trigger CyMind re-indexing for a collection. Returns status."""
+def query_for_compliance(description: str, top_k: int = 3) -> dict:
+    """
+    Query all active policy collections to find which compliance frameworks
+    are potentially implicated by an alert description.
+    Returns {frameworks: [...], chunks: [...], confidence: float}
+    """
     try:
-        resp = requests.post(
-            f"{get_cymind_url()}/api/collections/{collection_id}/reindex",
+        resp = requests.get(
+            _rag_url("query/multi"),
             headers=_headers(),
-            timeout=30,
+            params={
+                "collections": "policy-iso27001,policy-nis2,policy-dora,policy-soc2,policy-nist-csf,policy-pcidss",
+                "query": description,
+                "top_k": top_k,
+                "threshold": 0.35,
+            },
+            timeout=10,
         )
         if resp.ok:
-            return {"status": "reindexing", "collection_id": collection_id}
-        return {"status": "error", "detail": resp.text[:200]}
+            return resp.json()
     except Exception as exc:
-        log.error("reindex_collection(%s): %s", collection_id, exc)
-        return {"status": "error", "detail": str(exc)}
+        log.debug("query_for_compliance: CyMind unavailable: %s", exc)
+    return {}

@@ -1,287 +1,284 @@
 """
 cy_comp/services/siem_bridge.py
 ================================
-Abstracted SIEM ingestion bridge for the GRC compliance module.
+Compliance enrichment engine (v2 — zero duplicate storage).
 
 Architecture:
-  BaseSIEMAdapter            — abstract base with fetch_compliance_alerts()
-  CorrelationEngineAdapter   — calls SIEM_ENGINE_URL/alerts, filters compliance-relevant
-  WazuhDirectAdapter         — direct Wazuh Indexer API
-  SIEMBridgeService          — orchestrates adapters, deduplicates by alert_hash
+  enrich_alerts_pass()     — UPDATE alerts table with compliance columns in-place.
+  enrich_incidents_pass()  — UPDATE incidents with aggregated compliance data.
+  sync()                   — runs both passes, returns summary dict.
 
-Deduplication: SHA-256 hash of (external_id + source_type) stored in cy_comp_alerts.
+No data is copied or duplicated. The correlation engine's existing alerts and
+incidents tables get four extra columns populated by this service:
+  alerts:    is_compliance_relevant, compliance_frameworks, compliance_controls,
+             compliance_confidence
+  incidents: compliance_breach, compliance_frameworks, compliance_controls,
+             compliance_confidence
+
+cy_comp_alerts is kept only for FK compatibility — it is no longer written to.
 """
 
-import hashlib
 import json
 import logging
-import os
-import uuid
-from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Optional
-
-import requests
 
 from cy_comp.models import db
-from cy_comp.services.enrichment import enrich_alert, COMPLIANCE_MIN_LEVEL
+from cy_comp.services.enrichment import (
+    COMPLIANCE_MIN_LEVEL,
+    CRITICAL_LEVEL,
+    HIGH_LEVEL,
+    MITRE_TO_CONTROLS,
+    WAZUH_RULE_TO_CONTROLS,
+    enrich_alert,
+)
 
 log = logging.getLogger("cycentra.cy_comp.siem_bridge")
 
-SIEM_ENGINE_URL  = os.environ.get("SIEM_ENGINE_URL",      "http://127.0.0.1:8100")
-WAZUH_API_URL    = os.environ.get("WAZUH_API_URL",        "https://127.0.0.1:55000")
-WAZUH_API_USER   = os.environ.get("WAZUH_API_USER",       "wazuh-wui")
-WAZUH_API_PASS   = os.environ.get("WAZUH_API_PASSWORD",   "")
-
-# Compliance-relevant Wazuh rule IDs / groups (extend as needed)
-_COMPLIANCE_WAZUH_GROUPS = {
-    "gdpr", "hipaa", "nist_800_53", "pci_dss", "tsc", "gpg13",
-    "authentication_failures", "system_audit", "policy_changed",
-}
-
-# Compliance-relevant correlation engine alert categories
-_COMPLIANCE_ENGINE_CATEGORIES = {
-    "authentication", "compliance", "policy", "data_access",
-    "privilege_escalation", "network_anomaly", "configuration_change",
-}
+BATCH_SIZE = 1000
 
 
-def _alert_hash(external_id: str, source_type: str) -> str:
-    raw = f"{external_id}|{source_type}".encode()
-    return hashlib.sha256(raw).hexdigest()[:32]
+def _mitre_parent(mitre_id: str) -> str:
+    """Return parent technique ID: T1110.001 → T1110."""
+    return mitre_id.split(".")[0] if mitre_id else ""
 
 
-def _map_severity(raw_level) -> str:
-    """Map numeric or string severity to critical/high/medium/low."""
-    if isinstance(raw_level, int):
-        if raw_level >= 14: return "critical"
-        if raw_level >= 10: return "high"
-        if raw_level >= 6:  return "medium"
-        return "low"
-    s = str(raw_level).lower()
-    if s in ("critical", "high", "medium", "low"):
-        return s
-    return "medium"
+def _severity_from_level(level: int) -> str:
+    if level >= CRITICAL_LEVEL: return "critical"
+    if level >= HIGH_LEVEL:     return "high"
+    if level >= COMPLIANCE_MIN_LEVEL: return "medium"
+    return "low"
 
 
-# ── Base Adapter ──────────────────────────────────────────────────────────────
+def _compute_controls(mitre_id: str, rule_id: int) -> dict:
+    """Return compliance_controls JSONB dict by mapping MITRE + rule ID."""
+    controls: dict[str, list[str]] = {}
 
-class BaseSIEMAdapter(ABC):
-    @abstractmethod
-    def fetch_compliance_alerts(self) -> list[dict]:
-        """
-        Return a list of normalized alert dicts. Each dict must contain:
-          external_id, source_type, severity, title, description,
-          agent_name, agent_ip, raw_data, timestamp, framework (optional)
-        """
+    if mitre_id:
+        for technique in [mitre_id, _mitre_parent(mitre_id)]:
+            for fw, ctrl_list in MITRE_TO_CONTROLS.get(technique, {}).items():
+                for c in ctrl_list:
+                    controls.setdefault(fw, [])
+                    if c not in controls[fw]:
+                        controls[fw].append(c)
+
+    rule_key = str(rule_id) if rule_id else ""
+    for fw, ctrl_list in WAZUH_RULE_TO_CONTROLS.get(rule_key, {}).items():
+        for c in ctrl_list:
+            controls.setdefault(fw, [])
+            if c not in controls[fw]:
+                controls[fw].append(c)
+
+    return controls
 
 
-# ── Correlation Engine Adapter ────────────────────────────────────────────────
+def _compute_confidence(rule_level: int, controls: dict) -> float:
+    """
+    Confidence score 0.00–1.00:
+      - base from rule_level (0.3 at level 7 → 1.0 at level 15)
+      - bonus for number of frameworks matched
+    """
+    base = min(1.0, max(0.0, (rule_level - COMPLIANCE_MIN_LEVEL + 1) / (15 - COMPLIANCE_MIN_LEVEL + 1)))
+    fw_bonus = min(0.2, len(controls) * 0.05)
+    return round(min(1.0, base + fw_bonus), 2)
 
-class CorrelationEngineAdapter(BaseSIEMAdapter):
-    """Calls the existing CySIEM Correlation Engine /alerts endpoint."""
 
-    def fetch_compliance_alerts(self) -> list[dict]:
-        alerts = []
-        try:
-            resp = requests.get(
-                f"{SIEM_ENGINE_URL}/alerts",
-                params={"limit": 200, "status": "open"},
-                timeout=8,
+# ── Alert enrichment pass ─────────────────────────────────────────────────────
+
+def enrich_alerts_pass(batch_size: int = BATCH_SIZE) -> dict:
+    """
+    Process up to batch_size unprocessed alerts (is_compliance_relevant IS NULL)
+    that have MITRE data or high rule_level.
+    Updates alerts table in-place with compliance columns.
+    """
+    enriched = 0
+    relevant = 0
+    errors   = 0
+
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+
+            # Fetch alerts that haven't been compliance-enriched yet
+            cur.execute(
+                """
+                SELECT id, rule_id, rule_level, mitre_id, rule_desc, category
+                FROM alerts
+                WHERE is_compliance_relevant IS NULL
+                  AND (mitre_id IS NOT NULL OR rule_level >= %s)
+                ORDER BY id DESC
+                LIMIT %s;
+                """,
+                (COMPLIANCE_MIN_LEVEL, batch_size)
             )
-            if not resp.ok:
-                log.warning("CorrelationEngineAdapter: non-200 (%s)", resp.status_code)
-                return []
-            data = resp.json()
-            raw_list = data if isinstance(data, list) else data.get("alerts", [])
+            rows = cur.fetchall()
+            log.info("enrich_alerts_pass: found %d unprocessed alerts", len(rows))
 
-            for item in raw_list:
-                category = (item.get("category") or item.get("type") or "").lower()
-                rule_level = int(item.get("rule_level") or item.get("level") or 0)
-                # Accept by category OR by rule_level meeting the compliance threshold
-                if category not in _COMPLIANCE_ENGINE_CATEGORIES and rule_level < COMPLIANCE_MIN_LEVEL:
-                    continue
-                alerts.append({
-                    "external_id":     str(item.get("id") or item.get("alert_id", "")),
-                    "source_type":     "correlation_engine",
-                    "severity":        _map_severity(item.get("severity") or item.get("level", 5)),
-                    "title":           item.get("title") or item.get("description", "Compliance alert"),
-                    "description":     item.get("description") or item.get("detail", ""),
-                    "agent_name":      item.get("agent") or item.get("host", ""),
-                    "agent_ip":        item.get("agent_ip") or item.get("src_ip", ""),
-                    "raw_data":        item,
-                    "timestamp":       item.get("timestamp") or item.get("created_at"),
-                    "framework":       item.get("framework"),
-                    "rule_level":      rule_level,
-                    "rule_id":         str(item.get("rule_id") or ""),
-                    "mitre_technique": item.get("mitre_technique") or item.get("mitre") or "",
-                    "rule_groups":     item.get("rule_groups") or [],
-                })
-        except Exception as exc:
-            log.error("CorrelationEngineAdapter.fetch_compliance_alerts: %s", exc)
-        return alerts
+            for (aid, rule_id, rule_level, mitre_id, rule_desc, category) in rows:
+                try:
+                    rule_level = int(rule_level or 0)
+                    controls   = _compute_controls(mitre_id or "", rule_id)
+                    frameworks = list(controls.keys()) if controls else []
 
+                    # An alert is compliance-relevant if it meets the level threshold
+                    # OR it has a known MITRE technique mapped to a framework
+                    is_relevant = (rule_level >= COMPLIANCE_MIN_LEVEL and bool(frameworks)) \
+                                  or rule_level >= HIGH_LEVEL  # high severity always relevant
 
-# ── Wazuh Direct Adapter ──────────────────────────────────────────────────────
+                    confidence  = _compute_confidence(rule_level, controls) if is_relevant else 0.0
 
-class WazuhDirectAdapter(BaseSIEMAdapter):
-    """
-    Direct Wazuh Indexer REST API adapter.
-    Uses WAZUH_API_URL / WAZUH_API_USER / WAZUH_API_PASS env vars.
-    """
-
-    def _get_token(self) -> Optional[str]:
-        try:
-            resp = requests.post(
-                f"{WAZUH_API_URL}/security/user/authenticate",
-                auth=(WAZUH_API_USER, WAZUH_API_PASS),
-                verify=False,
-                timeout=6,
-            )
-            if resp.ok:
-                return resp.json().get("data", {}).get("token")
-        except Exception as exc:
-            log.warning("WazuhDirectAdapter._get_token: %s", exc)
-        return None
-
-    def fetch_compliance_alerts(self) -> list[dict]:
-        if not WAZUH_API_PASS:
-            log.debug("WazuhDirectAdapter: WAZUH_API_PASSWORD not set — skipping")
-            return []
-
-        token = self._get_token()
-        if not token:
-            return []
-
-        alerts = []
-        try:
-            resp = requests.get(
-                f"{WAZUH_API_URL}/alerts",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"limit": 100, "sort": "-timestamp"},
-                verify=False,
-                timeout=8,
-            )
-            if not resp.ok:
-                log.warning("WazuhDirectAdapter: /alerts returned %s", resp.status_code)
-                return []
-            items = resp.json().get("data", {}).get("affected_items", [])
-            for item in items:
-                rule   = item.get("rule", {})
-                groups = set(rule.get("groups", []))
-                if not groups.intersection(_COMPLIANCE_WAZUH_GROUPS):
-                    continue
-                alerts.append({
-                    "external_id":     item.get("id", ""),
-                    "source_type":     "wazuh_direct",
-                    "severity":        _map_severity(rule.get("level", 5)),
-                    "title":           rule.get("description", "Wazuh compliance alert"),
-                    "description":     item.get("full_log", rule.get("description", "")),
-                    "agent_name":      item.get("agent", {}).get("name", ""),
-                    "agent_ip":        item.get("agent", {}).get("ip", ""),
-                    "raw_data":        item,
-                    "timestamp":       item.get("timestamp"),
-                    "framework":       next(iter(groups.intersection({"pci_dss", "gdpr", "nist_800_53", "hipaa", "tsc"})), None),
-                    "rule_level":      int(rule.get("level", 0)),
-                    "rule_id":         str(rule.get("id", "")),
-                    "mitre_technique": rule.get("mitre", {}).get("technique", [None])[0] if rule.get("mitre") else "",
-                    "rule_groups":     list(groups),
-                })
-        except Exception as exc:
-            log.error("WazuhDirectAdapter.fetch_compliance_alerts: %s", exc)
-        return alerts
-
-
-# ── SIEM Bridge Service ───────────────────────────────────────────────────────
-
-class SIEMBridgeService:
-    """
-    Orchestrates all SIEM adapters, deduplicates alerts by hash, and persists
-    new compliance-relevant alerts to cy_comp_alerts.
-    """
-
-    def __init__(self):
-        self._adapters: list[BaseSIEMAdapter] = [
-            CorrelationEngineAdapter(),
-            WazuhDirectAdapter(),
-        ]
-
-    def sync(self) -> dict:
-        """Run all adapters, deduplicate, persist. Returns sync summary."""
-        all_alerts: list[dict] = []
-        for adapter in self._adapters:
-            try:
-                fetched = adapter.fetch_compliance_alerts()
-                all_alerts.extend(fetched)
-                log.info("%s fetched %d alerts", adapter.__class__.__name__, len(fetched))
-            except Exception as exc:
-                log.error("adapter %s failed: %s", adapter.__class__.__name__, exc)
-
-        new_count = 0
-        dup_count = 0
-
-        try:
-            with db() as conn:
-                cur = conn.cursor()
-                for alert in all_alerts:
-                    # Apply compliance enrichment (MITRE + rule ID → controls)
-                    enriched = enrich_alert(alert)
-                    if not enriched.get("is_compliance_relevant", True):
-                        continue
-
-                    h = _alert_hash(enriched.get("external_id", ""), enriched.get("source_type", ""))
-                    cur.execute(
-                        "SELECT id FROM cy_comp_alerts WHERE alert_hash = %s;", (h,)
-                    )
-                    if cur.fetchone():
-                        dup_count += 1
-                        continue
-                    aid = str(uuid.uuid4())
                     cur.execute(
                         """
-                        INSERT INTO cy_comp_alerts
-                            (id, alert_hash, external_id, source_type, severity,
-                             framework, title, description, agent_name, agent_ip,
-                             raw_data, controls_json, rule_level, rule_id,
-                             mitre_technique, timestamp, created_at)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW());
+                        UPDATE alerts
+                        SET is_compliance_relevant = %s,
+                            compliance_frameworks  = %s,
+                            compliance_controls    = %s,
+                            compliance_confidence  = %s
+                        WHERE id = %s;
                         """,
                         (
-                            aid, h,
-                            enriched.get("external_id"),
-                            enriched.get("source_type"),
-                            enriched.get("severity"),
-                            enriched.get("framework"),
-                            enriched.get("title"),
-                            enriched.get("description"),
-                            enriched.get("agent_name"),
-                            enriched.get("agent_ip"),
-                            json.dumps(enriched.get("raw_data", {})),
-                            json.dumps(enriched.get("controls", {})),
-                            enriched.get("rule_level"),
-                            enriched.get("rule_id"),
-                            enriched.get("mitre_technique"),
-                            enriched.get("timestamp"),
+                            is_relevant,
+                            frameworks or None,
+                            json.dumps(controls) if controls else None,
+                            confidence,
+                            aid,
                         )
                     )
-                    new_count += 1
-        except Exception as exc:
-            log.error("SIEMBridgeService.sync persist failed: %s", exc)
+                    enriched += 1
+                    if is_relevant:
+                        relevant += 1
+                except Exception as row_exc:
+                    log.warning("enrich_alerts_pass: alert %s failed: %s", aid, row_exc)
+                    errors += 1
 
-        log.info("SIEM sync complete: new=%d, dup=%d", new_count, dup_count)
-        return {
-            "new":        new_count,
-            "duplicates": dup_count,
-            "total":      len(all_alerts),
-        }
+            # Mark high-level alerts without MITRE as not-relevant (so we don't re-scan)
+            cur.execute(
+                """
+                UPDATE alerts
+                SET is_compliance_relevant = FALSE
+                WHERE is_compliance_relevant IS NULL
+                  AND rule_level < %s
+                  AND mitre_id IS NULL;
+                """,
+                (COMPLIANCE_MIN_LEVEL,)
+            )
+
+    except Exception as exc:
+        log.error("enrich_alerts_pass failed: %s", exc)
+        errors += 1
+
+    log.info("enrich_alerts_pass: enriched=%d relevant=%d errors=%d", enriched, relevant, errors)
+    return {"enriched": enriched, "relevant": relevant, "errors": errors}
 
 
-# Module-level singleton
-_bridge: Optional[SIEMBridgeService] = None
+# ── Incident enrichment pass ──────────────────────────────────────────────────
+
+def enrich_incidents_pass() -> dict:
+    """
+    Propagate compliance data from alerts → incidents.
+    An incident is a compliance_breach if any of its linked alerts are
+    compliance_relevant OR it has MITRE techniques mapped to frameworks.
+    """
+    updated = 0
+    errors  = 0
+
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+
+            # Fetch incidents that need compliance update
+            cur.execute(
+                """
+                SELECT i.id,
+                       array_agg(DISTINCT a.mitre_id) FILTER (WHERE a.mitre_id IS NOT NULL) AS mitre_ids,
+                       array_agg(DISTINCT a.compliance_controls) FILTER (WHERE a.compliance_controls IS NOT NULL AND a.compliance_controls != '{}') AS controls_arr,
+                       MAX(a.rule_level) AS max_rule_level,
+                       bool_or(a.is_compliance_relevant) AS any_relevant
+                FROM incidents i
+                LEFT JOIN alerts a ON a.incident_id = i.id
+                WHERE i.compliance_breach IS NULL
+                   OR i.compliance_breach = FALSE
+                GROUP BY i.id;
+                """
+            )
+            rows = cur.fetchall()
+
+            for (inc_id, mitre_ids, controls_arr, max_level, any_relevant) in rows:
+                try:
+                    merged: dict[str, list[str]] = {}
+
+                    # Merge controls from all linked alerts
+                    for ctrl_json in (controls_arr or []):
+                        if ctrl_json:
+                            d = ctrl_json if isinstance(ctrl_json, dict) else json.loads(ctrl_json)
+                            for fw, cids in d.items():
+                                for c in cids:
+                                    merged.setdefault(fw, [])
+                                    if c not in merged[fw]:
+                                        merged[fw].append(c)
+
+                    # Also map from incident's own mitre_ids
+                    for mid in (mitre_ids or []):
+                        c2 = _compute_controls(mid or "", 0)
+                        for fw, cids in c2.items():
+                            for c in cids:
+                                merged.setdefault(fw, [])
+                                if c not in merged[fw]:
+                                    merged[fw].append(c)
+
+                    frameworks   = list(merged.keys())
+                    max_level    = int(max_level or 0)
+                    is_breach    = bool(any_relevant) or bool(frameworks) or max_level >= HIGH_LEVEL
+                    confidence   = _compute_confidence(max_level, merged) if is_breach else 0.0
+
+                    cur.execute(
+                        """
+                        UPDATE incidents
+                        SET compliance_breach     = %s,
+                            compliance_frameworks = %s,
+                            compliance_controls   = %s,
+                            compliance_confidence = %s
+                        WHERE id = %s;
+                        """,
+                        (
+                            is_breach,
+                            frameworks or None,
+                            json.dumps(merged) if merged else None,
+                            confidence,
+                            inc_id,
+                        )
+                    )
+                    updated += 1
+                except Exception as row_exc:
+                    log.warning("enrich_incidents_pass: incident %s: %s", inc_id, row_exc)
+                    errors += 1
+
+    except Exception as exc:
+        log.error("enrich_incidents_pass failed: %s", exc)
+        errors += 1
+
+    log.info("enrich_incidents_pass: updated=%d errors=%d", updated, errors)
+    return {"updated": updated, "errors": errors}
 
 
-def get_bridge() -> SIEMBridgeService:
-    global _bridge
-    if _bridge is None:
-        _bridge = SIEMBridgeService()
-    return _bridge
+# ── Public sync entry point ───────────────────────────────────────────────────
+
+def sync(batch_size: int = BATCH_SIZE) -> dict:
+    """
+    Run compliance enrichment over existing alert and incident data.
+    Returns a summary dict for the API response.
+    """
+    alert_result    = enrich_alerts_pass(batch_size)
+    incident_result = enrich_incidents_pass()
+    return {
+        "alerts":    alert_result,
+        "incidents": incident_result,
+        "new":       alert_result["relevant"],
+    }
+
+
+def get_bridge():
+    """Backward-compat shim — callers that do get_bridge().sync() still work."""
+    class _Shim:
+        def sync(self):
+            return sync()
+    return _Shim()

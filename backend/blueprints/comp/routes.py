@@ -96,7 +96,14 @@ def get_framework_scores():
     return jsonify({"scores": scores})
 
 
-# ── Compliance Alerts ─────────────────────────────────────────────────────────
+# ── Compliance Alerts (query existing alerts table — no duplicate storage) ─────
+
+def _severity_from_level(level: int) -> str:
+    if level >= 12: return "critical"
+    if level >= 10: return "high"
+    if level >= 7:  return "medium"
+    return "low"
+
 
 @comp_bp.route("/alerts", methods=["GET"])
 @require_viewer
@@ -108,49 +115,72 @@ def list_compliance_alerts():
     framework = request.args.get("framework")
     offset    = (page - 1) * per_page
 
-    rows   = []
-    total  = 0
+    rows  = []
+    total = 0
     try:
         with db() as conn:
             cur = conn.cursor()
-            where, params = [], []
+            where  = ["is_compliance_relevant = TRUE"]
+            params = []
+
             if severity:
-                where.append("severity = %s"); params.append(severity)
+                # Map severity label to rule_level range
+                sev_ranges = {
+                    "critical": "rule_level >= 12",
+                    "high":     "rule_level >= 10 AND rule_level < 12",
+                    "medium":   "rule_level >= 7 AND rule_level < 10",
+                    "low":      "rule_level < 7",
+                }
+                rng = sev_ranges.get(severity)
+                if rng:
+                    where.append(rng)
+
             if framework:
-                where.append("framework = %s"); params.append(framework)
-            ack = request.args.get("acknowledged")
-            if ack is not None:
-                where.append("acknowledged = %s"); params.append(ack.lower() == "true")
+                where.append("%s = ANY(compliance_frameworks)")
+                params.append(framework)
 
-            clause = ("WHERE " + " AND ".join(where)) if where else ""
+            clause = "WHERE " + " AND ".join(where)
 
-            cur.execute(f"SELECT COUNT(*) FROM cy_comp_alerts {clause};", params)
+            cur.execute(f"SELECT COUNT(*) FROM alerts {clause};", params)
             total = (cur.fetchone() or [0])[0]
 
             cur.execute(
                 f"""
-                SELECT id, external_id, source_type, severity, framework,
-                       control_id, title, description, agent_name, agent_ip,
-                       acknowledged, finding_id, timestamp, created_at,
-                       controls_json, rule_level, rule_id, mitre_technique
-                FROM cy_comp_alerts {clause}
-                ORDER BY created_at DESC
+                SELECT id, wazuh_id, timestamp, agent_name, agent_ip,
+                       rule_id, rule_desc, rule_level, base_score, category,
+                       mitre_id, mitre_tactic, src_ip, username,
+                       incident_id,
+                       compliance_frameworks, compliance_controls, compliance_confidence
+                FROM alerts {clause}
+                ORDER BY timestamp DESC
                 LIMIT %s OFFSET %s;
                 """,
                 params + [per_page, offset]
             )
             for r in cur.fetchall():
+                rule_level = int(r[7] or 0)
                 rows.append({
-                    "id": r[0], "external_id": r[1], "source_type": r[2],
-                    "severity": r[3], "framework": r[4], "control_id": r[5],
-                    "title": r[6], "description": r[7], "agent_name": r[8],
-                    "agent_ip": r[9], "acknowledged": r[10], "finding_id": r[11],
-                    "timestamp": r[12].isoformat() if r[12] else None,
-                    "created_at": r[13].isoformat() if r[13] else None,
-                    "controls": r[14] or {},
-                    "rule_level": r[15],
-                    "rule_id": r[16],
-                    "mitre_technique": r[17],
+                    "id":                   r[0],
+                    "external_id":          r[1],
+                    "source_type":          "correlation_engine",
+                    "timestamp":            r[2].isoformat() if r[2] else None,
+                    "agent_name":           r[3],
+                    "agent_ip":             r[4],
+                    "rule_id":              r[5],
+                    "title":                r[6] or "Security alert",
+                    "description":          r[6] or "",
+                    "rule_level":           rule_level,
+                    "base_score":           float(r[8] or 0),
+                    "category":             r[9],
+                    "mitre_technique":      r[10],
+                    "mitre_tactic":         r[11],
+                    "src_ip":               r[12],
+                    "username":             r[13],
+                    "incident_id":          r[14],
+                    "severity":             _severity_from_level(rule_level),
+                    "compliance_frameworks": r[15] or [],
+                    "controls":             r[16] or {},
+                    "compliance_confidence": float(r[17] or 0),
                 })
     except Exception as exc:
         log.error("list_compliance_alerts: %s", exc)
@@ -162,9 +192,9 @@ def list_compliance_alerts():
 @comp_bp.route("/alerts/sync", methods=["POST"])
 @require_analyst
 def trigger_siem_sync():
-    from cy_comp.services.siem_bridge import get_bridge
+    from cy_comp.services.siem_bridge import sync
     try:
-        result = get_bridge().sync()
+        result = sync()
         return jsonify({"status": "ok", "result": result})
     except Exception as exc:
         log.error("trigger_siem_sync: %s", exc)

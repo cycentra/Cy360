@@ -283,10 +283,27 @@ _DDL_STATEMENTS = [
 
 # Column migrations for future schema evolution (idempotent ALTER TABLE)
 _MIGRATE_COLUMNS: list[str] = [
+    # Legacy cy_comp_alerts columns (kept for FK compatibility only — no longer populated)
     "ALTER TABLE cy_comp_alerts ADD COLUMN IF NOT EXISTS controls_json JSONB DEFAULT '{}';",
     "ALTER TABLE cy_comp_alerts ADD COLUMN IF NOT EXISTS rule_level INTEGER;",
     "ALTER TABLE cy_comp_alerts ADD COLUMN IF NOT EXISTS rule_id TEXT;",
     "ALTER TABLE cy_comp_alerts ADD COLUMN IF NOT EXISTS mitre_technique TEXT;",
+
+    # ── Compliance enrichment columns on existing correlation engine tables ────
+    # NULL = not yet processed, FALSE = processed + not relevant, TRUE = relevant
+    "ALTER TABLE alerts ADD COLUMN IF NOT EXISTS is_compliance_relevant BOOLEAN;",
+    "ALTER TABLE alerts ADD COLUMN IF NOT EXISTS compliance_frameworks TEXT[];",
+    "ALTER TABLE alerts ADD COLUMN IF NOT EXISTS compliance_controls JSONB DEFAULT '{}';",
+    "ALTER TABLE alerts ADD COLUMN IF NOT EXISTS compliance_confidence NUMERIC(4,2);",
+
+    "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS compliance_frameworks TEXT[];",
+    "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS compliance_controls JSONB DEFAULT '{}';",
+    "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS compliance_confidence NUMERIC(4,2);",
+    "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS compliance_breach BOOLEAN DEFAULT FALSE;",
+
+    # Indexes for compliance queries
+    "CREATE INDEX IF NOT EXISTS idx_alerts_is_compliance ON alerts(is_compliance_relevant, timestamp DESC) WHERE is_compliance_relevant = TRUE;",
+    "CREATE INDEX IF NOT EXISTS idx_incidents_compliance ON incidents(compliance_breach, last_seen DESC) WHERE compliance_breach = TRUE;",
 ]
 
 
