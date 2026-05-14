@@ -25,9 +25,10 @@ py-modules = ["app", "siem_proxy", "smtp_service"]
 where = ["."]
 include = [
     "cy_asm*",
+    "cy_comp*",
     "cysiemstack*",
     "blueprints*",
-    "core*",     
+    "core*",
 ]
 exclude = [
     "venv*",
