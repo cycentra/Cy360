@@ -977,6 +977,41 @@ def delete_framework_doc(doc_id):
     return jsonify({"error": reason}), 404
 
 
+# ── Statement of Applicability (SoA) — ISO 27001 Cl.6.1.3(d) ─────────────────
+
+@comp_bp.route("/soa/iso27001", methods=["GET"])
+@require_viewer
+def get_soa():
+    """Full SoA: all 93 Annex A controls with derived status, include/exclude, justification."""
+    from cy_comp.services.soa import get_soa as _get_soa
+    try:
+        return jsonify(_get_soa())
+    except Exception as exc:
+        log.error("GET /soa/iso27001: %s", exc)
+        return jsonify({"error": "Failed to load SoA"}), 500
+
+
+@comp_bp.route("/soa/iso27001/<control_id>", methods=["PUT"])
+@require_analyst
+def update_soa_entry(control_id: str):
+    """Update a single control's include/exclude decision and justification."""
+    from cy_comp.services.soa import update_soa_entry as _update
+    body = request.get_json(silent=True) or {}
+    included      = bool(body.get("included", True))
+    justification = body.get("justification") or None
+    try:
+        result = _update(
+            control_id    = control_id,
+            included      = included,
+            justification = justification,
+            updated_by    = _email(),
+        )
+        return jsonify(result)
+    except Exception as exc:
+        log.error("PUT /soa/iso27001/%s: %s", control_id, exc)
+        return jsonify({"error": "Failed to update SoA entry"}), 500
+
+
 # ── Settings ──────────────────────────────────────────────────────────────────
 
 @comp_bp.route("/settings", methods=["GET"])
@@ -1262,6 +1297,31 @@ def findings_verdict_summary():
     """Breach / warning / compliant counts for the dashboard."""
     from cy_comp.services.auto_findings import get_findings_summary
     return jsonify(get_findings_summary())
+
+
+@comp_bp.route("/findings/re-enrich-alerts", methods=["POST"])
+@require_analyst
+def re_enrich_alerts():
+    """
+    Reset compliance enrichment on all alerts so the siem_bridge re-tags them
+    with the current (expanded) framework mappings.
+    Safe to run after enrichment.py is updated.
+    """
+    from cy_comp.models import db
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE alerts SET is_compliance_relevant = NULL, compliance_frameworks = NULL, "
+                "compliance_controls = NULL, compliance_confidence = NULL;"
+            )
+            reset_count = cur.rowcount
+        from cy_comp.services.siem_bridge import enrich_alerts_pass
+        result = enrich_alerts_pass(batch_size=5000)
+        return jsonify({"status": "ok", "reset": reset_count, "enrichment": result})
+    except Exception as exc:
+        log.error("re_enrich_alerts: %s", exc)
+        return jsonify({"error": str(exc)}), 500
 
 
 @comp_bp.route("/findings/<finding_id>/remediation", methods=["GET"])

@@ -198,10 +198,12 @@ def delete_risk(risk_id: str) -> bool:
 
 def auto_populate_from_findings(created_by: Optional[str] = None) -> dict:
     """
-    Create cy_comp_risks entries from open breach/warning findings that have no risk yet.
+    Create cy_comp_risks entries from open findings (auto-generated AND manual).
     Dedup: checks title similarity to avoid exact duplicates.
     Returns {created, skipped}.
     """
+    import json as _json
+
     created = 0
     skipped = 0
     SEV_TO_LI = {"critical": (5, 5), "high": (4, 4), "medium": (3, 3), "low": (2, 2)}
@@ -210,26 +212,28 @@ def auto_populate_from_findings(created_by: Optional[str] = None) -> dict:
     try:
         with db() as conn:
             cur = conn.cursor()
+            # Include both auto-generated AND manual findings so the button
+            # is useful even before the alert-enrichment pipeline has run.
             cur.execute(
                 """
                 SELECT id, framework, control_id, severity, title, description, verdict
                 FROM cy_comp_findings
                 WHERE status IN ('open','in_progress')
                   AND verdict IN ('breach','warning')
-                  AND auto_generated = TRUE
                 ORDER BY
-                    CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END
-                LIMIT 50;
+                    CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,
+                    created_at DESC
+                LIMIT 100;
                 """
             )
             findings = cur.fetchall()
             for f in findings:
                 fid, fw, cid, sev, title, desc, verdict = f
-                likelihood, impact = SEV_TO_LI.get(sev, (3, 3))
+                likelihood, impact = SEV_TO_LI.get(sev or "medium", (3, 3))
                 risk_score = likelihood * impact
 
-                # Dedup by title prefix
-                short = title[:60]
+                # Dedup by title prefix (first 60 chars)
+                short = (title or "")[:60]
                 cur.execute(
                     "SELECT id FROM cy_comp_risks WHERE title LIKE %s LIMIT 1;",
                     (f"{short}%",)
@@ -239,22 +243,23 @@ def auto_populate_from_findings(created_by: Optional[str] = None) -> dict:
                     continue
 
                 rid = str(uuid.uuid4())
+                fw_list = [fw] if fw else []
                 cur.execute(
                     """
                     INSERT INTO cy_comp_risks
                         (id, title, description, category, owner, likelihood, impact,
-                         risk_score, appetite, status, treatment, frameworks, created_by)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'medium','open',%s,%s,%s);
+                         risk_score, appetite, status, treatment, frameworks, controls, created_by)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'medium','open',%s,%s,'[]',%s);
                     """,
                     (
                         rid,
-                        title[:200],
-                        (desc or "")[:500] + f"\n\nSource: {fw} finding ({cid})",
+                        (title or "Untitled finding")[:200],
+                        ((desc or "")[:500] + f"\n\nSource: {fw or 'unknown'} finding ({cid or 'N/A'})").strip(),
                         "IT",
                         created_by or "system",
                         likelihood, impact, risk_score,
-                        VERDICT_TO_TREATMENT.get(verdict, "mitigate"),
-                        [fw] if fw else [],
+                        VERDICT_TO_TREATMENT.get(verdict or "warning", "mitigate"),
+                        _json.dumps(fw_list),   # JSONB — must be serialised string
                         created_by,
                     )
                 )

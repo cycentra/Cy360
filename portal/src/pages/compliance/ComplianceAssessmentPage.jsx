@@ -507,6 +507,343 @@ function QuestionnaireView({ framework, color }) {
   );
 }
 
+// ── Statement of Applicability (ISO 27001 only) ────────────────────────────────
+
+const SOA_THEME_COLORS = {
+  Organisational: "#6378ff",
+  People:         "#f97316",
+  Physical:       "#38bdf8",
+  Technological:  "#00e5a0",
+};
+
+const SOA_STATUS_COLORS = {
+  compliant:    C.accent,
+  partial:      C.orange,
+  gap:          C.red,
+  breach:       C.red,
+  excluded:     "rgba(255,255,255,0.2)",
+  not_assessed: "rgba(255,255,255,0.15)",
+};
+
+const SOA_STATUS_LABELS = {
+  compliant:    "Compliant",
+  partial:      "Partial",
+  gap:          "Gap",
+  breach:       "Breach",
+  excluded:     "Excluded",
+  not_assessed: "Not Assessed",
+};
+
+function SoAControlRow({ ctrl, onUpdate }) {
+  const [open, setOpen]          = useState(false);
+  const [justification, setJust] = useState(ctrl.justification || "");
+  const [saving, setSaving]      = useState(false);
+
+  const sc    = SOA_STATUS_COLORS[ctrl.status] || C.muted;
+  const label = SOA_STATUS_LABELS[ctrl.status] || ctrl.status;
+
+  const handleToggle = (included) => {
+    setSaving(true);
+    fetch(`${API_BASE}/api/comp/soa/iso27001/${ctrl.control_id}`, {
+      method: "PUT", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ included, justification: justification || null }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => onUpdate(d))
+      .catch(e => console.error("SoA update failed", e))
+      .finally(() => setSaving(false));
+  };
+
+  const handleJustSave = () => {
+    setSaving(true);
+    fetch(`${API_BASE}/api/comp/soa/iso27001/${ctrl.control_id}`, {
+      method: "PUT", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ included: ctrl.included, justification: justification || null }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => onUpdate(d))
+      .catch(e => console.error("SoA update failed", e))
+      .finally(() => setSaving(false));
+  };
+
+  return (
+    <div style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", padding: "8px 0" }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+        {/* Status badge */}
+        <div style={{ width: 78, flexShrink: 0, paddingTop: 2 }}>
+          <span style={{
+            background: `${sc}15`, color: sc, border: `1px solid ${sc}30`,
+            fontSize: 7, fontFamily: "monospace", fontWeight: 700,
+            padding: "2px 5px", borderRadius: 3, display: "block",
+            textAlign: "center", textTransform: "uppercase",
+            opacity: ctrl.included ? 1 : 0.45,
+          }}>
+            {label}
+          </span>
+        </div>
+
+        {/* Control info */}
+        <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }}
+          onClick={() => setOpen(o => !o)}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ color: C.blue, fontSize: 8, fontFamily: "monospace",
+              fontWeight: 700, background: `${C.blue}12`,
+              padding: "1px 5px", borderRadius: 2, flexShrink: 0 }}>
+              {ctrl.control_id}
+            </span>
+            <span style={{ color: ctrl.included ? C.text : C.muted, fontSize: 10,
+              lineHeight: 1.3, fontWeight: 600 }}>
+              {ctrl.title}
+            </span>
+            {ctrl.question_id && (
+              <span style={{ color: C.purple, fontSize: 7, fontFamily: "monospace",
+                background: `${C.purple}10`, padding: "1px 4px", borderRadius: 2,
+                flexShrink: 0, marginLeft: "auto" }}>
+                Q: {ctrl.question_id}
+              </span>
+            )}
+          </div>
+          {open && (
+            <div style={{ color: C.muted, fontSize: 9, lineHeight: 1.5, marginTop: 4,
+              fontFamily: "monospace" }}>
+              {ctrl.description}
+            </div>
+          )}
+        </div>
+
+        {/* Include/Exclude toggle */}
+        <div style={{ flexShrink: 0, display: "flex", gap: 4, alignItems: "center" }}>
+          <button
+            onClick={() => !saving && handleToggle(true)}
+            disabled={saving}
+            style={{
+              background: ctrl.included ? `${C.accent}20` : "rgba(255,255,255,0.04)",
+              border: `1px solid ${ctrl.included ? C.accent : "rgba(255,255,255,0.1)"}`,
+              color: ctrl.included ? C.accent : C.muted,
+              fontSize: 7, fontFamily: "monospace", fontWeight: 700,
+              padding: "3px 8px", borderRadius: 3, cursor: "pointer",
+            }}>
+            IN
+          </button>
+          <button
+            onClick={() => !saving && handleToggle(false)}
+            disabled={saving}
+            style={{
+              background: !ctrl.included ? `${C.red}20` : "rgba(255,255,255,0.04)",
+              border: `1px solid ${!ctrl.included ? C.red : "rgba(255,255,255,0.1)"}`,
+              color: !ctrl.included ? C.red : C.muted,
+              fontSize: 7, fontFamily: "monospace", fontWeight: 700,
+              padding: "3px 8px", borderRadius: 3, cursor: "pointer",
+            }}>
+            EX
+          </button>
+        </div>
+      </div>
+
+      {/* Justification — shown when excluded OR when row is expanded */}
+      {(open || !ctrl.included) && (
+        <div style={{ display: "flex", gap: 6, marginTop: 8, paddingLeft: 88 }}>
+          <input
+            value={justification}
+            onChange={e => setJust(e.target.value)}
+            placeholder={ctrl.included
+              ? "Justification for inclusion (optional)…"
+              : "Justification for exclusion (required)…"}
+            style={{ flex: 1, background: "#0d1117", border: `1px solid ${C.border}`,
+              color: C.text, borderRadius: 4, padding: "5px 8px",
+              fontFamily: "monospace", fontSize: 9 }}
+          />
+          <button onClick={handleJustSave} disabled={saving}
+            style={{ background: `${C.blue}15`, border: `1px solid ${C.blue}40`,
+              color: C.blue, padding: "4px 10px", borderRadius: 4,
+              fontFamily: "monospace", fontSize: 9, cursor: "pointer",
+              opacity: saving ? 0.6 : 1 }}>
+            {saving ? "…" : "Save"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SoAView() {
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [theme, setTheme]     = useState("all");
+  const [filter, setFilter]   = useState("all");
+
+  const load = useCallback(() => {
+    setLoading(true);
+    fetch(`${API_BASE}/api/comp/soa/iso27001`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleUpdate = (updated) => {
+    if (!data) return;
+    setData(prev => ({
+      ...prev,
+      controls: prev.controls.map(c =>
+        c.control_id === updated.control_id
+          ? { ...c, included: updated.included, justification: updated.justification,
+              status: !updated.included ? "excluded" : c.status }
+          : c
+      ),
+    }));
+  };
+
+  if (loading || !data) return (
+    <div style={{ color: C.muted, fontFamily: "monospace", fontSize: 11, padding: 20 }}>
+      Loading Statement of Applicability…
+    </div>
+  );
+
+  const { controls, summary } = data;
+  const THEMES = ["all", "Organisational", "People", "Physical", "Technological"];
+
+  const visible = controls.filter(c => {
+    const themeOk  = theme === "all" || c.theme === theme;
+    const filterOk = filter === "all" || c.status === filter
+      || (filter === "gap" && c.status === "breach");
+    return themeOk && filterOk;
+  });
+
+  const byTheme = theme === "all"
+    ? THEMES.slice(1).reduce((acc, t) => {
+        acc[t] = visible.filter(c => c.theme === t);
+        return acc;
+      }, {})
+    : { [theme]: visible };
+
+  return (
+    <div>
+      {/* Summary strip */}
+      <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 20,
+        padding: "12px 16px", borderRadius: 6,
+        background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.2)" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ color: C.accent, fontSize: 26, fontFamily: "monospace",
+            fontWeight: 800 }}>
+            {summary.coverage_pct}%
+          </div>
+          <div style={{ color: C.muted, fontSize: 8, fontFamily: "monospace" }}>
+            Coverage
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+          {[
+            { label: "Total",       val: summary.total,        c: C.text },
+            { label: "Compliant",   val: summary.compliant,    c: C.accent },
+            { label: "Partial",     val: summary.partial,      c: C.orange },
+            { label: "Gap/Breach",  val: summary.gap,          c: C.red },
+            { label: "Excluded",    val: summary.excluded,     c: C.muted },
+            { label: "Unassessed",  val: summary.not_assessed, c: "rgba(255,255,255,0.25)" },
+          ].map(({ label, val, c }) => (
+            <div key={label} style={{ textAlign: "center" }}>
+              <div style={{ color: c, fontSize: 18, fontFamily: "monospace",
+                fontWeight: 700 }}>{val}</div>
+              <div style={{ color: C.muted, fontSize: 7, fontFamily: "monospace" }}>
+                {label}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ marginLeft: "auto", fontSize: 8, fontFamily: "monospace",
+          color: C.muted, textAlign: "right" }}>
+          ISO/IEC 27001:2022<br />Cl.6.1.3(d) SoA<br />
+          <span style={{ color: C.blue }}>{controls.length} controls</span>
+        </div>
+      </div>
+
+      {/* Theme + Status filters */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        {THEMES.map(t => {
+          const color = t === "all" ? C.blue : SOA_THEME_COLORS[t] || C.blue;
+          const act   = theme === t;
+          const cnt   = t === "all" ? controls.length
+            : controls.filter(c => c.theme === t).length;
+          return (
+            <button key={t} onClick={() => setTheme(t)}
+              style={{ background: act ? `${color}15` : "rgba(255,255,255,0.03)",
+                border: `1px solid ${act ? `${color}50` : "rgba(255,255,255,0.07)"}`,
+                color: act ? color : C.muted, padding: "4px 10px", borderRadius: 4,
+                fontFamily: "monospace", fontSize: 9, cursor: "pointer",
+                fontWeight: act ? 700 : 400 }}>
+              {t === "all" ? `All (${cnt})` : `${t} (${cnt})`}
+            </button>
+          );
+        })}
+        <span style={{ width: 1, background: C.border, margin: "0 4px" }} />
+        {[
+          { key: "all",          label: "All" },
+          { key: "gap",          label: "Gaps" },
+          { key: "partial",      label: "Partial" },
+          { key: "compliant",    label: "Compliant" },
+          { key: "not_assessed", label: "Unassessed" },
+          { key: "excluded",     label: "Excluded" },
+        ].map(({ key, label }) => {
+          const color = SOA_STATUS_COLORS[key] || C.blue;
+          const act   = filter === key;
+          return (
+            <button key={key} onClick={() => setFilter(key)}
+              style={{ background: act ? `${color}15` : "rgba(255,255,255,0.03)",
+                border: `1px solid ${act ? `${color}50` : "rgba(255,255,255,0.07)"}`,
+                color: act ? color : C.muted, padding: "4px 10px", borderRadius: 4,
+                fontFamily: "monospace", fontSize: 9, cursor: "pointer",
+                fontWeight: act ? 700 : 400 }}>
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Controls grouped by theme */}
+      {Object.entries(byTheme).map(([t, ctrls]) => {
+        if (!ctrls.length) return null;
+        const themeColor = SOA_THEME_COLORS[t] || C.blue;
+        const ts = summary.by_theme?.[t] || {};
+        return (
+          <div key={t} style={{ marginBottom: 24 }}>
+            {/* Theme header */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10,
+              marginBottom: 8, paddingBottom: 6,
+              borderBottom: `1px solid ${themeColor}25` }}>
+              <span style={{ color: themeColor, fontSize: 10, fontFamily: "monospace",
+                fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px" }}>
+                {t}
+              </span>
+              <span style={{ color: C.muted, fontSize: 9, fontFamily: "monospace" }}>
+                {ctrls.length} shown
+              </span>
+              <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
+                {[
+                  { label: "Compliant", val: ts.compliant, c: C.accent },
+                  { label: "Partial",   val: ts.partial,   c: C.orange },
+                  { label: "Gap",       val: (ts.gap || 0) + (ts.breach || 0), c: C.red },
+                ].map(({ label, val, c }) => val > 0 && (
+                  <span key={label} style={{ color: c, fontSize: 8,
+                    fontFamily: "monospace", background: `${c}10`,
+                    padding: "1px 6px", borderRadius: 3 }}>
+                    {val} {label}
+                  </span>
+                ))}
+              </div>
+            </div>
+            {ctrls.map(ctrl => (
+              <SoAControlRow key={ctrl.control_id} ctrl={ctrl} onUpdate={handleUpdate} />
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 
 const ALL_FW = Object.keys(FW_META);
@@ -568,7 +905,7 @@ export function ComplianceAssessmentPage() {
             const sc  = hf?.score || 0;
             const act = fw === activeFw;
             return (
-              <button key={fw} onClick={() => setActiveFw(fw)}
+              <button key={fw} onClick={() => { setActiveFw(fw); if (fw !== "iso27001") setActiveTab(t => t === "soa" ? "questionnaire" : t); }}
                 style={{ display: "flex", alignItems: "center", gap: 8,
                   background: act ? `${m.color}12` : "rgba(255,255,255,0.02)",
                   border: `1px solid ${act ? `${m.color}40` : "rgba(255,255,255,0.05)"}`,
@@ -621,6 +958,9 @@ export function ComplianceAssessmentPage() {
             {[
               { key: "questionnaire", label: "Questionnaire" },
               { key: "controls",      label: "Controls List" },
+              ...(activeFw === "iso27001"
+                ? [{ key: "soa", label: "Statement of Applicability" }]
+                : []),
             ].map(({ key, label }) => (
               <button key={key} onClick={() => setActiveTab(key)}
                 style={{ background: activeTab === key ? `${meta.color}15` : "rgba(255,255,255,0.04)",
@@ -638,6 +978,8 @@ export function ComplianceAssessmentPage() {
         {/* Content */}
         {activeTab === "questionnaire" ? (
           <QuestionnaireView key={activeFw} framework={activeFw} color={meta.color} />
+        ) : activeTab === "soa" && activeFw === "iso27001" ? (
+          <SoAView key="soa" />
         ) : (
           <ControlsList key={activeFw} framework={activeFw} />
         )}

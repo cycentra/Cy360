@@ -16,52 +16,240 @@ MEDIUM_LEVEL         = 7
 
 
 # ── MITRE ATT&CK → Framework Controls ───────────────────────────────────────
+#
+# Frameworks: nis2 | dora | iso27001 | avg (GDPR-NL) | soc2 | nist_csf | pci_dss
+#
+# SOC 2 references:  CC1–CC9 Trust Services Criteria
+# NIST CSF 2.0 refs: GV | ID.AM | PR.AA | PR.AT | PR.DS | PR.PS | DE.AE | DE.CM | RS.MA | RC.RP
+# PCI DSS v4.0 refs: Req 1–Req 12
 MITRE_TO_CONTROLS: Dict[str, Dict[str, List[str]]] = {
-    # Credential access
-    "T1110": {"nis2": ["NIS2-Art21-2i", "NIS2-Art21-2j"], "dora": ["DORA-Art9", "DORA-Art10"], "iso27001": ["ISO-A8.5", "ISO-A5.15"]},
-    "T1078": {"nis2": ["NIS2-Art21-2i", "NIS2-Art21-2j"], "dora": ["DORA-Art9"],               "iso27001": ["ISO-A5.16", "ISO-A8.2"]},
-    "T1555": {"nis2": ["NIS2-Art21-2i"],                   "dora": ["DORA-Art9"],               "iso27001": ["ISO-A5.17"]},
-    # Privilege escalation
-    "T1548": {"nis2": ["NIS2-Art21-2i"],                   "dora": ["DORA-Art9", "DORA-Art10"], "iso27001": ["ISO-A8.2", "ISO-A8.5"]},
-    "T1068": {"nis2": ["NIS2-Art21-2e", "NIS2-Art21-2i"],  "dora": ["DORA-Art6", "DORA-Art9"],  "iso27001": ["ISO-A8.8", "ISO-A8.2"]},
-    # Execution / malware
-    "T1059": {"nis2": ["NIS2-Art21-2a"],                   "dora": ["DORA-Art9", "DORA-Art10"], "iso27001": ["ISO-A8.7"]},
-    "T1204": {"nis2": ["NIS2-Art21-2g"],                   "dora": ["DORA-Art9"],               "iso27001": ["ISO-A8.7"]},
-    # Lateral movement
-    "T1021": {"nis2": ["NIS2-Art21-2i", "NIS2-Art21-2j"], "dora": ["DORA-Art9", "DORA-Art10"], "iso27001": ["ISO-A8.20", "ISO-A5.15"]},
-    # Exfiltration
-    "T1041": {"nis2": ["NIS2-Art21-2b", "NIS2-Art23"],    "dora": ["DORA-Art11", "DORA-Art13"], "iso27001": ["ISO-A8.20"], "avg": ["AVG-Art33"]},
-    "T1048": {"nis2": ["NIS2-Art21-2h", "NIS2-Art23"],    "dora": ["DORA-Art13"],               "avg": ["AVG-Art33"]},
-    # Defense evasion
-    "T1562": {"nis2": ["NIS2-Art21-2a"],                   "dora": ["DORA-Art10"],              "iso27001": ["ISO-A8.15", "ISO-A8.16"]},
-    # Persistence
-    "T1053": {"nis2": ["NIS2-Art21-2a"],                   "dora": ["DORA-Art9"],               "iso27001": ["ISO-A8.16"]},
-    # Discovery
-    "T1046": {"nis2": ["NIS2-Art21-2a"],                   "dora": ["DORA-Art10"],              "iso27001": ["ISO-A8.20"]},
-    # Vulnerability exploitation
-    "T1190": {"nis2": ["NIS2-Art21-2e"],                   "dora": ["DORA-Art6", "DORA-Art9"],  "iso27001": ["ISO-A8.8"]},
-    # Ransomware / encryption
-    "T1486": {"nis2": ["NIS2-Art21-2b", "NIS2-Art21-2c", "NIS2-Art23"], "dora": ["DORA-Art11", "DORA-Art13"], "iso27001": ["ISO-A8.24"]},
+    # Credential access — brute force / password spraying
+    "T1110": {
+        "nis2":     ["NIS2-Art21-2i", "NIS2-Art21-2j"],
+        "dora":     ["DORA-Art9", "DORA-Art10"],
+        "iso27001": ["ISO-A8.5", "ISO-A5.15"],
+        "soc2":     ["CC6.1", "CC6.7"],
+        "nist_csf": ["PR.AA-01", "PR.AA-02", "DE.CM-01"],
+        "pci_dss":  ["Req 8.3", "Req 8.4"],
+    },
+    # Valid accounts — stolen credentials
+    "T1078": {
+        "nis2":     ["NIS2-Art21-2i", "NIS2-Art21-2j"],
+        "dora":     ["DORA-Art9"],
+        "iso27001": ["ISO-A5.16", "ISO-A8.2"],
+        "soc2":     ["CC6.1", "CC6.2", "CC6.3"],
+        "nist_csf": ["PR.AA-01", "PR.AA-05", "DE.CM-01"],
+        "pci_dss":  ["Req 7.2", "Req 8.2"],
+    },
+    # Credentials from password stores
+    "T1555": {
+        "nis2":     ["NIS2-Art21-2i"],
+        "dora":     ["DORA-Art9"],
+        "iso27001": ["ISO-A5.17"],
+        "soc2":     ["CC6.1"],
+        "nist_csf": ["PR.AA-02"],
+        "pci_dss":  ["Req 8.3"],
+    },
+    # Abuse elevation / UAC bypass
+    "T1548": {
+        "nis2":     ["NIS2-Art21-2i"],
+        "dora":     ["DORA-Art9", "DORA-Art10"],
+        "iso27001": ["ISO-A8.2", "ISO-A8.5"],
+        "soc2":     ["CC6.3", "CC6.8"],
+        "nist_csf": ["PR.AA-05", "DE.CM-03"],
+        "pci_dss":  ["Req 7.3"],
+    },
+    # Exploit for privilege escalation
+    "T1068": {
+        "nis2":     ["NIS2-Art21-2e", "NIS2-Art21-2i"],
+        "dora":     ["DORA-Art6", "DORA-Art9"],
+        "iso27001": ["ISO-A8.8", "ISO-A8.2"],
+        "soc2":     ["CC7.1"],
+        "nist_csf": ["PR.PS-01", "DE.CM-04"],
+        "pci_dss":  ["Req 6.3", "Req 11.3"],
+    },
+    # Command and scripting interpreter / malware execution
+    "T1059": {
+        "nis2":     ["NIS2-Art21-2a"],
+        "dora":     ["DORA-Art9", "DORA-Art10"],
+        "iso27001": ["ISO-A8.7"],
+        "soc2":     ["CC6.8", "CC7.2"],
+        "nist_csf": ["DE.CM-01", "PR.PS-01"],
+        "pci_dss":  ["Req 5.2", "Req 6.2"],
+    },
+    # User execution (phishing payload)
+    "T1204": {
+        "nis2":     ["NIS2-Art21-2g"],
+        "dora":     ["DORA-Art9"],
+        "iso27001": ["ISO-A8.7"],
+        "soc2":     ["CC9.2"],
+        "nist_csf": ["PR.AT-01", "DE.AE-02"],
+        "pci_dss":  ["Req 12.6"],
+    },
+    # Lateral movement via remote services
+    "T1021": {
+        "nis2":     ["NIS2-Art21-2i", "NIS2-Art21-2j"],
+        "dora":     ["DORA-Art9", "DORA-Art10"],
+        "iso27001": ["ISO-A8.20", "ISO-A5.15"],
+        "soc2":     ["CC6.6"],
+        "nist_csf": ["PR.AA-05", "DE.CM-01"],
+        "pci_dss":  ["Req 1.3", "Req 8.4"],
+    },
+    # Exfiltration over C2 channel
+    "T1041": {
+        "nis2":     ["NIS2-Art21-2b", "NIS2-Art23"],
+        "dora":     ["DORA-Art11", "DORA-Art13"],
+        "iso27001": ["ISO-A8.20"],
+        "avg":      ["AVG-Art33"],
+        "soc2":     ["CC6.7"],
+        "nist_csf": ["DE.AE-02", "DE.CM-01"],
+        "pci_dss":  ["Req 12.3"],
+    },
+    # Exfiltration over alternative protocol (DNS tunnelling, etc.)
+    "T1048": {
+        "nis2":     ["NIS2-Art21-2h", "NIS2-Art23"],
+        "dora":     ["DORA-Art13"],
+        "iso27001": ["ISO-A8.20", "ISO-A8.22"],
+        "avg":      ["AVG-Art33"],
+        "soc2":     ["CC6.7"],
+        "nist_csf": ["DE.AE-02", "PR.DS-01"],
+        "pci_dss":  ["Req 4.2", "Req 12.3"],
+    },
+    # Defense evasion — impair defenses / disable AV
+    "T1562": {
+        "nis2":     ["NIS2-Art21-2a"],
+        "dora":     ["DORA-Art10"],
+        "iso27001": ["ISO-A8.15", "ISO-A8.16"],
+        "soc2":     ["CC7.2"],
+        "nist_csf": ["DE.CM-09", "PR.PS-06"],
+        "pci_dss":  ["Req 5.3", "Req 10.3"],
+    },
+    # Persistence via scheduled task / cron
+    "T1053": {
+        "nis2":     ["NIS2-Art21-2a"],
+        "dora":     ["DORA-Art9"],
+        "iso27001": ["ISO-A8.16"],
+        "soc2":     ["CC6.3"],
+        "nist_csf": ["DE.CM-01", "PR.PS-01"],
+        "pci_dss":  ["Req 6.3"],
+    },
+    # Discovery — network service scanning
+    "T1046": {
+        "nis2":     ["NIS2-Art21-2a"],
+        "dora":     ["DORA-Art10"],
+        "iso27001": ["ISO-A8.20"],
+        "soc2":     ["CC7.1"],
+        "nist_csf": ["ID.AM-01", "DE.CM-01"],
+        "pci_dss":  ["Req 11.4"],
+    },
+    # Exploit public-facing application
+    "T1190": {
+        "nis2":     ["NIS2-Art21-2e"],
+        "dora":     ["DORA-Art6", "DORA-Art9"],
+        "iso27001": ["ISO-A8.8"],
+        "soc2":     ["CC7.1", "CC6.6"],
+        "nist_csf": ["PR.PS-01", "DE.CM-04"],
+        "pci_dss":  ["Req 6.3", "Req 11.3"],
+    },
+    # Ransomware / data encryption for impact
+    "T1486": {
+        "nis2":     ["NIS2-Art21-2b", "NIS2-Art21-2c", "NIS2-Art23"],
+        "dora":     ["DORA-Art11", "DORA-Art13"],
+        "iso27001": ["ISO-A8.24"],
+        "soc2":     ["CC9.1", "CC7.5"],
+        "nist_csf": ["RS.MA-01", "RC.RP-01"],
+        "pci_dss":  ["Req 12.10"],
+    },
 }
 
 # ── Wazuh Rule ID → Framework Controls ──────────────────────────────────────
 WAZUH_RULE_TO_CONTROLS: Dict[str, Dict[str, List[str]]] = {
-    # SSH failures
-    "5710":  {"nis2": ["NIS2-Art21-2i", "NIS2-Art21-2j"], "dora": ["DORA-Art9", "DORA-Art10"], "iso27001": ["ISO-A8.5"]},
-    "5763":  {"nis2": ["NIS2-Art21-2i"],                   "dora": ["DORA-Art9"],               "iso27001": ["ISO-A8.5"]},
-    # File integrity
-    "550":   {"nis2": ["NIS2-Art21-2e"],                   "dora": ["DORA-Art9"],               "iso27001": ["ISO-A8.15"]},
-    "554":   {"nis2": ["NIS2-Art21-2e"],                   "dora": ["DORA-Art9"],               "iso27001": ["ISO-A8.15"]},
-    # Vulnerability detection
-    "23504": {"nis2": ["NIS2-Art21-2e"],                   "dora": ["DORA-Art6"],               "iso27001": ["ISO-A8.8"]},
-    "23505": {"nis2": ["NIS2-Art21-2e"],                   "dora": ["DORA-Art6"],               "iso27001": ["ISO-A8.8"]},
-    # Windows auth
-    "18107": {"nis2": ["NIS2-Art21-2i"],                   "dora": ["DORA-Art9"],               "iso27001": ["ISO-A5.15"]},
-    "18106": {"nis2": ["NIS2-Art21-2i"],                   "dora": ["DORA-Art9"],               "iso27001": ["ISO-A5.15"]},
-    # Privilege escalation
-    "5402":  {"nis2": ["NIS2-Art21-2i"],                   "dora": ["DORA-Art9"],               "iso27001": ["ISO-A8.2"]},
-    # Rootkit / malware
-    "510":   {"nis2": ["NIS2-Art21-2a", "NIS2-Art21-2b"],  "dora": ["DORA-Art10", "DORA-Art11"], "iso27001": ["ISO-A8.7"]},
+    # SSH authentication failures
+    "5710": {
+        "nis2":     ["NIS2-Art21-2i", "NIS2-Art21-2j"],
+        "dora":     ["DORA-Art9", "DORA-Art10"],
+        "iso27001": ["ISO-A8.5"],
+        "soc2":     ["CC6.1", "CC6.7"],
+        "nist_csf": ["PR.AA-01", "DE.CM-01"],
+        "pci_dss":  ["Req 8.3", "Req 10.2"],
+    },
+    "5763": {
+        "nis2":     ["NIS2-Art21-2i"],
+        "dora":     ["DORA-Art9"],
+        "iso27001": ["ISO-A8.5"],
+        "soc2":     ["CC6.1"],
+        "nist_csf": ["PR.AA-01", "DE.CM-01"],
+        "pci_dss":  ["Req 8.3"],
+    },
+    # File integrity monitoring alerts
+    "550": {
+        "nis2":     ["NIS2-Art21-2e"],
+        "dora":     ["DORA-Art9"],
+        "iso27001": ["ISO-A8.15"],
+        "soc2":     ["CC7.2"],
+        "nist_csf": ["DE.CM-03", "PR.DS-01"],
+        "pci_dss":  ["Req 10.3", "Req 11.5"],
+    },
+    "554": {
+        "nis2":     ["NIS2-Art21-2e"],
+        "dora":     ["DORA-Art9"],
+        "iso27001": ["ISO-A8.15"],
+        "soc2":     ["CC7.2"],
+        "nist_csf": ["DE.CM-03", "PR.DS-01"],
+        "pci_dss":  ["Req 10.3", "Req 11.5"],
+    },
+    # Vulnerability detection (Wazuh SCA / Vuls module)
+    "23504": {
+        "nis2":     ["NIS2-Art21-2e"],
+        "dora":     ["DORA-Art6"],
+        "iso27001": ["ISO-A8.8"],
+        "soc2":     ["CC7.1"],
+        "nist_csf": ["ID.RA-01", "DE.CM-04"],
+        "pci_dss":  ["Req 6.3", "Req 11.3"],
+    },
+    "23505": {
+        "nis2":     ["NIS2-Art21-2e"],
+        "dora":     ["DORA-Art6"],
+        "iso27001": ["ISO-A8.8"],
+        "soc2":     ["CC7.1"],
+        "nist_csf": ["ID.RA-01", "DE.CM-04"],
+        "pci_dss":  ["Req 6.3", "Req 11.3"],
+    },
+    # Windows authentication events
+    "18107": {
+        "nis2":     ["NIS2-Art21-2i"],
+        "dora":     ["DORA-Art9"],
+        "iso27001": ["ISO-A5.15"],
+        "soc2":     ["CC6.2"],
+        "nist_csf": ["PR.AA-01", "DE.CM-01"],
+        "pci_dss":  ["Req 8.2", "Req 10.2"],
+    },
+    "18106": {
+        "nis2":     ["NIS2-Art21-2i"],
+        "dora":     ["DORA-Art9"],
+        "iso27001": ["ISO-A5.15"],
+        "soc2":     ["CC6.2"],
+        "nist_csf": ["PR.AA-01", "DE.CM-01"],
+        "pci_dss":  ["Req 8.2", "Req 10.2"],
+    },
+    # Privilege escalation (sudo / su)
+    "5402": {
+        "nis2":     ["NIS2-Art21-2i"],
+        "dora":     ["DORA-Art9"],
+        "iso27001": ["ISO-A8.2"],
+        "soc2":     ["CC6.3"],
+        "nist_csf": ["PR.AA-05", "DE.CM-03"],
+        "pci_dss":  ["Req 7.3"],
+    },
+    # Rootkit / malware detection
+    "510": {
+        "nis2":     ["NIS2-Art21-2a", "NIS2-Art21-2b"],
+        "dora":     ["DORA-Art10", "DORA-Art11"],
+        "iso27001": ["ISO-A8.7"],
+        "soc2":     ["CC6.8", "CC7.2"],
+        "nist_csf": ["DE.CM-04", "DE.AE-02"],
+        "pci_dss":  ["Req 5.2", "Req 11.4"],
+    },
 }
 
 # ── Framework tag from Wazuh rule groups ─────────────────────────────────────

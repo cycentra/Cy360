@@ -1,3 +1,18 @@
+## v1.2.5 -- 2026-05-14
+
+### New Features
+
+  - **ISO 27001 Statement of Applicability (SoA)** — two-tier assessment model: 45 grouped questionnaire questions for scoring + a per-control SoA view listing all 93 Annex A controls individually, satisfying ISO 27001:2022 Cl.6.1.3(d). Analyst can include/exclude each control with a typed justification. Status (compliant / partial / gap / breach / excluded / not assessed) auto-derived from questionnaire responses and open breach findings. Controls grouped by Annex A theme (Organisational / People / Physical / Technological) with theme-level gap summaries and coverage percentage. Accessible as a "Statement of Applicability" sub-tab on the ISO 27001 assessment page.
+  - **Policy Documents guidance panel** — collapsible guide on the Policy Documents page listing 12 recommended policy categories (Information Security Policy, IRP, Access Control, Risk Management, BCP/DR, Asset Management, Vendor Security, Data Classification, AUP, Change Management, Vulnerability Management, Privacy/GDPR), recommended naming convention (`<Policy_Name>_v<Version>_<Year>.pdf`) with examples, supported file types, annual review cycle note, and a callout clarifying the difference between org policy docs and framework reference documents.
+  - **Extended compliance framework mapping** — enrichment engine (`enrichment.py`) now tags alerts against SOC 2 (CC Trust Services Criteria), NIST CSF 2.0 (GV/ID/PR/DE/RS/RC function.subcategory format), and PCI DSS v4.0 (Req 1–12) in addition to the existing NIS2 / DORA / ISO 27001 / AVG coverage. All 15 MITRE ATT&CK technique entries and all 10 Wazuh rule ID entries extended. Backfill endpoint added: `POST /api/comp/findings/re-enrich-alerts` resets and re-tags all historical alerts.
+
+### Bug Fixes
+
+  - **Risk heat map / Auto Populate 500 error** — `auto_populate_from_findings` was passing a raw Python list into a JSONB column without `json.dumps()`, causing a psycopg2 `ProgrammingError` on every call. Fixed with proper serialisation. Query also expanded to include manual findings (was previously restricted to `auto_generated = TRUE` only), so the button is useful immediately after questionnaire gap findings are generated.
+  - **cy_comp_soa_entries table** — new DB table added (`cy_comp/models.py`) to persist analyst SoA include/exclude decisions and justifications. Auto-created at startup via `ensure_tables()`.
+
+---
+
 ## v1.2.4 -- 2026-05-14
 
 ### Improvements

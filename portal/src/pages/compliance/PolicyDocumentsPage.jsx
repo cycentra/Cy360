@@ -20,6 +20,21 @@ const C = {
 
 const ORG_COLLECTION = "org-policies";
 
+const RECOMMENDED_DOCS = [
+  { name: "Information Security Policy",          tag: "security",    desc: "Overarching IS policy covering objectives, scope, and responsibilities (ISO 27001 A.5.1, NIS2 Art.21)." },
+  { name: "Access Control Policy",                tag: "security",    desc: "Rules for granting, reviewing, and revoking logical and physical access (ISO 27001 A.5.15–A.5.18, PCI Req 7–8)." },
+  { name: "Incident Response Plan",               tag: "security",    desc: "Step-by-step IR playbook including roles, escalation paths, and notification SLAs (NIS2 Art.23, DORA Art.17)." },
+  { name: "Risk Management Policy",               tag: "security",    desc: "Methodology for identifying, assessing, treating, and monitoring information security risks (ISO 27001 Cl.6.1)." },
+  { name: "Business Continuity / DR Plan",        tag: "operations",  desc: "RTO/RPO targets, failover procedures, and test schedules (ISO 27001 A.5.30, DORA Art.11–12)." },
+  { name: "Asset Management Policy",              tag: "operations",  desc: "Inventory, classification, and handling requirements for hardware, software, and data assets (ISO 27001 A.5.9–A.5.13)." },
+  { name: "Vendor / Third-Party Security Policy", tag: "security",    desc: "Due-diligence, contractual, and monitoring requirements for suppliers (ISO 27001 A.5.19–A.5.22, DORA Art.28–30)." },
+  { name: "Data Classification & Handling Policy",tag: "privacy",     desc: "Data classification tiers (Public / Internal / Confidential / Restricted) and handling rules per tier." },
+  { name: "Acceptable Use Policy",                tag: "hr",          desc: "Permitted and prohibited use of corporate systems, data, and internet by employees and contractors." },
+  { name: "Change Management Policy",             tag: "operations",  desc: "Request, approval, testing, and roll-back process for infrastructure and application changes (ISO 27001 A.8.32)." },
+  { name: "Vulnerability Management Policy",      tag: "security",    desc: "Scan cadence, patch SLAs by severity, and exception process (NIS2 Art.21(2)(e), PCI Req 6, 11)." },
+  { name: "Privacy / GDPR Compliance Policy",     tag: "privacy",     desc: "Data subject rights, lawful basis, retention periods, DPA obligations, and breach notification (AVG/GDPR Art.24–32)." },
+];
+
 const TAG_COLORS = {
   security: "#4d9eff", privacy: "#b06eff", hr: "#ff8c00",
   operations: "#00e5a0", legal: "#ff3b3b", finance: "#ffd700",
@@ -48,6 +63,138 @@ function TagBadge({ tag }) {
     }}>
       {tag}
     </span>
+  );
+}
+
+function GuidancePanel() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ background: "rgba(77,158,255,0.05)", border: `1px solid rgba(77,158,255,0.18)`,
+      borderRadius: 8, marginBottom: 24, overflow: "hidden" }}>
+
+      {/* Header — always visible */}
+      <button onClick={() => setOpen(o => !o)}
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: 10,
+          padding: "14px 20px", background: "none", border: "none",
+          cursor: "pointer", textAlign: "left" }}>
+        <span style={{ fontSize: 14 }}>📋</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ color: C.blue, fontSize: 11, fontWeight: 700,
+            fontFamily: "monospace" }}>
+            What to upload — Policy & Governance Document Guide
+          </div>
+          <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace", marginTop: 2 }}>
+            Recommended document types, naming conventions, and upload guidance
+          </div>
+        </div>
+        <span style={{ color: C.muted, fontSize: 11 }}>{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div style={{ padding: "0 20px 20px" }}>
+
+          {/* Key notes strip */}
+          <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
+            {[
+              { icon: "📄", title: "Supported formats", body: "PDF · DOCX · TXT · Markdown (.md)" },
+              { icon: "🔄", title: "Review cycle", body: "Review and re-upload annually, or after any major control change, audit, or incident." },
+              { icon: "✅", title: "Accuracy requirement", body: "Documents must reflect your organisation's actual operational processes and controls — not aspirational or template text." },
+            ].map(({ icon, title, body }) => (
+              <div key={title} style={{ flex: "1 1 200px", background: "rgba(255,255,255,0.03)",
+                border: `1px solid rgba(255,255,255,0.06)`, borderRadius: 6,
+                padding: "12px 14px" }}>
+                <div style={{ fontSize: 16, marginBottom: 6 }}>{icon}</div>
+                <div style={{ color: C.text, fontSize: 10, fontWeight: 700,
+                  fontFamily: "monospace", marginBottom: 4 }}>{title}</div>
+                <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+                  lineHeight: 1.6 }}>{body}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Recommended documents table */}
+          <div style={{ color: C.muted, fontSize: 8, fontFamily: "monospace",
+            textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 10 }}>
+            Recommended Policy Documents
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 20 }}>
+            {RECOMMENDED_DOCS.map(d => {
+              const color = TAG_COLORS[d.tag] || C.muted;
+              return (
+                <div key={d.name} style={{ display: "flex", gap: 10, alignItems: "flex-start",
+                  padding: "9px 12px", background: "rgba(255,255,255,0.02)",
+                  borderRadius: 5, border: `1px solid rgba(255,255,255,0.04)` }}>
+                  <span style={{ background: `${color}15`, color, border: `1px solid ${color}30`,
+                    fontSize: 8, fontFamily: "monospace", fontWeight: 700,
+                    padding: "2px 7px", borderRadius: 10, flexShrink: 0,
+                    textTransform: "uppercase", marginTop: 1 }}>
+                    {d.tag}
+                  </span>
+                  <div>
+                    <div style={{ color: C.text, fontSize: 11, fontWeight: 600,
+                      marginBottom: 2 }}>{d.name}</div>
+                    <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+                      lineHeight: 1.5 }}>{d.desc}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Naming conventions */}
+          <div style={{ color: C.muted, fontSize: 8, fontFamily: "monospace",
+            textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 10 }}>
+            Recommended Naming Convention
+          </div>
+          <div style={{ background: "rgba(255,255,255,0.03)", border: `1px solid rgba(255,255,255,0.07)`,
+            borderRadius: 6, padding: "14px 16px", marginBottom: 16 }}>
+            <div style={{ color: C.accent, fontSize: 11, fontFamily: "monospace",
+              fontWeight: 700, marginBottom: 10 }}>
+              {"<Policy_Name>_v<Version>_<Year>.pdf"}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {[
+                "Information_Security_Policy_v1.2_2026.pdf",
+                "Incident_Response_Plan_v3.0_2026.pdf",
+                "Access_Control_Policy_v2.1_2026.pdf",
+                "Risk_Management_Policy_v1.0_2026.pdf",
+                "Business_Continuity_DR_Plan_v2.3_2026.pdf",
+              ].map(ex => (
+                <div key={ex} style={{ color: C.muted, fontSize: 9, fontFamily: "monospace" }}>
+                  <span style={{ color: "rgba(255,255,255,0.25)", marginRight: 8 }}>→</span>
+                  {ex}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Framework docs note */}
+          <div style={{ background: "rgba(176,110,255,0.06)",
+            border: "1px solid rgba(176,110,255,0.2)", borderRadius: 6,
+            padding: "12px 16px", display: "flex", gap: 10, alignItems: "flex-start" }}>
+            <span style={{ fontSize: 14, flexShrink: 0 }}>ℹ️</span>
+            <div>
+              <div style={{ color: C.purple, fontSize: 10, fontWeight: 700,
+                fontFamily: "monospace", marginBottom: 4 }}>
+                Framework Reference Documents
+              </div>
+              <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+                lineHeight: 1.7 }}>
+                This store is for your <strong style={{ color: C.text }}>organisation's own operational documents</strong> —
+                policies, plans, and procedures your team actually follows.<br />
+                Framework standard documents (e.g. <em>ISO/IEC 27001:2022</em>, <em>NIST SP 800-53</em>,
+                PCI DSS v4.0 specification) are uploaded separately under{" "}
+                <strong style={{ color: C.purple }}>System Settings → Security Compliance → Framework Documents</strong>
+                . Uploading the framework standard enables CyMind to cross-reference your policy documents against
+                the exact control language in the standard. You should upload a reference document for each framework
+                you intend to assess (NIS2, DORA, SOC 2, PCI DSS, NIST CSF, ISO 27001).
+              </div>
+            </div>
+          </div>
+
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -196,6 +343,9 @@ export function PolicyDocumentsPage() {
           </span>
         </div>
       </div>
+
+      {/* Guidance panel */}
+      <GuidancePanel />
 
       {/* Upload zone */}
       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 20, marginBottom: 24 }}>

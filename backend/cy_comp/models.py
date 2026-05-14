@@ -316,6 +316,22 @@ _DDL_STATEMENTS = [
     );
     CREATE INDEX IF NOT EXISTS idx_cy_comp_qresp_framework ON cy_comp_questionnaire_responses (framework);
     """,
+
+    # 15. Statement of Applicability — ISO 27001 Cl.6.1.3(d)
+    #     One row per (framework, control_id); populated on first access, updated by analyst
+    """
+    CREATE TABLE IF NOT EXISTS cy_comp_soa_entries (
+        id              TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+        framework       TEXT        NOT NULL,
+        control_id      TEXT        NOT NULL,
+        included        BOOLEAN     NOT NULL DEFAULT TRUE,
+        justification   TEXT,
+        updated_by      TEXT,
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (framework, control_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_cy_comp_soa_framework ON cy_comp_soa_entries (framework);
+    """,
 ]
 
 # Column migrations for future schema evolution (idempotent ALTER TABLE)
@@ -384,6 +400,6 @@ def ensure_tables() -> None:
                 except Exception as m_exc:
                     log.debug("cy_comp migration skipped (%s): %s", mig[:60], m_exc)
         _tables_ready = True
-        log.info("cy_comp: all 12 tables ensured (CYCENTRA_DB_URL=%s)", CYCENTRA_DB_URL)
+        log.info("cy_comp: all 15 tables ensured (CYCENTRA_DB_URL=%s)", CYCENTRA_DB_URL)
     except Exception as exc:
         log.error("cy_comp: table init failed — GRC module unavailable: %s", exc)
