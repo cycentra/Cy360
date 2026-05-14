@@ -1,3 +1,11 @@
+## v1.2.0 -- 2026-05-14
+
+### New Features
+
+  - cy-comp): zero-duplicate GRC — enrich alerts/incidents in-place, fix RAG URLs
+
+---
+
 ## v1.1.3 -- 2026-05-14
 
 ### Bug Fixes
