@@ -131,7 +131,8 @@ def list_compliance_alerts():
                 f"""
                 SELECT id, external_id, source_type, severity, framework,
                        control_id, title, description, agent_name, agent_ip,
-                       acknowledged, finding_id, timestamp, created_at
+                       acknowledged, finding_id, timestamp, created_at,
+                       controls_json, rule_level, rule_id, mitre_technique
                 FROM cy_comp_alerts {clause}
                 ORDER BY created_at DESC
                 LIMIT %s OFFSET %s;
@@ -146,6 +147,10 @@ def list_compliance_alerts():
                     "agent_ip": r[9], "acknowledged": r[10], "finding_id": r[11],
                     "timestamp": r[12].isoformat() if r[12] else None,
                     "created_at": r[13].isoformat() if r[13] else None,
+                    "controls": r[14] or {},
+                    "rule_level": r[15],
+                    "rule_id": r[16],
+                    "mitre_technique": r[17],
                 })
     except Exception as exc:
         log.error("list_compliance_alerts: %s", exc)
@@ -832,13 +837,26 @@ def reindex_collection(collection_id):
 @comp_bp.route("/settings", methods=["GET"])
 @require_admin
 def get_comp_settings():
-    from cy_comp.services.policy_rag import _load_cymind_settings
-    settings = _load_cymind_settings()
-    # Return only comp-relevant settings; mask key
+    import json as _json
+    from core.config import AI_SETTINGS_FILE
+    settings = {}
+    if AI_SETTINGS_FILE.exists():
+        try:
+            settings = _json.loads(AI_SETTINGS_FILE.read_text())
+        except Exception:
+            pass
+
+    # Global CyMind integration is enabled when an apiKey is present in ai_settings.json
+    global_cymind_enabled  = bool(settings.get("apiKey") or settings.get("cymind_api_key"))
+    global_cymind_url      = settings.get("serverUrl") or settings.get("cymind_url") or ""
+
     return jsonify({
-        "cymind_url":         settings.get("cymind_url") or settings.get("CYMIND_API_URL", ""),
-        "cymind_admin_key":   "***" if settings.get("cymind_admin_key") else "",
-        "comp_reports_dir":   str(settings.get("comp_reports_dir", "/var/log/cycentra/cy-comp/reports")),
+        # If global CyMind is enabled, URL is inherited and we surface it read-only
+        "cymind_url":              global_cymind_url,
+        "cymind_admin_key":        "***" if settings.get("cymind_admin_key") else "",
+        "comp_reports_dir":        str(settings.get("comp_reports_dir", "/var/log/cycentra/cy-comp/reports")),
+        "global_cymind_enabled":   global_cymind_enabled,
+        "global_cymind_url":       global_cymind_url,
     })
 
 

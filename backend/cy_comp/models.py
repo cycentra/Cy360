@@ -283,7 +283,10 @@ _DDL_STATEMENTS = [
 
 # Column migrations for future schema evolution (idempotent ALTER TABLE)
 _MIGRATE_COLUMNS: list[str] = [
-    # placeholder — add future ALTER TABLE IF NOT EXISTS statements here
+    "ALTER TABLE cy_comp_alerts ADD COLUMN IF NOT EXISTS controls_json JSONB DEFAULT '{}';",
+    "ALTER TABLE cy_comp_alerts ADD COLUMN IF NOT EXISTS rule_level INTEGER;",
+    "ALTER TABLE cy_comp_alerts ADD COLUMN IF NOT EXISTS rule_id TEXT;",
+    "ALTER TABLE cy_comp_alerts ADD COLUMN IF NOT EXISTS mitre_technique TEXT;",
 ]
 
 

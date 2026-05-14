@@ -15,8 +15,33 @@ const C = {
 };
 
 const SEV_COLORS = { critical: C.red, high: C.orange, medium: C.blue, low: C.muted, info: C.muted };
-const FRAMEWORKS = ["", "nis2", "dora", "iso27001", "soc2", "nist_csf", "pci_dss"];
+const FRAMEWORKS = ["", "nis2", "dora", "iso27001", "soc2", "nist_csf", "pci_dss", "avg"];
 const SEVERITIES = ["", "critical", "high", "medium", "low"];
+
+const FW_COLORS = {
+  nis2: "#6378ff", iso27001: "#00e5c0", dora: "#ffd166",
+  soc2: "#ff6b6b", avg: "#a78bfa", nist: "#38bdf8", nist_csf: "#38bdf8",
+  pci_dss: "#f97316", hipaa: "#84cc16",
+};
+
+function ControlBadges({ controls }) {
+  if (!controls || !Object.keys(controls).length) return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginTop: 5 }}>
+      {Object.entries(controls).map(([fw, ids]) =>
+        Array.isArray(ids) && ids.length > 0 ? (
+          <span key={fw} title={ids.join(", ")}
+            style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, fontFamily: "monospace",
+              fontWeight: 700, background: `${FW_COLORS[fw] || "#6378ff"}18`,
+              color: FW_COLORS[fw] || "#6378ff",
+              border: `1px solid ${FW_COLORS[fw] || "#6378ff"}40` }}>
+            {fw.toUpperCase()}: {ids.slice(0,2).join(", ")}{ids.length > 2 ? ` +${ids.length-2}` : ""}
+          </span>
+        ) : null
+      )}
+    </div>
+  );
+}
 
 function SevBadge({ sev }) {
   const c = SEV_COLORS[sev] || C.muted;
@@ -118,7 +143,7 @@ export function ComplianceLiveAlertsPage() {
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-              {["Severity", "Framework", "Title", "Agent", "Source", "Time"].map(h => (
+              {["Severity", "Title & Controls", "Agent", "MITRE", "Source", "Time"].map(h => (
                 <th key={h} style={{ padding: "10px 14px", textAlign: "left",
                   color: C.muted, fontSize: 9, fontFamily: "monospace",
                   letterSpacing: "1px", textTransform: "uppercase" }}>{h}</th>
@@ -131,30 +156,40 @@ export function ComplianceLiveAlertsPage() {
                 color: C.muted, fontFamily: "monospace", fontSize: 12 }}>Loading...</td></tr>
             ) : alerts.length === 0 ? (
               <tr><td colSpan={6} style={{ padding: 32, textAlign: "center",
-                color: C.muted, fontFamily: "monospace", fontSize: 12 }}>No alerts found</td></tr>
+                color: C.muted, fontFamily: "monospace", fontSize: 12 }}>
+                No compliance alerts found. Click "Sync SIEM Now" to ingest from the Correlation Engine.
+              </td></tr>
             ) : alerts.map((a, i) => (
               <tr key={a.id} style={{
                 borderBottom: `1px solid rgba(255,255,255,0.03)`,
                 background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
+                verticalAlign: "top",
               }}>
-                <td style={{ padding: "10px 14px" }}><SevBadge sev={a.severity} /></td>
-                <td style={{ padding: "10px 14px", color: C.muted, fontSize: 10, fontFamily: "monospace" }}>
-                  {a.framework ? a.framework.toUpperCase() : "—"}
+                <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
+                  <SevBadge sev={a.severity} />
+                  {a.rule_level && (
+                    <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9,
+                      fontFamily: "monospace", marginTop: 3 }}>Lvl {a.rule_level}</div>
+                  )}
                 </td>
-                <td style={{ padding: "10px 14px", color: C.text, fontSize: 11, maxWidth: 340 }}>
+                <td style={{ padding: "10px 14px", color: C.text, fontSize: 11, maxWidth: 380 }}>
                   <div style={{ fontWeight: 600, marginBottom: 2 }}>{a.title}</div>
                   {a.description && (
                     <div style={{ color: C.muted, fontSize: 10, fontFamily: "monospace",
                       overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                      maxWidth: 320 }}>{a.description}</div>
+                      maxWidth: 360, marginBottom: 2 }}>{a.description}</div>
                   )}
+                  <ControlBadges controls={a.controls} />
                 </td>
                 <td style={{ padding: "10px 14px", color: C.muted, fontSize: 10, fontFamily: "monospace" }}>
                   {a.agent_name || a.agent_ip || "—"}
                 </td>
+                <td style={{ padding: "10px 14px", color: C.purple, fontSize: 10, fontFamily: "monospace" }}>
+                  {a.mitre_technique || "—"}
+                </td>
                 <td style={{ padding: "10px 14px" }}>
                   <span style={{ color: C.blue, fontSize: 9, fontFamily: "monospace" }}>
-                    {a.source_type}
+                    {(a.source_type || "").replace("_", " ")}
                   </span>
                 </td>
                 <td style={{ padding: "10px 14px", color: C.muted, fontSize: 10, fontFamily: "monospace" }}>

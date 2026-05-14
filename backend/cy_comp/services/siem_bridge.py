@@ -24,6 +24,7 @@ from typing import Optional
 import requests
 
 from cy_comp.models import db
+from cy_comp.services.enrichment import enrich_alert, COMPLIANCE_MIN_LEVEL
 
 log = logging.getLogger("cycentra.cy_comp.siem_bridge")
 
@@ -96,19 +97,25 @@ class CorrelationEngineAdapter(BaseSIEMAdapter):
 
             for item in raw_list:
                 category = (item.get("category") or item.get("type") or "").lower()
-                if category not in _COMPLIANCE_ENGINE_CATEGORIES:
+                rule_level = int(item.get("rule_level") or item.get("level") or 0)
+                # Accept by category OR by rule_level meeting the compliance threshold
+                if category not in _COMPLIANCE_ENGINE_CATEGORIES and rule_level < COMPLIANCE_MIN_LEVEL:
                     continue
                 alerts.append({
-                    "external_id":  str(item.get("id") or item.get("alert_id", "")),
-                    "source_type":  "correlation_engine",
-                    "severity":     _map_severity(item.get("severity") or item.get("level", 5)),
-                    "title":        item.get("title") or item.get("description", "Compliance alert"),
-                    "description":  item.get("description") or item.get("detail", ""),
-                    "agent_name":   item.get("agent") or item.get("host", ""),
-                    "agent_ip":     item.get("agent_ip") or item.get("src_ip", ""),
-                    "raw_data":     item,
-                    "timestamp":    item.get("timestamp") or item.get("created_at"),
-                    "framework":    item.get("framework"),
+                    "external_id":     str(item.get("id") or item.get("alert_id", "")),
+                    "source_type":     "correlation_engine",
+                    "severity":        _map_severity(item.get("severity") or item.get("level", 5)),
+                    "title":           item.get("title") or item.get("description", "Compliance alert"),
+                    "description":     item.get("description") or item.get("detail", ""),
+                    "agent_name":      item.get("agent") or item.get("host", ""),
+                    "agent_ip":        item.get("agent_ip") or item.get("src_ip", ""),
+                    "raw_data":        item,
+                    "timestamp":       item.get("timestamp") or item.get("created_at"),
+                    "framework":       item.get("framework"),
+                    "rule_level":      rule_level,
+                    "rule_id":         str(item.get("rule_id") or ""),
+                    "mitre_technique": item.get("mitre_technique") or item.get("mitre") or "",
+                    "rule_groups":     item.get("rule_groups") or [],
                 })
         except Exception as exc:
             log.error("CorrelationEngineAdapter.fetch_compliance_alerts: %s", exc)
@@ -165,16 +172,20 @@ class WazuhDirectAdapter(BaseSIEMAdapter):
                 if not groups.intersection(_COMPLIANCE_WAZUH_GROUPS):
                     continue
                 alerts.append({
-                    "external_id":  item.get("id", ""),
-                    "source_type":  "wazuh_direct",
-                    "severity":     _map_severity(rule.get("level", 5)),
-                    "title":        rule.get("description", "Wazuh compliance alert"),
-                    "description":  item.get("full_log", rule.get("description", "")),
-                    "agent_name":   item.get("agent", {}).get("name", ""),
-                    "agent_ip":     item.get("agent", {}).get("ip", ""),
-                    "raw_data":     item,
-                    "timestamp":    item.get("timestamp"),
-                    "framework":    next(iter(groups.intersection({"pci_dss", "gdpr", "nist_800_53", "hipaa", "tsc"})), None),
+                    "external_id":     item.get("id", ""),
+                    "source_type":     "wazuh_direct",
+                    "severity":        _map_severity(rule.get("level", 5)),
+                    "title":           rule.get("description", "Wazuh compliance alert"),
+                    "description":     item.get("full_log", rule.get("description", "")),
+                    "agent_name":      item.get("agent", {}).get("name", ""),
+                    "agent_ip":        item.get("agent", {}).get("ip", ""),
+                    "raw_data":        item,
+                    "timestamp":       item.get("timestamp"),
+                    "framework":       next(iter(groups.intersection({"pci_dss", "gdpr", "nist_800_53", "hipaa", "tsc"})), None),
+                    "rule_level":      int(rule.get("level", 0)),
+                    "rule_id":         str(rule.get("id", "")),
+                    "mitre_technique": rule.get("mitre", {}).get("technique", [None])[0] if rule.get("mitre") else "",
+                    "rule_groups":     list(groups),
                 })
         except Exception as exc:
             log.error("WazuhDirectAdapter.fetch_compliance_alerts: %s", exc)
@@ -213,36 +224,44 @@ class SIEMBridgeService:
             with db() as conn:
                 cur = conn.cursor()
                 for alert in all_alerts:
-                    h = _alert_hash(alert.get("external_id", ""), alert.get("source_type", ""))
-                    # Check dedup
+                    # Apply compliance enrichment (MITRE + rule ID → controls)
+                    enriched = enrich_alert(alert)
+                    if not enriched.get("is_compliance_relevant", True):
+                        continue
+
+                    h = _alert_hash(enriched.get("external_id", ""), enriched.get("source_type", ""))
                     cur.execute(
                         "SELECT id FROM cy_comp_alerts WHERE alert_hash = %s;", (h,)
                     )
                     if cur.fetchone():
                         dup_count += 1
                         continue
-                    # Insert
                     aid = str(uuid.uuid4())
                     cur.execute(
                         """
                         INSERT INTO cy_comp_alerts
                             (id, alert_hash, external_id, source_type, severity,
                              framework, title, description, agent_name, agent_ip,
-                             raw_data, timestamp, created_at)
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW());
+                             raw_data, controls_json, rule_level, rule_id,
+                             mitre_technique, timestamp, created_at)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW());
                         """,
                         (
                             aid, h,
-                            alert.get("external_id"),
-                            alert.get("source_type"),
-                            alert.get("severity"),
-                            alert.get("framework"),
-                            alert.get("title"),
-                            alert.get("description"),
-                            alert.get("agent_name"),
-                            alert.get("agent_ip"),
-                            json.dumps(alert.get("raw_data", {})),
-                            alert.get("timestamp"),
+                            enriched.get("external_id"),
+                            enriched.get("source_type"),
+                            enriched.get("severity"),
+                            enriched.get("framework"),
+                            enriched.get("title"),
+                            enriched.get("description"),
+                            enriched.get("agent_name"),
+                            enriched.get("agent_ip"),
+                            json.dumps(enriched.get("raw_data", {})),
+                            json.dumps(enriched.get("controls", {})),
+                            enriched.get("rule_level"),
+                            enriched.get("rule_id"),
+                            enriched.get("mitre_technique"),
+                            enriched.get("timestamp"),
                         )
                     )
                     new_count += 1

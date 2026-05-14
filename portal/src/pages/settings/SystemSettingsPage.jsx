@@ -2925,7 +2925,9 @@ function CompGRCSettingsTab() {
 
   const handleSave = () => {
     setSaving(true); setMsg(null);
-    const payload = { cymind_url: settings.cymind_url };
+    // Only save the admin key for RAG collection management;
+    // URL is inherited from global CyMind integration automatically
+    const payload = {};
     if (newKey) payload.cymind_admin_key = newKey;
     fetch(`${API_BASE}/api/comp/settings`, {
       method: "PUT", credentials: "include",
@@ -2938,26 +2940,53 @@ function CompGRCSettingsTab() {
   };
 
   const inp = { ...INPUT, width: "100%", boxSizing: "border-box" };
+  const globalEnabled = settings.global_cymind_enabled;
 
   return (
     <div>
       <div style={{ ...CARD, marginBottom: 16 }}>
-        <div style={{ ...LABEL, marginBottom: 16 }}>CyMind RAG Configuration</div>
-        <div style={{ marginBottom: 12 }}>
-          <div style={LABEL}>CyMind API URL</div>
-          {loading ? <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 11 }}>Loading...</div> : (
-            <input style={inp} value={settings.cymind_url || ""}
-              onChange={e => setSettings(s => ({ ...s, cymind_url: e.target.value }))}
-              placeholder="http://127.0.0.1:8200" />
-          )}
+        <div style={{ ...LABEL, marginBottom: 4 }}>CyMind RAG — Policy Document Pipeline</div>
+        <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace", marginBottom: 16 }}>
+          Policy documents uploaded in cy-comp are indexed in CyMind's vector database using the existing integration below.
         </div>
+
+        {/* Global CyMind integration status — read-only */}
+        <div style={{ background: globalEnabled ? "rgba(0,229,160,0.06)" : "rgba(255,59,59,0.06)",
+          border: `1px solid ${globalEnabled ? "rgba(0,229,160,0.25)" : "rgba(255,59,59,0.25)"}`,
+          borderRadius: 6, padding: "12px 14px", marginBottom: 16, display: "flex",
+          alignItems: "flex-start", gap: 10 }}>
+          <span style={{ fontSize: 14, marginTop: 1 }}>{globalEnabled ? "✓" : "✗"}</span>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700,
+              color: globalEnabled ? "#00e5a0" : "#ff3b3b", fontFamily: "monospace" }}>
+              {globalEnabled ? "Global CyMind integration is active" : "CyMind integration is not configured"}
+            </div>
+            {globalEnabled && settings.global_cymind_url && (
+              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", fontFamily: "monospace", marginTop: 3 }}>
+                {settings.global_cymind_url}
+              </div>
+            )}
+            {!globalEnabled && (
+              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginTop: 3 }}>
+                Enable CyMind in <strong style={{ color: "rgba(255,255,255,0.5)" }}>Integrations → CyMind</strong> tab.
+                RAG pipeline for policy documents requires an active CyMind connection.
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Admin key — only needed for collection management (create sub-collections by framework) */}
         <div style={{ marginBottom: 16 }}>
           <div style={LABEL}>CyMind Admin API Key</div>
+          <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", marginBottom: 6 }}>
+            Required for collection management (create per-framework policy sub-collections).
+            The standard CyMind key handles document upload — this is only needed for admin-level operations.
+          </div>
           <div style={{ display: "flex", gap: 8 }}>
             <input style={{ ...inp }} type={keyVisible ? "text" : "password"}
               value={newKey || (settings.cymind_admin_key === "***" ? "" : settings.cymind_admin_key || "")}
               onChange={e => setNewKey(e.target.value)}
-              placeholder={settings.cymind_admin_key === "***" ? "Key is set (enter new to replace)" : "Enter admin key"} />
+              placeholder={settings.cymind_admin_key === "***" ? "Key is set (enter new to replace)" : "Enter CyMind admin API key"} />
             <button onClick={() => setKeyVisible(v => !v)}
               style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
                 color: "rgba(255,255,255,0.45)", padding: "7px 12px", borderRadius: 4,
@@ -2965,13 +2994,12 @@ function CompGRCSettingsTab() {
               {keyVisible ? "Hide" : "Show"}
             </button>
           </div>
-          <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", marginTop: 4 }}>
-            This key is used for policy document RAG collection management (admin-level CyMind API key)
-          </div>
         </div>
-        {msg && <div style={{ color: msg.ok ? "#00e5a0" : "#ff3b3b", fontSize: 10, fontFamily: "monospace", marginBottom: 10 }}>{msg.text}</div>}
-        <button onClick={handleSave} disabled={saving} style={BTN()}>
-          {saving ? "Saving..." : "Save GRC Settings"}
+
+        {msg && <div style={{ color: msg.ok ? "#00e5a0" : "#ff3b3b", fontSize: 10,
+          fontFamily: "monospace", marginBottom: 10 }}>{msg.text}</div>}
+        <button onClick={handleSave} disabled={saving || !newKey.trim()} style={BTN()}>
+          {saving ? "Saving..." : "Save Admin Key"}
         </button>
       </div>
     </div>
