@@ -1,0 +1,966 @@
+"""
+blueprints/comp/routes.py
+==========================
+Flask Blueprint — CyCentra GRC Compliance API.
+
+All routes are gated with RBAC decorators consistent with the siem_proxy.py
+pattern (session-based auth, role checks via blueprints.rbac.manager).
+
+RBAC levels:
+  viewer+   — any authenticated user with viewer, analyst, or admin role
+  analyst+  — analyst or admin
+  admin+    — admin only
+
+Prefix: /api/comp/*
+"""
+
+import json
+import logging
+import uuid
+from functools import wraps
+from pathlib import Path
+
+from flask import Blueprint, jsonify, request, session, send_file
+
+log = logging.getLogger("cycentra.blueprints.comp")
+
+comp_bp = Blueprint("comp", __name__, url_prefix="/api/comp")
+
+
+# ── Auth decorators ───────────────────────────────────────────────────────────
+
+def _get_role() -> str | None:
+    email = session.get("user_email", "")
+    if not email:
+        return None
+    from blueprints.rbac.manager import get_user_role
+    return get_user_role(email)
+
+
+def _email() -> str:
+    return session.get("user_email", "")
+
+
+def require_viewer(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("user_email"):
+            return jsonify({"error": "Authentication required"}), 401
+        role = _get_role()
+        if role not in ("admin", "analyst", "viewer"):
+            return jsonify({"error": "Access denied"}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
+def require_analyst(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("user_email"):
+            return jsonify({"error": "Authentication required"}), 401
+        if _get_role() not in ("admin", "analyst"):
+            return jsonify({"error": "Analyst or admin role required"}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
+def require_admin(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("user_email"):
+            return jsonify({"error": "Authentication required"}), 401
+        if _get_role() != "admin":
+            return jsonify({"error": "Admin role required"}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+
+@comp_bp.route("/dashboard", methods=["GET"])
+@require_viewer
+def compliance_dashboard():
+    from cy_comp.services.compliance import get_dashboard_summary
+    return jsonify(get_dashboard_summary())
+
+
+@comp_bp.route("/framework-scores", methods=["GET"])
+@require_viewer
+def get_framework_scores():
+    from cy_comp.services.compliance import get_latest_scores, compute_framework_scores
+    refresh = request.args.get("refresh", "false").lower() == "true"
+    if refresh:
+        scores = compute_framework_scores()
+    else:
+        scores = get_latest_scores()
+    return jsonify({"scores": scores})
+
+
+# ── Compliance Alerts ─────────────────────────────────────────────────────────
+
+@comp_bp.route("/alerts", methods=["GET"])
+@require_viewer
+def list_compliance_alerts():
+    from cy_comp.models import db
+    page      = int(request.args.get("page", 1))
+    per_page  = min(int(request.args.get("per_page", 50)), 200)
+    severity  = request.args.get("severity")
+    framework = request.args.get("framework")
+    offset    = (page - 1) * per_page
+
+    rows   = []
+    total  = 0
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            where, params = [], []
+            if severity:
+                where.append("severity = %s"); params.append(severity)
+            if framework:
+                where.append("framework = %s"); params.append(framework)
+            ack = request.args.get("acknowledged")
+            if ack is not None:
+                where.append("acknowledged = %s"); params.append(ack.lower() == "true")
+
+            clause = ("WHERE " + " AND ".join(where)) if where else ""
+
+            cur.execute(f"SELECT COUNT(*) FROM cy_comp_alerts {clause};", params)
+            total = (cur.fetchone() or [0])[0]
+
+            cur.execute(
+                f"""
+                SELECT id, external_id, source_type, severity, framework,
+                       control_id, title, description, agent_name, agent_ip,
+                       acknowledged, finding_id, timestamp, created_at
+                FROM cy_comp_alerts {clause}
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s;
+                """,
+                params + [per_page, offset]
+            )
+            for r in cur.fetchall():
+                rows.append({
+                    "id": r[0], "external_id": r[1], "source_type": r[2],
+                    "severity": r[3], "framework": r[4], "control_id": r[5],
+                    "title": r[6], "description": r[7], "agent_name": r[8],
+                    "agent_ip": r[9], "acknowledged": r[10], "finding_id": r[11],
+                    "timestamp": r[12].isoformat() if r[12] else None,
+                    "created_at": r[13].isoformat() if r[13] else None,
+                })
+    except Exception as exc:
+        log.error("list_compliance_alerts: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify({"alerts": rows, "total": total, "page": page, "per_page": per_page})
+
+
+@comp_bp.route("/alerts/sync", methods=["POST"])
+@require_analyst
+def trigger_siem_sync():
+    from cy_comp.services.siem_bridge import get_bridge
+    try:
+        result = get_bridge().sync()
+        return jsonify({"status": "ok", "result": result})
+    except Exception as exc:
+        log.error("trigger_siem_sync: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Risk Register ─────────────────────────────────────────────────────────────
+
+@comp_bp.route("/risks", methods=["GET"])
+@require_viewer
+def list_risks():
+    from cy_comp.services.risk import list_risks as _list
+    return jsonify({"risks": _list(
+        category=request.args.get("category"),
+        status=request.args.get("status"),
+    )})
+
+
+@comp_bp.route("/risks", methods=["POST"])
+@require_analyst
+def create_risk():
+    from cy_comp.services.risk import create_risk as _create
+    data = request.get_json() or {}
+    if not data.get("title"):
+        return jsonify({"error": "title is required"}), 400
+    try:
+        risk = _create(data, created_by=_email())
+        return jsonify(risk), 201
+    except Exception as exc:
+        log.error("create_risk: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/risks/heatmap", methods=["GET"])
+@require_viewer
+def get_risk_heatmap():
+    from cy_comp.services.risk import get_heatmap
+    return jsonify(get_heatmap())
+
+
+@comp_bp.route("/risks/<risk_id>", methods=["GET"])
+@require_viewer
+def get_risk(risk_id):
+    from cy_comp.services.risk import get_risk as _get
+    risk = _get(risk_id)
+    if not risk:
+        return jsonify({"error": "Risk not found"}), 404
+    return jsonify(risk)
+
+
+@comp_bp.route("/risks/<risk_id>", methods=["PUT"])
+@require_analyst
+def update_risk(risk_id):
+    from cy_comp.services.risk import update_risk as _update
+    data = request.get_json() or {}
+    risk = _update(risk_id, data)
+    if not risk:
+        return jsonify({"error": "Risk not found"}), 404
+    return jsonify(risk)
+
+
+@comp_bp.route("/risks/<risk_id>", methods=["DELETE"])
+@require_admin
+def delete_risk(risk_id):
+    from cy_comp.services.risk import delete_risk as _delete
+    if not _delete(risk_id):
+        return jsonify({"error": "Risk not found"}), 404
+    return jsonify({"status": "deleted", "id": risk_id})
+
+
+@comp_bp.route("/risks/<risk_id>/analyze", methods=["POST"])
+@require_analyst
+def ai_analyze_risk(risk_id):
+    from cy_comp.services.risk import get_risk as _get
+    from cy_comp.services.ai_analysis import analyze_risk
+    risk = _get(risk_id)
+    if not risk:
+        return jsonify({"error": "Risk not found"}), 404
+    text = analyze_risk(risk, created_by=_email())
+    return jsonify({"risk_id": risk_id, "analysis": text})
+
+
+# ── Risk Appetite ─────────────────────────────────────────────────────────────
+
+@comp_bp.route("/appetite", methods=["GET"])
+@require_viewer
+def get_appetite():
+    from cy_comp.services.risk import get_appetite as _get
+    return jsonify(_get())
+
+
+@comp_bp.route("/appetite", methods=["PUT"])
+@require_admin
+def update_appetite():
+    from cy_comp.services.risk import update_appetite as _update
+    data = request.get_json() or {}
+    return jsonify(_update(data, updated_by=_email()))
+
+
+# ── Compliance Findings ───────────────────────────────────────────────────────
+
+@comp_bp.route("/findings", methods=["GET"])
+@require_viewer
+def list_findings():
+    from cy_comp.models import db
+    framework = request.args.get("framework")
+    severity  = request.args.get("severity")
+    status    = request.args.get("status")
+    page      = int(request.args.get("page", 1))
+    per_page  = min(int(request.args.get("per_page", 50)), 200)
+    offset    = (page - 1) * per_page
+
+    rows  = []
+    total = 0
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            where, params = [], []
+            if framework: where.append("framework = %s"); params.append(framework)
+            if severity:  where.append("severity = %s");  params.append(severity)
+            if status:    where.append("status = %s");    params.append(status)
+            clause = ("WHERE " + " AND ".join(where)) if where else ""
+
+            cur.execute(f"SELECT COUNT(*) FROM cy_comp_findings {clause};", params)
+            total = (cur.fetchone() or [0])[0]
+
+            cur.execute(
+                f"""
+                SELECT id, framework, control_id, control_name, severity, title,
+                       description, ai_analysis, remediation, status, source_type,
+                       assigned_to, alert_id, created_by, created_at, updated_at
+                FROM cy_comp_findings {clause}
+                ORDER BY created_at DESC LIMIT %s OFFSET %s;
+                """,
+                params + [per_page, offset]
+            )
+            for r in cur.fetchall():
+                rows.append({
+                    "id": r[0], "framework": r[1], "control_id": r[2],
+                    "control_name": r[3], "severity": r[4], "title": r[5],
+                    "description": r[6], "ai_analysis": r[7], "remediation": r[8],
+                    "status": r[9], "source_type": r[10], "assigned_to": r[11],
+                    "alert_id": r[12], "created_by": r[13],
+                    "created_at": r[14].isoformat() if r[14] else None,
+                    "updated_at": r[15].isoformat() if r[15] else None,
+                })
+    except Exception as exc:
+        log.error("list_findings: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify({"findings": rows, "total": total, "page": page, "per_page": per_page})
+
+
+@comp_bp.route("/findings", methods=["POST"])
+@require_analyst
+def create_finding():
+    from cy_comp.models import db
+    data = request.get_json() or {}
+    if not data.get("title") or not data.get("framework"):
+        return jsonify({"error": "title and framework are required"}), 400
+    fid = str(uuid.uuid4())
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO cy_comp_findings
+                    (id, framework, control_id, control_name, severity, title,
+                     description, remediation, status, source_type, assigned_to,
+                     alert_id, created_by, created_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW());
+                """,
+                (
+                    fid,
+                    data["framework"],
+                    data.get("control_id"),
+                    data.get("control_name"),
+                    data.get("severity", "medium"),
+                    data["title"],
+                    data.get("description"),
+                    data.get("remediation"),
+                    data.get("status", "open"),
+                    data.get("source_type", "manual"),
+                    data.get("assigned_to"),
+                    data.get("alert_id"),
+                    _email(),
+                )
+            )
+        return jsonify({"id": fid, "status": "created"}), 201
+    except Exception as exc:
+        log.error("create_finding: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/findings/<finding_id>", methods=["PUT"])
+@require_analyst
+def update_finding(finding_id):
+    from cy_comp.models import db
+    data = request.get_json() or {}
+    allowed = ("framework", "control_id", "control_name", "severity", "title",
+               "description", "remediation", "status", "source_type", "assigned_to")
+    fields, params = [], []
+    for col in allowed:
+        if col in data:
+            fields.append(f"{col} = %s"); params.append(data[col])
+    if not fields:
+        return jsonify({"error": "No updatable fields provided"}), 400
+    fields.append("updated_at = NOW()")
+    params.append(finding_id)
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"UPDATE cy_comp_findings SET {', '.join(fields)} WHERE id = %s;",
+                params
+            )
+            if cur.rowcount == 0:
+                return jsonify({"error": "Finding not found"}), 404
+        return jsonify({"id": finding_id, "status": "updated"})
+    except Exception as exc:
+        log.error("update_finding: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/findings/<finding_id>", methods=["DELETE"])
+@require_admin
+def delete_finding(finding_id):
+    from cy_comp.models import db
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM cy_comp_findings WHERE id = %s;", (finding_id,))
+            if cur.rowcount == 0:
+                return jsonify({"error": "Finding not found"}), 404
+        return jsonify({"status": "deleted", "id": finding_id})
+    except Exception as exc:
+        log.error("delete_finding: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/findings/<finding_id>/analyze", methods=["POST"])
+@require_analyst
+def ai_analyze_finding(finding_id):
+    from cy_comp.models import db
+    from cy_comp.services.ai_analysis import analyze_finding
+    row = None
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, framework, control_id, control_name, severity,
+                       title, description, status
+                FROM cy_comp_findings WHERE id = %s;
+                """,
+                (finding_id,)
+            )
+            r = cur.fetchone()
+            if r:
+                row = {
+                    "id": r[0], "framework": r[1], "control_id": r[2],
+                    "control_name": r[3], "severity": r[4], "title": r[5],
+                    "description": r[6], "status": r[7],
+                }
+    except Exception as exc:
+        log.error("ai_analyze_finding lookup: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+    if not row:
+        return jsonify({"error": "Finding not found"}), 404
+
+    text = analyze_finding(row, created_by=_email())
+    return jsonify({"finding_id": finding_id, "analysis": text})
+
+
+# ── Controls Library ──────────────────────────────────────────────────────────
+
+@comp_bp.route("/controls", methods=["GET"])
+@require_viewer
+def list_controls():
+    from cy_comp.models import db
+    framework = request.args.get("framework")
+    status    = request.args.get("status")
+    page      = int(request.args.get("page", 1))
+    per_page  = min(int(request.args.get("per_page", 100)), 500)
+    offset    = (page - 1) * per_page
+
+    rows  = []
+    total = 0
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            where, params = [], []
+            if framework: where.append("framework = %s"); params.append(framework)
+            if status:    where.append("implementation_status = %s"); params.append(status)
+            clause = ("WHERE " + " AND ".join(where)) if where else ""
+
+            cur.execute(f"SELECT COUNT(*) FROM cy_comp_controls {clause};", params)
+            total = (cur.fetchone() or [0])[0]
+
+            cur.execute(
+                f"""
+                SELECT id, framework, control_id, title, description, category,
+                       implementation_status, owner, evidence_count, last_reviewed,
+                       created_at, updated_at
+                FROM cy_comp_controls {clause}
+                ORDER BY framework, control_id LIMIT %s OFFSET %s;
+                """,
+                params + [per_page, offset]
+            )
+            for r in cur.fetchall():
+                rows.append({
+                    "id": r[0], "framework": r[1], "control_id": r[2],
+                    "title": r[3], "description": r[4], "category": r[5],
+                    "implementation_status": r[6], "owner": r[7],
+                    "evidence_count": r[8],
+                    "last_reviewed": r[9].isoformat() if r[9] else None,
+                    "created_at": r[10].isoformat() if r[10] else None,
+                    "updated_at": r[11].isoformat() if r[11] else None,
+                })
+    except Exception as exc:
+        log.error("list_controls: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify({"controls": rows, "total": total, "page": page, "per_page": per_page})
+
+
+@comp_bp.route("/controls", methods=["POST"])
+@require_analyst
+def create_control():
+    from cy_comp.models import db
+    data = request.get_json() or {}
+    if not data.get("title") or not data.get("framework"):
+        return jsonify({"error": "title and framework are required"}), 400
+    cid = str(uuid.uuid4())
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO cy_comp_controls
+                    (id, framework, control_id, title, description, category,
+                     implementation_status, owner, implementation_guidance,
+                     test_procedure, created_by, created_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW());
+                """,
+                (
+                    cid, data["framework"],
+                    data.get("control_id"),
+                    data["title"],
+                    data.get("description"),
+                    data.get("category"),
+                    data.get("implementation_status", "not_implemented"),
+                    data.get("owner"),
+                    data.get("implementation_guidance"),
+                    data.get("test_procedure"),
+                    _email(),
+                )
+            )
+        return jsonify({"id": cid, "status": "created"}), 201
+    except Exception as exc:
+        log.error("create_control: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/controls/<control_id>", methods=["PUT"])
+@require_analyst
+def update_control(control_id):
+    from cy_comp.models import db
+    data    = request.get_json() or {}
+    allowed = ("title", "description", "category", "implementation_status",
+               "owner", "implementation_guidance", "test_procedure")
+    fields, params = [], []
+    for col in allowed:
+        if col in data:
+            fields.append(f"{col} = %s"); params.append(data[col])
+    if not fields:
+        return jsonify({"error": "No updatable fields provided"}), 400
+    fields.append("updated_at = NOW()")
+    params.append(control_id)
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"UPDATE cy_comp_controls SET {', '.join(fields)} WHERE id = %s;",
+                params
+            )
+            if cur.rowcount == 0:
+                return jsonify({"error": "Control not found"}), 404
+        return jsonify({"id": control_id, "status": "updated"})
+    except Exception as exc:
+        log.error("update_control: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Evidence ──────────────────────────────────────────────────────────────────
+
+@comp_bp.route("/evidence", methods=["GET"])
+@require_viewer
+def list_evidence():
+    from cy_comp.models import db
+    finding_id = request.args.get("finding_id")
+    control_id = request.args.get("control_id")
+    rows = []
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            where, params = [], []
+            if finding_id: where.append("finding_id = %s"); params.append(finding_id)
+            if control_id: where.append("control_id = %s"); params.append(control_id)
+            clause = ("WHERE " + " AND ".join(where)) if where else ""
+            cur.execute(
+                f"""
+                SELECT id, title, type, file_type, description,
+                       finding_id, control_id, ai_gap_status, ai_gap_analysis,
+                       uploaded_by, created_at
+                FROM cy_comp_evidence {clause} ORDER BY created_at DESC;
+                """,
+                params
+            )
+            for r in cur.fetchall():
+                rows.append({
+                    "id": r[0], "title": r[1], "type": r[2], "file_type": r[3],
+                    "description": r[4], "finding_id": r[5], "control_id": r[6],
+                    "ai_gap_status": r[7], "ai_gap_analysis": r[8],
+                    "uploaded_by": r[9],
+                    "created_at": r[10].isoformat() if r[10] else None,
+                })
+    except Exception as exc:
+        log.error("list_evidence: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"evidence": rows})
+
+
+@comp_bp.route("/evidence", methods=["POST"])
+@require_analyst
+def upload_evidence():
+    from cy_comp.models import db
+    data = request.get_json() or {}
+    if not data.get("title"):
+        return jsonify({"error": "title is required"}), 400
+    eid = str(uuid.uuid4())
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO cy_comp_evidence
+                    (id, title, type, file_type, description,
+                     finding_id, control_id, uploaded_by, created_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW());
+                """,
+                (
+                    eid, data["title"],
+                    data.get("type", "document"),
+                    data.get("file_type"),
+                    data.get("description"),
+                    data.get("finding_id"),
+                    data.get("control_id"),
+                    _email(),
+                )
+            )
+        return jsonify({"id": eid, "status": "created"}), 201
+    except Exception as exc:
+        log.error("upload_evidence: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/evidence/<evidence_id>", methods=["DELETE"])
+@require_admin
+def delete_evidence(evidence_id):
+    from cy_comp.models import db
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM cy_comp_evidence WHERE id = %s;", (evidence_id,))
+            if cur.rowcount == 0:
+                return jsonify({"error": "Evidence not found"}), 404
+        return jsonify({"status": "deleted", "id": evidence_id})
+    except Exception as exc:
+        log.error("delete_evidence: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Reports ───────────────────────────────────────────────────────────────────
+
+@comp_bp.route("/reports", methods=["GET"])
+@require_viewer
+def list_reports():
+    from cy_comp.models import db
+    rows = []
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, title, framework, overall_score,
+                       generated_by, pdf_path, created_at
+                FROM cy_comp_reports ORDER BY created_at DESC LIMIT 50;
+                """
+            )
+            for r in cur.fetchall():
+                rows.append({
+                    "id": r[0], "title": r[1], "framework": r[2],
+                    "overall_score": r[3], "generated_by": r[4],
+                    "has_pdf": bool(r[5]),
+                    "created_at": r[6].isoformat() if r[6] else None,
+                })
+    except Exception as exc:
+        log.error("list_reports: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"reports": rows})
+
+
+@comp_bp.route("/reports/generate", methods=["POST"])
+@require_analyst
+def generate_report():
+    from cy_comp.services.report import create_report_job
+
+    data        = request.get_json() or {}
+    framework   = data.get("framework", "all")
+    period_start = data.get("period_start", "")
+    period_end   = data.get("period_end", "")
+    email        = _email()
+
+    # Create pending job row
+    job_id = create_report_job(framework, period_start, period_end, email)
+
+    # Schedule one-off APScheduler job using the existing scheduler instance
+    try:
+        from blueprints.scheduler.routes import _scheduler, _scheduler_owner
+        from cy_comp.services.report import generate_report_job
+
+        if _scheduler and _scheduler_owner:
+            _scheduler.add_job(
+                generate_report_job,
+                trigger="date",       # one-off, run immediately
+                args=[job_id],
+                id=f"comp_report_{job_id}",
+                replace_existing=True,
+                misfire_grace_time=300,
+            )
+            log.info("generate_report: APScheduler job queued job_id=%s", job_id)
+        else:
+            # Not the scheduler-owning worker — run inline (non-optimal but safe fallback)
+            log.warning("generate_report: scheduler not owned by this worker; running inline")
+            import threading
+            t = threading.Thread(target=generate_report_job, args=(job_id,), daemon=True)
+            t.start()
+    except Exception as exc:
+        log.error("generate_report: scheduler enqueue failed: %s", exc)
+        # Fall back to thread
+        import threading
+        from cy_comp.services.report import generate_report_job
+        t = threading.Thread(target=generate_report_job, args=(job_id,), daemon=True)
+        t.start()
+
+    return jsonify({"job_id": job_id, "status": "pending"}), 202
+
+
+@comp_bp.route("/reports/jobs/<job_id>", methods=["GET"])
+@require_analyst
+def poll_report_job(job_id):
+    from cy_comp.services.report import poll_job
+    job = poll_job(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify(job)
+
+
+@comp_bp.route("/reports/<report_id>/download", methods=["GET"])
+@require_viewer
+def download_report(report_id):
+    from cy_comp.models import db
+    import os
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT pdf_path, title FROM cy_comp_reports WHERE id = %s;",
+                (report_id,)
+            )
+            row = cur.fetchone()
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    if not row:
+        return jsonify({"error": "Report not found"}), 404
+
+    pdf_path, title = row
+    if pdf_path and os.path.exists(pdf_path):
+        return send_file(pdf_path, as_attachment=True,
+                         download_name=f"{title or report_id}.pdf",
+                         mimetype="application/pdf")
+
+    # Fall back to JSON
+    from cy_comp.services.report import REPORTS_DIR
+    json_files = list(REPORTS_DIR.glob(f"*{report_id}*.json")) if REPORTS_DIR.exists() else []
+    if json_files:
+        return send_file(str(json_files[0]), as_attachment=True,
+                         download_name=f"{title or report_id}.json",
+                         mimetype="application/json")
+
+    return jsonify({"error": "Report file not available"}), 404
+
+
+# ── Policy Documents ──────────────────────────────────────────────────────────
+
+@comp_bp.route("/policy-docs/collections", methods=["GET"])
+@require_viewer
+def list_collections():
+    from cy_comp.services.policy_rag import list_collections as _list
+    return jsonify({"collections": _list()})
+
+
+@comp_bp.route("/policy-docs/collections", methods=["POST"])
+@require_admin
+def create_collection():
+    from cy_comp.services.policy_rag import create_collection as _create
+    data      = request.get_json() or {}
+    framework = data.get("framework", "").strip()
+    if not framework:
+        return jsonify({"error": "framework is required"}), 400
+    return jsonify(_create(framework)), 201
+
+
+@comp_bp.route("/policy-docs/collections/<collection_id>/documents", methods=["GET"])
+@require_viewer
+def list_documents(collection_id):
+    from cy_comp.services.policy_rag import list_documents as _list
+    return jsonify({"documents": _list(collection_id)})
+
+
+@comp_bp.route("/policy-docs/collections/<collection_id>/documents", methods=["POST"])
+@require_analyst
+def upload_document(collection_id):
+    from cy_comp.services.policy_rag import upload_document as _upload
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    file     = request.files["file"]
+    metadata = {
+        "framework": request.form.get("framework") or collection_id.replace("policy-", ""),
+    }
+    try:
+        doc = _upload(collection_id, file, metadata, uploaded_by=_email())
+        return jsonify(doc), 201
+    except Exception as exc:
+        log.error("upload_document: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/policy-docs/documents/<doc_id>", methods=["DELETE"])
+@require_admin
+def delete_document(doc_id):
+    from cy_comp.services.policy_rag import delete_document as _delete
+    if not _delete(doc_id):
+        return jsonify({"error": "Document not found"}), 404
+    return jsonify({"status": "deleted", "id": doc_id})
+
+
+@comp_bp.route("/policy-docs/collections/<collection_id>/reindex", methods=["POST"])
+@require_admin
+def reindex_collection(collection_id):
+    from cy_comp.services.policy_rag import reindex_collection as _reindex
+    return jsonify(_reindex(collection_id))
+
+
+# ── Settings ──────────────────────────────────────────────────────────────────
+
+@comp_bp.route("/settings", methods=["GET"])
+@require_admin
+def get_comp_settings():
+    from cy_comp.services.policy_rag import _load_cymind_settings
+    settings = _load_cymind_settings()
+    # Return only comp-relevant settings; mask key
+    return jsonify({
+        "cymind_url":         settings.get("cymind_url") or settings.get("CYMIND_API_URL", ""),
+        "cymind_admin_key":   "***" if settings.get("cymind_admin_key") else "",
+        "comp_reports_dir":   str(settings.get("comp_reports_dir", "/var/log/cycentra/cy-comp/reports")),
+    })
+
+
+@comp_bp.route("/settings", methods=["PUT"])
+@require_admin
+def update_comp_settings():
+    import json as _json
+    from core.config import AI_SETTINGS_FILE
+    data = request.get_json() or {}
+    allowed = ("cymind_url", "cymind_admin_key", "comp_reports_dir")
+    try:
+        current = {}
+        if AI_SETTINGS_FILE.exists():
+            current = _json.loads(AI_SETTINGS_FILE.read_text())
+        for key in allowed:
+            if key in data and data[key] not in (None, "***"):
+                current[key] = data[key]
+        AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        AI_SETTINGS_FILE.write_text(_json.dumps(current, indent=2))
+        return jsonify({"status": "saved"})
+    except Exception as exc:
+        log.error("update_comp_settings: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/settings/siem-connections", methods=["GET"])
+@require_admin
+def list_siem_connections():
+    from cy_comp.models import db
+    rows = []
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, name, siem_type, host, port, username,
+                       is_active, last_sync, created_at
+                FROM cy_comp_siem_connections ORDER BY created_at DESC;
+                """
+            )
+            for r in cur.fetchall():
+                rows.append({
+                    "id": r[0], "name": r[1], "siem_type": r[2], "host": r[3],
+                    "port": r[4], "username": r[5], "is_active": r[6],
+                    "last_sync": r[7].isoformat() if r[7] else None,
+                    "created_at": r[8].isoformat() if r[8] else None,
+                })
+    except Exception as exc:
+        log.error("list_siem_connections: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"connections": rows})
+
+
+@comp_bp.route("/settings/siem-connections", methods=["POST"])
+@require_admin
+def create_siem_connection():
+    from cy_comp.models import db
+    data = request.get_json() or {}
+    if not data.get("name") or not data.get("siem_type"):
+        return jsonify({"error": "name and siem_type are required"}), 400
+    cid = str(uuid.uuid4())
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO cy_comp_siem_connections
+                    (id, name, siem_type, host, port, username,
+                     is_active, created_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,NOW());
+                """,
+                (
+                    cid, data["name"], data["siem_type"],
+                    data.get("host"), data.get("port", 55000),
+                    data.get("username"), data.get("is_active", True),
+                )
+            )
+        return jsonify({"id": cid, "status": "created"}), 201
+    except Exception as exc:
+        log.error("create_siem_connection: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/settings/siem-connections/<conn_id>", methods=["PUT"])
+@require_admin
+def update_siem_connection(conn_id):
+    from cy_comp.models import db
+    data    = request.get_json() or {}
+    allowed = ("name", "siem_type", "host", "port", "username", "is_active")
+    fields, params = [], []
+    for col in allowed:
+        if col in data:
+            fields.append(f"{col} = %s"); params.append(data[col])
+    if not fields:
+        return jsonify({"error": "No updatable fields provided"}), 400
+    params.append(conn_id)
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"UPDATE cy_comp_siem_connections SET {', '.join(fields)} WHERE id = %s;",
+                params
+            )
+            if cur.rowcount == 0:
+                return jsonify({"error": "Connection not found"}), 404
+        return jsonify({"id": conn_id, "status": "updated"})
+    except Exception as exc:
+        log.error("update_siem_connection: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/settings/siem-connections/<conn_id>", methods=["DELETE"])
+@require_admin
+def delete_siem_connection(conn_id):
+    from cy_comp.models import db
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM cy_comp_siem_connections WHERE id = %s;", (conn_id,))
+            if cur.rowcount == 0:
+                return jsonify({"error": "Connection not found"}), 404
+        return jsonify({"status": "deleted", "id": conn_id})
+    except Exception as exc:
+        log.error("delete_siem_connection: %s", exc)
+        return jsonify({"error": str(exc)}), 500

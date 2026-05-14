@@ -2813,8 +2813,209 @@ function IntegrationsTab() {
   );
 }
 
+// ── GRC Compliance Settings tabs ─────────────────────────────────────────────
+
+function CompSIEMSourcesTab() {
+  const [connections, setConnections] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState({ name: "", siem_type: "wazuh", host: "", port: 55000, username: "" });
+
+  const load = () => {
+    setLoading(true);
+    fetch(`${API_BASE}/api/comp/settings/siem-connections`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { setConnections(d.connections || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+
+  const handleAdd = () => {
+    fetch(`${API_BASE}/api/comp/settings/siem-connections`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(form),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(() => { setShowAdd(false); load(); })
+      .catch(e => alert(`Failed: ${e}`));
+  };
+
+  const handleDelete = (id) => {
+    if (!confirm("Remove this SIEM connection?")) return;
+    fetch(`${API_BASE}/api/comp/settings/siem-connections/${id}`, { method: "DELETE", credentials: "include" })
+      .then(r => r.ok ? load() : alert("Delete failed"));
+  };
+
+  const inp = { ...INPUT, width: "100%", boxSizing: "border-box" };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div style={{ ...LABEL }}>SIEM Sources for Compliance Ingestion</div>
+        <button onClick={() => setShowAdd(s => !s)} style={BTN()}>
+          {showAdd ? "Cancel" : "+ Add SIEM Source"}
+        </button>
+      </div>
+      {showAdd && (
+        <div style={{ ...CARD, marginBottom: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {[
+            { label: "Name", key: "name" }, { label: "Host", key: "host" }, { label: "Username", key: "username" },
+          ].map(({ label, key }) => (
+            <div key={key}>
+              <div style={LABEL}>{label}</div>
+              <input style={inp} value={form[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))} />
+            </div>
+          ))}
+          <div>
+            <div style={LABEL}>SIEM Type</div>
+            <select style={{ ...inp, cursor: "pointer" }} value={form.siem_type}
+              onChange={e => setForm(f => ({ ...f, siem_type: e.target.value }))}>
+              {["wazuh", "splunk", "elastic", "sentinel", "qradar", "correlation_engine"].map(t =>
+                <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={LABEL}>Port</div>
+            <input style={inp} type="number" value={form.port}
+              onChange={e => setForm(f => ({ ...f, port: +e.target.value }))} />
+          </div>
+          <div style={{ gridColumn: "1/-1", display: "flex", justifyContent: "flex-end" }}>
+            <button onClick={handleAdd} style={BTN()}>Save Connection</button>
+          </div>
+        </div>
+      )}
+      {loading ? (
+        <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 11 }}>Loading...</div>
+      ) : connections.length === 0 ? (
+        <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 11, padding: 16 }}>
+          No SIEM sources configured. The built-in Correlation Engine adapter runs automatically.
+        </div>
+      ) : connections.map(c => (
+        <div key={c.id} style={{ ...CARD, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div>
+            <div style={{ color: "rgba(255,255,255,0.82)", fontSize: 12, fontWeight: 600 }}>{c.name}</div>
+            <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace", marginTop: 2 }}>
+              {c.siem_type} — {c.host || "internal"}:{c.port}
+            </div>
+          </div>
+          <button onClick={() => handleDelete(c.id)}
+            style={{ ...BTN("#ff3b3b"), padding: "5px 12px", fontSize: 10 }}>Remove</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CompGRCSettingsTab() {
+  const [settings, setSettings] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [keyVisible, setKeyVisible] = useState(false);
+  const [newKey, setNewKey] = useState("");
+
+  const load = () => {
+    setLoading(true);
+    fetch(`${API_BASE}/api/comp/settings`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { setSettings(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+
+  const handleSave = () => {
+    setSaving(true); setMsg(null);
+    const payload = { cymind_url: settings.cymind_url };
+    if (newKey) payload.cymind_admin_key = newKey;
+    fetch(`${API_BASE}/api/comp/settings`, {
+      method: "PUT", credentials: "include",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(() => { setMsg({ ok: true, text: "Settings saved" }); setNewKey(""); })
+      .catch(e => setMsg({ ok: false, text: `Save failed: ${e}` }))
+      .finally(() => setSaving(false));
+  };
+
+  const inp = { ...INPUT, width: "100%", boxSizing: "border-box" };
+
+  return (
+    <div>
+      <div style={{ ...CARD, marginBottom: 16 }}>
+        <div style={{ ...LABEL, marginBottom: 16 }}>CyMind RAG Configuration</div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={LABEL}>CyMind API URL</div>
+          {loading ? <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 11 }}>Loading...</div> : (
+            <input style={inp} value={settings.cymind_url || ""}
+              onChange={e => setSettings(s => ({ ...s, cymind_url: e.target.value }))}
+              placeholder="http://127.0.0.1:8200" />
+          )}
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <div style={LABEL}>CyMind Admin API Key</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input style={{ ...inp }} type={keyVisible ? "text" : "password"}
+              value={newKey || (settings.cymind_admin_key === "***" ? "" : settings.cymind_admin_key || "")}
+              onChange={e => setNewKey(e.target.value)}
+              placeholder={settings.cymind_admin_key === "***" ? "Key is set (enter new to replace)" : "Enter admin key"} />
+            <button onClick={() => setKeyVisible(v => !v)}
+              style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
+                color: "rgba(255,255,255,0.45)", padding: "7px 12px", borderRadius: 4,
+                fontFamily: "monospace", fontSize: 10, cursor: "pointer", whiteSpace: "nowrap" }}>
+              {keyVisible ? "Hide" : "Show"}
+            </button>
+          </div>
+          <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", marginTop: 4 }}>
+            This key is used for policy document RAG collection management (admin-level CyMind API key)
+          </div>
+        </div>
+        {msg && <div style={{ color: msg.ok ? "#00e5a0" : "#ff3b3b", fontSize: 10, fontFamily: "monospace", marginBottom: 10 }}>{msg.text}</div>}
+        <button onClick={handleSave} disabled={saving} style={BTN()}>
+          {saving ? "Saving..." : "Save GRC Settings"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CompNotificationsTab() {
+  return (
+    <div style={{ ...CARD }}>
+      <div style={{ ...LABEL, marginBottom: 12 }}>Compliance Notifications</div>
+      <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, fontFamily: "monospace" }}>
+        Notification rules for compliance threshold breaches and new critical findings will be configurable here in a future release. Email notifications use the SMTP settings configured in Users & Auth.
+      </div>
+    </div>
+  );
+}
+
+// ── Two-column Settings layout ────────────────────────────────────────────────
+
+const PLATFORM_TABS = [
+  { id: "updates",   label: "Updates & Version" },
+  { id: "env",       label: "Environment Config" },
+  { id: "scheduler", label: "Scheduler" },
+  { id: "users",     label: "Users & Auth" },
+  { id: "backup",    label: "Backup & Restore" },
+];
+
+const COMP_TABS = [
+  { id: "comp-siem",          label: "SIEM Sources" },
+  { id: "comp-grc-settings",  label: "GRC Settings" },
+  { id: "comp-notifications", label: "Notifications" },
+];
+
+const MODULES = [
+  { id: "platform", label: "Platform Settings",    icon: "⚙️", color: "#00e5a0" },
+  { id: "comp",     label: "Security Compliance",  icon: "🛡️", color: "#4d9eff" },
+];
+
 export function SystemSettingsPage() {
-  const [tab, setTab] = useState("updates");
+  const [module, setModule] = useState("platform");
+  const [tab, setTab]       = useState("updates");
+  const [compTab, setCompTab] = useState("comp-siem");
+
+  const currentTabs = module === "platform" ? PLATFORM_TABS : COMP_TABS;
 
   return (
     <div>
@@ -2824,32 +3025,89 @@ export function SystemSettingsPage() {
           Settings
         </div>
         <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 13 }}>
-          Platform updates, environment configuration, backup and integrations
+          Platform configuration and Security Compliance (GRC) settings
         </div>
       </div>
 
-      {/* Tab bar */}
-      <div style={{ display: "flex", gap: 4, borderBottom: "1px solid rgba(255,255,255,0.06)", marginBottom: 24 }}>
-        {TABS.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            style={{ background: "none", border: "none", borderBottom: tab === t.id ? "2px solid #00e5a0" : "2px solid transparent", color: tab === t.id ? "#00e5a0" : "rgba(255,255,255,0.45)", padding: "8px 18px", fontFamily: "monospace", fontSize: 12, fontWeight: tab === t.id ? 700 : 400, cursor: "pointer", marginBottom: -1, letterSpacing: "0.5px" }}>
-            {t.label}
-          </button>
-        ))}
-      </div>
+      {/* Two-column layout */}
+      <div style={{ display: "flex", gap: 20 }}>
 
-      {tab === "updates"   && <UpdatesTab />}
-      {tab === "env"       && <EnvConfigTab />}
-      {tab === "scheduler"    && <SchedulerTab />}
-      {tab === "users"        && (
-        <>
-          <CollapsibleSection icon="👤" title="User Management">
-            <UserManagementTab />
-          </CollapsibleSection>
-          <SSOTab />
-        </>
-      )}
-      {tab === "backup"       && <BackupTab />}
+        {/* Left: module selector */}
+        <div style={{ width: 210, flexShrink: 0 }}>
+          <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+            letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 10 }}>Module</div>
+          {MODULES.map(m => (
+            <button key={m.id} onClick={() => {
+              setModule(m.id);
+              if (m.id === "platform") setTab("updates");
+              else setCompTab("comp-siem");
+            }}
+              style={{
+                width: "100%", padding: "12px 14px", borderRadius: 6, marginBottom: 6,
+                background: module === m.id ? `${m.color}0e` : "rgba(255,255,255,0.02)",
+                border: `1px solid ${module === m.id ? `${m.color}40` : "rgba(255,255,255,0.06)"}`,
+                color: module === m.id ? m.color : "rgba(255,255,255,0.45)",
+                fontFamily: "monospace", fontSize: 12, fontWeight: module === m.id ? 700 : 400,
+                cursor: "pointer", textAlign: "left", display: "flex", alignItems: "center", gap: 8,
+                transition: "all 0.15s",
+              }}>
+              <span style={{ fontSize: 16 }}>{m.icon}</span>
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Right: tab content */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Tab bar */}
+          <div style={{ display: "flex", gap: 4, borderBottom: "1px solid rgba(255,255,255,0.06)", marginBottom: 24 }}>
+            {currentTabs.map(t => {
+              const active = module === "platform" ? tab === t.id : compTab === t.id;
+              return (
+                <button key={t.id}
+                  onClick={() => module === "platform" ? setTab(t.id) : setCompTab(t.id)}
+                  style={{
+                    background: "none", border: "none",
+                    borderBottom: active ? "2px solid #00e5a0" : "2px solid transparent",
+                    color: active ? "#00e5a0" : "rgba(255,255,255,0.45)",
+                    padding: "8px 18px", fontFamily: "monospace", fontSize: 12,
+                    fontWeight: active ? 700 : 400, cursor: "pointer",
+                    marginBottom: -1, letterSpacing: "0.5px",
+                  }}>
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Platform Settings tabs (unchanged) */}
+          {module === "platform" && (
+            <>
+              {tab === "updates"   && <UpdatesTab />}
+              {tab === "env"       && <EnvConfigTab />}
+              {tab === "scheduler" && <SchedulerTab />}
+              {tab === "users"     && (
+                <>
+                  <CollapsibleSection icon="👤" title="User Management">
+                    <UserManagementTab />
+                  </CollapsibleSection>
+                  <SSOTab />
+                </>
+              )}
+              {tab === "backup"    && <BackupTab />}
+            </>
+          )}
+
+          {/* Security Compliance (GRC) Settings tabs */}
+          {module === "comp" && (
+            <>
+              {compTab === "comp-siem"          && <CompSIEMSourcesTab />}
+              {compTab === "comp-grc-settings"  && <CompGRCSettingsTab />}
+              {compTab === "comp-notifications" && <CompNotificationsTab />}
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

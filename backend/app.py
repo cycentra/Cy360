@@ -35,6 +35,7 @@ from blueprints.marketplace.routes import marketplace_bp
 from blueprints.audit.routes       import audit_bp
 from blueprints.sso.routes         import sso_bp
 from blueprints.benchmark.routes   import benchmark_bp
+from blueprints.comp.routes        import comp_bp
 
 # siem_proxy.py lives at backend root — import as-is (already a Blueprint)
 from siem_proxy import siem_bp
@@ -52,8 +53,16 @@ def create_app() -> Flask:
     app.config.update(COOKIE_SETTINGS)
 
     # Register all blueprints
-    for bp in (auth_bp, oidc_bp, rbac_bp, platform_bp, asm_bp, siem_bp, system_bp, backup_bp, scheduler_bp, marketplace_bp, audit_bp, sso_bp, benchmark_bp):
+    for bp in (auth_bp, oidc_bp, rbac_bp, platform_bp, asm_bp, siem_bp, system_bp, backup_bp, scheduler_bp, marketplace_bp, audit_bp, sso_bp, benchmark_bp, comp_bp):
         app.register_blueprint(bp)
+
+    # Ensure GRC compliance tables exist on startup
+    try:
+        from cy_comp.models import ensure_tables
+        ensure_tables()
+    except Exception as _comp_exc:
+        import logging as _log
+        _log.getLogger(__name__).warning("cy_comp table init failed (non-fatal): %s", _comp_exc)
 
     # Start background job scheduler (only one gunicorn worker acquires lock)
     init_scheduler(app)

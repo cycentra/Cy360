@@ -70,6 +70,16 @@ import { AuditTrailPage }         from './pages/audit/AuditTrailPage.jsx';
 import { BenchmarkPage }          from './pages/benchmark/BenchmarkPage.jsx';
 import { PlatformExtensionsPage } from './pages/platform-extensions/index.jsx';
 
+// ── Security Compliance (GRC) pages ──────────────────────────────────────────
+import { ComplianceDashboardPage }  from './pages/compliance/ComplianceDashboardPage.jsx';
+import { ComplianceLiveAlertsPage } from './pages/compliance/ComplianceLiveAlertsPage.jsx';
+import { RiskRegisterPage }         from './pages/compliance/RiskRegisterPage.jsx';
+import { RiskHeatmapPage }          from './pages/compliance/RiskHeatmapPage.jsx';
+import { RiskAppetitePage }         from './pages/compliance/RiskAppetitePage.jsx';
+import { ComplianceFindingsPage }   from './pages/compliance/ComplianceFindingsPage.jsx';
+import { ComplianceReportsPage }    from './pages/compliance/ComplianceReportsPage.jsx';
+import { PolicyDocumentsPage }      from './pages/compliance/PolicyDocumentsPage.jsx';
+
 // ── Scan History Dropdown ─────────────────────────────────────────────────────
 
 function ScanHistoryDropdown({ scanHistory, selectedScanId, onSelect, historyLoading }) {
@@ -347,6 +357,16 @@ export default function App() {
             {activeTab==="system-settings"     && <SystemSettingsPage />}
             {activeTab==="audit-trail"         && <AuditTrailPage />}
             {activeTab==="platform-extensions" && <PlatformExtensionsPage installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
+
+            {/* ── Security Compliance (GRC) ─────────────────────────────── */}
+            {activeTab==="comp-dashboard" && <ComplianceDashboardPage setActiveTab={setActiveTab}/>}
+            {activeTab==="comp-alerts"    && <ComplianceLiveAlertsPage/>}
+            {activeTab==="comp-risks"     && <RiskRegisterPage setActiveTab={setActiveTab}/>}
+            {activeTab==="comp-heatmap"   && <RiskHeatmapPage/>}
+            {activeTab==="comp-appetite"  && <RiskAppetitePage/>}
+            {activeTab==="comp-findings"  && <ComplianceFindingsPage/>}
+            {activeTab==="comp-reports"   && <ComplianceReportsPage/>}
+            {activeTab==="comp-policy"    && <PolicyDocumentsPage/>}
 
           </div>
           </PageErrorBoundary>

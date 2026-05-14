@@ -100,9 +100,9 @@ OIDC_CLIENTS = {
 
 # ── RBAC ───────────────────────────────────────────────────────────────────────
 ROLE_APPS = {
-    "admin":   ["cy360", "cysiem", "cyiris", "cysoar", "cyasm"],
-    "analyst": ["cy360", "cysiem", "cyiris", "cysoar", "cyasm"],
-    "viewer":  ["cy360", "cysiem"],
+    "admin":   ["cy360", "cysiem", "cyiris", "cysoar", "cyasm", "cycomp"],
+    "analyst": ["cy360", "cysiem", "cyiris", "cysoar", "cyasm", "cycomp"],
+    "viewer":  ["cy360", "cysiem", "cycomp"],
     "cyiris":  ["cy360", "cyiris"],
     "cysoar":  ["cy360", "cysoar"],
 }
