@@ -300,12 +300,14 @@ def update_appetite():
 @require_viewer
 def list_findings():
     from cy_comp.models import db
-    framework = request.args.get("framework")
-    severity  = request.args.get("severity")
-    status    = request.args.get("status")
-    page      = int(request.args.get("page", 1))
-    per_page  = min(int(request.args.get("per_page", 50)), 200)
-    offset    = (page - 1) * per_page
+    framework   = request.args.get("framework")
+    severity    = request.args.get("severity")
+    status      = request.args.get("status")
+    verdict     = request.args.get("verdict")
+    source_type = request.args.get("source_type")
+    page        = int(request.args.get("page", 1))
+    per_page    = min(int(request.args.get("per_page", 50)), 200)
+    offset      = (page - 1) * per_page
 
     rows  = []
     total = 0
@@ -313,9 +315,11 @@ def list_findings():
         with db() as conn:
             cur = conn.cursor()
             where, params = [], []
-            if framework: where.append("framework = %s"); params.append(framework)
-            if severity:  where.append("severity = %s");  params.append(severity)
-            if status:    where.append("status = %s");    params.append(status)
+            if framework:   where.append("framework = %s");   params.append(framework)
+            if severity:    where.append("severity = %s");    params.append(severity)
+            if status:      where.append("status = %s");      params.append(status)
+            if verdict:     where.append("verdict = %s");     params.append(verdict)
+            if source_type: where.append("source_type = %s"); params.append(source_type)
             clause = ("WHERE " + " AND ".join(where)) if where else ""
 
             cur.execute(f"SELECT COUNT(*) FROM cy_comp_findings {clause};", params)
@@ -325,21 +329,39 @@ def list_findings():
                 f"""
                 SELECT id, framework, control_id, control_name, severity, title,
                        description, ai_analysis, remediation, status, source_type,
-                       assigned_to, alert_id, created_by, created_at, updated_at
+                       assigned_to, alert_id, created_by, created_at, updated_at,
+                       verdict, auto_generated, alert_count, last_seen_at, questionnaire_gap
                 FROM cy_comp_findings {clause}
-                ORDER BY created_at DESC LIMIT %s OFFSET %s;
+                ORDER BY
+                    CASE verdict WHEN 'breach' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
+                    created_at DESC
+                LIMIT %s OFFSET %s;
                 """,
                 params + [per_page, offset]
             )
             for r in cur.fetchall():
                 rows.append({
-                    "id": r[0], "framework": r[1], "control_id": r[2],
-                    "control_name": r[3], "severity": r[4], "title": r[5],
-                    "description": r[6], "ai_analysis": r[7], "remediation": r[8],
-                    "status": r[9], "source_type": r[10], "assigned_to": r[11],
-                    "alert_id": r[12], "created_by": r[13],
-                    "created_at": r[14].isoformat() if r[14] else None,
-                    "updated_at": r[15].isoformat() if r[15] else None,
+                    "id":               r[0],
+                    "framework":        r[1],
+                    "control_id":       r[2],
+                    "control_name":     r[3],
+                    "severity":         r[4],
+                    "title":            r[5],
+                    "description":      r[6],
+                    "ai_analysis":      r[7],
+                    "remediation":      r[8],
+                    "status":           r[9],
+                    "source_type":      r[10],
+                    "assigned_to":      r[11],
+                    "alert_id":         r[12],
+                    "created_by":       r[13],
+                    "created_at":       r[14].isoformat() if r[14] else None,
+                    "updated_at":       r[15].isoformat() if r[15] else None,
+                    "verdict":          r[16],
+                    "auto_generated":   r[17],
+                    "alert_count":      r[18] or 0,
+                    "last_seen_at":     r[19].isoformat() if r[19] else None,
+                    "questionnaire_gap": r[20],
                 })
     except Exception as exc:
         log.error("list_findings: %s", exc)
@@ -1019,4 +1041,156 @@ def delete_siem_connection(conn_id):
         return jsonify({"status": "deleted", "id": conn_id})
     except Exception as exc:
         log.error("delete_siem_connection: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Questionnaire ─────────────────────────────────────────────────────────────
+
+@comp_bp.route("/questionnaire/seed", methods=["POST"])
+@require_admin
+def seed_questionnaire_templates():
+    from cy_comp.services.questionnaire import seed_templates
+    force = request.get_json(silent=True) or {}
+    try:
+        result = seed_templates(force=bool(force.get("force")))
+        return jsonify({"status": "ok", "result": result})
+    except Exception as exc:
+        log.error("seed_questionnaire_templates: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/questionnaire/hub", methods=["GET"])
+@require_viewer
+def questionnaire_hub():
+    """All-frameworks completion + score summary for the hub page."""
+    from cy_comp.services.questionnaire import get_all_completions
+    return jsonify({"frameworks": get_all_completions()})
+
+
+@comp_bp.route("/questionnaire/<framework>", methods=["GET"])
+@require_viewer
+def get_questionnaire(framework):
+    """Templates + saved responses for one framework."""
+    from cy_comp.services.questionnaire import get_templates, get_responses, score_framework
+    templates  = get_templates(framework)
+    responses  = get_responses(framework)
+    scored     = score_framework(framework)
+    return jsonify({
+        "framework": framework,
+        "templates": templates,
+        "responses": responses,
+        "score":     scored,
+    })
+
+
+@comp_bp.route("/questionnaire/<framework>/respond", methods=["POST"])
+@require_analyst
+def save_questionnaire_responses(framework):
+    """Bulk-save answers for a framework. Body: {answers: [{question_id, response, notes?}]}"""
+    from cy_comp.services.questionnaire import save_bulk_responses
+    data    = request.get_json() or {}
+    answers = data.get("answers", [])
+    if not answers:
+        return jsonify({"error": "No answers provided"}), 400
+    try:
+        result = save_bulk_responses(framework, answers, responded_by=_email())
+        return jsonify({"status": "ok", "result": result})
+    except Exception as exc:
+        log.error("save_questionnaire_responses: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/questionnaire/<framework>/respond/<question_id>", methods=["PUT"])
+@require_analyst
+def save_single_response(framework, question_id):
+    """Save one answer. Body: {response, notes?, evidence_refs?}"""
+    from cy_comp.services.questionnaire import save_response
+    data = request.get_json() or {}
+    if "response" not in data:
+        return jsonify({"error": "response is required"}), 400
+    try:
+        result = save_response(
+            framework=framework,
+            question_id=question_id,
+            response=data["response"],
+            notes=data.get("notes"),
+            evidence_refs=data.get("evidence_refs"),
+            responded_by=_email(),
+        )
+        return jsonify(result)
+    except Exception as exc:
+        log.error("save_single_response: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/questionnaire/<framework>/score", methods=["GET"])
+@require_viewer
+def get_questionnaire_score(framework):
+    from cy_comp.services.questionnaire import score_framework
+    return jsonify(score_framework(framework))
+
+
+@comp_bp.route("/questionnaire/<framework>/generate-findings", methods=["POST"])
+@require_analyst
+def generate_questionnaire_findings(framework):
+    """Create cy_comp_findings rows for all gap questions in a framework."""
+    from cy_comp.services.questionnaire import generate_gap_findings
+    try:
+        result = generate_gap_findings(framework, created_by=_email())
+        return jsonify({"status": "ok", "result": result})
+    except Exception as exc:
+        log.error("generate_questionnaire_findings: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Auto Findings ─────────────────────────────────────────────────────────────
+
+@comp_bp.route("/findings/auto-generate", methods=["POST"])
+@require_analyst
+def auto_generate_findings():
+    """
+    Generate / refresh cy_comp_findings from compliance-relevant alerts.
+    Body (optional): {framework: "nis2"}  — if omitted, runs for all frameworks.
+    """
+    from cy_comp.services.auto_findings import generate_findings_from_alerts
+    data      = request.get_json(silent=True) or {}
+    framework = data.get("framework")
+    try:
+        result = generate_findings_from_alerts(framework=framework, created_by=_email())
+        return jsonify({"status": "ok", "result": result})
+    except Exception as exc:
+        log.error("auto_generate_findings: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/findings/verdicts", methods=["GET"])
+@require_viewer
+def findings_verdict_summary():
+    """Breach / warning / compliant counts for the dashboard."""
+    from cy_comp.services.auto_findings import get_findings_summary
+    return jsonify(get_findings_summary())
+
+
+@comp_bp.route("/findings/<finding_id>/remediation", methods=["GET"])
+@require_viewer
+def get_finding_remediation(finding_id):
+    """Return remediation guidance for a specific finding (looks up MITRE technique)."""
+    from cy_comp.models import db
+    from cy_comp.services.auto_findings import get_remediation_for_mitre
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT control_id, title FROM cy_comp_findings WHERE id = %s;",
+                (finding_id,)
+            )
+            row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "Finding not found"}), 404
+        control_id = row[0] or ""
+        mitre_id   = control_id.split(",")[0].strip() if control_id else None
+        rem        = get_remediation_for_mitre(mitre_id)
+        return jsonify(rem)
+    except Exception as exc:
+        log.error("get_finding_remediation: %s", exc)
         return jsonify({"error": str(exc)}), 500

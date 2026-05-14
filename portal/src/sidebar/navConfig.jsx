@@ -75,12 +75,13 @@ export function buildNavSections({ installedModules = {}, data = null }) {
     {
       section: "SECURITY COMPLIANCE",
       items: [
-        { id: "comp-dashboard", label: "Compliance Overview",   icon: SvgComp,   accent: "#00e5a0" },
-        { id: "comp-alerts",    label: "Live Alerts",           icon: <span style={{ fontSize: 13 }}>🔔</span>, accent: "#ff8c00" },
-        { id: "comp-findings",  label: "Findings",              icon: SvgRisk,   accent: "#ff3b3b" },
-        { id: "comp-risks",     label: "Risk Management",       icon: SvgRisk,   accent: "#ff8c00" },
-        { id: "comp-reports",   label: "Reports",               icon: SvgReport, accent: "#b06eff" },
-        { id: "comp-policy",    label: "Policy Documents",      icon: SvgDoc,    accent: "#4d9eff" },
+        { id: "comp-dashboard",  label: "Compliance Overview",  icon: SvgComp,   accent: "#00e5a0" },
+        { id: "comp-assessment", label: "Assessments",          icon: <span style={{ fontSize: 13 }}>📋</span>, accent: "#6378ff" },
+        { id: "comp-alerts",     label: "Live Alerts",          icon: <span style={{ fontSize: 13 }}>🔔</span>, accent: "#ff8c00" },
+        { id: "comp-findings",   label: "Findings",             icon: SvgRisk,   accent: "#ff3b3b" },
+        { id: "comp-risks",      label: "Risk Management",      icon: SvgRisk,   accent: "#ff8c00" },
+        { id: "comp-reports",    label: "Reports",              icon: SvgReport, accent: "#b06eff" },
+        { id: "comp-policy",     label: "Policy Documents",     icon: SvgDoc,    accent: "#4d9eff" },
       ],
     },
     {

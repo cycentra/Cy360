@@ -291,11 +291,12 @@ export function ComplianceDashboardPage({ setActiveTab }) {
       {/* Quick actions */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
         {[
-          { label: "View Findings",    tab: "comp-findings", color: C.red },
-          { label: "Risk Register",    tab: "comp-risks",    color: C.orange },
-          { label: "Live Alerts",      tab: "comp-alerts",   color: C.blue },
-          { label: "Generate Report",  tab: "comp-reports",  color: C.purple },
-          { label: "Policy Documents", tab: "comp-policy",   color: C.accent },
+          { label: "Assessments",      tab: "comp-assessment", color: "#6378ff" },
+          { label: "View Findings",    tab: "comp-findings",   color: C.red },
+          { label: "Risk Register",    tab: "comp-risks",      color: C.orange },
+          { label: "Live Alerts",      tab: "comp-alerts",     color: C.blue },
+          { label: "Generate Report",  tab: "comp-reports",    color: C.purple },
+          { label: "Policy Documents", tab: "comp-policy",     color: C.accent },
         ].map(({ label, tab, color }) => (
           <button key={tab} onClick={() => setActiveTab && setActiveTab(tab)}
             style={{

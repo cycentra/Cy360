@@ -60,6 +60,8 @@ def create_app() -> Flask:
     try:
         from cy_comp.models import ensure_tables
         ensure_tables()
+        from cy_comp.services.questionnaire import seed_templates
+        seed_templates()  # idempotent — skips existing question_ids
     except Exception as _comp_exc:
         import logging as _log
         _log.getLogger(__name__).warning("cy_comp table init failed (non-fatal): %s", _comp_exc)

@@ -279,6 +279,43 @@ _DDL_STATEMENTS = [
     CREATE INDEX IF NOT EXISTS idx_cy_comp_alerts_framework ON cy_comp_alerts (framework);
     CREATE INDEX IF NOT EXISTS idx_cy_comp_alerts_severity  ON cy_comp_alerts (severity);
     """,
+
+    # 13. Questionnaire Templates (framework-specific questions, seeded from code)
+    """
+    CREATE TABLE IF NOT EXISTS cy_comp_questionnaire_templates (
+        id              TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+        framework       TEXT        NOT NULL,
+        section         TEXT        NOT NULL,
+        question_id     TEXT        NOT NULL UNIQUE,
+        question        TEXT        NOT NULL,
+        guidance        TEXT,
+        control_ref     TEXT,
+        weight          INTEGER     NOT NULL DEFAULT 2,
+        question_type   TEXT        NOT NULL DEFAULT 'yes_no',
+        options         JSONB       DEFAULT '[]',
+        order_idx       INTEGER     NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_cy_comp_qtpl_framework ON cy_comp_questionnaire_templates (framework);
+    """,
+
+    # 14. Questionnaire Responses (answers per user/session per framework)
+    """
+    CREATE TABLE IF NOT EXISTS cy_comp_questionnaire_responses (
+        id              TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+        framework       TEXT        NOT NULL,
+        question_id     TEXT        NOT NULL,
+        response        TEXT,
+        score           INTEGER,
+        notes           TEXT,
+        evidence_refs   JSONB       DEFAULT '[]',
+        responded_by    TEXT,
+        responded_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        reviewed_by     TEXT,
+        reviewed_at     TIMESTAMPTZ,
+        UNIQUE (framework, question_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_cy_comp_qresp_framework ON cy_comp_questionnaire_responses (framework);
+    """,
 ]
 
 # Column migrations for future schema evolution (idempotent ALTER TABLE)
@@ -301,7 +338,15 @@ _MIGRATE_COLUMNS: list[str] = [
     "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS compliance_confidence NUMERIC(4,2);",
     "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS compliance_breach BOOLEAN DEFAULT FALSE;",
 
+    # Verdict + auto-generated flag on findings
+    "ALTER TABLE cy_comp_findings ADD COLUMN IF NOT EXISTS verdict TEXT DEFAULT 'open';",
+    "ALTER TABLE cy_comp_findings ADD COLUMN IF NOT EXISTS auto_generated BOOLEAN DEFAULT FALSE;",
+    "ALTER TABLE cy_comp_findings ADD COLUMN IF NOT EXISTS alert_count INTEGER DEFAULT 0;",
+    "ALTER TABLE cy_comp_findings ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;",
+    "ALTER TABLE cy_comp_findings ADD COLUMN IF NOT EXISTS questionnaire_gap BOOLEAN DEFAULT FALSE;",
+
     # Indexes for compliance queries
+    "CREATE INDEX IF NOT EXISTS idx_cy_comp_findings_auto ON cy_comp_findings(auto_generated, framework);",
     "CREATE INDEX IF NOT EXISTS idx_alerts_is_compliance ON alerts(is_compliance_relevant, timestamp DESC) WHERE is_compliance_relevant = TRUE;",
     "CREATE INDEX IF NOT EXISTS idx_incidents_compliance ON incidents(compliance_breach, last_seen DESC) WHERE compliance_breach = TRUE;",
 ]

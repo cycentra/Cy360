@@ -77,6 +77,7 @@ import { RiskRegisterPage, RiskHeatmapPage, RiskAppetitePage } from './pages/com
 import { ComplianceFindingsPage }   from './pages/compliance/ComplianceFindingsPage.jsx';
 import { ComplianceReportsPage }    from './pages/compliance/ComplianceReportsPage.jsx';
 import { PolicyDocumentsPage }      from './pages/compliance/PolicyDocumentsPage.jsx';
+import { ComplianceAssessmentPage } from './pages/compliance/ComplianceAssessmentPage.jsx';
 
 // ── Scan History Dropdown ─────────────────────────────────────────────────────
 
@@ -357,14 +358,15 @@ export default function App() {
             {activeTab==="platform-extensions" && <PlatformExtensionsPage installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
 
             {/* ── Security Compliance (GRC) ─────────────────────────────── */}
-            {activeTab==="comp-dashboard" && <ComplianceDashboardPage setActiveTab={setActiveTab}/>}
-            {activeTab==="comp-alerts"    && <ComplianceLiveAlertsPage/>}
-            {activeTab==="comp-risks"     && <RiskRegisterPage setActiveTab={setActiveTab}/>}
-            {activeTab==="comp-heatmap"   && <RiskHeatmapPage/>}
-            {activeTab==="comp-appetite"  && <RiskAppetitePage/>}
-            {activeTab==="comp-findings"  && <ComplianceFindingsPage/>}
-            {activeTab==="comp-reports"   && <ComplianceReportsPage/>}
-            {activeTab==="comp-policy"    && <PolicyDocumentsPage/>}
+            {activeTab==="comp-dashboard"   && <ComplianceDashboardPage setActiveTab={setActiveTab}/>}
+            {activeTab==="comp-alerts"      && <ComplianceLiveAlertsPage/>}
+            {activeTab==="comp-assessment"  && <ComplianceAssessmentPage/>}
+            {activeTab==="comp-findings"    && <ComplianceFindingsPage/>}
+            {activeTab==="comp-risks"       && <RiskRegisterPage setActiveTab={setActiveTab}/>}
+            {activeTab==="comp-heatmap"     && <RiskHeatmapPage/>}
+            {activeTab==="comp-appetite"    && <RiskAppetitePage/>}
+            {activeTab==="comp-reports"     && <ComplianceReportsPage/>}
+            {activeTab==="comp-policy"      && <PolicyDocumentsPage/>}
 
           </div>
           </PageErrorBoundary>
