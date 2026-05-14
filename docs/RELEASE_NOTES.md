@@ -1,3 +1,19 @@
+## v1.1.0 -- 2026-05-14
+
+### New Features
+
+  - cy-comp): integrate GRC compliance module into CyCentra360
+  - inject linked alerts into CyMind incident detail context
+
+### Bug Fixes
+
+  - incidents page now defaults to Active filter, shows all 20 correctly
+  - active incidents now fetched by status=investigating|open
+  - 3 chat context issues — incident count, ASM IDs, guest scan leak
+  - action widget not triggering when INC-ID absent from close/resolve message
+
+---
+
 ## v1.0.419 -- 2026-05-13
 
 ### Bug Fixes
