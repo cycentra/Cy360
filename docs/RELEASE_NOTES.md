@@ -1,3 +1,11 @@
+## v1.1.2 -- 2026-05-14
+
+### Bug Fixes
+
+  - cy-comp): 4 UX improvements — risk pages merged, compliance tagging, RAG settings, severity mapping
+
+---
+
 ## v1.1.1 -- 2026-05-14
 
 ### New Features
