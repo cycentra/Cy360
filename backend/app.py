@@ -61,7 +61,9 @@ def create_app() -> Flask:
         from cy_comp.models import ensure_tables
         ensure_tables()
         from cy_comp.services.questionnaire import seed_templates
-        seed_templates()  # idempotent — skips existing question_ids
+        # force=True: questionnaire expanded to full framework coverage (v1.2.4).
+        # Updates question text/guidance/control_ref; existing RESPONSES are preserved.
+        seed_templates(force=True)
     except Exception as _comp_exc:
         import logging as _log
         _log.getLogger(__name__).warning("cy_comp table init failed (non-fatal): %s", _comp_exc)

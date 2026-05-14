@@ -26,12 +26,12 @@ SUPPORTED_FRAMEWORKS = ["nis2", "dora", "iso27001", "soc2", "nist_csf", "pci_dss
 # Canonical question/control count per framework (matches questionnaire data)
 # Used as total_controls denominator when no manual controls exist
 FRAMEWORK_CONTROL_COUNTS = {
-    "nis2":     20,
-    "dora":     19,
-    "iso27001": 19,
-    "soc2":     16,
-    "nist_csf": 17,
-    "pci_dss":  17,
+    "nis2":     28,   # 28 questions across all 10 Art.21 measures + governance + reporting
+    "dora":     28,   # 28 questions covering Art.5–49
+    "iso27001": 45,   # 45 questions mapping all 93 Annex A controls across 4 themes + ISMS clauses
+    "soc2":     28,   # 28 questions covering CC1-CC9 + A, C, PI, P criteria
+    "nist_csf": 26,   # 26 questions covering all 6 CSF 2.0 functions (GV, ID, PR, DE, RS, RC)
+    "pci_dss":  30,   # 30 questions covering all 12 PCI DSS v4 requirements
 }
 
 
