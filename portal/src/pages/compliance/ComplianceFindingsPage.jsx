@@ -9,6 +9,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { API_BASE } from "../../core/constants.js";
 import { CY_FW_FILTER_KEY } from "./ComplianceDashboardPage.jsx";
+import { ComplianceLiveAlertsPage } from "./ComplianceLiveAlertsPage.jsx";
 
 const C = {
   bg: "#090b10", surface: "#0d1117", border: "rgba(255,255,255,0.07)",
@@ -154,7 +155,7 @@ function RemediationPanel({ findingId, onClose }) {
   );
 }
 
-export function ComplianceFindingsPage() {
+function FindingsTab() {
   const [findings, setFindings]   = useState([]);
   const [total, setTotal]         = useState(0);
   const [loading, setLoading]     = useState(true);
@@ -581,6 +582,36 @@ export function ComplianceFindingsPage() {
               fontSize: 11, cursor: "pointer", opacity: page === totalPages ? 0.4 : 1 }}>Next</button>
         </div>
       )}
+    </div>
+  );
+}
+
+const TABS = [
+  { id: "findings",     label: "Findings" },
+  { id: "live-alerts",  label: "Live Alerts" },
+];
+
+export function ComplianceFindingsPage() {
+  const [tab, setTab] = useState("findings");
+  return (
+    <div>
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: 0, borderBottom: "1px solid rgba(255,255,255,0.07)", marginBottom: 24 }}>
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            style={{
+              background: "none", border: "none", borderBottom: tab === t.id ? "2px solid #00e5a0" : "2px solid transparent",
+              color: tab === t.id ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.4)",
+              padding: "10px 22px", fontFamily: "monospace", fontSize: 11, fontWeight: 700,
+              cursor: "pointer", marginBottom: -1, letterSpacing: "0.5px",
+              transition: "color 0.15s, border-color 0.15s",
+            }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === "findings"    && <FindingsTab />}
+      {tab === "live-alerts" && <ComplianceLiveAlertsPage />}
     </div>
   );
 }

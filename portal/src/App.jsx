@@ -72,7 +72,6 @@ import { PlatformExtensionsPage } from './pages/platform-extensions/index.jsx';
 
 // ── Security Compliance (GRC) pages ──────────────────────────────────────────
 import { ComplianceDashboardPage }  from './pages/compliance/ComplianceDashboardPage.jsx';
-import { ComplianceLiveAlertsPage } from './pages/compliance/ComplianceLiveAlertsPage.jsx';
 import { RiskRegisterPage, RiskHeatmapPage, RiskAppetitePage } from './pages/compliance/RiskRegisterPage.jsx';
 import { ComplianceFindingsPage }   from './pages/compliance/ComplianceFindingsPage.jsx';
 import { ComplianceReportsPage }    from './pages/compliance/ComplianceReportsPage.jsx';
@@ -362,7 +361,6 @@ export default function App() {
             {activeTab==="comp-assessment"  && <ComplianceAssessmentPage/>}
             {activeTab==="comp-findings"    && <ComplianceFindingsPage/>}
             {activeTab==="comp-risks"       && <RiskRegisterPage setActiveTab={setActiveTab}/>}
-            {activeTab==="comp-live-alerts" && <ComplianceLiveAlertsPage/>}
             {activeTab==="comp-heatmap"     && <RiskHeatmapPage/>}
             {activeTab==="comp-appetite"    && <RiskAppetitePage/>}
             {activeTab==="comp-reports"     && <ComplianceReportsPage/>}

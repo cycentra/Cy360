@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { API_BASE } from "../../core/constants.js";
+import { CY_FW_FILTER_KEY } from "./ComplianceDashboardPage.jsx";
 
 const C = {
   bg: "#090b10", surface: "#0d1117", border: "rgba(255,255,255,0.07)",
@@ -37,7 +38,15 @@ const CATEGORIES = ["IT", "Operational", "Financial", "Legal", "Reputational"];
 const TREATMENTS = ["mitigate", "avoid", "transfer", "accept"];
 const STATUSES   = ["open", "mitigated", "accepted", "closed"];
 const APPETITES  = ["low", "medium", "high"];
-const FRAMEWORKS = ["NIS2", "DORA", "ISO27001", "SOC2", "AVG", "NIST"];
+const FRAMEWORKS = ["NIS2", "DORA", "ISO27001", "SOC2", "NIST_CSF", "PCI_DSS", "GDPR"];
+
+function _getEnabledFws() {
+  try {
+    const s = JSON.parse(localStorage.getItem(CY_FW_FILTER_KEY));
+    if (Array.isArray(s) && s.length) return s;
+  } catch { /* ignore */ }
+  return null;
+}
 
 const EMPTY_FORM = {
   title: "", description: "", category: "IT", owner: "",
@@ -271,6 +280,25 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
   const [aiLoading, setAiLoading] = useState({});
   const [msg, setMsg]             = useState("");
   const [populating, setPopulating] = useState(false);
+  const [enabledFws, setEnabledFws] = useState(_getEnabledFws);
+
+  // Stay in sync when the user changes the framework selector on the dashboard
+  useEffect(() => {
+    const onStorage = e => {
+      if (e.key === CY_FW_FILTER_KEY) setEnabledFws(_getEnabledFws());
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  // Client-side filter: a risk is shown when at least one of its frameworks matches
+  // the global selection. Comparison is case-insensitive (DB stores mixed case).
+  const filteredRisks = enabledFws
+    ? risks.filter(r =>
+        !r.frameworks?.length ||
+        r.frameworks.some(fw => enabledFws.includes(fw.toLowerCase()))
+      )
+    : risks;
 
   const load = useCallback(() => {
     setLoading(true);
@@ -478,12 +506,14 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
               </tr>
             </thead>
             <tbody>
-              {risks.length === 0 ? (
+              {filteredRisks.length === 0 ? (
                 <tr><td colSpan={8} style={{ padding: 32, textAlign: "center",
                   color: C.muted, fontFamily: "monospace" }}>
-                  No risks registered. Click "+ Add Risk" to begin.
+                  {risks.length === 0
+                    ? "No risks registered. Click \"+ Add Risk\" to begin."
+                    : "No risks match the selected frameworks."}
                 </td></tr>
-              ) : risks.map((r, i) => [
+              ) : filteredRisks.map((r, i) => [
                 <tr key={r.id} style={{ borderBottom: `1px solid rgba(255,255,255,0.03)`,
                   background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)" }}>
                   <td style={{ padding: "10px 14px", maxWidth: 260 }}>
