@@ -1,8 +1,15 @@
-## v1.2.5 -- 2026-05-14
+## v1.2.6 -- 2026-05-15
 
 ### New Features
 
-  - cy-comp): v1.2.5 — ISO 27001 SoA, extended framework mapping, risk populate fix, policy docs guidance
+  - **Comprehensive PDF compliance reports** — `report.py` completely rewritten. PDFs now include: navy/teal branded cover page with live posture score ring and grade, executive summary table (overall score, grade, completion %, findings count, open risks, alert count), framework posture scores table with per-framework grade/passing/critical-gaps/alert-penalty breakdown, horizontal bar chart (reportlab HorizontalBarChart), questionnaire completion table per framework, compliance-relevant alerts summary (30-day, severity breakdown), top-50 findings table (sortable by severity), risk register summary (severity counts + top-30 risks table), gap analysis section with per-framework prioritised recommendations (REC-01…), and conclusion with framework tier list and 6 next-step actions. PDF is fully usable and self-contained; JSON export retained alongside.
+  - **Benchmark compliance integration** — `_collect_compliance_score()` in `blueprints/benchmark/routes.py` rewrote. Previously queried `cy_compliance_controls` (non-existent table), causing the compliance dimension to always return `score=None` and be silently excluded from the CSPI composite score. Now queries `cy_comp_framework_scores` for the latest cached score per framework (falls back to live questionnaire weight calculation if cache is empty), then averages across all frameworks. Compliance dimension is now live in the CSPI composite on the Benchmark page.
+  - **Dashboard extended** — Risk Register Summary widget and Questionnaire Completion widget added to Compliance Dashboard (Row 5). Risk widget: severity count chips + stacked severity bar + "VIEW HEATMAP →" nav. Questionnaire widget: per-framework colour-coded progress bars with answered/total label + "OPEN ASSESSMENT →" nav.
+
+### Bug Fixes
+
+  - **Dashboard refresh blanking all widgets** — `Refresh Scores` button was writing the `/api/comp/framework-scores?refresh=true` response (shape `{scores:[...]}`) into the main `summary` state, destroying all other widget data. Fixed: score recompute call moved to `.finally(() => fetchDashboard())` so the full dashboard is always re-fetched after scores update.
+  - **Scoring inconsistency** — `compliance.py` `_compute_score_for_framework()` used count-based formula while `questionnaire.py` `score_framework()` used weight-based formula, causing Dashboard and Assessment page to show different numbers for the same framework. Unified to weight-based formula: `q_score = (pass_weight + partial_weight × 0.5) / total_weight × 100`.
 
 ---
 

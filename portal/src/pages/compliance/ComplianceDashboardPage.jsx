@@ -234,13 +234,22 @@ export function ComplianceDashboardPage({ setActiveTab }) {
 
   const load = useCallback((force = false) => {
     if (force) setRefreshing(true); else setLoading(true);
-    const url = force
-      ? `${API_BASE}/api/comp/framework-scores?refresh=true`
-      : `${API_BASE}/api/comp/dashboard`;
-    fetch(force ? url : `${API_BASE}/api/comp/dashboard`, { credentials: "include" })
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(d => { setSummary(d); setLoading(false); setRefreshing(false); })
-      .catch(e => { setError(`Failed (${e})`); setLoading(false); setRefreshing(false); });
+
+    const fetchDashboard = () =>
+      fetch(`${API_BASE}/api/comp/dashboard`, { credentials: "include" })
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(d => { setSummary(d); setLoading(false); setRefreshing(false); })
+        .catch(e => { setError(`Failed to load dashboard (${e})`); setLoading(false); setRefreshing(false); });
+
+    if (force) {
+      // Step 1: recompute scores on the server.
+      // Step 2: re-fetch the full dashboard payload regardless of step 1's result.
+      // Never write the /framework-scores response into summary — it has a different shape.
+      fetch(`${API_BASE}/api/comp/framework-scores?refresh=true`, { credentials: "include" })
+        .finally(() => fetchDashboard());
+    } else {
+      fetchDashboard();
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -262,15 +271,17 @@ export function ComplianceDashboardPage({ setActiveTab }) {
     <div style={{ color: C.red, fontFamily: "monospace", fontSize: 12, padding: 40 }}>{error}</div>
   );
 
-  const scores       = summary?.framework_scores    || [];
-  const findSumm     = summary?.findings_summary    || {};
-  const findVerdict  = summary?.findings_by_verdict || {};
-  const activeAlerts = summary?.active_alerts       || 0;
-  const breachInc    = summary?.breach_incidents    || 0;
-  const overall      = summary?.overall_score       || 0;
-  const recentInc    = summary?.recent_incidents    || [];
-  const alertsByDay  = summary?.alerts_by_day       || [];
-  const scoreHist    = summary?.score_history       || [];
+  const scores        = summary?.framework_scores    || [];
+  const findSumm      = summary?.findings_summary    || {};
+  const findVerdict   = summary?.findings_by_verdict || {};
+  const activeAlerts  = summary?.active_alerts       || 0;
+  const breachInc     = summary?.breach_incidents    || 0;
+  const overall       = summary?.overall_score       || 0;
+  const recentInc     = summary?.recent_incidents    || [];
+  const alertsByDay   = summary?.alerts_by_day       || [];
+  const scoreHist     = summary?.score_history       || [];
+  const riskSummary   = summary?.risk_summary        || {};
+  const qHub          = summary?.questionnaire_hub   || [];
 
   const visibleScores = scores.filter(fw => !hidden.includes(fw.framework));
 
@@ -567,6 +578,116 @@ export function ComplianceDashboardPage({ setActiveTab }) {
           </div>
         </div>
       )}
+
+      {/* ── Row 5: Risk Register + Questionnaire Completion ─────────────── */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+
+        {/* Risk Register Summary */}
+        <div style={CARD}>
+          <div style={{ display: "flex", justifyContent: "space-between",
+            alignItems: "center", marginBottom: 16 }}>
+            <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px",
+              fontFamily: "monospace", textTransform: "uppercase" }}>
+              Risk Register
+            </div>
+            <button onClick={() => setActiveTab && setActiveTab("comp-risks")}
+              style={{ background: "none", border: "none", color: C.red,
+                fontFamily: "monospace", fontSize: 9, cursor: "pointer",
+                fontWeight: 700, padding: 0 }}>
+              VIEW HEATMAP →
+            </button>
+          </div>
+          {riskSummary.total > 0 ? (
+            <div>
+              <div style={{ display: "flex", gap: 16, marginBottom: 16, flexWrap: "wrap" }}>
+                {[
+                  { label: "Total",    val: riskSummary.total,    color: C.text },
+                  { label: "Critical", val: riskSummary.critical,  color: C.red },
+                  { label: "High",     val: riskSummary.high,      color: C.orange },
+                  { label: "Medium",   val: riskSummary.medium,    color: C.blue },
+                  { label: "Low",      val: riskSummary.low,       color: C.muted },
+                ].map(({ label, val, color }) => (
+                  <div key={label} style={{ textAlign: "center" }}>
+                    <div style={{ color, fontSize: 22, fontFamily: "monospace",
+                      fontWeight: 800 }}>{val || 0}</div>
+                    <div style={{ color: C.muted, fontSize: 8,
+                      fontFamily: "monospace" }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+              {/* Severity bar */}
+              <div style={{ height: 6, display: "flex", borderRadius: 3, overflow: "hidden",
+                background: "rgba(255,255,255,0.04)" }}>
+                {[
+                  { key: "critical", color: C.red },
+                  { key: "high",     color: C.orange },
+                  { key: "medium",   color: C.blue },
+                  { key: "low",      color: C.muted },
+                ].map(({ key, color }) => {
+                  const pct = riskSummary.total
+                    ? ((riskSummary[key] || 0) / riskSummary.total) * 100 : 0;
+                  return pct > 0
+                    ? <div key={key} style={{ width: `${pct}%`, background: color }} />
+                    : null;
+                })}
+              </div>
+            </div>
+          ) : (
+            <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 10,
+              fontFamily: "monospace" }}>
+              No risks in register. Use Auto Populate on the Risk Heatmap page.
+            </div>
+          )}
+        </div>
+
+        {/* Questionnaire Completion */}
+        <div style={CARD}>
+          <div style={{ display: "flex", justifyContent: "space-between",
+            alignItems: "center", marginBottom: 16 }}>
+            <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px",
+              fontFamily: "monospace", textTransform: "uppercase" }}>
+              Questionnaire Completion
+            </div>
+            <button onClick={() => setActiveTab && setActiveTab("comp-assessment")}
+              style={{ background: "none", border: "none", color: C.purple,
+                fontFamily: "monospace", fontSize: 9, cursor: "pointer",
+                fontWeight: 700, padding: 0 }}>
+              OPEN ASSESSMENT →
+            </button>
+          </div>
+          {qHub.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {qHub.map(fw => {
+                const meta  = FW_META[fw.framework] || { label: fw.framework.toUpperCase(), color: C.blue };
+                const pct   = fw.pct || 0;
+                return (
+                  <div key={fw.framework}>
+                    <div style={{ display: "flex", justifyContent: "space-between",
+                      marginBottom: 3 }}>
+                      <span style={{ color: meta.color, fontSize: 9,
+                        fontFamily: "monospace", fontWeight: 700 }}>{meta.label}</span>
+                      <span style={{ color: C.muted, fontSize: 9, fontFamily: "monospace" }}>
+                        {fw.answered}/{fw.total} · {pct}%
+                      </span>
+                    </div>
+                    <div style={{ height: 4, background: "rgba(255,255,255,0.05)",
+                      borderRadius: 2 }}>
+                      <div style={{ height: "100%", width: `${pct}%`,
+                        background: pct >= 80 ? C.accent : pct >= 40 ? C.orange : C.red,
+                        borderRadius: 2, transition: "width 1s ease" }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 10,
+              fontFamily: "monospace" }}>
+              No questionnaire data. Complete assessments to populate.
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* ── Getting Started Flow ──────────────────────────────────────────── */}
       <div style={CARD}>

@@ -37,81 +37,92 @@ FRAMEWORK_CONTROL_COUNTS = {
 
 def _compute_score_for_framework(cur, framework: str) -> dict:
     """
-    Score = blended questionnaire + alert signal, capped 0–100.
-    total_controls = questionnaire question count (never alert count).
-    """
-    # ── 1. Questionnaire baseline ───────────────────────────────────────────
-    cur.execute(
-        "SELECT COUNT(*) FROM cy_comp_questionnaire_templates WHERE framework = %s;",
-        (framework,)
-    )
-    q_total = (cur.fetchone() or [0])[0] or FRAMEWORK_CONTROL_COUNTS.get(framework, 20)
+    Score = blended questionnaire (weight-based) + alert signal, capped 0–100.
 
+    Scoring formula — identical to questionnaire.py → score_framework() so that
+    every page shows the same number:
+        q_score = (pass_weight + partial_weight × 0.5) / total_weight × 100
+
+    Weights come from cy_comp_questionnaire_templates.weight (default 2; critical = 3).
+    total_controls = question count (not alert count) — used for the denominator label.
+    """
+    # ── 1. Questionnaire baseline (weight-based, mirrors score_framework()) ─
     cur.execute(
         """
         SELECT
-            COUNT(*) FILTER (WHERE r.score >= 2)  AS passing,
-            COUNT(*) FILTER (WHERE r.score = 0)   AS failing,
-            COUNT(*) FILTER (WHERE r.score = 1)   AS partial
-        FROM cy_comp_questionnaire_responses r
-        JOIN cy_comp_questionnaire_templates t ON t.question_id = r.question_id
+            COUNT(t.question_id)                                          AS q_total,
+            COALESCE(SUM(t.weight), 0)                                    AS total_weight,
+            COALESCE(SUM(t.weight) FILTER (WHERE r.score >= 2),   0)      AS pass_weight,
+            COALESCE(SUM(t.weight) FILTER (WHERE r.score = 0),    0)      AS fail_weight,
+            COALESCE(SUM(t.weight) FILTER (WHERE r.score = 1),    0)      AS partial_weight,
+            COUNT(r.question_id)                                          AS q_answered,
+            COUNT(r.question_id) FILTER (WHERE r.score >= 2)             AS q_pass,
+            COUNT(r.question_id) FILTER (WHERE r.score = 0)              AS q_fail
+        FROM cy_comp_questionnaire_templates t
+        LEFT JOIN cy_comp_questionnaire_responses r
+               ON r.question_id = t.question_id AND r.framework = t.framework
         WHERE t.framework = %s;
         """,
         (framework,)
     )
-    row = cur.fetchone() or (0, 0, 0)
-    q_pass, q_fail, q_partial = int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)
-    q_answered = q_pass + q_fail + q_partial
+    row       = cur.fetchone() or (0, 0, 0, 0, 0, 0, 0, 0)
+    q_total       = int(row[0] or 0) or FRAMEWORK_CONTROL_COUNTS.get(framework, 20)
+    total_weight  = float(row[1] or 0) or (q_total * 2)   # fallback: 2 pts per question
+    pass_weight   = float(row[2] or 0)
+    fail_weight   = float(row[3] or 0)
+    partial_weight = float(row[4] or 0)
+    q_answered    = int(row[5] or 0)
+    q_pass        = int(row[6] or 0)
+    q_fail        = int(row[7] or 0)
 
     # ── 2. Alert-based penalty ──────────────────────────────────────────────
-    cur.execute(
-        """
-        SELECT
-            COUNT(*) FILTER (WHERE rule_level >= 12)              AS crit,
-            COUNT(*) FILTER (WHERE rule_level >= 10 AND rule_level < 12) AS high,
-            COUNT(*) FILTER (WHERE rule_level >= 7  AND rule_level < 10) AS med,
-            COUNT(*) FILTER (WHERE rule_level < 7)                AS low
-        FROM alerts
-        WHERE is_compliance_relevant = TRUE
-          AND %s = ANY(compliance_frameworks)
-          AND timestamp > NOW() - INTERVAL '30 days';
-        """,
-        (framework,)
-    )
-    ar = cur.fetchone() or (0, 0, 0, 0)
-    a_crit, a_high, a_med, a_low = (int(x or 0) for x in ar)
-
-    # Raw penalty (0-100 scale), capped at 40 so alerts alone can't zero a score
+    try:
+        cur.execute(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE rule_level >= 12)                       AS crit,
+                COUNT(*) FILTER (WHERE rule_level >= 10 AND rule_level < 12)   AS high,
+                COUNT(*) FILTER (WHERE rule_level >= 7  AND rule_level < 10)   AS med
+            FROM alerts
+            WHERE is_compliance_relevant = TRUE
+              AND %s = ANY(compliance_frameworks)
+              AND timestamp > NOW() - INTERVAL '30 days';
+            """,
+            (framework,)
+        )
+        ar = cur.fetchone() or (0, 0, 0)
+    except Exception:
+        ar = (0, 0, 0)
+    a_crit, a_high, a_med = (int(x or 0) for x in ar)
+    # Capped at 40 so alerts alone can't zero a score
     alert_penalty = min(40, a_crit * 8 + a_high * 4 + a_med * 1)
 
-    # ── 3. Compute score ────────────────────────────────────────────────────
+    # ── 3. Compute final score (weight-based, same formula as score_framework) ─
     if q_answered > 0:
-        # Questionnaire-driven: weight partial answers at 50%
-        earned = q_pass + q_partial * 0.5
-        q_score = round((earned / q_total) * 100, 1)
-        # Alert penalty reduces questionnaire score by up to 40 pts
-        score = max(0.0, round(q_score - alert_penalty, 1))
+        earned   = pass_weight + partial_weight * 0.5
+        q_score  = round((earned / total_weight) * 100, 1)
+        score    = max(0.0, round(q_score - alert_penalty, 1))
         passing  = q_pass
         failing  = q_fail
         critical_gaps = q_fail + a_crit + a_high
     else:
-        # No questionnaire data yet — use alert-only penalty against fixed denominator
+        # No responses yet — use alert penalty against fixed baseline (100 % clean start)
         score         = max(0.0, round(100.0 - alert_penalty, 1))
-        passing       = max(0, q_total - (a_crit + a_high))
-        failing       = a_crit + a_high
+        passing       = 0
+        failing       = 0
         critical_gaps = a_crit + a_high
 
     return {
-        "framework":       framework,
-        "score":           score,
-        "total_controls":  q_total,
-        "passing":         min(passing, q_total),
-        "failing":         min(failing, q_total),
-        "critical_gaps":   critical_gaps,
-        "q_answered":      q_answered,
-        "q_total":         q_total,
-        "alert_penalty":   alert_penalty,
-        "computed_at":     datetime.now(timezone.utc).isoformat(),
+        "framework":      framework,
+        "score":          score,
+        "total_controls": q_total,
+        "passing":        min(passing, q_total),
+        "failing":        min(failing, q_total),
+        "critical_gaps":  critical_gaps,
+        "q_answered":     q_answered,
+        "q_total":        q_total,
+        "alert_penalty":  alert_penalty,
+        "computed_at":    datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -343,31 +354,35 @@ def get_controls_view(framework: str) -> list[dict]:
 
 def get_dashboard_summary() -> dict:
     """
-    Live dashboard data: scores, alerts distribution, breach incidents, findings.
+    Full GRC posture dashboard: scores, alerts, incidents, findings, risks, questionnaire completion.
+    Every widget on ComplianceDashboardPage.jsx reads from this one endpoint.
     """
     scores  = get_latest_scores()
     overall = round(sum(s["score"] for s in scores) / len(scores), 1) if scores else 0.0
 
-    alert_by_severity   = {"critical": 0, "high": 0, "medium": 0, "low": 0}
-    framework_breakdown = {}
-    recent_incidents    = []
-    active_alerts       = 0
-    breach_incidents    = 0
-    findings_summary    = {}
+    alert_by_severity    = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    framework_breakdown  = {}
+    recent_incidents     = []
+    active_alerts        = 0
+    breach_incidents     = 0
+    findings_summary     = {}
+    findings_by_verdict  = {}
+    risk_summary         = {"total": 0, "critical": 0, "high": 0, "medium": 0, "low": 0, "open": 0}
+    questionnaire_hub    = []   # [{framework, total, answered, pct}]
 
     try:
         with db() as conn:
             cur = conn.cursor()
 
-            # Active compliance alerts by severity (last 7 days)
+            # ── Active compliance alerts by severity (last 7 days) ────────────
             cur.execute(
                 """
                 SELECT
-                    SUM(CASE WHEN rule_level >= 12 THEN 1 ELSE 0 END)              AS critical,
-                    SUM(CASE WHEN rule_level >= 10 AND rule_level < 12 THEN 1 ELSE 0 END) AS high,
-                    SUM(CASE WHEN rule_level >= 7  AND rule_level < 10 THEN 1 ELSE 0 END) AS medium,
-                    SUM(CASE WHEN rule_level < 7 THEN 1 ELSE 0 END)                AS low,
-                    COUNT(*)                                                        AS total
+                    SUM(CASE WHEN rule_level >= 12 THEN 1 ELSE 0 END)                      AS critical,
+                    SUM(CASE WHEN rule_level >= 10 AND rule_level < 12 THEN 1 ELSE 0 END)  AS high,
+                    SUM(CASE WHEN rule_level >= 7  AND rule_level < 10 THEN 1 ELSE 0 END)  AS medium,
+                    SUM(CASE WHEN rule_level < 7 THEN 1 ELSE 0 END)                        AS low,
+                    COUNT(*)                                                                AS total
                 FROM alerts
                 WHERE is_compliance_relevant = TRUE
                   AND timestamp > NOW() - INTERVAL '7 days';
@@ -381,7 +396,7 @@ def get_dashboard_summary() -> dict:
                 }
                 active_alerts = int(row[4] or 0)
 
-            # Framework breakdown (last 7 days)
+            # ── Alert framework breakdown (last 7 days) ───────────────────────
             cur.execute(
                 """
                 SELECT unnest(compliance_frameworks) AS fw, COUNT(*) AS cnt
@@ -394,7 +409,7 @@ def get_dashboard_summary() -> dict:
             for fw, cnt in cur.fetchall():
                 framework_breakdown[fw] = int(cnt)
 
-            # Recent breach incidents
+            # ── Recent breach incidents ───────────────────────────────────────
             cur.execute(
                 """
                 SELECT id, severity, risk_score, compliance_confidence,
@@ -406,16 +421,16 @@ def get_dashboard_summary() -> dict:
             )
             for r in cur.fetchall():
                 recent_incidents.append({
-                    "id":          r[0], "severity":    r[1],
-                    "risk_score":  float(r[2] or 0),
-                    "confidence":  float(r[3] or 0),
-                    "frameworks":  r[4] or [],
-                    "last_seen":   r[5].isoformat() if r[5] else None,
-                    "status":      r[6], "alert_count": r[7],
+                    "id":         r[0], "severity":    r[1],
+                    "risk_score": float(r[2] or 0),
+                    "confidence": float(r[3] or 0),
+                    "frameworks": r[4] or [],
+                    "last_seen":  r[5].isoformat() if r[5] else None,
+                    "status":     r[6], "alert_count": r[7],
                 })
             breach_incidents = len(recent_incidents)
 
-            # Findings by severity
+            # ── Findings by severity (all open/in-progress) ───────────────────
             cur.execute(
                 """
                 SELECT severity, COUNT(*) FROM cy_comp_findings
@@ -425,20 +440,71 @@ def get_dashboard_summary() -> dict:
             for sev, cnt in cur.fetchall():
                 findings_summary[sev] = int(cnt)
 
-            # Findings by verdict
+            # ── Findings by verdict ───────────────────────────────────────────
             cur.execute(
                 """
-                SELECT verdict, COUNT(*) FROM cy_comp_findings
-                WHERE status IN ('open','in_progress') GROUP BY verdict;
+                SELECT COALESCE(verdict,'open') AS verdict, COUNT(*) FROM cy_comp_findings
+                WHERE status IN ('open','in_progress') GROUP BY 1;
                 """
             )
-            findings_by_verdict = {}
             for verdict, cnt in cur.fetchall():
-                findings_by_verdict[verdict or "open"] = int(cnt)
+                findings_by_verdict[verdict] = int(cnt)
+
+            # ── Risk register summary ─────────────────────────────────────────
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*)                                                           AS total,
+                    COUNT(*) FILTER (WHERE risk_score >= 20)                          AS critical,
+                    COUNT(*) FILTER (WHERE risk_score >= 12 AND risk_score < 20)      AS high,
+                    COUNT(*) FILTER (WHERE risk_score >= 6  AND risk_score < 12)      AS medium,
+                    COUNT(*) FILTER (WHERE risk_score < 6)                             AS low,
+                    COUNT(*) FILTER (WHERE status = 'open')                           AS open_count
+                FROM cy_comp_risks
+                WHERE status != 'closed';
+                """
+            )
+            rr = cur.fetchone()
+            if rr:
+                risk_summary = {
+                    "total":    int(rr[0] or 0),
+                    "critical": int(rr[1] or 0),
+                    "high":     int(rr[2] or 0),
+                    "medium":   int(rr[3] or 0),
+                    "low":      int(rr[4] or 0),
+                    "open":     int(rr[5] or 0),
+                }
+
+            # ── Questionnaire completion per framework ────────────────────────
+            cur.execute(
+                """
+                SELECT
+                    t.framework,
+                    COUNT(t.question_id)          AS total,
+                    COUNT(r.question_id)          AS answered,
+                    COALESCE(SUM(t.weight),0)     AS total_weight,
+                    COALESCE(SUM(t.weight) FILTER (WHERE r.score >= 2), 0)  AS pass_weight,
+                    COALESCE(SUM(t.weight) FILTER (WHERE r.score = 1),  0)  AS partial_weight
+                FROM cy_comp_questionnaire_templates t
+                LEFT JOIN cy_comp_questionnaire_responses r
+                       ON r.question_id = t.question_id AND r.framework = t.framework
+                GROUP BY t.framework;
+                """
+            )
+            for row in cur.fetchall():
+                fw, total, answered, tw, pw, partw = row
+                pct_answered = round((answered / total * 100) if total else 0, 1)
+                score_pct    = round(((pw + partw * 0.5) / tw * 100) if tw else 0, 1)
+                questionnaire_hub.append({
+                    "framework": fw,
+                    "total":     int(total),
+                    "answered":  int(answered),
+                    "pct":       pct_answered,
+                    "score":     score_pct,
+                })
 
     except Exception as exc:
         log.error("get_dashboard_summary: %s", exc)
-        findings_by_verdict = {}
 
     return {
         "overall_score":       overall,
@@ -450,6 +516,8 @@ def get_dashboard_summary() -> dict:
         "breach_incidents":    breach_incidents,
         "findings_summary":    findings_summary,
         "findings_by_verdict": findings_by_verdict,
+        "risk_summary":        risk_summary,
+        "questionnaire_hub":   questionnaire_hub,
         "alerts_by_day":       get_alerts_by_day(14),
         "score_history":       get_score_history(),
     }

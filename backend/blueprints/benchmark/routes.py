@@ -414,47 +414,76 @@ def _collect_siem_score() -> dict:
 
 def _collect_compliance_score() -> dict:
     """
-    Regulatory compliance coverage (0-100).
+    Regulatory compliance coverage (0-100) sourced from cy_comp module.
 
-    Attempt 1: cy_compliance_controls PostgreSQL table (CyComp module).
-    Attempt 2: ASM finding severity heuristic.
-
-    TODO when CyComp is enabled:
-      - Confirm table name: cy_compliance_controls
-      - Confirm status column values: 'compliant' | 'partial' | 'non_compliant'
+    Primary: average of cached per-framework scores from cy_comp_framework_scores.
+    Fallback: weight-based calculation direct from questionnaire responses.
+    Returns score=None only when cy_comp tables don't exist yet.
     """
     try:
         from core.config import CYCENTRA_DB_URL
         import psycopg2
         conn = psycopg2.connect(CYCENTRA_DB_URL)
         cur  = conn.cursor()
+
+        # Attempt 1: use the cached scores table (populated by cy_comp score runs)
+        cur.execute("""
+            SELECT framework, score
+            FROM (
+                SELECT framework, score,
+                       ROW_NUMBER() OVER (PARTITION BY framework ORDER BY computed_at DESC) AS rn
+                FROM cy_comp_framework_scores
+            ) t
+            WHERE rn = 1 AND score IS NOT NULL;
+        """)
+        rows = cur.fetchall()
+        if rows:
+            avg_score = round(sum(float(r[1]) for r in rows) / len(rows), 1)
+            frameworks = ", ".join(r[0].upper() for r in rows)
+            conn.close()
+            return {
+                "score":  avg_score,
+                "stale":  False,
+                "detail": f"CyComp: avg {avg_score}% across {len(rows)} frameworks ({frameworks})",
+            }
+
+        # Attempt 2: derive from questionnaire responses directly
         cur.execute("""
             SELECT
-                COUNT(*) FILTER (WHERE status = 'compliant')     AS compliant,
-                COUNT(*) FILTER (WHERE status = 'partial')       AS partial,
-                COUNT(*)                                            AS total
-            FROM cy_compliance_controls
+                t.framework,
+                COALESCE(SUM(t.weight), 0)                                AS total_weight,
+                COALESCE(SUM(t.weight) FILTER (WHERE r.score >= 2), 0)    AS pass_weight,
+                COALESCE(SUM(t.weight) FILTER (WHERE r.score = 1),  0)    AS partial_weight,
+                COUNT(r.question_id)                                       AS answered
+            FROM cy_comp_questionnaire_templates t
+            LEFT JOIN cy_comp_questionnaire_responses r
+                   ON r.question_id = t.question_id AND r.framework = t.framework
+            GROUP BY t.framework
+            HAVING COUNT(r.question_id) > 0;
         """)
-        row = cur.fetchone()
+        rows = cur.fetchall()
         conn.close()
-        if row and row[2]:
-            score = round(((row[0] + row[1] * 0.5) / row[2]) * 100)
-            return {"score": score, "stale": False,
-                    "detail": f"{row[0]}/{row[2]} controls compliant (CyComp)"}
+        if rows:
+            scores = []
+            for row in rows:
+                tw = float(row[1] or 1)
+                pw = float(row[2] or 0)
+                pa = float(row[3] or 0)
+                scores.append(round(((pw + pa * 0.5) / tw) * 100, 1))
+            avg_score = round(sum(scores) / len(scores), 1)
+            return {
+                "score":  avg_score,
+                "stale":  False,
+                "detail": f"CyComp (questionnaire): avg {avg_score}% across {len(scores)} frameworks",
+            }
     except Exception:
-        pass   # table not yet created — fall through silently
+        pass  # cy_comp tables don't exist yet
 
-    # CyComp is not installed.  Do NOT fall back to ASM scan findings:
-    # those findings already drive the ASM dimension score (weight 20%).
-    # Re-using them here would count the same CVE data in two separate
-    # CSPI dimensions and artificially depress the composite score.
-    # Return None so this dimension is omitted from the weighted average
-    # until CyComp is installed and the cy_compliance_controls table exists.
+    # cy_comp not yet set up — omit from CSPI weighted average
     return {
         "score":  None,
         "stale":  False,
-        "detail": "CyComp not installed — compliance score unavailable. "
-                  "Install the CyComp module for NIS2 / ISO 27001 / DORA coverage scoring.",
+        "detail": "CyComp not configured — run a compliance assessment to populate scores.",
     }
 
 
