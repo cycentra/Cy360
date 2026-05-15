@@ -154,11 +154,61 @@ def compute_framework_scores(frameworks: Optional[list] = None) -> list[dict]:
 
 
 def get_latest_scores(frameworks: Optional[list] = None) -> list[dict]:
+    """
+    Return latest score snapshot per framework, enriched with two live metrics:
+      - alert_penalty : current 30-day alert penalty (always fresh, not cached)
+      - q_answered    : current answered questionnaire question count (always fresh)
+
+    These two metrics are batch-queried once and merged into every row so the
+    frontend always sees up-to-date values without a full score recompute.
+    """
     targets = frameworks or SUPPORTED_FRAMEWORKS
     rows = []
     try:
         with db() as conn:
             cur = conn.cursor()
+
+            # ── Batch: alert penalties (live, last 30 days) ───────────────────
+            alert_penalties: dict[str, int] = {fw: 0 for fw in targets}
+            try:
+                cur.execute(
+                    """
+                    SELECT fw,
+                           LEAST(40, SUM(
+                               CASE WHEN rule_level >= 12 THEN 8
+                                    WHEN rule_level >= 10 THEN 4
+                                    WHEN rule_level >= 7  THEN 1
+                                    ELSE 0 END)) AS penalty
+                    FROM alerts,
+                         UNNEST(compliance_frameworks) AS fw
+                    WHERE is_compliance_relevant = TRUE
+                      AND timestamp > NOW() - INTERVAL '30 days'
+                    GROUP BY fw;
+                    """
+                )
+                for fw_name, pen in cur.fetchall():
+                    alert_penalties[fw_name] = int(pen or 0)
+            except Exception as exc:
+                log.warning("get_latest_scores: alert_penalties batch: %s", exc)
+
+            # ── Batch: questionnaire answered counts (live) ────────────────────
+            q_answered_map: dict[str, int] = {fw: 0 for fw in targets}
+            try:
+                cur.execute(
+                    """
+                    SELECT t.framework, COUNT(r.question_id) AS answered
+                    FROM cy_comp_questionnaire_templates t
+                    LEFT JOIN cy_comp_questionnaire_responses r
+                           ON r.question_id = t.question_id AND r.framework = t.framework
+                    GROUP BY t.framework;
+                    """
+                )
+                for fw_name, answered in cur.fetchall():
+                    q_answered_map[fw_name] = int(answered or 0)
+            except Exception as exc:
+                log.warning("get_latest_scores: q_answered batch: %s", exc)
+
+            # ── Per-framework cache lookup ─────────────────────────────────────
             for fw in targets:
                 cur.execute(
                     """
@@ -169,21 +219,26 @@ def get_latest_scores(frameworks: Optional[list] = None) -> list[dict]:
                     (fw,)
                 )
                 row = cur.fetchone()
-                # Skip stale cache rows where total_controls was never written (legacy bug).
-                # Also write corrected values back to DB so the fix is permanent.
+                penalty = alert_penalties.get(fw, 0)
+                q_ans   = q_answered_map.get(fw, 0)
+
                 if row and (row[2] or 0) > 0:
                     rows.append({
                         "framework":      row[0],
-                        "score":          row[1],
-                        "total_controls": row[2],
-                        "passing":        row[3],
-                        "failing":        row[4],
-                        "critical_gaps":  row[5],
+                        "score":          float(row[1] or 0),
+                        "total_controls": int(row[2] or 0),
+                        "passing":        int(row[3] or 0),
+                        "failing":        int(row[4] or 0),
+                        "critical_gaps":  int(row[5] or 0),
+                        "alert_penalty":  penalty,   # live
+                        "q_answered":     q_ans,     # live
                         "computed_at":    row[6].isoformat() if row[6] else None,
                     })
                 else:
+                    # Stale cache (total_controls=0): recompute and persist
                     fresh = _compute_score_for_framework(cur, fw)
-                    # Persist the corrected values so subsequent requests use the cache
+                    fresh["alert_penalty"] = penalty
+                    fresh["q_answered"]    = q_ans
                     try:
                         cur.execute(
                             """
@@ -194,8 +249,8 @@ def get_latest_scores(frameworks: Optional[list] = None) -> list[dict]:
                             (fresh["framework"], fresh["score"], fresh["total_controls"],
                              fresh["passing"], fresh["failing"], fresh["critical_gaps"])
                         )
-                        log.info("get_latest_scores: repaired stale cache for %s (total_controls=%s)",
-                                 fw, fresh["total_controls"])
+                        log.info("get_latest_scores: repaired stale cache for %s (tc=%s, pen=%s)",
+                                 fw, fresh["total_controls"], penalty)
                     except Exception as exc:
                         log.warning("get_latest_scores: cache repair INSERT [%s]: %s", fw, exc)
                     rows.append(fresh)

@@ -150,37 +150,51 @@ function LineChart({ history, height = 90 }) {
   });
 
   const W = 400, H = height;
+  const fwKeys = Object.keys(byFw);
 
-  const lines = Object.entries(byFw).map(([fw, pts]) => {
-    const color = FW_META[fw]?.color || C.blue;
-    // For single-snapshot frameworks: render as a full-width flat horizontal line
-    // so it's visible in the chart (a dot gets squashed by preserveAspectRatio=none)
-    const series = pts.length === 1 ? [pts[0], pts[0]] : pts;
-    const n      = series.length;
-    const points = series.map((p, i) => {
+  // Apply a small y-offset so frameworks at the same score level don't stack invisibly
+  const scoreGroups = {};
+  fwKeys.forEach(fw => {
+    const s = Math.round((byFw[fw][byFw[fw].length - 1]?.score) || 0);
+    if (!scoreGroups[s]) scoreGroups[s] = [];
+    scoreGroups[s].push(fw);
+  });
+  const yOffset = {};
+  Object.values(scoreGroups).forEach(group => {
+    const mid = (group.length - 1) / 2;
+    group.forEach((fw, i) => { yOffset[fw] = (i - mid) * 2.5; });
+  });
+
+  const lines = fwKeys.map(fw => {
+    const pts      = byFw[fw];
+    const color    = FW_META[fw]?.color || C.blue;
+    const off      = yOffset[fw] || 0;
+    const series   = pts.length === 1 ? [pts[0], pts[0]] : pts;
+    const n        = series.length;
+    const points   = series.map((p, i) => {
       const x = n > 1 ? (i / (n - 1)) * W : W / 2;
-      const y = H - (p.score / 100) * H;
+      const y = H - (p.score / 100) * H + off;
       return `${x},${y}`;
     }).join(" ");
-    const lastY = H - (series[series.length - 1].score / 100) * H;
-    const isSingle = pts.length === 1;
+    const lastScore = series[series.length - 1].score;
+    const lastY     = H - (lastScore / 100) * H + off;
+    const isSingle  = pts.length === 1;
     return (
       <g key={fw}>
         <polyline points={points}
           fill="none" stroke={color}
-          strokeWidth={isSingle ? 1 : 1.5}
-          strokeDasharray={isSingle ? "4 3" : undefined}
+          strokeWidth={isSingle ? 1.5 : 2}
+          strokeDasharray={isSingle ? "5 3" : undefined}
           strokeLinecap="round" strokeLinejoin="round"
-          opacity={isSingle ? 0.5 : 0.85}>
-          <title>{FW_META[fw]?.label || fw.toUpperCase()}{isSingle ? " (1 snapshot — dashed)" : ""}</title>
+          opacity={isSingle ? 0.65 : 0.9}>
+          <title>{FW_META[fw]?.label || fw.toUpperCase()}: {Math.round(lastScore)}%{isSingle ? " — single snapshot (dashed)" : ""}</title>
         </polyline>
-        {/* End-point marker at rightmost position */}
-        <circle cx={W} cy={lastY} r={3} fill={color} opacity={0.9} />
+        <circle cx={W} cy={lastY} r={isSingle ? 2.5 : 3.5} fill={color} opacity={0.95} />
       </g>
     );
   });
 
-  const hasSingle = Object.values(byFw).some(pts => pts.length === 1);
+  const hasSingle = fwKeys.some(fw => byFw[fw].length === 1);
 
   return (
     <div>
@@ -194,7 +208,7 @@ function LineChart({ history, height = 90 }) {
       {hasSingle && (
         <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 8,
           fontFamily: "monospace", marginTop: 4 }}>
-          Dashed lines = single snapshot. Click ↻ Refresh Scores to build trend lines.
+          Dashed = 1 snapshot · Solid = trend · Frameworks at the same score are offset ±2px for visibility · Click ↻ Refresh Scores after each assessment to grow trend history
         </div>
       )}
     </div>
@@ -204,10 +218,13 @@ function LineChart({ history, height = 90 }) {
 // ── Framework Score Bar ───────────────────────────────────────────────────────
 
 function FwScoreBar({ fw, visible, onToggle, onClick }) {
-  const meta  = FW_META[fw.framework] || { label: fw.framework.toUpperCase(), color: C.blue };
-  const color = meta.color;
-  const score = Math.round(fw.score || 0);
-  const sc    = scoreColor(score);
+  const meta     = FW_META[fw.framework] || { label: fw.framework.toUpperCase(), color: C.blue };
+  const color    = meta.color;
+  const score    = Math.round(fw.score || 0);
+  const sc       = scoreColor(score);
+  const qAns     = fw.q_answered      ?? fw.passing ?? 0;
+  const qTotal   = fw.total_controls  || 0;
+  const penalty  = fw.alert_penalty   ?? 0;
 
   return (
     <div style={{ opacity: visible ? 1 : 0.3, transition: "opacity 0.2s" }}>
@@ -227,14 +244,15 @@ function FwScoreBar({ fw, visible, onToggle, onClick }) {
           <span style={{ color: sc, fontSize: 12, fontFamily: "monospace", fontWeight: 700, width: 32, textAlign: "right" }}>
             {score}%
           </span>
-          <span title="Passing questions / Total questions in this framework's assessment"
-            style={{ color: C.muted, fontSize: 9, fontFamily: "monospace", width: 70 }}>
-            {fw.passing || 0}/{fw.total_controls || 0} ctl
+          <span title={`${qAns} questionnaire questions answered out of ${qTotal} total. Open Assessment to answer questions and raise this score.`}
+            style={{ color: qAns > 0 ? C.muted : "rgba(255,255,255,0.25)", fontSize: 9,
+            fontFamily: "monospace", width: 60 }}>
+            {qAns}/{qTotal} ans
           </span>
-          <span title="Critical gaps: failing controls + high/critical compliance alerts"
-            style={{ color: (fw.critical_gaps || 0) > 0 ? C.red : C.muted,
-            fontSize: 9, fontFamily: "monospace", width: 48 }}>
-            {fw.critical_gaps || 0} crit
+          <span title={`Alert penalty: score is reduced by ${penalty} points due to compliance-relevant alerts in the last 30 days (cap: −40pt). Raw alert count: ${fw.critical_gaps || 0}`}
+            style={{ color: penalty > 0 ? C.orange : C.muted,
+            fontSize: 9, fontFamily: "monospace", width: 52 }}>
+            {penalty > 0 ? `−${penalty}pt` : "no pen"}
           </span>
         </div>
       </div>
