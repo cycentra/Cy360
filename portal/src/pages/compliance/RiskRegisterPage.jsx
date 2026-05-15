@@ -300,6 +300,35 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
       )
     : risks;
 
+  // Derive heatmap grid + summary from filteredRisks so the heatmap responds to
+  // the global framework selector without a separate API call.
+  const filteredGrid = (() => {
+    const g = Array.from({ length: 5 }, () => Array.from({ length: 5 }, () => []));
+    filteredRisks.forEach(r => {
+      const li = (r.likelihood || 1) - 1;
+      const im = (r.impact || 1) - 1;
+      if (li >= 0 && li < 5 && im >= 0 && im < 5) g[im][li].push(r);
+    });
+    return g;
+  })();
+
+  const filteredHeatmapSummary = (() => {
+    const by_category = {};
+    filteredRisks.forEach(r => {
+      const cat = r.category || "Unknown";
+      by_category[cat] = (by_category[cat] || 0) + 1;
+    });
+    const score = r => r.risk_score ?? ((r.likelihood || 1) * (r.impact || 1));
+    return {
+      total:    filteredRisks.length,
+      critical: filteredRisks.filter(r => score(r) >= 20).length,
+      high:     filteredRisks.filter(r => score(r) >= 12 && score(r) < 20).length,
+      medium:   filteredRisks.filter(r => score(r) >= 6  && score(r) < 12).length,
+      low:      filteredRisks.filter(r => score(r) <  6).length,
+      by_category,
+    };
+  })();
+
   const load = useCallback(() => {
     setLoading(true);
     Promise.all([
@@ -410,7 +439,7 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
       {/* ── HEATMAP ── */}
       {!loading && view === "heatmap" && (
         <div>
-          {/* Summary cards */}
+          {/* Summary cards — derived from filteredRisks so they respond to global framework selector */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
             {[
               { label: "Critical", key: "critical", color: C.red },
@@ -420,7 +449,7 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
             ].map(({ label, key, color }) => (
               <div key={key} style={{ background: C.surface, border: `1px solid ${C.border}`,
                 borderRadius: 8, padding: "14px 16px", textAlign: "center" }}>
-                <div style={{ fontSize: 28, fontWeight: 800, color }}>{heatmap?.summary?.[key] || 0}</div>
+                <div style={{ fontSize: 28, fontWeight: 800, color }}>{filteredHeatmapSummary[key] || 0}</div>
                 <div style={{ fontSize: 11, color: C.muted, marginTop: 2, fontFamily: "monospace" }}>{label}</div>
               </div>
             ))}
@@ -430,7 +459,7 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 20 }}>
               <div style={{ fontFamily: "monospace", fontSize: 9, letterSpacing: "1.5px",
                 color: C.muted, textTransform: "uppercase", marginBottom: 16 }}>RISK HEATMAP</div>
-              <Heatmap grid={heatmap?.grid || []} onCellClick={setCellRisks} />
+              <Heatmap grid={filteredGrid} onCellClick={setCellRisks} />
               <div style={{ marginTop: 10, fontSize: 10, color: "rgba(255,255,255,0.25)",
                 fontFamily: "monospace" }}>Click a cell to see risks at that position</div>
             </div>
@@ -438,12 +467,12 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 20 }}>
               <div style={{ fontFamily: "monospace", fontSize: 9, letterSpacing: "1.5px",
                 color: C.muted, textTransform: "uppercase", marginBottom: 16 }}>BY CATEGORY</div>
-              {Object.entries(heatmap?.summary?.by_category || {}).map(([cat, count]) => (
+              {Object.entries(filteredHeatmapSummary.by_category || {}).map(([cat, count]) => (
                 <div key={cat} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
                   <div style={{ fontSize: 11, color: C.text, width: 110, fontFamily: "monospace" }}>{cat}</div>
                   <div style={{ flex: 1, height: 6, background: "rgba(255,255,255,0.06)", borderRadius: 3, overflow: "hidden" }}>
                     <div style={{ height: "100%", borderRadius: 3, background: C.blue,
-                      width: `${((count / (heatmap?.summary?.total || 1)) * 100)}%` }} />
+                      width: `${((count / (filteredHeatmapSummary.total || 1)) * 100)}%` }} />
                   </div>
                   <div style={{ fontSize: 11, color: C.muted, width: 20, textAlign: "right",
                     fontFamily: "monospace" }}>{count}</div>

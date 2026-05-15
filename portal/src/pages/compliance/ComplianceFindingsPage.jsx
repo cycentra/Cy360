@@ -272,36 +272,27 @@ function FindingsTab() {
 
   return (
     <div>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24 }}>
-        <div>
-          <div style={{ color: C.muted, fontSize: 9, letterSpacing: "2px", fontFamily: "monospace",
-            textTransform: "uppercase", marginBottom: 4 }}>SECURITY COMPLIANCE</div>
-          <h1 style={{ color: C.text, fontSize: 20, fontWeight: 700, margin: 0 }}>Compliance Findings</h1>
-          <div style={{ color: C.muted, fontSize: 11, marginTop: 4, fontFamily: "monospace" }}>
-            {total} total findings
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+      {/* Action bar (no page title — shared header is in the wrapper) */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <span style={{ color: C.muted, fontSize: 11, fontFamily: "monospace" }}>{total} findings</span>
+        <div style={{ display: "flex", gap: 8 }}>
+          {genMsg && <span style={{ color: genMsg.includes("Failed") ? C.red : C.accent,
+            fontSize: 10, fontFamily: "monospace", alignSelf: "center" }}>{genMsg}</span>}
           <button onClick={handleAutoGenerate} disabled={genning}
             style={{ background: `${C.orange}10`, border: `1px solid ${C.orange}40`, color: C.orange,
-              padding: "8px 16px", borderRadius: 4, fontFamily: "monospace", fontSize: 11,
+              padding: "7px 14px", borderRadius: 4, fontFamily: "monospace", fontSize: 11,
               fontWeight: 700, cursor: "pointer", opacity: genning ? 0.6 : 1 }}>
             {genning ? "Generating..." : "Auto-Generate from Alerts"}
           </button>
           <button onClick={() => setShowForm(s => !s)}
             style={{ background: `${C.accent}10`, border: `1px solid ${C.accent}40`,
-              color: C.accent, padding: "8px 16px", borderRadius: 4, fontFamily: "monospace",
+              color: C.accent, padding: "7px 14px", borderRadius: 4, fontFamily: "monospace",
               fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
             {showForm ? "Close" : "+ Manual Finding"}
           </button>
         </div>
       </div>
 
-      {genMsg && (
-        <div style={{ color: genMsg.includes("fail") ? C.red : C.orange,
-          fontSize: 10, fontFamily: "monospace", marginBottom: 12 }}>{genMsg}</div>
-      )}
 
       {/* Verdict summary pills */}
       <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
@@ -595,21 +586,30 @@ export function ComplianceFindingsPage() {
   const [tab, setTab] = useState("findings");
   return (
     <div>
-      {/* Tab bar */}
-      <div style={{ display: "flex", gap: 0, borderBottom: "1px solid rgba(255,255,255,0.07)", marginBottom: 24 }}>
+      {/* Shared page header */}
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ color: C.muted, fontSize: 9, letterSpacing: "2px", fontFamily: "monospace",
+          textTransform: "uppercase", marginBottom: 4 }}>SECURITY COMPLIANCE</div>
+        <h1 style={{ color: C.text, fontSize: 20, fontWeight: 700, margin: 0 }}>Findings & Alerts</h1>
+        <div style={{ color: C.muted, fontSize: 11, marginTop: 4, fontFamily: "monospace" }}>
+          Compliance findings, live correlation alerts and enrichment
+        </div>
+      </div>
+
+      {/* Tab switcher — pill style matching Risk Management */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
         {TABS.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
-            style={{
-              background: "none", border: "none", borderBottom: tab === t.id ? "2px solid #00e5a0" : "2px solid transparent",
-              color: tab === t.id ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.4)",
-              padding: "10px 22px", fontFamily: "monospace", fontSize: 11, fontWeight: 700,
-              cursor: "pointer", marginBottom: -1, letterSpacing: "0.5px",
-              transition: "color 0.15s, border-color 0.15s",
-            }}>
+            style={{ padding: "7px 16px", borderRadius: 6, cursor: "pointer",
+              fontFamily: "monospace", fontSize: 11, fontWeight: 600,
+              background: tab === t.id ? `${C.blue}20` : "transparent",
+              border: `1px solid ${tab === t.id ? `${C.blue}60` : C.border}`,
+              color: tab === t.id ? C.blue : C.muted }}>
             {t.label}
           </button>
         ))}
       </div>
+
       {tab === "findings"    && <FindingsTab />}
       {tab === "live-alerts" && <ComplianceLiveAlertsPage />}
     </div>

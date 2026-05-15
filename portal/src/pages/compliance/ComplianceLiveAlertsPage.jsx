@@ -157,31 +157,26 @@ export function ComplianceLiveAlertsPage() {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24 }}>
-        <div>
-          <div style={{ color: C.muted, fontSize: 9, letterSpacing: "2px", fontFamily: "monospace", textTransform: "uppercase", marginBottom: 4 }}>
-            SECURITY COMPLIANCE
-          </div>
-          <h1 style={{ color: C.text, fontSize: 20, fontWeight: 700, margin: 0 }}>Live Compliance Alerts</h1>
-          <div style={{ color: C.muted, fontSize: 11, marginTop: 4, fontFamily: "monospace" }}>
-            {total} compliance-relevant alerts from correlation engine
-          </div>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
+      {/* Action bar (no page title — shared header is in the wrapper) */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <span style={{ color: C.muted, fontSize: 11, fontFamily: "monospace" }}>
+          {total} compliance-relevant alerts from correlation engine
+        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {syncMsg && (
+            <span style={{ color: syncMsg.includes("failed") ? C.red : C.accent, fontSize: 10, fontFamily: "monospace" }}>
+              {syncMsg}
+            </span>
+          )}
           <button onClick={handleSync} disabled={syncing}
             style={{
               background: `${C.accent}10`, border: `1px solid ${C.accent}40`,
-              color: C.accent, padding: "8px 18px", borderRadius: 4,
+              color: C.accent, padding: "7px 14px", borderRadius: 4,
               fontFamily: "monospace", fontSize: 11, fontWeight: 700,
               cursor: "pointer", opacity: syncing ? 0.6 : 1,
             }}>
             {syncing ? "Enriching..." : "Run Compliance Enrichment"}
           </button>
-          {syncMsg && (
-            <div style={{ color: syncMsg.includes("failed") ? C.red : C.accent, fontSize: 10, fontFamily: "monospace" }}>
-              {syncMsg}
-            </div>
-          )}
         </div>
       </div>
 
