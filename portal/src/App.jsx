@@ -362,6 +362,7 @@ export default function App() {
             {activeTab==="comp-assessment"  && <ComplianceAssessmentPage/>}
             {activeTab==="comp-findings"    && <ComplianceFindingsPage/>}
             {activeTab==="comp-risks"       && <RiskRegisterPage setActiveTab={setActiveTab}/>}
+            {activeTab==="comp-live-alerts" && <ComplianceLiveAlertsPage/>}
             {activeTab==="comp-heatmap"     && <RiskHeatmapPage/>}
             {activeTab==="comp-appetite"    && <RiskAppetitePage/>}
             {activeTab==="comp-reports"     && <ComplianceReportsPage/>}

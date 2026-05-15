@@ -492,15 +492,17 @@ def get_dashboard_summary(frameworks: Optional[list] = None) -> dict:
             for fw, cnt in cur.fetchall():
                 framework_breakdown[fw] = int(cnt)
 
-            # ── Recent breach incidents ───────────────────────────────────────
+            # ── Recent breach incidents (scoped to selected frameworks) ─────
             cur.execute(
                 """
                 SELECT id, severity, risk_score, compliance_confidence,
                        compliance_frameworks, last_seen, status, alert_count
                 FROM incidents
                 WHERE compliance_breach = TRUE
+                  AND compliance_frameworks && %s::text[]
                 ORDER BY last_seen DESC LIMIT 10;
-                """
+                """,
+                (targets,)
             )
             for r in cur.fetchall():
                 recent_incidents.append({
