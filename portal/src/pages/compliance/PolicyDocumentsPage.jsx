@@ -278,6 +278,14 @@ export function PolicyDocumentsPage() {
   const [deleting, setDeleting] = useState(null);
   const [reindexMsg, setReindexMsg] = useState(null);
 
+  // Policy Analysis
+  const [analysisFramework, setAnalysisFramework] = useState("nis2");
+  const [analysisOverwrite, setAnalysisOverwrite] = useState(false);
+  const [analysisJobId, setAnalysisJobId]         = useState(null);
+  const [analysisJob,   setAnalysisJob]           = useState(null);
+  const [analysisRunning, setAnalysisRunning]     = useState(false);
+  const pollRef = useRef(null);
+
   const load = () => {
     setLoading(true);
     fetch(`${API_BASE}/api/comp/policy-docs/collections/${ORG_COLLECTION}/documents`,
@@ -313,6 +321,46 @@ export function PolicyDocumentsPage() {
       .then(() => setReindexMsg("Reindex started"))
       .catch(() => setReindexMsg("Reindex failed"));
     setTimeout(() => setReindexMsg(null), 4000);
+  };
+
+  // Poll analysis job status every 2 s until terminal
+  useEffect(() => {
+    if (!analysisJobId) return;
+    const poll = () => {
+      fetch(`${API_BASE}/api/comp/policy-docs/analyze-jobs/${analysisJobId}`,
+        { credentials: "include" })
+        .then(r => r.ok ? r.json() : null)
+        .then(job => {
+          if (!job) return;
+          setAnalysisJob(job);
+          if (job.status === "complete" || job.status === "failed") {
+            clearInterval(pollRef.current);
+            setAnalysisRunning(false);
+          }
+        })
+        .catch(() => {});
+    };
+    poll();
+    pollRef.current = setInterval(poll, 2000);
+    return () => clearInterval(pollRef.current);
+  }, [analysisJobId]);
+
+  const handleRunAnalysis = () => {
+    setAnalysisRunning(true);
+    setAnalysisJob(null);
+    setAnalysisJobId(null);
+    clearInterval(pollRef.current);
+    fetch(`${API_BASE}/api/comp/policy-docs/analyze-framework`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ framework: analysisFramework, overwrite: analysisOverwrite }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => setAnalysisJobId(d.job_id))
+      .catch(e => {
+        setAnalysisRunning(false);
+        setAnalysisJob({ status: "failed", message: `Request failed (${e})` });
+      });
   };
 
   const allTags = [...new Set(docs.map(d => d.tag || d.framework).filter(Boolean))];
@@ -354,6 +402,156 @@ export function PolicyDocumentsPage() {
           Upload Policy Document
         </div>
         <DropZone onUploaded={load} />
+      </div>
+
+      {/* Policy Analysis */}
+      <div style={{ background: C.surface, border: `1px solid rgba(0,229,160,0.2)`,
+        borderRadius: 8, padding: 20, marginBottom: 24 }}>
+        <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+          textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 4 }}>
+          Auto-Score Questionnaire
+        </div>
+        <div style={{ color: C.accent, fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+          Policy Analysis
+        </div>
+        <div style={{ color: C.muted, fontSize: 10, fontFamily: "monospace",
+          lineHeight: 1.7, marginBottom: 16, maxWidth: 680 }}>
+          Run AI-powered analysis to automatically score the compliance questionnaire using your
+          uploaded policy documents. For each control question, CyMind retrieves relevant policy
+          excerpts and the LLM assigns a score (Pass&nbsp;/&nbsp;Partial&nbsp;/&nbsp;Fail).
+          Results are saved directly to the Assessment questionnaire.
+        </div>
+
+        <div style={{ display: "flex", gap: 16, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 8 }}>
+          <div>
+            <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+              textTransform: "uppercase", letterSpacing: "1px", marginBottom: 6 }}>
+              Framework
+            </div>
+            <select value={analysisFramework} onChange={e => setAnalysisFramework(e.target.value)}
+              disabled={analysisRunning}
+              style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`,
+                color: C.text, borderRadius: 4, padding: "7px 12px", fontFamily: "monospace",
+                fontSize: 11, cursor: "pointer", minWidth: 160 }}>
+              {[
+                { value: "nis2",     label: "NIS2"     },
+                { value: "dora",     label: "DORA"     },
+                { value: "iso27001", label: "ISO 27001" },
+                { value: "soc2",     label: "SOC 2"    },
+                { value: "nist_csf", label: "NIST CSF" },
+                { value: "pci_dss",  label: "PCI DSS"  },
+                { value: "gdpr",     label: "GDPR"     },
+              ].map(fw => <option key={fw.value} value={fw.value}>{fw.label}</option>)}
+            </select>
+          </div>
+
+          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
+            color: C.muted, fontSize: 10, fontFamily: "monospace",
+            userSelect: "none", paddingBottom: 2 }}>
+            <input type="checkbox" checked={analysisOverwrite}
+              onChange={e => setAnalysisOverwrite(e.target.checked)}
+              disabled={analysisRunning}
+              style={{ accentColor: C.accent, cursor: "pointer", width: 13, height: 13 }} />
+            Overwrite existing answers
+          </label>
+
+          <button onClick={handleRunAnalysis}
+            disabled={analysisRunning || docs.length === 0}
+            style={{
+              background: analysisRunning ? "rgba(0,229,160,0.05)" : "rgba(0,229,160,0.12)",
+              border: `1px solid ${analysisRunning ? "rgba(0,229,160,0.2)" : "rgba(0,229,160,0.4)"}`,
+              color: analysisRunning ? "rgba(0,229,160,0.45)" : C.accent,
+              padding: "8px 20px", borderRadius: 5, fontFamily: "monospace",
+              fontSize: 11, fontWeight: 700,
+              cursor: (analysisRunning || docs.length === 0) ? "not-allowed" : "pointer",
+              minWidth: 170,
+            }}>
+            {analysisRunning ? "Analysing…" : "Run Policy Analysis"}
+          </button>
+
+          {docs.length === 0 && (
+            <span style={{ color: C.orange, fontSize: 10, fontFamily: "monospace" }}>
+              Upload at least one policy document first.
+            </span>
+          )}
+        </div>
+
+        {/* Progress / Result panel */}
+        {(analysisJob || (analysisRunning && !analysisJob)) && (
+          <div style={{ borderTop: `1px solid rgba(255,255,255,0.06)`, paddingTop: 16, marginTop: 8 }}>
+            {analysisRunning && !analysisJob && (
+              <div style={{ color: C.muted, fontSize: 10, fontFamily: "monospace" }}>
+                Starting job…
+              </div>
+            )}
+            {analysisJob && (analysisJob.status === "running" || analysisJob.status === "pending") && (
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between",
+                  alignItems: "center", marginBottom: 6 }}>
+                  <span style={{ color: C.muted, fontSize: 10, fontFamily: "monospace",
+                    maxWidth: 520, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {analysisJob.message}
+                  </span>
+                  <span style={{ color: C.accent, fontSize: 11, fontFamily: "monospace",
+                    fontWeight: 700, flexShrink: 0, marginLeft: 12 }}>
+                    {analysisJob.progress || 0}%
+                  </span>
+                </div>
+                <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 3,
+                  height: 4, overflow: "hidden", marginBottom: 6 }}>
+                  <div style={{ background: C.accent, height: "100%", borderRadius: 3,
+                    width: `${analysisJob.progress || 0}%`, transition: "width 0.4s ease" }} />
+                </div>
+                {analysisJob.total > 0 && (
+                  <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace" }}>
+                    {analysisJob.answered} answered · {analysisJob.skipped} skipped ·{" "}
+                    {analysisJob.errors} errors · {analysisJob.total} total controls
+                  </div>
+                )}
+              </div>
+            )}
+            {analysisJob?.status === "complete" && (
+              <div style={{ background: "rgba(0,229,160,0.06)",
+                border: "1px solid rgba(0,229,160,0.2)", borderRadius: 6, padding: "16px 20px" }}>
+                <div style={{ color: C.accent, fontSize: 11, fontWeight: 700,
+                  fontFamily: "monospace", marginBottom: 12 }}>
+                  Analysis Complete
+                </div>
+                <div style={{ display: "flex", gap: 28, flexWrap: "wrap", marginBottom: 12 }}>
+                  {[
+                    { label: "Answered from policy", value: analysisJob.answered, color: C.accent },
+                    { label: "Skipped (no evidence)", value: analysisJob.skipped, color: C.orange },
+                    { label: "Errors",                value: analysisJob.errors,  color: C.red   },
+                  ].map(({ label, value, color }) => (
+                    <div key={label}>
+                      <div style={{ color, fontSize: 22, fontWeight: 700,
+                        fontFamily: "monospace" }}>{value}</div>
+                      <div style={{ color: C.muted, fontSize: 9,
+                        fontFamily: "monospace", marginTop: 2 }}>{label}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace", lineHeight: 1.7 }}>
+                  Results saved to Assessments → {analysisFramework.toUpperCase()} questionnaire.
+                  Navigate to{" "}
+                  <strong style={{ color: C.blue }}>Assessments</strong> to review and adjust scored responses.
+                </div>
+              </div>
+            )}
+            {analysisJob?.status === "failed" && (
+              <div style={{ background: "rgba(255,59,59,0.06)",
+                border: `1px solid rgba(255,59,59,0.2)`, borderRadius: 6, padding: "12px 16px" }}>
+                <div style={{ color: C.red, fontSize: 11, fontWeight: 700,
+                  fontFamily: "monospace", marginBottom: 4 }}>
+                  Analysis Failed
+                </div>
+                <div style={{ color: C.muted, fontSize: 10, fontFamily: "monospace" }}>
+                  {analysisJob.message}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Filters + reindex */}

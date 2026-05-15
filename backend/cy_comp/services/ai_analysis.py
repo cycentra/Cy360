@@ -207,6 +207,58 @@ Keep response under 400 words."""
     return text or "AI analysis unavailable — CyMind unreachable."
 
 
+def score_question_from_policy(question: str, control_ref: str,
+                               framework: str, chunks: list[str]) -> dict:
+    """
+    Use CyMind LLM to score a single questionnaire question against retrieved policy chunks.
+
+    Returns {score: 0|1|2, justification: str, evidence_snippet: str}.
+    Score key: 2=Pass, 1=Partial, 0=Fail/no evidence.
+    Fails safe to score=0 on any parse error so the pipeline never writes bad data.
+    """
+    chunks_text = "\n---\n".join(chunks[:5])  # cap at 5 to stay within token budget
+
+    prompt = (
+        f"Framework: {framework.upper()}\n"
+        f"Control Reference: {control_ref}\n"
+        f"Compliance Question: {question}\n\n"
+        f"Policy Document Excerpts:\n{chunks_text}\n\n"
+        "Based ONLY on the policy excerpts above, score compliance with this control.\n"
+        "Respond with ONLY valid JSON — no markdown fences, no preamble:\n"
+        '{"score": <0|1|2>, '
+        '"justification": "<1-2 sentence explanation>", '
+        '"evidence_snippet": "<direct verbatim quote from policy, or empty string>"}\n\n'
+        "Score key: 2=Pass (explicit policy language covers this control), "
+        "1=Partial (partially addressed), 0=Fail (no relevant policy found). "
+        "Be conservative — only score 2 when the policy text is explicit and unambiguous."
+    )
+
+    system = (
+        "You are a GRC compliance analyst performing a policy gap assessment. "
+        "Your task is to determine whether an organisation's policy documents demonstrate "
+        "compliance with a specific control requirement. Be conservative and precise. "
+        "Respond only with the requested JSON object."
+    )
+
+    model = _get_model()
+    text, duration_ms = _call_llm(prompt, system=system, max_tokens=300)
+    _log_audit("policy_question_score", control_ref, prompt, text, model, duration_ms, "policy_analysis")
+
+    try:
+        clean = text.strip()
+        if clean.startswith("```"):
+            parts = clean.split("```")
+            clean = parts[1][4:] if parts[1].startswith("json") else parts[1]
+        result = json.loads(clean.strip())
+        result["score"] = max(0, min(2, int(result.get("score", 0))))
+        result.setdefault("justification", "")
+        result.setdefault("evidence_snippet", "")
+        return result
+    except Exception:
+        log.warning("score_question_from_policy: parse error for %s: %.120s", control_ref, text)
+        return {"score": 0, "justification": "LLM parse error", "evidence_snippet": ""}
+
+
 def suggest_controls(framework: str, gap_description: str,
                      created_by: str = "system") -> dict:
     """

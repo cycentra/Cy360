@@ -491,6 +491,39 @@ def delete_framework_doc(doc_id: str) -> tuple[bool, str]:
         return False, str(exc)
 
 
+def query_for_question(question_text: str, top_k: int = 5) -> list[str]:
+    """
+    Query the org-policies collection for chunks relevant to a single questionnaire question.
+    Returns a list of plain-text chunks (empty list if CyMind unavailable or nothing relevant).
+    Uses a conservative relevance threshold (0.45) so only genuinely related policy text
+    is returned — lower confidence chunks produce false scoring signals.
+    """
+    try:
+        resp = requests.get(
+            _rag_url("query/multi"),
+            headers=_headers(),
+            params={
+                "collections": "org-policies",
+                "query":       question_text,
+                "top_k":       top_k,
+                "threshold":   0.45,
+            },
+            timeout=15,
+        )
+        if not resp.ok:
+            log.debug("query_for_question: CyMind %s", resp.status_code)
+            return []
+        data = resp.json()
+        # CyMind multi-query response shapes:
+        #   {"results": [{"text": "...", "score": 0.87, "collection": "..."}, ...]}
+        #   {"chunks": [...]}
+        results = data.get("results") or data.get("chunks") or []
+        return [r["text"] for r in results if isinstance(r, dict) and r.get("text")]
+    except Exception as exc:
+        log.debug("query_for_question: CyMind unavailable: %s", exc)
+        return []
+
+
 def query_for_compliance(description: str, top_k: int = 3) -> dict:
     """
     Query all active policy collections to find which compliance frameworks

@@ -925,6 +925,39 @@ def reindex_collection(collection_id):
     return jsonify(_reindex(collection_id))
 
 
+# ── Policy Analysis (RAG → Questionnaire auto-scoring) ───────────────────────
+
+@comp_bp.route("/policy-docs/analyze-framework", methods=["POST"])
+@require_analyst
+def analyze_policy_framework():
+    """
+    Start a background job that queries org-policies RAG for each questionnaire
+    question in the given framework and scores answers via CyMind LLM.
+
+    Body: {framework: str, overwrite: bool}   overwrite=true rewrites already-answered questions
+    Returns: {job_id, framework, status: "pending"}   — poll analyze-jobs/{job_id} for progress
+    """
+    from cy_comp.services.policy_analysis import start_analysis_job
+    data      = request.get_json() or {}
+    framework = data.get("framework", "").strip().lower()
+    overwrite = bool(data.get("overwrite", False))
+    if not framework:
+        return jsonify({"error": "framework is required"}), 400
+    job_id = start_analysis_job(framework, overwrite, _email())
+    return jsonify({"job_id": job_id, "framework": framework, "status": "pending"}), 202
+
+
+@comp_bp.route("/policy-docs/analyze-jobs/<job_id>", methods=["GET"])
+@require_viewer
+def get_analysis_job(job_id):
+    """Poll policy analysis job status."""
+    from cy_comp.services.policy_analysis import get_job
+    job = get_job(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    return jsonify(job)
+
+
 # ── Framework Documents (System Settings → Security Compliance) ───────────────
 
 @comp_bp.route("/framework-docs/frameworks", methods=["GET"])

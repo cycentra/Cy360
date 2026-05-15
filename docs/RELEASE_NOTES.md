@@ -1,3 +1,13 @@
+## v1.2.15 -- 2026-05-16
+
+### New Features
+
+  - **Policy Analysis pipeline** — Upload org policy documents, then run AI-powered analysis to auto-score the compliance questionnaire. For each control question, CyMind RAG retrieves relevant policy excerpts and the LLM assigns Pass / Partial / Fail. Results are written to the Assessment questionnaire with evidence snippets and justifications.
+  - **Policy Analysis UI** (`Policy Documents` page) — Framework selector, overwrite toggle, "Run Policy Analysis" button, live progress bar with per-question status, and a completion summary showing answered / skipped / error counts.
+  - **New API routes**: `POST /api/comp/policy-docs/analyze-framework` (start job) and `GET /api/comp/policy-docs/analyze-jobs/<job_id>` (poll progress).
+
+---
+
 ## v1.2.14 -- 2026-05-15
 
 ### Improvements
