@@ -2,6 +2,14 @@
 
 ### Bug Fixes
 
+  - cy-comp): v1.2.8 — harden CTL cache repair and trend chart visibility
+
+---
+
+## v1.2.8 -- 2026-05-15
+
+### Bug Fixes
+
   - **CTL=0 and trend lines hardened**: `compute_framework_scores()` INSERT failures now log instead of silent swallow. `get_latest_scores()` writes corrected values back to DB on first dashboard load (no Refresh click needed). `LineChart` renders single-snapshot frameworks as visible dashed horizontal lines with label, instead of an invisible dot.
 
 ---
