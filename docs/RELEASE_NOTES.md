@@ -1,3 +1,11 @@
+## v1.2.15 -- 2026-05-15
+
+### New Features
+
+  - cy-comp): v1.2.15 — Policy Analysis pipeline (RAG → LLM → questionnaire auto-scoring
+
+---
+
 ## v1.2.15 -- 2026-05-16
 
 ### New Features
