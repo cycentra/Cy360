@@ -11,7 +11,7 @@
  *   - Getting Started flow guide
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { API_BASE } from "../../core/constants.js";
 
 const C = {
@@ -282,26 +282,37 @@ export function ComplianceDashboardPage({ setActiveTab }) {
   const [error, setError]           = useState(null);
   const [enabled, setEnabled]       = useState(_loadEnabled);
 
+  // Ref keeps the current framework list accessible inside stable callbacks without
+  // adding `enabled` as a dependency (which would cause double-fetches on toggle).
+  const enabledRef = useRef(enabled);
+
   const saveEnabled = next => {
+    enabledRef.current = next;   // update ref before triggering fetch
     setEnabled(next);
     localStorage.setItem(CY_FW_FILTER_KEY, JSON.stringify(next));
-    // Dispatch storage event so other open tabs / pages can react
     window.dispatchEvent(new StorageEvent("storage", {
       key: CY_FW_FILTER_KEY, newValue: JSON.stringify(next),
     }));
+    load(false, true);  // silent re-fetch scoped to new framework selection
   };
 
   const toggleFw = fw =>
     saveEnabled(enabled.includes(fw) ? enabled.filter(x => x !== fw) : [...enabled, fw]);
 
-  const load = useCallback((force = false) => {
-    if (force) setRefreshing(true); else setLoading(true);
+  // `silent = true` skips the loading spinner so the current data stays visible while
+  // we refetch with a new framework filter (triggered by chip toggles).
+  const load = useCallback((force = false, silent = false) => {
+    if (force) setRefreshing(true); else if (!silent) setLoading(true);
 
+    const fwParam = enabledRef.current.join(",");
     const fetchDashboard = () =>
-      fetch(`${API_BASE}/api/comp/dashboard`, { credentials: "include" })
+      fetch(`${API_BASE}/api/comp/dashboard?frameworks=${fwParam}`, { credentials: "include" })
         .then(r => r.ok ? r.json() : Promise.reject(r.status))
         .then(d => { setSummary(d); setLoading(false); setRefreshing(false); })
-        .catch(e => { setError(`Failed to load dashboard (${e})`); setLoading(false); setRefreshing(false); });
+        .catch(e => {
+          if (!silent) setError(`Failed to load dashboard (${e})`);
+          setLoading(false); setRefreshing(false);
+        });
 
     if (force) {
       fetch(`${API_BASE}/api/comp/framework-scores?refresh=true`, { credentials: "include" })
@@ -309,7 +320,7 @@ export function ComplianceDashboardPage({ setActiveTab }) {
     } else {
       fetchDashboard();
     }
-  }, []);
+  }, []); // stable — reads frameworks via ref, not closure
 
   useEffect(() => { load(); }, [load]);
 

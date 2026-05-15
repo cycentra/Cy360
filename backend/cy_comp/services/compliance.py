@@ -426,12 +426,17 @@ def get_controls_view(framework: str) -> list[dict]:
     return list(rows.values())
 
 
-def get_dashboard_summary() -> dict:
+def get_dashboard_summary(frameworks: Optional[list] = None) -> dict:
     """
     Full GRC posture dashboard: scores, alerts, incidents, findings, risks, questionnaire completion.
     Every widget on ComplianceDashboardPage.jsx reads from this one endpoint.
+
+    When ``frameworks`` is provided (list of framework IDs), all widget queries are scoped to those
+    frameworks only. This makes the Overall Posture donut, alert counters, findings charts, and risk
+    summary all respond to the global framework selector in the portal.
     """
-    scores  = get_latest_scores()
+    targets = frameworks or SUPPORTED_FRAMEWORKS
+    scores  = get_latest_scores(frameworks=targets)
     overall = round(sum(s["score"] for s in scores) / len(scores), 1) if scores else 0.0
 
     alert_by_severity    = {"critical": 0, "high": 0, "medium": 0, "low": 0}
@@ -459,8 +464,10 @@ def get_dashboard_summary() -> dict:
                     COUNT(*)                                                                AS total
                 FROM alerts
                 WHERE is_compliance_relevant = TRUE
-                  AND timestamp > NOW() - INTERVAL '7 days';
-                """
+                  AND timestamp > NOW() - INTERVAL '7 days'
+                  AND compliance_frameworks && %s::text[];
+                """,
+                (targets,)
             )
             row = cur.fetchone()
             if row:
@@ -477,8 +484,10 @@ def get_dashboard_summary() -> dict:
                 FROM alerts
                 WHERE is_compliance_relevant = TRUE
                   AND timestamp > NOW() - INTERVAL '7 days'
+                  AND compliance_frameworks && %s::text[]
                 GROUP BY fw ORDER BY cnt DESC;
-                """
+                """,
+                (targets,)
             )
             for fw, cnt in cur.fetchall():
                 framework_breakdown[fw] = int(cnt)
@@ -504,27 +513,35 @@ def get_dashboard_summary() -> dict:
                 })
             breach_incidents = len(recent_incidents)
 
-            # ── Findings by severity (all open/in-progress) ───────────────────
+            # ── Findings by severity (open/in-progress, scoped to selected frameworks) ─
             cur.execute(
                 """
                 SELECT severity, COUNT(*) FROM cy_comp_findings
-                WHERE status IN ('open','in_progress') GROUP BY severity;
-                """
+                WHERE status IN ('open','in_progress')
+                  AND framework = ANY(%s::text[])
+                GROUP BY severity;
+                """,
+                (targets,)
             )
             for sev, cnt in cur.fetchall():
                 findings_summary[sev] = int(cnt)
 
-            # ── Findings by verdict ───────────────────────────────────────────
+            # ── Findings by verdict (scoped to selected frameworks) ───────────
             cur.execute(
                 """
                 SELECT COALESCE(verdict,'open') AS verdict, COUNT(*) FROM cy_comp_findings
-                WHERE status IN ('open','in_progress') GROUP BY 1;
-                """
+                WHERE status IN ('open','in_progress')
+                  AND framework = ANY(%s::text[])
+                GROUP BY 1;
+                """,
+                (targets,)
             )
             for verdict, cnt in cur.fetchall():
                 findings_by_verdict[verdict] = int(cnt)
 
-            # ── Risk register summary ─────────────────────────────────────────
+            # ── Risk register summary (scoped to selected frameworks) ─────────
+            # cy_comp_risks.frameworks is jsonb (e.g. ["nis2","gdpr"]).
+            # Include a risk when at least one of its frameworks overlaps with targets.
             cur.execute(
                 """
                 SELECT
@@ -535,8 +552,13 @@ def get_dashboard_summary() -> dict:
                     COUNT(*) FILTER (WHERE risk_score < 6)                             AS low,
                     COUNT(*) FILTER (WHERE status = 'open')                           AS open_count
                 FROM cy_comp_risks
-                WHERE status != 'closed';
-                """
+                WHERE status != 'closed'
+                  AND EXISTS (
+                      SELECT 1 FROM jsonb_array_elements_text(cy_comp_risks.frameworks) AS elem
+                      WHERE elem = ANY(%s::text[])
+                  );
+                """,
+                (targets,)
             )
             rr = cur.fetchone()
             if rr:
@@ -549,7 +571,7 @@ def get_dashboard_summary() -> dict:
                     "open":     int(rr[5] or 0),
                 }
 
-            # ── Questionnaire completion per framework ────────────────────────
+            # ── Questionnaire completion per framework (scoped) ───────────────
             cur.execute(
                 """
                 SELECT
@@ -562,8 +584,10 @@ def get_dashboard_summary() -> dict:
                 FROM cy_comp_questionnaire_templates t
                 LEFT JOIN cy_comp_questionnaire_responses r
                        ON r.question_id = t.question_id AND r.framework = t.framework
+                WHERE t.framework = ANY(%s::text[])
                 GROUP BY t.framework;
-                """
+                """,
+                (targets,)
             )
             for row in cur.fetchall():
                 fw, total, answered, tw, pw, partw = row

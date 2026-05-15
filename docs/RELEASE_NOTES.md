@@ -1,3 +1,26 @@
+## v1.2.11 -- 2026-05-15
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.2.11 -- 2026-05-15
+
+### Features
+
+- **GRC dashboard widgets now filter by framework selection** — All five widgets on the GRC Posture Dashboard now scope their data to the globally selected frameworks (Overall Posture donut, Findings by Severity pie, Findings by Verdict bars, Risk Register summary, Active Alerts count, Questionnaire Hub). The `GET /api/comp/dashboard?frameworks=...` endpoint accepts a comma-separated list of framework IDs and scopes every backend query accordingly.
+- **GRC Scoring Model documentation** — Added `docs/GRC_SCORING_MODEL.md` with a complete explanation of the questionnaire weight-based baseline, alert penalty calculation (severity tiers, 40-point cap), zero-questions baseline logic, framework-to-alert mapping, score normalization, and the framework selector behaviour.
+
+### Bug Fixes
+
+- **Overall Posture score now reflects selected frameworks** — The donut percentage previously averaged all 7 frameworks regardless of the chip selector. It now averages only the selected frameworks.
+- **Findings charts no longer show cross-framework noise** — Findings by Severity and Findings by Verdict now filter by `framework = ANY(selected)` so deselecting a framework removes its findings immediately.
+- **Risk Register widget scoped to selected frameworks** — Risks with no overlap with selected frameworks are excluded from all counts.
+
+---
+
 ## v1.2.10 -- 2026-05-15
 
 ### Improvements

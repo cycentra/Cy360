@@ -81,7 +81,9 @@ def require_admin(f):
 @require_viewer
 def compliance_dashboard():
     from cy_comp.services.compliance import get_dashboard_summary
-    return jsonify(get_dashboard_summary())
+    fw_param   = request.args.get("frameworks", "")
+    frameworks = [f.strip() for f in fw_param.split(",") if f.strip()] or None
+    return jsonify(get_dashboard_summary(frameworks=frameworks))
 
 
 @comp_bp.route("/framework-scores", methods=["GET"])
