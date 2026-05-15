@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { API_BASE } from "../../core/constants.js";
+import { CY_FW_FILTER_KEY } from "./ComplianceDashboardPage.jsx";
 
 const C = {
   bg: "#090b10", surface: "#0d1117", border: "rgba(255,255,255,0.07)",
@@ -14,7 +15,17 @@ const C = {
   accent: "#00e5a0", red: "#ff3b3b", orange: "#ff8c00", blue: "#4d9eff", purple: "#b06eff",
 };
 
-const FRAMEWORKS = ["all", "nis2", "dora", "iso27001", "soc2", "nist_csf", "pci_dss"];
+const ALL_FRAMEWORKS = ["all", "nis2", "dora", "iso27001", "soc2", "nist_csf", "pci_dss", "gdpr"];
+
+function _getFilteredFrameworks() {
+  try {
+    const s = JSON.parse(localStorage.getItem(CY_FW_FILTER_KEY));
+    if (Array.isArray(s) && s.length) return ["all", ...s];
+  } catch { /* ignore */ }
+  return ALL_FRAMEWORKS;
+}
+
+const FRAMEWORKS = ALL_FRAMEWORKS;
 
 function fmtTs(ts) {
   if (!ts) return "—";
@@ -45,6 +56,7 @@ export function ComplianceReportsPage() {
   const [reports, setReports]       = useState([]);
   const [loading, setLoading]       = useState(true);
   const [framework, setFramework]   = useState("all");
+  const filteredFrameworks = _getFilteredFrameworks();
   const [generating, setGenerating] = useState(false);
   const [activeJob, setActiveJob]   = useState(null);
   const pollRef = useRef(null);
@@ -108,7 +120,7 @@ export function ComplianceReportsPage() {
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <select value={framework} onChange={e => setFramework(e.target.value)} style={inp}>
-            {FRAMEWORKS.map(f => <option key={f} value={f}>{f === "all" ? "All Frameworks" : f.toUpperCase()}</option>)}
+            {filteredFrameworks.map(f => <option key={f} value={f}>{f === "all" ? "All Frameworks" : f.toUpperCase()}</option>)}
           </select>
           <button onClick={handleGenerate} disabled={generating}
             style={{ background: `${C.accent}10`, border: `1px solid ${C.accent}40`,

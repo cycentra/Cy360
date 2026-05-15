@@ -31,7 +31,12 @@ const FW_META = {
   soc2:     { label: "SOC 2",     color: "#ff6b6b" },
   nist_csf: { label: "NIST CSF",  color: "#38bdf8" },
   pci_dss:  { label: "PCI DSS",   color: "#f97316" },
+  gdpr:     { label: "GDPR",      color: "#8b5cf6" },
 };
+
+// Shared localStorage key — other compliance pages read this to inherit the global filter
+export const CY_FW_FILTER_KEY = "cy_fw_filter";
+const ALL_FRAMEWORKS = Object.keys(FW_META);
 
 const SEV_COLORS = {
   critical: C.red, high: C.orange, medium: C.blue, low: C.muted,
@@ -133,9 +138,12 @@ function BarChart({ data, height = 100 }) {
   );
 }
 
-function LineChart({ history, height = 90 }) {
+function LineChart({ history, height = 90, enabledFws }) {
   // history = [{framework, score, computed_at}]
-  if (!history || !history.length) return (
+  const filtered = enabledFws
+    ? (history || []).filter(h => enabledFws.includes(h.framework))
+    : (history || []);
+  if (!filtered.length) return (
     <div style={{ height, display: "flex", alignItems: "center",
       color: "rgba(255,255,255,0.15)", fontFamily: "monospace", fontSize: 10 }}>
       No score history yet — scores are saved each time you refresh framework scores.
@@ -144,7 +152,7 @@ function LineChart({ history, height = 90 }) {
 
   // Group by framework, preserving chronological order
   const byFw = {};
-  history.forEach(h => {
+  filtered.forEach(h => {
     if (!byFw[h.framework]) byFw[h.framework] = [];
     byFw[h.framework].push(h);
   });
@@ -217,44 +225,41 @@ function LineChart({ history, height = 90 }) {
 
 // ── Framework Score Bar ───────────────────────────────────────────────────────
 
-function FwScoreBar({ fw, visible, onToggle, onClick }) {
-  const meta     = FW_META[fw.framework] || { label: fw.framework.toUpperCase(), color: C.blue };
-  const color    = meta.color;
-  const score    = Math.round(fw.score || 0);
-  const sc       = scoreColor(score);
-  const qAns     = fw.q_answered      ?? fw.passing ?? 0;
-  const qTotal   = fw.total_controls  || 0;
-  const penalty  = fw.alert_penalty   ?? 0;
+function FwScoreBar({ fw, onClick }) {
+  const meta    = FW_META[fw.framework] || { label: fw.framework.toUpperCase(), color: C.blue };
+  const color   = meta.color;
+  const score   = Math.round(fw.score || 0);
+  const sc      = scoreColor(score);
+  const qAns    = fw.q_answered     ?? fw.passing ?? 0;
+  const qTotal  = fw.total_controls || 0;
+  const penalty = fw.alert_penalty  ?? 0;
 
   return (
-    <div style={{ opacity: visible ? 1 : 0.3, transition: "opacity 0.2s" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-        <button onClick={onToggle}
-          title={visible ? "Hide" : "Show"}
-          style={{ width: 12, height: 12, borderRadius: 2, border: "none", cursor: "pointer",
-            background: visible ? color : "rgba(255,255,255,0.1)", flexShrink: 0, padding: 0 }} />
-        <span style={{ color: visible ? color : C.muted, fontSize: 10, fontFamily: "monospace",
-          fontWeight: 700, width: 80, flexShrink: 0 }}>{meta.label}</span>
-        <div style={{ flex: 1, height: 6, background: "rgba(255,255,255,0.05)", borderRadius: 3,
-          cursor: "pointer" }} onClick={onClick}>
-          <div style={{ height: "100%", width: `${score}%`, background: visible ? color : "rgba(255,255,255,0.1)",
-            borderRadius: 3, transition: "width 1s ease" }} />
-        </div>
-        <div style={{ display: "flex", gap: 12, flexShrink: 0 }}>
-          <span style={{ color: sc, fontSize: 12, fontFamily: "monospace", fontWeight: 700, width: 32, textAlign: "right" }}>
-            {score}%
-          </span>
-          <span title={`${qAns} questionnaire questions answered out of ${qTotal} total. Open Assessment to answer questions and raise this score.`}
-            style={{ color: qAns > 0 ? C.muted : "rgba(255,255,255,0.25)", fontSize: 9,
-            fontFamily: "monospace", width: 60 }}>
-            {qAns}/{qTotal} ans
-          </span>
-          <span title={`Alert penalty: score is reduced by ${penalty} points due to compliance-relevant alerts in the last 30 days (cap: −40pt). Raw alert count: ${fw.critical_gaps || 0}`}
-            style={{ color: penalty > 0 ? C.orange : C.muted,
-            fontSize: 9, fontFamily: "monospace", width: 52 }}>
-            {penalty > 0 ? `−${penalty}pt` : "no pen"}
-          </span>
-        </div>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+      <div style={{ width: 10, height: 10, borderRadius: 2, flexShrink: 0,
+        background: color, opacity: 0.85 }} />
+      <span style={{ color, fontSize: 10, fontFamily: "monospace",
+        fontWeight: 700, width: 80, flexShrink: 0 }}>{meta.label}</span>
+      <div style={{ flex: 1, height: 6, background: "rgba(255,255,255,0.05)", borderRadius: 3,
+        cursor: "pointer" }} onClick={onClick}>
+        <div style={{ height: "100%", width: `${score}%`, background: color,
+          borderRadius: 3, transition: "width 1s ease" }} />
+      </div>
+      <div style={{ display: "flex", gap: 12, flexShrink: 0 }}>
+        <span style={{ color: sc, fontSize: 12, fontFamily: "monospace",
+          fontWeight: 700, width: 32, textAlign: "right" }}>
+          {score}%
+        </span>
+        <span title={`${qAns} questionnaire questions answered out of ${qTotal} total. Open Assessment to answer questions and raise this score.`}
+          style={{ color: qAns > 0 ? C.muted : "rgba(255,255,255,0.25)", fontSize: 9,
+          fontFamily: "monospace", width: 60 }}>
+          {qAns}/{qTotal} ans
+        </span>
+        <span title={`Alert penalty: score is reduced by ${penalty} points due to compliance-relevant alerts in the last 30 days (cap: −40pt).`}
+          style={{ color: penalty > 0 ? C.orange : C.muted,
+          fontSize: 9, fontFamily: "monospace", width: 52 }}>
+          {penalty > 0 ? `−${penalty}pt` : "no pen"}
+        </span>
       </div>
     </div>
   );
@@ -262,17 +267,32 @@ function FwScoreBar({ fw, visible, onToggle, onClick }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-const STORAGE_KEY = "grc_hidden_frameworks";
+function _loadEnabled() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(CY_FW_FILTER_KEY));
+    if (Array.isArray(stored) && stored.length) return stored;
+  } catch { /* ignore */ }
+  return ALL_FRAMEWORKS.slice();
+}
 
 export function ComplianceDashboardPage({ setActiveTab }) {
   const [summary, setSummary]       = useState(null);
   const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError]           = useState(null);
-  const [hidden, setHidden]         = useState(() => {
-    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); }
-    catch { return []; }
-  });
+  const [enabled, setEnabled]       = useState(_loadEnabled);
+
+  const saveEnabled = next => {
+    setEnabled(next);
+    localStorage.setItem(CY_FW_FILTER_KEY, JSON.stringify(next));
+    // Dispatch storage event so other open tabs / pages can react
+    window.dispatchEvent(new StorageEvent("storage", {
+      key: CY_FW_FILTER_KEY, newValue: JSON.stringify(next),
+    }));
+  };
+
+  const toggleFw = fw =>
+    saveEnabled(enabled.includes(fw) ? enabled.filter(x => x !== fw) : [...enabled, fw]);
 
   const load = useCallback((force = false) => {
     if (force) setRefreshing(true); else setLoading(true);
@@ -284,9 +304,6 @@ export function ComplianceDashboardPage({ setActiveTab }) {
         .catch(e => { setError(`Failed to load dashboard (${e})`); setLoading(false); setRefreshing(false); });
 
     if (force) {
-      // Step 1: recompute scores on the server.
-      // Step 2: re-fetch the full dashboard payload regardless of step 1's result.
-      // Never write the /framework-scores response into summary — it has a different shape.
       fetch(`${API_BASE}/api/comp/framework-scores?refresh=true`, { credentials: "include" })
         .finally(() => fetchDashboard());
     } else {
@@ -295,14 +312,6 @@ export function ComplianceDashboardPage({ setActiveTab }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
-
-  const toggleFw = fw => {
-    setHidden(prev => {
-      const next = prev.includes(fw) ? prev.filter(x => x !== fw) : [...prev, fw];
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
-  };
 
   if (loading) return (
     <div style={{ color: C.muted, fontFamily: "monospace", fontSize: 12, padding: 40 }}>
@@ -313,7 +322,7 @@ export function ComplianceDashboardPage({ setActiveTab }) {
     <div style={{ color: C.red, fontFamily: "monospace", fontSize: 12, padding: 40 }}>{error}</div>
   );
 
-  const scores        = summary?.framework_scores    || [];
+  const allScores     = summary?.framework_scores    || [];
   const findSumm      = summary?.findings_summary    || {};
   const findVerdict   = summary?.findings_by_verdict || {};
   const activeAlerts  = summary?.active_alerts       || 0;
@@ -321,11 +330,14 @@ export function ComplianceDashboardPage({ setActiveTab }) {
   const overall       = summary?.overall_score       || 0;
   const recentInc     = summary?.recent_incidents    || [];
   const alertsByDay   = summary?.alerts_by_day       || [];
-  const scoreHist     = summary?.score_history       || [];
+  const allScoreHist  = summary?.score_history       || [];
   const riskSummary   = summary?.risk_summary        || {};
-  const qHub          = summary?.questionnaire_hub   || [];
+  const allQHub       = summary?.questionnaire_hub   || [];
 
-  const visibleScores = scores.filter(fw => !hidden.includes(fw.framework));
+  // Apply global framework filter
+  const scores    = allScores.filter(fw => enabled.includes(fw.framework));
+  const scoreHist = allScoreHist.filter(h => enabled.includes(h.framework));
+  const qHub      = allQHub.filter(fw => enabled.includes(fw.framework));
 
   // Pie chart data — findings by severity
   const pieData = [
@@ -397,43 +409,64 @@ export function ComplianceDashboardPage({ setActiveTab }) {
           </div>
         </div>
 
-        {/* Framework bars + show/hide */}
+        {/* Framework bars + chip selector */}
         <div style={CARD}>
           <div style={{ display: "flex", justifyContent: "space-between",
-            alignItems: "center", marginBottom: 16 }}>
+            alignItems: "center", marginBottom: 12 }}>
             <div style={{ color: C.muted, fontSize: 9, letterSpacing: "1.5px",
               fontFamily: "monospace", textTransform: "uppercase" }}>
               Framework Posture Scores
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => { setHidden([]); localStorage.removeItem(STORAGE_KEY); }}
+              <button onClick={() => saveEnabled(ALL_FRAMEWORKS.slice())}
                 style={{ background: "none", border: "none", color: C.accent,
                   fontFamily: "monospace", fontSize: 9, cursor: "pointer", padding: 0 }}>
-                Show All
+                All
               </button>
-              <button onClick={() => {
-                const all = scores.map(s => s.framework);
-                setHidden(all); localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
-              }}
+              <button onClick={() => saveEnabled([])}
                 style={{ background: "none", border: "none", color: C.muted,
                   fontFamily: "monospace", fontSize: 9, cursor: "pointer", padding: 0 }}>
-                Hide All
+                None
               </button>
             </div>
           </div>
+
+          {/* Framework chip selector — controls global filter for all widgets & pages */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 16,
+            paddingBottom: 12, borderBottom: `1px solid ${C.border}` }}>
+            {ALL_FRAMEWORKS.map(fw => {
+              const meta = FW_META[fw];
+              const on   = enabled.includes(fw);
+              return (
+                <button key={fw} onClick={() => toggleFw(fw)}
+                  title={on ? `Hide ${meta.label} from all views` : `Show ${meta.label} in all views`}
+                  style={{
+                    padding: "3px 10px", borderRadius: 12, fontFamily: "monospace",
+                    fontSize: 9, fontWeight: 700, cursor: "pointer", letterSpacing: "0.3px",
+                    transition: "all 0.15s",
+                    background: on ? `${meta.color}22` : "rgba(255,255,255,0.03)",
+                    border: `1px solid ${on ? meta.color : "rgba(255,255,255,0.1)"}`,
+                    color: on ? meta.color : "rgba(255,255,255,0.2)",
+                  }}>
+                  {meta.label}
+                </button>
+              );
+            })}
+          </div>
+
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {scores.map(fw => (
               <FwScoreBar key={fw.framework}
                 fw={fw}
-                visible={!hidden.includes(fw.framework)}
-                onToggle={() => toggleFw(fw.framework)}
                 onClick={() => setActiveTab && setActiveTab("comp-assessment")}
               />
             ))}
           </div>
           {scores.length === 0 && (
             <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 11, fontFamily: "monospace" }}>
-              No scores yet. Click ↻ Refresh Scores to compute.
+              {allScores.length === 0
+                ? "No scores yet. Click ↻ Refresh Scores to compute."
+                : "No frameworks selected. Use the chips above to show frameworks."}
             </div>
           )}
         </div>
@@ -547,7 +580,7 @@ export function ComplianceDashboardPage({ setActiveTab }) {
       </div>
 
       {/* ── Row 3: Score trend line chart ─────────────────────────────────── */}
-      {scoreHist.length > 0 && (
+      {allScoreHist.length > 0 && (
         <div style={{ ...CARD, marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between",
             alignItems: "center", marginBottom: 16 }}>
@@ -556,12 +589,16 @@ export function ComplianceDashboardPage({ setActiveTab }) {
               Score Trend (per framework)
             </div>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              {Object.entries(FW_META).map(([fw, m]) => (
-                <div key={fw} style={{ display: "flex", gap: 5, alignItems: "center" }}>
-                  <div style={{ width: 20, height: 2, borderRadius: 1, background: m.color }} />
-                  <span style={{ color: C.muted, fontSize: 8, fontFamily: "monospace" }}>{m.label}</span>
-                </div>
-              ))}
+              {enabled.map(fw => {
+                const m = FW_META[fw];
+                if (!m) return null;
+                return (
+                  <div key={fw} style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                    <div style={{ width: 20, height: 2, borderRadius: 1, background: m.color }} />
+                    <span style={{ color: C.muted, fontSize: 8, fontFamily: "monospace" }}>{m.label}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
           {/* Y axis labels */}
@@ -574,7 +611,7 @@ export function ComplianceDashboardPage({ setActiveTab }) {
               ))}
             </div>
             <div style={{ flex: 1 }}>
-              <LineChart history={scoreHist} height={90} />
+              <LineChart history={allScoreHist} height={90} enabledFws={enabled} />
             </div>
           </div>
         </div>

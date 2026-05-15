@@ -11,6 +11,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { API_BASE } from "../../core/constants.js";
+import { CY_FW_FILTER_KEY } from "./ComplianceDashboardPage.jsx";
 
 const C = {
   bg: "#090b10", surface: "#0d1117", border: "rgba(255,255,255,0.07)",
@@ -25,7 +26,16 @@ const FW_META = {
   soc2:     { label: "SOC 2",               color: "#ff6b6b", region: "US" },
   nist_csf: { label: "NIST CSF 2.0",        color: "#38bdf8", region: "US" },
   pci_dss:  { label: "PCI DSS v4.0",        color: "#f97316", region: "PCI" },
+  gdpr:     { label: "GDPR",                color: "#8b5cf6", region: "EU" },
 };
+
+function _getEnabledFws() {
+  try {
+    const s = JSON.parse(localStorage.getItem(CY_FW_FILTER_KEY));
+    if (Array.isArray(s) && s.length) return s;
+  } catch { /* ignore */ }
+  return null;
+}
 
 const STATUS_COLORS = {
   compliant:    C.accent,
@@ -846,10 +856,22 @@ function SoAView() {
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-const ALL_FW = Object.keys(FW_META);
+const ALL_FW_ORDERED = Object.keys(FW_META);
 
 export function ComplianceAssessmentPage() {
-  const [activeFw, setActiveFw]   = useState("nis2");
+  // Only show tabs for globally-enabled frameworks; default to first enabled
+  const [activeFw, setActiveFw]   = useState(() => {
+    const enabled = _getEnabledFws();
+    if (enabled && enabled.length) {
+      const first = ALL_FW_ORDERED.find(fw => enabled.includes(fw));
+      return first || "nis2";
+    }
+    return "nis2";
+  });
+  const enabledFws = _getEnabledFws();
+  const ALL_FW     = enabledFws
+    ? ALL_FW_ORDERED.filter(fw => enabledFws.includes(fw))
+    : ALL_FW_ORDERED;
   const [activeTab, setActiveTab] = useState("questionnaire"); // "questionnaire" | "controls"
   const [hub, setHub]             = useState(null);
   const [seeding, setSeeding]     = useState(false);

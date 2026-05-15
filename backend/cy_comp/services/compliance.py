@@ -21,7 +21,7 @@ from cy_comp.models import db
 
 log = logging.getLogger("cycentra.cy_comp.compliance")
 
-SUPPORTED_FRAMEWORKS = ["nis2", "dora", "iso27001", "soc2", "nist_csf", "pci_dss"]
+SUPPORTED_FRAMEWORKS = ["nis2", "dora", "iso27001", "soc2", "nist_csf", "pci_dss", "gdpr"]
 
 # Canonical question/control count per framework (matches questionnaire data)
 # Used as total_controls denominator when no manual controls exist
@@ -32,6 +32,7 @@ FRAMEWORK_CONTROL_COUNTS = {
     "soc2":     28,   # 28 questions covering CC1-CC9 + A, C, PI, P criteria
     "nist_csf": 26,   # 26 questions covering all 6 CSF 2.0 functions (GV, ID, PR, DE, RS, RC)
     "pci_dss":  30,   # 30 questions covering all 12 PCI DSS v4 requirements
+    "gdpr":     30,   # 30 questions covering key GDPR articles (Art.5-49, Art.83)
 }
 
 

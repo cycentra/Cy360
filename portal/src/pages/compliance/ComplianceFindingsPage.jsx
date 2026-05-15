@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { API_BASE } from "../../core/constants.js";
+import { CY_FW_FILTER_KEY } from "./ComplianceDashboardPage.jsx";
 
 const C = {
   bg: "#090b10", surface: "#0d1117", border: "rgba(255,255,255,0.07)",
@@ -21,14 +22,23 @@ const VERDICT_LABELS = { breach: "BREACH", warning: "WARNING", compliant: "COMPL
 
 const FW_COLORS = {
   nis2: "#6378ff", iso27001: "#00e5c0", dora: "#ffd166",
-  soc2: "#ff6b6b", avg: "#a78bfa", nist_csf: "#38bdf8", pci_dss: "#f97316",
+  soc2: "#ff6b6b", nist_csf: "#38bdf8", pci_dss: "#f97316", gdpr: "#8b5cf6",
 };
 const FW_LABELS = {
   nis2: "NIS2", dora: "DORA", iso27001: "ISO 27001",
-  soc2: "SOC 2", nist_csf: "NIST CSF", pci_dss: "PCI DSS", avg: "GDPR/AVG",
+  soc2: "SOC 2", nist_csf: "NIST CSF", pci_dss: "PCI DSS", gdpr: "GDPR",
 };
 
-const FRAMEWORKS = ["", "nis2", "dora", "iso27001", "soc2", "nist_csf", "pci_dss", "avg"];
+function _getEnabledFws() {
+  try {
+    const s = JSON.parse(localStorage.getItem(CY_FW_FILTER_KEY));
+    if (Array.isArray(s) && s.length) return s;
+  } catch { /* ignore */ }
+  return null;
+}
+
+const ALL_FRAMEWORKS = ["", "nis2", "dora", "iso27001", "soc2", "nist_csf", "pci_dss", "gdpr"];
+const FRAMEWORKS = ALL_FRAMEWORKS;
 const SEVERITIES = ["", "critical", "high", "medium", "low"];
 const STATUSES   = ["", "open", "in_progress", "resolved", "accepted"];
 const VERDICTS   = ["", "breach", "warning", "compliant"];
@@ -148,16 +158,28 @@ export function ComplianceFindingsPage() {
   const [findings, setFindings]   = useState([]);
   const [total, setTotal]         = useState(0);
   const [loading, setLoading]     = useState(true);
-  const [framework, setFramework] = useState("");
+  // Pre-select framework from global filter if exactly one is selected
+  const [framework, setFramework] = useState(() => {
+    const enabled = _getEnabledFws();
+    return (enabled && enabled.length === 1) ? enabled[0] : "";
+  });
   const [severity, setSeverity]   = useState("");
   const [status, setStatus]       = useState("open");
   const [verdict, setVerdict]     = useState("");
   const [source, setSource]       = useState("");
   const [page, setPage]           = useState(1);
   const [showForm, setShowForm]   = useState(false);
-  const [form, setForm]           = useState({
-    title: "", framework: "iso27001", severity: "medium", description: "",
+  const [form, setForm]           = useState(() => {
+    const enabled = _getEnabledFws();
+    const defaultFw = (enabled && enabled.length >= 1) ? enabled[0] : "iso27001";
+    return { title: "", framework: defaultFw, severity: "medium", description: "" };
   });
+
+  // Restrict framework dropdown to globally selected frameworks (or all if no filter)
+  const enabledFws = _getEnabledFws();
+  const filteredFrameworks = enabledFws
+    ? ["", ...ALL_FRAMEWORKS.filter(f => f && enabledFws.includes(f))]
+    : FRAMEWORKS;
   const [aiMap, setAiMap]         = useState({});
   const [aiLoading, setAiLoading] = useState({});
   const [remOpen, setRemOpen]     = useState(null);
@@ -312,7 +334,7 @@ export function ComplianceFindingsPage() {
               onChange={e => setForm(f => ({ ...f, title: e.target.value }))} />
           </div>
           {[
-            { key: "framework", opts: FRAMEWORKS.filter(Boolean), label: "Framework" },
+            { key: "framework", opts: filteredFrameworks.filter(Boolean), label: "Framework" },
             { key: "severity",  opts: SEVERITIES.filter(Boolean), label: "Severity" },
           ].map(({ key, opts, label }) => (
             <div key={key}>
@@ -349,7 +371,7 @@ export function ComplianceFindingsPage() {
       {/* Filters */}
       <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
         {[
-          { label: "Framework", value: framework, setValue: setFramework, options: FRAMEWORKS },
+          { label: "Framework", value: framework, setValue: setFramework, options: filteredFrameworks },
           { label: "Severity",  value: severity,  setValue: setSeverity,  options: SEVERITIES },
           { label: "Status",    value: status,    setValue: setStatus,    options: STATUSES },
           { label: "Verdict",   value: verdict,   setValue: setVerdict,   options: VERDICTS },

@@ -1232,6 +1232,205 @@ PCI_DSS = [
     },
 ]
 
+# ── GDPR (EU General Data Protection Regulation) ─────────────────────────────
+# 30 questions covering key obligations across the GDPR's 99 articles.
+# Sections map directly to the chapter/article structure so gap reports
+# pinpoint which legal obligation is exposed.
+GDPR = [
+    # ── Art.5 — Principles of Processing ─────────────────────────────────────
+    {
+        "qid": "gdpr-prin-01", "section": "Art.5 — Principles of Processing",
+        "question": "Has the organisation documented the legal basis for every category of personal data it processes, ensuring processing is lawful, fair, and transparent to data subjects?",
+        "guidance": "Art.5(1)(a) & Art.6. Evidence: data inventory / RoPA with legal basis column, privacy notice, consent records.",
+        "control_ref": "GDPR Art.5(1)(a) / Art.6", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 1,
+    },
+    {
+        "qid": "gdpr-prin-02", "section": "Art.5 — Principles of Processing",
+        "question": "Does the organisation apply data minimisation, purpose limitation, and storage limitation — collecting only what is necessary, using it only for stated purposes, and deleting it when no longer needed?",
+        "guidance": "Art.5(1)(b)(c)(e). Evidence: data retention schedule, automated deletion processes, privacy impact assessments showing minimisation.",
+        "control_ref": "GDPR Art.5(1)(b)(c)(e)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 2,
+    },
+    {
+        "qid": "gdpr-prin-03", "section": "Art.5 — Principles of Processing",
+        "question": "Are appropriate technical and organisational measures in place to ensure accuracy and integrity/confidentiality of personal data, and can the organisation demonstrate accountability for compliance (Art.5(2))?",
+        "guidance": "Art.5(1)(d)(f) & Art.5(2). Evidence: data quality controls, encryption/access controls, compliance programme documentation.",
+        "control_ref": "GDPR Art.5(1)(d)(f) / Art.5(2)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 3,
+    },
+    # ── Art.6/7 — Lawful Basis & Consent ─────────────────────────────────────
+    {
+        "qid": "gdpr-consent-01", "section": "Art.6/7 — Lawful Basis & Consent",
+        "question": "Where consent is the legal basis for processing, is it obtained freely, specifically, informedly, and unambiguously (opt-in), with withdrawal as easy as giving it and full records maintained?",
+        "guidance": "Art.7. Evidence: consent management platform records, opt-in UI screenshots, withdrawal mechanism, consent audit log.",
+        "control_ref": "GDPR Art.7", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 4,
+    },
+    {
+        "qid": "gdpr-consent-02", "section": "Art.6/7 — Lawful Basis & Consent",
+        "question": "Are special-category data (Art.9) and criminal-offence data (Art.10) only processed under an explicit exception, with a separate documented justification for each processing activity?",
+        "guidance": "Art.9-10. Evidence: RoPA with special-category flags, legal opinion or DPA guidance, explicit consent records or statutory basis citations.",
+        "control_ref": "GDPR Art.9 / Art.10", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 5,
+    },
+    # ── Art.12-23 — Data Subject Rights ──────────────────────────────────────
+    {
+        "qid": "gdpr-dsr-01", "section": "Art.12-23 — Data Subject Rights",
+        "question": "Are privacy notices provided to data subjects at the time of collection, covering all required Art.13/14 information in a concise, intelligible, and easily accessible format?",
+        "guidance": "Art.13-14. Evidence: published privacy policy, layered notice design, version-controlled notice history.",
+        "control_ref": "GDPR Art.13 / Art.14", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 6,
+    },
+    {
+        "qid": "gdpr-dsr-02", "section": "Art.12-23 — Data Subject Rights",
+        "question": "Does the organisation have a documented process to identify, validate, and respond to data subject access requests (SARs) within one calendar month, with a tracker and escalation path?",
+        "guidance": "Art.15 & Art.12(3). Evidence: SAR procedure, ticketing system records, response-time SLA evidence.",
+        "control_ref": "GDPR Art.15 / Art.12(3)", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 7,
+    },
+    {
+        "qid": "gdpr-dsr-03", "section": "Art.12-23 — Data Subject Rights",
+        "question": "Are erasure (Art.17), rectification (Art.16), restriction (Art.18), portability (Art.20), and objection (Art.21) rights operationalised with defined workflows and tested regularly?",
+        "guidance": "Art.16-21. Evidence: rights fulfilment procedure, system capability to export/delete data, test exercise records.",
+        "control_ref": "GDPR Art.16-21", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 8,
+    },
+    {
+        "qid": "gdpr-dsr-04", "section": "Art.12-23 — Data Subject Rights",
+        "question": "Where automated decision-making or profiling with significant effects is used (Art.22), is a human review mechanism available and disclosed to data subjects?",
+        "guidance": "Art.22. Evidence: profiling register, human-review SLA, disclosure in privacy notice.",
+        "control_ref": "GDPR Art.22", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 9,
+    },
+    # ── Art.25 — Privacy by Design & Default ─────────────────────────────────
+    {
+        "qid": "gdpr-pbd-01", "section": "Art.25 — Privacy by Design & Default",
+        "question": "Is privacy by design and default embedded in product/system development — including pseudonymisation, encryption, access minimisation, and retention limits built into architecture from the outset?",
+        "guidance": "Art.25(1). Evidence: SDLC privacy gates, design review checklists, security architecture diagrams showing PbD controls.",
+        "control_ref": "GDPR Art.25(1)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 10,
+    },
+    {
+        "qid": "gdpr-pbd-02", "section": "Art.25 — Privacy by Design & Default",
+        "question": "Are only personal data necessary for each specific purpose processed by default (data minimisation by design), with no opt-in required to achieve the minimal disclosure level?",
+        "guidance": "Art.25(2). Evidence: default settings review, UX screenshots, data flow diagrams showing minimal fields collected.",
+        "control_ref": "GDPR Art.25(2)", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 11,
+    },
+    # ── Art.28 — Processors & Contracts ──────────────────────────────────────
+    {
+        "qid": "gdpr-proc-01", "section": "Art.28 — Processors & Data Processing Agreements",
+        "question": "Is a written Data Processing Agreement (DPA) in place with every processor that handles personal data on behalf of the organisation, covering all Art.28(3) mandatory clauses?",
+        "guidance": "Art.28(3). Evidence: signed DPA register, template DPA, supplier audit results.",
+        "control_ref": "GDPR Art.28(3)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 12,
+    },
+    {
+        "qid": "gdpr-proc-02", "section": "Art.28 — Processors & Data Processing Agreements",
+        "question": "Does the organisation maintain an up-to-date register of all processors and sub-processors, and does it conduct or review periodic audits or certifications of key processors?",
+        "guidance": "Art.28(2)(3)(h). Evidence: processor register, sub-processor notification log, audit reports or ISO 27001/SOC 2 certs.",
+        "control_ref": "GDPR Art.28(2)(3)(h)", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 13,
+    },
+    # ── Art.30 — Records of Processing Activities ─────────────────────────────
+    {
+        "qid": "gdpr-ropa-01", "section": "Art.30 — Records of Processing Activities (RoPA)",
+        "question": "Does the organisation maintain a complete and current Record of Processing Activities (RoPA) covering all required Art.30 fields (controller/processor details, purposes, categories, transfers, retention, security)?",
+        "guidance": "Art.30(1)(2). Evidence: RoPA document, last-reviewed date, process for updating on new processing activities.",
+        "control_ref": "GDPR Art.30", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 14,
+    },
+    {
+        "qid": "gdpr-ropa-02", "section": "Art.30 — Records of Processing Activities (RoPA)",
+        "question": "Is the RoPA reviewed at least annually and updated within a defined SLA whenever a new processing activity is introduced or an existing one changes materially?",
+        "guidance": "Art.30 & Art.5(2) accountability. Evidence: RoPA change log, annual review sign-off, change management procedure.",
+        "control_ref": "GDPR Art.30 / Art.5(2)", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 15,
+    },
+    # ── Art.32 — Security of Processing ──────────────────────────────────────
+    {
+        "qid": "gdpr-sec-01", "section": "Art.32 — Security of Processing",
+        "question": "Are personal data encrypted at rest and in transit using appropriate algorithms, with key management procedures documented and tested?",
+        "guidance": "Art.32(1)(a). Evidence: encryption standards policy, TLS configuration scan, KMS documentation, penetration test report.",
+        "control_ref": "GDPR Art.32(1)(a)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 16,
+    },
+    {
+        "qid": "gdpr-sec-02", "section": "Art.32 — Security of Processing",
+        "question": "Are access controls (RBAC/least-privilege), MFA, and privileged access management implemented and reviewed for all systems processing personal data?",
+        "guidance": "Art.32(1)(b). Evidence: IAM policy, MFA enforcement evidence, quarterly access review records.",
+        "control_ref": "GDPR Art.32(1)(b)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 17,
+    },
+    {
+        "qid": "gdpr-sec-03", "section": "Art.32 — Security of Processing",
+        "question": "Is pseudonymisation applied where feasible to reduce the risk to data subjects, and are personal data separated from identifying attributes in analytics and test environments?",
+        "guidance": "Art.32(1)(a) & Recital 78. Evidence: pseudonymisation design docs, test data masking evidence, data flow diagrams.",
+        "control_ref": "GDPR Art.32(1)(a) / Recital 78", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 18,
+    },
+    {
+        "qid": "gdpr-sec-04", "section": "Art.32 — Security of Processing",
+        "question": "Is there a tested process to restore availability and access to personal data in a timely manner after a physical or technical incident (resilience and recovery capability)?",
+        "guidance": "Art.32(1)(c)(d). Evidence: BCP/DR policy, last recovery test date and RTO/RPO achieved, backup audit.",
+        "control_ref": "GDPR Art.32(1)(c)(d)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 19,
+    },
+    # ── Art.33-34 — Breach Notification ──────────────────────────────────────
+    {
+        "qid": "gdpr-breach-01", "section": "Art.33-34 — Breach Notification",
+        "question": "Does the organisation have a documented personal data breach response procedure that ensures notification to the supervisory authority within 72 hours of becoming aware, with a defined breach register?",
+        "guidance": "Art.33(1)(2). Evidence: breach response runbook, breach register, DPA notification template.",
+        "control_ref": "GDPR Art.33", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 20,
+    },
+    {
+        "qid": "gdpr-breach-02", "section": "Art.33-34 — Breach Notification",
+        "question": "Is there a clear decision process to assess whether a breach is likely to result in a risk (notifiable) or high risk (also requires data-subject communication) to data subjects' rights and freedoms?",
+        "guidance": "Art.33-34 & EDPB Breach Notification Guidelines. Evidence: breach risk assessment template, severity classification matrix.",
+        "control_ref": "GDPR Art.33-34", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 21,
+    },
+    {
+        "qid": "gdpr-breach-03", "section": "Art.33-34 — Breach Notification",
+        "question": "Have breach response procedures been tested (tabletop or simulated exercise) within the last 12 months, and are employees trained to recognise and escalate potential breaches promptly?",
+        "guidance": "Art.32 & Art.5(2). Evidence: breach simulation exercise report, training records, escalation procedure.",
+        "control_ref": "GDPR Art.32 / Art.5(2)", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 22,
+    },
+    # ── Art.35 — Data Protection Impact Assessment ────────────────────────────
+    {
+        "qid": "gdpr-dpia-01", "section": "Art.35 — Data Protection Impact Assessment (DPIA)",
+        "question": "Is a DPIA conducted prior to processing that is likely to result in high risk (e.g. large-scale profiling, systematic monitoring, sensitive data processing), and are results documented with risk mitigations?",
+        "guidance": "Art.35(1)(3). Evidence: DPIA register, completed DPIA reports, DPO consultation records.",
+        "control_ref": "GDPR Art.35", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 23,
+    },
+    # ── Art.37-39 — Data Protection Officer ──────────────────────────────────
+    {
+        "qid": "gdpr-dpo-01", "section": "Art.37-39 — Data Protection Officer (DPO)",
+        "question": "Has the organisation determined whether a DPO is required (Art.37), and if so, has a qualified DPO been designated, registered with the supervisory authority, and given sufficient resources and independence?",
+        "guidance": "Art.37-39. Evidence: DPO appointment letter, DPA registration, DPO resource allocation, independence statement.",
+        "control_ref": "GDPR Art.37-39", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 24,
+    },
+    {
+        "qid": "gdpr-dpo-02", "section": "Art.37-39 — Data Protection Officer (DPO)",
+        "question": "Is the DPO (or privacy function) involved in all material decisions involving personal data, and is there a documented process for data subjects to contact the DPO directly?",
+        "guidance": "Art.38-39. Evidence: DPO engagement log, RACI matrix showing DPO in privacy decisions, contact details published in privacy notice.",
+        "control_ref": "GDPR Art.38-39", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 25,
+    },
+    # ── Art.44-49 — International Transfers ──────────────────────────────────
+    {
+        "qid": "gdpr-xfer-01", "section": "Art.44-49 — International Data Transfers",
+        "question": "Are all transfers of personal data to third countries documented, and is each transfer covered by an adequate transfer mechanism (adequacy decision, SCCs, BCRs, or Art.49 derogation)?",
+        "guidance": "Art.44-46. Evidence: transfer impact assessment, SCCs signed by both parties, BCR approval, adequacy decision citation per destination.",
+        "control_ref": "GDPR Art.44-46", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 26,
+    },
+    {
+        "qid": "gdpr-xfer-02", "section": "Art.44-49 — International Data Transfers",
+        "question": "Has a Transfer Impact Assessment (TIA) been conducted for transfers to countries without adequacy decisions to assess whether the legal framework of the destination undermines the SCCs' effectiveness?",
+        "guidance": "CJEU Schrems II & EDPB Recommendations 01/2020. Evidence: TIA register, supplementary measures documentation, legal assessment per destination country.",
+        "control_ref": "GDPR Art.46 / EDPB Rec. 01/2020", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 27,
+    },
+    # ── Art.5(2) / Art.83 — Accountability & Governance ─────────────────────
+    {
+        "qid": "gdpr-gov-01", "section": "Art.5(2) / Art.83 — Accountability & Governance",
+        "question": "Is there a GDPR compliance programme with named ownership, executive sponsorship, documented policies and procedures, and a regular review cycle (at least annually)?",
+        "guidance": "Art.5(2) & Art.24. Evidence: GDPR programme charter, policy register, board-level privacy report.",
+        "control_ref": "GDPR Art.5(2) / Art.24", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 28,
+    },
+    {
+        "qid": "gdpr-gov-02", "section": "Art.5(2) / Art.83 — Accountability & Governance",
+        "question": "Does the organisation conduct regular GDPR awareness training for all staff handling personal data, with completion tracked and records maintained for at least 3 years?",
+        "guidance": "Art.39(1)(b) & Art.5(2). Evidence: training platform completion reports, training content version history.",
+        "control_ref": "GDPR Art.39(1)(b)", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 29,
+    },
+    {
+        "qid": "gdpr-gov-03", "section": "Art.5(2) / Art.83 — Accountability & Governance",
+        "question": "Is there a third-party privacy audit or assessment (internal or external) conducted at least annually, with findings tracked to remediation and reported to leadership?",
+        "guidance": "Art.5(2) & Art.32(1)(d). Evidence: last audit report date, finding-remediation tracker, board or DPO update.",
+        "control_ref": "GDPR Art.5(2) / Art.32(1)(d)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 30,
+    },
+]
+
 # ── Master registry ───────────────────────────────────────────────────────────
 ALL_QUESTIONNAIRES: dict[str, list[dict]] = {
     "nis2":     NIS2,
@@ -1240,6 +1439,7 @@ ALL_QUESTIONNAIRES: dict[str, list[dict]] = {
     "soc2":     SOC2,
     "nist_csf": NIST_CSF,
     "pci_dss":  PCI_DSS,
+    "gdpr":     GDPR,
 }
 
 FRAMEWORK_META: dict[str, dict] = {
@@ -1249,4 +1449,5 @@ FRAMEWORK_META: dict[str, dict] = {
     "soc2":     {"label": "SOC 2",            "color": "#ff6b6b", "total": len(SOC2)},
     "nist_csf": {"label": "NIST CSF 2.0",    "color": "#38bdf8", "total": len(NIST_CSF)},
     "pci_dss":  {"label": "PCI DSS v4.0",    "color": "#f97316", "total": len(PCI_DSS)},
+    "gdpr":     {"label": "GDPR",            "color": "#8b5cf6", "total": len(GDPR)},
 }

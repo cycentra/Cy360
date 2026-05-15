@@ -1,3 +1,35 @@
+## v1.2.10 -- 2026-05-15
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.3.0 -- 2026-05-15
+
+### Features
+
+- **GDPR framework added** — Full EU GDPR coverage across all GRC modules:
+  - 30-question assessment covering Art.5 (principles), Art.6/7 (lawful basis & consent), Art.12-23 (data subject rights), Art.25 (privacy by design), Art.28 (DPA contracts), Art.30 (RoPA), Art.32 (security), Art.33-34 (breach notification), Art.35 (DPIA), Art.37-39 (DPO), Art.44-49 (international transfers), Art.83 (accountability)
+  - MITRE ATT&CK → GDPR control mappings added to enrichment engine for all 14 techniques and 10 Wazuh rule IDs (Art.32, Art.33, Art.34, Art.25, Art.5(1)(f))
+  - GDPR appears in Framework Posture Scores, Score Trend, Findings, Assessment, Live Alerts, Reports
+  - Score: `100 − alert_penalty` baseline (same formula as other frameworks)
+- **Framework selector on GRC Posture Dashboard** — Coloured chip toggles above the Framework Posture Scores card let users select which frameworks are displayed. Selection is persisted to `localStorage` (`cy_fw_filter`) and propagates globally:
+  - Dashboard: score bars, trend chart lines, questionnaire completion all filtered
+  - Findings page: framework dropdown restricted to selected frameworks
+  - Assessment page: framework tabs restricted to selected frameworks
+  - Live Alerts page: framework filter dropdown restricted to selected
+  - Reports page: framework report dropdown restricted to selected
+  - Selecting a single framework auto-pre-selects it in per-page dropdowns
+
+### Bug Fixes
+
+- **Alert enrichment** — `_GROUP_TO_FRAMEWORK` now maps Wazuh `gdpr` rule group to `gdpr` (was incorrectly mapped to `avg`)
+- **`avg` (GDPR-NL) references removed** from portal dropdowns in favour of canonical `gdpr` key
+
+---
+
 ## v1.2.9 -- 2026-05-15
 
 ### Bug Fixes

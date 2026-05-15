@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { API_BASE } from "../../core/constants.js";
+import { CY_FW_FILTER_KEY } from "./ComplianceDashboardPage.jsx";
 
 const C = {
   bg: "#090b10", surface: "#0d1117", border: "rgba(255,255,255,0.07)",
@@ -19,10 +20,20 @@ const SEV_COLORS = { critical: C.red, high: C.orange, medium: C.blue, low: C.mut
 
 const FW_COLORS = {
   nis2: "#6378ff", iso27001: "#00e5c0", dora: "#ffd166",
-  soc2: "#ff6b6b", avg: "#a78bfa", nist_csf: "#38bdf8", pci_dss: "#f97316", hipaa: "#84cc16",
+  soc2: "#ff6b6b", nist_csf: "#38bdf8", pci_dss: "#f97316", gdpr: "#8b5cf6", hipaa: "#84cc16",
 };
 
-const FRAMEWORKS = ["", "nis2", "dora", "iso27001", "soc2", "nist_csf", "pci_dss", "avg"];
+const ALL_FW_LIST = ["", "nis2", "dora", "iso27001", "soc2", "nist_csf", "pci_dss", "gdpr"];
+
+function _getEnabledFws() {
+  try {
+    const s = JSON.parse(localStorage.getItem(CY_FW_FILTER_KEY));
+    if (Array.isArray(s) && s.length) return s;
+  } catch { /* ignore */ }
+  return null;
+}
+
+const FRAMEWORKS = ALL_FW_LIST;
 const SEVERITIES = ["", "critical", "high", "medium", "low"];
 
 function FrameworkBadge({ fw }) {
@@ -104,7 +115,14 @@ export function ComplianceLiveAlertsPage() {
   const [syncing, setSyncing]   = useState(false);
   const [syncMsg, setSyncMsg]   = useState(null);
   const [severity, setSeverity] = useState("");
-  const [framework, setFramework] = useState("");
+  const [framework, setFramework] = useState(() => {
+    const enabled = _getEnabledFws();
+    return (enabled && enabled.length === 1) ? enabled[0] : "";
+  });
+  const enabledFws = _getEnabledFws();
+  const filteredFws = enabledFws
+    ? ["", ...ALL_FW_LIST.filter(f => f && enabledFws.includes(f))]
+    : FRAMEWORKS;
   const [page, setPage]         = useState(1);
 
   const PER_PAGE = 50;
@@ -171,7 +189,7 @@ export function ComplianceLiveAlertsPage() {
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         {[
           { label: "Severity",  value: severity,  setValue: setSeverity,  options: SEVERITIES },
-          { label: "Framework", value: framework, setValue: setFramework, options: FRAMEWORKS },
+          { label: "Framework", value: framework, setValue: setFramework, options: filteredFws },
         ].map(({ label, value, setValue, options }) => (
           <select key={label} value={value} onChange={e => { setValue(e.target.value); setPage(1); }}
             style={{
