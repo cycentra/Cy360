@@ -169,7 +169,8 @@ def get_latest_scores(frameworks: Optional[list] = None) -> list[dict]:
                     (fw,)
                 )
                 row = cur.fetchone()
-                if row:
+                # Skip stale cache rows where total_controls was never written (legacy bug)
+                if row and (row[2] or 0) > 0:
                     rows.append({
                         "framework":      row[0],
                         "score":          row[1],

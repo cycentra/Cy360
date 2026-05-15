@@ -142,39 +142,63 @@ function LineChart({ history, height = 90 }) {
     </div>
   );
 
-  // Group by framework
+  // Group by framework, preserving chronological order
   const byFw = {};
   history.forEach(h => {
     if (!byFw[h.framework]) byFw[h.framework] = [];
-    byFw[h.framework].push(h.score);
+    byFw[h.framework].push(h);
   });
 
   const W = 400, H = height;
-  const lines = Object.entries(byFw).map(([fw, scores]) => {
-    if (scores.length < 2) return null;
+
+  // Find overall time range for x-axis positioning
+  const allDates = history.map(h => new Date(h.computed_at).getTime()).filter(Boolean);
+  const minT = allDates.length ? Math.min(...allDates) : 0;
+  const maxT = allDates.length ? Math.max(...allDates) : 1;
+  const timeRange = maxT - minT || 1;
+
+  const elements = Object.entries(byFw).flatMap(([fw, pts]) => {
     const color = FW_META[fw]?.color || C.blue;
-    const pts = scores.map((s, i) => {
-      const x = (i / (scores.length - 1)) * W;
-      const y = H - (s / 100) * H;
+    if (pts.length === 1) {
+      // Single snapshot — draw a dot at the correct score position
+      const x = W / 2;
+      const y = H - (pts[0].score / 100) * H;
+      return [
+        <circle key={`${fw}-dot`} cx={x} cy={y} r={4}
+          fill={color} opacity={0.8}>
+          <title>{FW_META[fw]?.label || fw}: {pts[0].score}%</title>
+        </circle>
+      ];
+    }
+    // Multiple snapshots — draw a line using timestamps for x-position
+    const linePoints = pts.map(p => {
+      const t = new Date(p.computed_at).getTime();
+      const x = ((t - minT) / timeRange) * W;
+      const y = H - (p.score / 100) * H;
       return `${x},${y}`;
     }).join(" ");
-    return (
-      <polyline key={fw} points={pts}
+    // End-point dot
+    const last = pts[pts.length - 1];
+    const lx   = ((new Date(last.computed_at).getTime() - minT) / timeRange) * W;
+    const ly   = H - (last.score / 100) * H;
+    return [
+      <polyline key={`${fw}-line`} points={linePoints}
         fill="none" stroke={color} strokeWidth={1.5}
-        strokeLinecap="round" strokeLinejoin="round" opacity={0.8}/>
-    );
-  }).filter(Boolean);
-
-  if (!lines.length) return null;
+        strokeLinecap="round" strokeLinejoin="round" opacity={0.8}>
+        <title>{FW_META[fw]?.label || fw}</title>
+      </polyline>,
+      <circle key={`${fw}-end`} cx={lx} cy={ly} r={3}
+        fill={color} opacity={0.9} />
+    ];
+  });
 
   return (
     <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-      {/* Grid lines */}
       {[0, 25, 50, 75, 100].map(v => (
         <line key={v} x1={0} y1={H - (v/100)*H} x2={W} y2={H - (v/100)*H}
           stroke="rgba(255,255,255,0.04)" strokeWidth={1}/>
       ))}
-      {lines}
+      {elements}
     </svg>
   );
 }
@@ -205,10 +229,12 @@ function FwScoreBar({ fw, visible, onToggle, onClick }) {
           <span style={{ color: sc, fontSize: 12, fontFamily: "monospace", fontWeight: 700, width: 32, textAlign: "right" }}>
             {score}%
           </span>
-          <span style={{ color: C.muted, fontSize: 9, fontFamily: "monospace", width: 70 }}>
+          <span title="Passing questions / Total questions in this framework's assessment"
+            style={{ color: C.muted, fontSize: 9, fontFamily: "monospace", width: 70 }}>
             {fw.passing || 0}/{fw.total_controls || 0} ctl
           </span>
-          <span style={{ color: (fw.critical_gaps || 0) > 0 ? C.red : C.muted,
+          <span title="Critical gaps: failing controls + high/critical compliance alerts"
+            style={{ color: (fw.critical_gaps || 0) > 0 ? C.red : C.muted,
             fontSize: 9, fontFamily: "monospace", width: 48 }}>
             {fw.critical_gaps || 0} crit
           </span>

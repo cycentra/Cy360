@@ -348,11 +348,21 @@ def get_appetite() -> dict:
         if (r.get("risk_score") or 0) > threshold:
             exceeding.append(r)
 
+    # Severity breakdown of all active (non-closed, non-accepted) risks
+    # Note: heatmap includes accepted risks; appetite excludes them — so counts differ
+    severity_summary = {
+        "critical": sum(1 for r in active if (r.get("risk_score") or 0) >= 20),
+        "high":     sum(1 for r in active if 12 <= (r.get("risk_score") or 0) < 20),
+        "medium":   sum(1 for r in active if 6  <= (r.get("risk_score") or 0) < 12),
+        "low":      sum(1 for r in active if (r.get("risk_score") or 0) < 6),
+    }
+
     return {
         "appetite_thresholds":  thresholds,
         "total_risks":          len(active),
         "exceeding_appetite":   len(exceeding),
         "risks_exceeding":      exceeding,
+        "severity_summary":     severity_summary,
     }
 
 

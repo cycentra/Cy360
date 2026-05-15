@@ -629,6 +629,40 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
             </div>
           </div>
 
+          {/* Severity breakdown + explanation */}
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontFamily: "monospace", fontSize: 9, letterSpacing: "1px",
+                color: C.muted, textTransform: "uppercase" }}>SEVERITY BREAKDOWN</div>
+              <div style={{ fontSize: 9, color: "rgba(255,255,255,0.25)", fontFamily: "monospace" }}>
+                open + mitigated risks only
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12 }}>
+              {[
+                { label: "Critical", key: "critical", color: C.red },
+                { label: "High",     key: "high",     color: C.orange },
+                { label: "Medium",   key: "medium",   color: C.yellow },
+                { label: "Low",      key: "low",      color: C.teal },
+              ].map(({ label, key, color }) => (
+                <div key={key} style={{ textAlign: "center", padding: "10px 8px",
+                  background: `${color}08`, border: `1px solid ${color}20`, borderRadius: 6 }}>
+                  <div style={{ fontSize: 22, fontWeight: 800, color, fontFamily: "monospace" }}>
+                    {appetite?.severity_summary?.[key] ?? 0}
+                  </div>
+                  <div style={{ fontSize: 9, color: C.muted, fontFamily: "monospace", marginTop: 2 }}>{label}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 9, color: "rgba(255,255,255,0.25)", fontFamily: "monospace",
+              padding: "8px 10px", background: "rgba(255,255,255,0.02)", borderRadius: 4,
+              borderLeft: `2px solid rgba(255,255,255,0.08)` }}>
+              ℹ️ Why these counts differ from the Heatmap: the Heatmap includes risks with status
+              "accepted" — this view excludes them (accepted risks are intentionally outside the
+              normal mitigation cycle). Closed risks are excluded from both.
+            </div>
+          </div>
+
           {/* Exceeding appetite */}
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 20 }}>
             <div style={{ display: "flex", justifyContent: "space-between",
