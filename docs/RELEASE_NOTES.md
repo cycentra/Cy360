@@ -1,3 +1,11 @@
+## v1.2.9 -- 2026-05-15
+
+### Bug Fixes
+
+  - cy-comp): v1.2.9 — live alert_penalty+q_answered, score bar labels, trend jitter
+
+---
+
 ## v1.2.8 -- 2026-05-15
 
 ### Bug Fixes
