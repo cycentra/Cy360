@@ -2,6 +2,14 @@
 
 ### Bug Fixes
 
+  - cy-comp): v1.2.7 — CTL/CRIT zeros, trend missing lines, appetite vs heatmap mismatch
+
+---
+
+## v1.2.7 -- 2026-05-15
+
+### Bug Fixes
+
   - **Framework Posture Scores — CTL showing 0** — `get_latest_scores()` was returning stale cached rows from `cy_comp_framework_scores` where `total_controls=0` (rows written before the `FRAMEWORK_CONTROL_COUNTS` fallback existed). Fixed by skipping the cache when `total_controls=0` and running a fresh live computation. CTL now shows e.g. `0/28` for unstarted frameworks. Hover tooltip added: "CTL = passing questions / total questions", "CRIT = failing controls + critical/high compliance alerts".
   - **Score Trend — only 2 lines visible** — `LineChart` was silently dropping any framework with fewer than 2 score snapshots (`if (scores.length < 2) return null`). Fixed: frameworks with 1 snapshot now render as a coloured dot at the correct score level. Frameworks with 2+ snapshots render lines with timestamp-based x-positioning and an end-point dot. All 6 frameworks are now always visible once at least one score snapshot exists.
   - **Risk Appetite numbers differ from Heatmap** — The discrepancy is by design: the Heatmap counts ALL non-closed risks (including `accepted`); the Appetite analysis excludes `accepted` risks because they are intentionally outside the mitigation cycle. This was not communicated to users. Fixed: Appetite tab now shows a Severity Breakdown section (Critical/High/Medium/Low counts for open+mitigated risks only) and an explanatory note clarifying why the totals differ from the Heatmap. Backend `get_appetite()` extended to return `severity_summary` dict.
