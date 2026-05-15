@@ -145,8 +145,8 @@ def compute_framework_scores(frameworks: Optional[list] = None) -> list[dict]:
                          score_dict["total_controls"], score_dict["passing"],
                          score_dict["failing"], score_dict["critical_gaps"])
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.error("compute_framework_scores INSERT [%s]: %s", fw, exc)
                 results.append(score_dict)
     except Exception as exc:
         log.error("compute_framework_scores: %s", exc)
@@ -169,7 +169,8 @@ def get_latest_scores(frameworks: Optional[list] = None) -> list[dict]:
                     (fw,)
                 )
                 row = cur.fetchone()
-                # Skip stale cache rows where total_controls was never written (legacy bug)
+                # Skip stale cache rows where total_controls was never written (legacy bug).
+                # Also write corrected values back to DB so the fix is permanent.
                 if row and (row[2] or 0) > 0:
                     rows.append({
                         "framework":      row[0],
@@ -181,7 +182,23 @@ def get_latest_scores(frameworks: Optional[list] = None) -> list[dict]:
                         "computed_at":    row[6].isoformat() if row[6] else None,
                     })
                 else:
-                    rows.append(_compute_score_for_framework(cur, fw))
+                    fresh = _compute_score_for_framework(cur, fw)
+                    # Persist the corrected values so subsequent requests use the cache
+                    try:
+                        cur.execute(
+                            """
+                            INSERT INTO cy_comp_framework_scores
+                                (framework, score, total_controls, passing, failing, critical_gaps, computed_at)
+                            VALUES (%s,%s,%s,%s,%s,%s,NOW());
+                            """,
+                            (fresh["framework"], fresh["score"], fresh["total_controls"],
+                             fresh["passing"], fresh["failing"], fresh["critical_gaps"])
+                        )
+                        log.info("get_latest_scores: repaired stale cache for %s (total_controls=%s)",
+                                 fw, fresh["total_controls"])
+                    except Exception as exc:
+                        log.warning("get_latest_scores: cache repair INSERT [%s]: %s", fw, exc)
+                    rows.append(fresh)
     except Exception as exc:
         log.error("get_latest_scores: %s", exc)
     return rows

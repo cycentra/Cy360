@@ -1,8 +1,16 @@
+## v1.2.8 -- 2026-05-15
+
+### Bug Fixes
+
+  - **CTL=0 and trend lines hardened**: `compute_framework_scores()` INSERT failures now log instead of silent swallow. `get_latest_scores()` writes corrected values back to DB on first dashboard load (no Refresh click needed). `LineChart` renders single-snapshot frameworks as visible dashed horizontal lines with label, instead of an invisible dot.
+
+---
+
 ## v1.2.7 -- 2026-05-15
 
 ### Bug Fixes
 
-  - cy-comp): v1.2.7 — CTL/CRIT zeros, trend missing lines, appetite vs heatmap mismatch
+  - **CTL/CRIT zeros, trend missing lines, appetite vs heatmap mismatch** — see v1.2.7 release notes.
 
 ---
 

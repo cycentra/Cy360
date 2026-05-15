@@ -151,55 +151,53 @@ function LineChart({ history, height = 90 }) {
 
   const W = 400, H = height;
 
-  // Find overall time range for x-axis positioning
-  const allDates = history.map(h => new Date(h.computed_at).getTime()).filter(Boolean);
-  const minT = allDates.length ? Math.min(...allDates) : 0;
-  const maxT = allDates.length ? Math.max(...allDates) : 1;
-  const timeRange = maxT - minT || 1;
-
-  const elements = Object.entries(byFw).flatMap(([fw, pts]) => {
+  const lines = Object.entries(byFw).map(([fw, pts]) => {
     const color = FW_META[fw]?.color || C.blue;
-    if (pts.length === 1) {
-      // Single snapshot — draw a dot at the correct score position
-      const x = W / 2;
-      const y = H - (pts[0].score / 100) * H;
-      return [
-        <circle key={`${fw}-dot`} cx={x} cy={y} r={4}
-          fill={color} opacity={0.8}>
-          <title>{FW_META[fw]?.label || fw}: {pts[0].score}%</title>
-        </circle>
-      ];
-    }
-    // Multiple snapshots — draw a line using timestamps for x-position
-    const linePoints = pts.map(p => {
-      const t = new Date(p.computed_at).getTime();
-      const x = ((t - minT) / timeRange) * W;
+    // For single-snapshot frameworks: render as a full-width flat horizontal line
+    // so it's visible in the chart (a dot gets squashed by preserveAspectRatio=none)
+    const series = pts.length === 1 ? [pts[0], pts[0]] : pts;
+    const n      = series.length;
+    const points = series.map((p, i) => {
+      const x = n > 1 ? (i / (n - 1)) * W : W / 2;
       const y = H - (p.score / 100) * H;
       return `${x},${y}`;
     }).join(" ");
-    // End-point dot
-    const last = pts[pts.length - 1];
-    const lx   = ((new Date(last.computed_at).getTime() - minT) / timeRange) * W;
-    const ly   = H - (last.score / 100) * H;
-    return [
-      <polyline key={`${fw}-line`} points={linePoints}
-        fill="none" stroke={color} strokeWidth={1.5}
-        strokeLinecap="round" strokeLinejoin="round" opacity={0.8}>
-        <title>{FW_META[fw]?.label || fw}</title>
-      </polyline>,
-      <circle key={`${fw}-end`} cx={lx} cy={ly} r={3}
-        fill={color} opacity={0.9} />
-    ];
+    const lastY = H - (series[series.length - 1].score / 100) * H;
+    const isSingle = pts.length === 1;
+    return (
+      <g key={fw}>
+        <polyline points={points}
+          fill="none" stroke={color}
+          strokeWidth={isSingle ? 1 : 1.5}
+          strokeDasharray={isSingle ? "4 3" : undefined}
+          strokeLinecap="round" strokeLinejoin="round"
+          opacity={isSingle ? 0.5 : 0.85}>
+          <title>{FW_META[fw]?.label || fw.toUpperCase()}{isSingle ? " (1 snapshot — dashed)" : ""}</title>
+        </polyline>
+        {/* End-point marker at rightmost position */}
+        <circle cx={W} cy={lastY} r={3} fill={color} opacity={0.9} />
+      </g>
+    );
   });
 
+  const hasSingle = Object.values(byFw).some(pts => pts.length === 1);
+
   return (
-    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-      {[0, 25, 50, 75, 100].map(v => (
-        <line key={v} x1={0} y1={H - (v/100)*H} x2={W} y2={H - (v/100)*H}
-          stroke="rgba(255,255,255,0.04)" strokeWidth={1}/>
-      ))}
-      {elements}
-    </svg>
+    <div>
+      <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+        {[0, 25, 50, 75, 100].map(v => (
+          <line key={v} x1={0} y1={H - (v/100)*H} x2={W} y2={H - (v/100)*H}
+            stroke="rgba(255,255,255,0.04)" strokeWidth={1}/>
+        ))}
+        {lines}
+      </svg>
+      {hasSingle && (
+        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 8,
+          fontFamily: "monospace", marginTop: 4 }}>
+          Dashed lines = single snapshot. Click ↻ Refresh Scores to build trend lines.
+        </div>
+      )}
+    </div>
   );
 }
 
