@@ -40,11 +40,11 @@ _CALL_DELAY = 0.25
 
 # ── Job state helpers ─────────────────────────────────────────────────────────
 
-def _set(job_id: str, **kwargs) -> None:
+def _set(jid: str, **kwargs) -> None:
     with _lock:
-        if job_id not in _jobs:
-            _jobs[job_id] = {}
-        _jobs[job_id].update(kwargs)
+        if jid not in _jobs:
+            _jobs[jid] = {}
+        _jobs[jid].update(kwargs)
 
 
 def get_job(job_id: str) -> dict | None:
