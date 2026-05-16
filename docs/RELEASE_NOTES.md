@@ -1,3 +1,11 @@
+## v1.2.16 -- 2026-05-16
+
+### Bug Fixes
+
+  - cy-comp): ImportError get_admin_key → get_cymind_api_key in ai_analysis.py
+
+---
+
 ## v1.2.15 -- 2026-05-15
 
 ### New Features
