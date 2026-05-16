@@ -93,6 +93,14 @@ def _collection_name(framework: str) -> str:
     return f"policy-{slug}"
 
 
+def _cymind_collection_id(collection_id: str) -> str:
+    """Resolve a logical collection name (e.g. 'org-policies') to the CyMind ID
+    ('policy-orgpolicies'). Already-prefixed IDs pass through unchanged."""
+    if collection_id.startswith("policy-") or collection_id.startswith("framework-"):
+        return collection_id
+    return _collection_name(collection_id)
+
+
 def _framework_collection_name(framework: str) -> str:
     """RAG collection name for framework reference docs: framework-{slug}."""
     slug = framework.lower().replace(" ", "").replace("_", "").replace("-", "")
@@ -180,6 +188,9 @@ def upload_document(collection_id: str, file_storage, metadata: dict, uploaded_b
     tag       = metadata.get("tag") or None
     file_size = None
 
+    # Resolve logical names (e.g. "org-policies") to CyMind IDs ("policy-orgpolicies")
+    cymind_id = _cymind_collection_id(collection_id)
+
     cymind_doc_id = None
     try:
         file_bytes = file_storage.read()
@@ -189,7 +200,7 @@ def upload_document(collection_id: str, file_storage, metadata: dict, uploaded_b
             "file": (filename, file_bytes, file_storage.content_type or "application/octet-stream")
         }
         resp = requests.post(
-            _rag_url(f"collections/{collection_id}/upload"),
+            _rag_url(f"collections/{cymind_id}/upload"),
             headers=_auth_header(),
             files=files,
             params={"chunk_size": 512, "overlap": 64},
@@ -242,6 +253,7 @@ def upload_document(collection_id: str, file_storage, metadata: dict, uploaded_b
 def list_documents(collection_id: str) -> list[dict]:
     """Return policy documents (doc_type='policy') for a collection from local metadata."""
     rows = []
+    cymind_id = _cymind_collection_id(collection_id)
     try:
         with db() as conn:
             cur = conn.cursor()
@@ -250,11 +262,11 @@ def list_documents(collection_id: str) -> list[dict]:
                 SELECT id, name, file_type, collection_id, cymind_doc_id,
                        framework, indexed, uploaded_by, tag, file_size, created_at
                 FROM cy_comp_policy_docs
-                WHERE collection_id = %s
+                WHERE collection_id = ANY(%s::text[])
                   AND COALESCE(doc_type, 'policy') = 'policy'
                 ORDER BY created_at DESC;
                 """,
-                (collection_id,)
+                ([collection_id, cymind_id],)
             )
             for r in cur.fetchall():
                 rows.append({
@@ -308,6 +320,27 @@ def delete_document(doc_id: str) -> bool:
     except Exception as exc:
         log.error("delete_document DB: %s", exc)
         return False
+
+
+def reindex_collection(collection_id: str) -> dict:
+    """
+    Ask CyMind to reindex all documents in a collection.
+    Resolves logical names to CyMind IDs (e.g. 'org-policies' → 'policy-orgpolicies').
+    """
+    cymind_id = _cymind_collection_id(collection_id)
+    try:
+        resp = requests.post(
+            _rag_url(f"collections/{cymind_id}/reindex"),
+            headers=_auth_header(),
+            timeout=30,
+        )
+        if resp.ok:
+            return resp.json()
+        log.warning("reindex_collection(%s): CyMind %s %s", cymind_id, resp.status_code, resp.text[:200])
+        return {"status": "error", "message": f"CyMind returned {resp.status_code}"}
+    except Exception as exc:
+        log.error("reindex_collection(%s): %s", cymind_id, exc)
+        return {"status": "error", "message": str(exc)}
 
 
 # ── Framework Document Management (admin — System Settings) ───────────────────
@@ -503,10 +536,10 @@ def query_for_question(question_text: str, top_k: int = 5) -> list[str]:
             _rag_url("query/multi"),
             headers=_headers(),
             params={
-                "collections": "org-policies",
+                "collections": _cymind_collection_id("org-policies"),  # "policy-orgpolicies"
                 "query":       question_text,
                 "top_k":       top_k,
-                "threshold":   0.45,
+                "threshold":   0.35,  # lowered from 0.45 — conservative but not overly strict
             },
             timeout=15,
         )
