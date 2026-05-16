@@ -398,7 +398,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
       {/* Header */}
       <div style={{ marginBottom:22 }}>
         <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
-          <h1 style={{ fontSize:22, fontWeight:700, color:"white" }}>Attack Surface Overview</h1>
+          <h1 style={{ fontSize:22, fontWeight:700, color:"white" }}>External Attack Posture</h1>
           {scanType && (
             <span style={{ background:`${scanTypeColor[scanType]||"#00e5a0"}15`, color:scanTypeColor[scanType]||"#00e5a0",
               border:`1px solid ${scanTypeColor[scanType]||"#00e5a0"}40`,

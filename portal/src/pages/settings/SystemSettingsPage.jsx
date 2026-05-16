@@ -3026,6 +3026,7 @@ const FW_INFO = {
   soc2:     { label: "SOC 2 Type II",  color: "#ff8c00" },
   nist_csf: { label: "NIST CSF 2.0",  color: "#6378ff" },
   pci_dss:  { label: "PCI DSS 4.0",   color: "#ff3b3b" },
+  gdpr:     { label: "GDPR",          color: "#8b5cf6" },
 };
 
 function FrameworkDropZone({ framework, onUploaded, locked }) {

@@ -57,7 +57,7 @@ export function buildNavSections({ installedModules = {}, data = null }) {
     {
       section: "EXTERNAL EXPOSURE",
       items: [
-        { id: "dashboard", label: "Attack Surface",  icon: SvgDash  },
+        { id: "dashboard", label: "External Attack Posture",  icon: SvgDash  },
         { id: "assets",    label: "Asset Inventory", icon: SvgAsset },
         { id: "vulns",     label: "Vulnerabilities", icon: SvgVuln  },
         { id: "scan",      label: "Scan Operations", icon: SvgScan, accent: "#00e5a0" },
@@ -66,7 +66,7 @@ export function buildNavSections({ installedModules = {}, data = null }) {
     {
       section: "INTERNAL EXPOSURE",
       items: [
-        { id: "internal-dashboard", label: "Exposure Dashboard", icon: <span style={{ fontSize: 13 }}>🛡️</span>, accent: "#4d9eff" },
+        { id: "internal-dashboard", label: "Internal Attack Posture", icon: <span style={{ fontSize: 13 }}>🛡️</span>, accent: "#4d9eff" },
         { id: "siem-incidents", label: "Active Incidents",     icon: <span style={{ fontSize: 13 }}>🔥</span>, accent: "#ff3b3b" },
         { id: "siem-risk",      label: "Entity Risk",          icon: <span style={{ fontSize: 13 }}>⚡</span>, accent: "#ff8c00" },
         { id: "siem-ueba",      label: "Behavioral Analytics", icon: <span style={{ fontSize: 13 }}>👤</span>, accent: "#b06eff" },

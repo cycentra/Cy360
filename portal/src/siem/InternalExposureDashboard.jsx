@@ -726,7 +726,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
       <div style={{ marginBottom: 22 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: "white", margin: 0 }}>
-            Internal Exposure Overview
+            Internal Attack Posture
           </h1>
           <span style={{ background: "rgba(255,59,59,0.12)", color: "#ff3b3b", border: "1px solid rgba(255,59,59,0.3)", fontSize: 10, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 2, letterSpacing: "1px" }}>
             INTERNAL

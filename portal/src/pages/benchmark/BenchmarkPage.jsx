@@ -18,7 +18,7 @@
  * Then apply PATCH_3 to App.jsx and navConfig.jsx
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -708,6 +708,16 @@ function CohortSelector({ config, allIndustries, onSave }) {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
+const CY_FW_FILTER_KEY = "cy_fw_filter";
+
+function _getActiveFws() {
+  try {
+    const v = localStorage.getItem(CY_FW_FILTER_KEY);
+    const parsed = v ? JSON.parse(v) : null;
+    return Array.isArray(parsed) && parsed.length ? parsed : null;
+  } catch { return null; }
+}
+
 export function BenchmarkPage() {
   const [scoreData,    setScoreData]    = useState(null);
   const [config,       setConfig]       = useState(null);
@@ -718,14 +728,30 @@ export function BenchmarkPage() {
   const [lastRefresh,  setLastRefresh]  = useState(null);
   const [industry,     setIndustry]     = useState("general");
 
+  const fwRef = useRef(_getActiveFws());
+
+  // Re-read framework filter when the GRC page changes it
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key === CY_FW_FILTER_KEY) {
+        fwRef.current = _getActiveFws();
+        fetchAll();
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const fetchAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
+      const fws       = fwRef.current;
+      const fwParam   = fws ? `?frameworks=${fws.join(",")}` : "";
       const [scoreRes, configRes, indRes] = await Promise.all([
-        fetch(`${API}/score`,      { credentials: "include" }),
-        fetch(`${API}/config`,     { credentials: "include" }),
-        fetch(`${API}/industries`, { credentials: "include" }),
+        fetch(`${API}/score${fwParam}`, { credentials: "include" }),
+        fetch(`${API}/config`,          { credentials: "include" }),
+        fetch(`${API}/industries`,      { credentials: "include" }),
       ]);
       if (!scoreRes.ok)  throw new Error(`Score API error ${scoreRes.status}`);
       if (!configRes.ok) throw new Error(`Config API error ${configRes.status}`);

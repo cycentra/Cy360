@@ -23,7 +23,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 from datetime import datetime, timezone, timedelta
-from functools import wraps
+from functools import wraps, partial
 from pathlib import Path
 from typing import Optional
 
@@ -412,12 +412,14 @@ def _collect_siem_score() -> dict:
 
 # ── 3. Compliance ─────────────────────────────────────────────────────────────
 
-def _collect_compliance_score() -> dict:
+def _collect_compliance_score(frameworks: list = None) -> dict:
     """
     Regulatory compliance coverage (0-100) sourced from cy_comp module.
 
     Primary: average of cached per-framework scores from cy_comp_framework_scores.
     Fallback: weight-based calculation direct from questionnaire responses.
+    frameworks: optional list of framework IDs to filter (e.g. ['nis2','iso27001']).
+                When None, averages all frameworks that have scores.
     Returns score=None only when cy_comp tables don't exist yet.
     """
     try:
@@ -427,40 +429,68 @@ def _collect_compliance_score() -> dict:
         cur  = conn.cursor()
 
         # Attempt 1: use the cached scores table (populated by cy_comp score runs)
-        cur.execute("""
-            SELECT framework, score
-            FROM (
-                SELECT framework, score,
-                       ROW_NUMBER() OVER (PARTITION BY framework ORDER BY computed_at DESC) AS rn
-                FROM cy_comp_framework_scores
-            ) t
-            WHERE rn = 1 AND score IS NOT NULL;
-        """)
+        if frameworks:
+            cur.execute("""
+                SELECT framework, score
+                FROM (
+                    SELECT framework, score,
+                           ROW_NUMBER() OVER (PARTITION BY framework ORDER BY computed_at DESC) AS rn
+                    FROM cy_comp_framework_scores
+                    WHERE framework = ANY(%s)
+                ) t
+                WHERE rn = 1 AND score IS NOT NULL;
+            """, (frameworks,))
+        else:
+            cur.execute("""
+                SELECT framework, score
+                FROM (
+                    SELECT framework, score,
+                           ROW_NUMBER() OVER (PARTITION BY framework ORDER BY computed_at DESC) AS rn
+                    FROM cy_comp_framework_scores
+                ) t
+                WHERE rn = 1 AND score IS NOT NULL;
+            """)
         rows = cur.fetchall()
         if rows:
             avg_score = round(sum(float(r[1]) for r in rows) / len(rows), 1)
-            frameworks = ", ".join(r[0].upper() for r in rows)
+            fw_labels = ", ".join(r[0].upper() for r in rows)
             conn.close()
             return {
                 "score":  avg_score,
                 "stale":  False,
-                "detail": f"CyComp: avg {avg_score}% across {len(rows)} frameworks ({frameworks})",
+                "detail": f"CyComp: avg {avg_score}% across {len(rows)} frameworks ({fw_labels})",
             }
 
         # Attempt 2: derive from questionnaire responses directly
-        cur.execute("""
-            SELECT
-                t.framework,
-                COALESCE(SUM(t.weight), 0)                                AS total_weight,
-                COALESCE(SUM(t.weight) FILTER (WHERE r.score >= 2), 0)    AS pass_weight,
-                COALESCE(SUM(t.weight) FILTER (WHERE r.score = 1),  0)    AS partial_weight,
-                COUNT(r.question_id)                                       AS answered
-            FROM cy_comp_questionnaire_templates t
-            LEFT JOIN cy_comp_questionnaire_responses r
-                   ON r.question_id = t.question_id AND r.framework = t.framework
-            GROUP BY t.framework
-            HAVING COUNT(r.question_id) > 0;
-        """)
+        if frameworks:
+            cur.execute("""
+                SELECT
+                    t.framework,
+                    COALESCE(SUM(t.weight), 0)                                AS total_weight,
+                    COALESCE(SUM(t.weight) FILTER (WHERE r.score >= 2), 0)    AS pass_weight,
+                    COALESCE(SUM(t.weight) FILTER (WHERE r.score = 1),  0)    AS partial_weight,
+                    COUNT(r.question_id)                                       AS answered
+                FROM cy_comp_questionnaire_templates t
+                LEFT JOIN cy_comp_questionnaire_responses r
+                       ON r.question_id = t.question_id AND r.framework = t.framework
+                WHERE t.framework = ANY(%s)
+                GROUP BY t.framework
+                HAVING COUNT(r.question_id) > 0;
+            """, (frameworks,))
+        else:
+            cur.execute("""
+                SELECT
+                    t.framework,
+                    COALESCE(SUM(t.weight), 0)                                AS total_weight,
+                    COALESCE(SUM(t.weight) FILTER (WHERE r.score >= 2), 0)    AS pass_weight,
+                    COALESCE(SUM(t.weight) FILTER (WHERE r.score = 1),  0)    AS partial_weight,
+                    COUNT(r.question_id)                                       AS answered
+                FROM cy_comp_questionnaire_templates t
+                LEFT JOIN cy_comp_questionnaire_responses r
+                       ON r.question_id = t.question_id AND r.framework = t.framework
+                GROUP BY t.framework
+                HAVING COUNT(r.question_id) > 0;
+            """)
         rows = cur.fetchall()
         conn.close()
         if rows:
@@ -1075,7 +1105,7 @@ def invalidate_cspi_cache() -> None:
 
 # ── CSPI composite ─────────────────────────────────────────────────────────────
 
-def _compute_cspi(config: dict) -> dict:
+def _compute_cspi(config: dict, frameworks: list = None) -> dict:
     """
     Compute the CSPI composite score.
 
@@ -1088,11 +1118,16 @@ def _compute_cspi(config: dict) -> dict:
 
     Results are cached for _CSPI_CACHE_TTL seconds and returned on subsequent
     calls unless the config has changed or the cache is explicitly invalidated.
+
+    frameworks: optional list of framework IDs from the GRC Posture page filter.
+                Passed only to the compliance collector; other collectors are unaffected.
+                When set, the cache key includes the sorted framework list.
     """
     sources = config.get("sources", _DEFAULT_CONFIG["sources"])
 
-    # ── TTL cache check ────────────────────────────────────────────────────────
-    chash = _config_hash(config)
+    # ── TTL cache check (keyed on config + active framework filter) ────────────
+    fw_key = ",".join(sorted(frameworks)) if frameworks else ""
+    chash  = _config_hash(config) + "|" + fw_key
     with _cspi_cache_lock:
         cached = _cspi_cache["result"]
         if (
@@ -1106,10 +1141,16 @@ def _compute_cspi(config: dict) -> dict:
     weighted  = 0.0
     total_w   = 0.0
 
+    # Build collector list — swap compliance for a framework-filtered variant when needed
+    collectors = [
+        (src_id, partial(_collect_compliance_score, frameworks=frameworks) if src_id == "compliance" else fn)
+        for src_id, fn in _COLLECTORS
+    ]
+
     # ── Parallel collection ────────────────────────────────────────────────────
     raw_results: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=len(_COLLECTORS), thread_name_prefix="bench") as pool:
-        futures = {pool.submit(collector): src_id for src_id, collector in _COLLECTORS}
+    with ThreadPoolExecutor(max_workers=len(collectors), thread_name_prefix="bench") as pool:
+        futures = {pool.submit(collector): src_id for src_id, collector in collectors}
         for fut in as_completed(futures, timeout=_COLLECTOR_TIMEOUT + 2):
             src_id = futures[fut]
             try:
@@ -1121,7 +1162,7 @@ def _compute_cspi(config: dict) -> dict:
                 raw_results[src_id] = {"score": None, "stale": False, "detail": str(exc)}
 
     # Ensure all collectors have an entry even if as_completed timed out globally
-    for src_id, _ in _COLLECTORS:
+    for src_id, _ in collectors:
         raw_results.setdefault(src_id, {"score": None, "stale": False, "detail": "Collector did not complete"})
 
     # ── ext_benchmark — reuse already-collected asm + compliance (no re-call) ─
@@ -1303,9 +1344,11 @@ def register_benchmark_scheduler(scheduler) -> None:
 @benchmark_bp.route("/score")
 @_require_auth
 def get_score():
-    config   = _load_config()
-    result   = _compute_cspi(config)
-    industry = config.get("industry", "general")
+    config     = _load_config()
+    fw_param   = request.args.get("frameworks", "")
+    frameworks = [f.strip() for f in fw_param.split(",") if f.strip()] or None
+    result     = _compute_cspi(config, frameworks=frameworks)
+    industry   = config.get("industry", "general")
     cohorts  = _load_industry_cohorts()
     cohort   = cohorts.get(industry, cohorts["general"])
     pct_label, pct_n = _percentile(result.get("cspi"), cohort["bands"])
