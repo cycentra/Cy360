@@ -1,3 +1,11 @@
+## v1.2.17 -- 2026-05-16
+
+### Bug Fixes
+
+  - cy-comp): TypeError _set() duplicate job_id arg in policy_analysis.py
+
+---
+
 ## v1.2.16 -- 2026-05-16
 
 ### Bug Fixes
