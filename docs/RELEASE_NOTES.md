@@ -1,3 +1,11 @@
+## v1.2.19 -- 2026-05-16
+
+### New Features
+
+  - framework filter for benchmark compliance, renames, GDPR in framework docs
+
+---
+
 ## v1.2.18 -- 2026-05-16
 
 ### Bug Fixes
