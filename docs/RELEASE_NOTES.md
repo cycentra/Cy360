@@ -1,3 +1,11 @@
+## v1.2.18 -- 2026-05-16
+
+### Bug Fixes
+
+  - cy-comp): fix collection ID resolution for org-policies RAG pipeline
+
+---
+
 ## v1.2.17 -- 2026-05-16
 
 ### Bug Fixes
