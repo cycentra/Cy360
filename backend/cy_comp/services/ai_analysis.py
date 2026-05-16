@@ -22,7 +22,7 @@ from typing import Optional
 import requests
 
 from cy_comp.models import db
-from cy_comp.services.policy_rag import get_cymind_url, get_admin_key
+from cy_comp.services.policy_rag import get_cymind_url, get_cymind_api_key
 
 log = logging.getLogger("cycentra.cy_comp.ai_analysis")
 
@@ -57,7 +57,7 @@ def _call_llm(prompt: str, system: str = _GRC_SYSTEM_PROMPT,
     Returns (response_text, duration_ms).
     """
     url   = get_cymind_url()
-    key   = get_admin_key()
+    key   = get_cymind_api_key()
     model = _get_model()
 
     headers = {"Content-Type": "application/json"}
