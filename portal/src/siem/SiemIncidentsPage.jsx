@@ -1384,10 +1384,11 @@ export function SiemIncidentsPage() {
               const COL_KEY = { "ID": "id", "SEVERITY": "severity", "HOST ID": "source",
                 "HOST NAME": null,
                 "TYPE / CATEGORY": "category", "ALERTS": "alerts", "STATUS": "status",
-                "INTEL": null, "LAST SEEN": "last_seen" };
+                "INTEL": null, "RISK LEVEL": "risk_score", "FP PROB": "fp_probability",
+                "LAST SEEN": "last_seen" };
               return (
                 <div style={{ display: "grid",
-                  gridTemplateColumns: "130px 75px 140px 130px 110px 60px 75px 80px 100px",
+                  gridTemplateColumns: "130px 75px 140px 130px 110px 60px 75px 80px 80px 65px 100px",
                   gap: 10, padding: "10px 16px",
                   background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                   {Object.entries(COL_KEY).map(([h, key]) => {
@@ -1418,7 +1419,7 @@ export function SiemIncidentsPage() {
               <div key={inc.id}
                 onClick={() => setSelected(inc)}
                 style={{ display: "grid",
-                  gridTemplateColumns: "130px 75px 140px 130px 110px 60px 75px 80px 100px",
+                  gridTemplateColumns: "130px 75px 140px 130px 110px 60px 75px 80px 80px 65px 100px",
                   gap: 10, padding: "12px 16px", cursor: "pointer",
                   borderBottom: "1px solid rgba(255,255,255,0.04)",
                   background: selected?.id === inc.id ? "rgba(0,229,160,0.04)" : "transparent",
@@ -1511,6 +1512,39 @@ export function SiemIncidentsPage() {
                   {!inc.llm_summary && !(inc.misp_enrichment?.ioc_hits || []).length && !inc.iris_case_id && (
                     <span style={{ color: "rgba(255,255,255,0.42)", fontSize: 10 }}>—</span>
                   )}
+                </div>
+                {/* RISK LEVEL */}
+                <div style={{ display: "flex", alignItems: "center" }}>
+                  {inc.risk_score > 0 ? (() => {
+                    const rs = inc.risk_score;
+                    const [label, color, bg] = rs >= 8
+                      ? ["CRIT", "#ff3b3b", "rgba(255,59,59,0.12)"]
+                      : rs >= 5
+                        ? ["HIGH", "#ff8c00", "rgba(255,140,0,0.12)"]
+                        : rs >= 3
+                          ? ["MED", "#f5c518", "rgba(245,197,24,0.10)"]
+                          : ["LOW", "#00e5a0", "rgba(0,229,160,0.10)"];
+                    return (
+                      <span title={`Risk Score: ${rs?.toFixed(1)}`}
+                        style={{ background: bg, color, border: `1px solid ${color}55`,
+                          fontSize: 9, fontFamily: "monospace", padding: "2px 5px",
+                          borderRadius: 2, fontWeight: 700, letterSpacing: "0.5px",
+                          whiteSpace: "nowrap" }}>
+                        {label} {rs?.toFixed(1)}
+                      </span>
+                    );
+                  })() : <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 11 }}>—</span>}
+                </div>
+                {/* FP PROB */}
+                <div style={{ display: "flex", alignItems: "center" }}>
+                  {inc.fp_probability != null
+                    ? <span
+                        title={`False-Positive Probability: ${inc.fp_probability?.toFixed(1)}% — high value = likely noise`}
+                        style={{ color: inc.fp_probability >= 90 ? "#ff8c00" : inc.fp_probability >= 70 ? "#f5c518" : "#4d9eff",
+                          fontSize: 11, fontFamily: "monospace", fontWeight: 600 }}>
+                        {inc.fp_probability?.toFixed(0)}%
+                      </span>
+                    : <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 11 }}>—</span>}
                 </div>
                 <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 10, fontFamily: "monospace" }}>
                   {fmtTs(inc.last_seen)}
