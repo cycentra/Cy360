@@ -794,9 +794,10 @@ def ueba_anomaly_status_post(anomaly_id):
 # asyncio.run() calls create fresh loops that can't reuse those connections.
 # ══════════════════════════════════════════════════════════════════════════════
 
-_CORR_DB_URL = os.environ.get(
-    "CORRELATION_DB_URL",
-    os.environ.get("DATABASE_URL", "postgresql://corruser:changeme@127.0.0.1:5433/correlation"),
+_CORR_DB_URL = (
+    os.environ.get("CYCENTRA_DB_URL")
+    or os.environ.get("CORRELATION_DB_URL")
+    or os.environ.get("DATABASE_URL", "postgresql://corruser:changeme@127.0.0.1:5433/correlation")
 ).replace("+asyncpg", "")
 
 
