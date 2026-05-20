@@ -123,6 +123,8 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
   const [auditVisible, setAuditVisible] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
   const [wazuhLaunching, setWazuhLaunching] = useState(false);
+  const [requestingAi, setRequestingAi]     = useState(false);
+  const [aiRequestErr, setAiRequestErr]     = useState("");
 
   // Fetch full incident detail on mount
   useEffect(() => {
@@ -193,6 +195,21 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
       setInc(updated);
       onPatched?.(updated);
     }
+  };
+
+  const handleRequestAi = async () => {
+    setRequestingAi(true);
+    setAiRequestErr("");
+    const data = await siemFetch(siemApi.requestAiAnalysis(inc.id));
+    setRequestingAi(false);
+    if (data._offline) { setAiRequestErr("Engine offline — try again shortly."); return; }
+    if (data._error)   { setAiRequestErr(data._error); return; }
+    setInc(prev => ({
+      ...prev,
+      llm_summary:      data.llm_summary,
+      llm_remediation:  data.llm_remediation,
+      llm_generated_at: data.llm_generated_at,
+    }));
   };
 
   const handleRaise = async () => {
@@ -291,13 +308,24 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
                   fontWeight: 700 }}>{inc.risk_score?.toFixed(1)}</span>
               </span>
             )}
-            {inc.fp_probability != null && (
-              <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11 }}
-                title="False-Positive Probability: high value = likely noise. Multi-factor score based on rule confidence, UEBA anomalies, MISP IOC hits, kill-chain stage and asset criticality.">
-                FP Prob: <span style={{ color: inc.fp_probability >= 90 ? "#ff8c00" : "#4d9eff",
-                  fontWeight: 700 }}>{inc.fp_probability?.toFixed(1)}%</span>
-              </span>
-            )}
+            {inc.fp_probability != null && (() => {
+              const fp = inc.fp_probability;
+              const fpLabel = fp >= 90 ? "Very likely false positive"
+                            : fp >= 70 ? "Probably noise"
+                            : fp >= 40 ? "Uncertain — review recommended"
+                            : fp >= 20 ? "Likely real threat"
+                            :            "High confidence — real threat";
+              const fpColor = fp >= 70 ? "#ff8c00"
+                            : fp >= 40 ? "#f5c518"
+                            :            "#ff3b3b";
+              return (
+                <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11 }}
+                  title="Multi-factor FP probability: rule confidence + UEBA anomalies + MISP IOC hits + kill-chain stage + asset criticality.">
+                  FP: <span style={{ color: fpColor, fontWeight: 700 }}>{fp.toFixed(0)}%</span>
+                  <span style={{ color: fpColor, fontSize: 10, marginLeft: 4 }}>— {fpLabel}</span>
+                </span>
+              );
+            })()}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0, marginLeft: 12 }}>
@@ -542,24 +570,76 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
           </>
         )}
 
-        {/* LLM narrative */}
-        {inc.llm_summary && (
-          <>
-            <SectionLabel>🤖 AI NARRATIVE</SectionLabel>
-            <div style={{ background: "rgba(0,229,160,0.03)", border: "1px solid rgba(0,229,160,0.15)",
-              borderRadius: 4, padding: "14px 16px" }}>
-              <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 13, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
-                {inc.llm_summary}
+        {/* LLM narrative — show analysis or request button */}
+        <SectionLabel>🤖 AI ANALYSIS</SectionLabel>
+        {inc.llm_summary ? (
+          <div style={{ background: "rgba(0,229,160,0.03)", border: "1px solid rgba(0,229,160,0.2)",
+            borderRadius: 4, padding: "14px 16px" }}>
+            {inc.llm_generated_at && (
+              <div style={{ color: "rgba(0,229,160,0.45)", fontSize: 10, fontFamily: "monospace",
+                marginBottom: 10 }}>
+                Generated {fmtTs(inc.llm_generated_at)}
               </div>
-              {inc.llm_remediation && (
-                <div style={{ marginTop: 10, color: "rgba(255,255,255,0.5)", fontSize: 12,
-                  lineHeight: 1.7, whiteSpace: "pre-wrap", borderTop: "1px solid rgba(0,229,160,0.1)",
-                  paddingTop: 10 }}>
-                  {inc.llm_remediation}
+            )}
+            <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 13, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>
+              {inc.llm_summary}
+            </div>
+            {inc.llm_remediation && (
+              <div style={{ marginTop: 14, borderTop: "1px solid rgba(0,229,160,0.12)", paddingTop: 12 }}>
+                <div style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace",
+                  fontWeight: 700, letterSpacing: "1px", marginBottom: 8 }}>REMEDIATION STEPS</div>
+                {inc.llm_remediation.split(/\n/).filter(l => l.trim()).map((line, i) => {
+                  const isStep = /^\d+[\.\)]/.test(line.trim());
+                  return (
+                    <div key={i} style={{ display: "flex", gap: 10, marginBottom: 6, alignItems: "flex-start" }}>
+                      {isStep && (
+                        <span style={{ background: "rgba(0,229,160,0.15)", color: "#00e5a0",
+                          fontSize: 10, fontFamily: "monospace", fontWeight: 700,
+                          padding: "2px 7px", borderRadius: 2, flexShrink: 0, marginTop: 1 }}>
+                          {line.trim().match(/^(\d+)/)[1]}
+                        </span>
+                      )}
+                      <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, lineHeight: 1.7 }}>
+                        {isStep ? line.trim().replace(/^\d+[\.\)]\s*/, "") : line}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+            borderRadius: 4, padding: "14px 16px", display: "flex",
+            alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, marginBottom: 4 }}>
+                No AI analysis available for this incident.
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
+                AI analysis runs automatically for critical/high incidents with 3+ alerts.
+                Click to request it now for any incident.
+              </div>
+              {aiRequestErr && (
+                <div style={{ color: "#ff6464", fontSize: 11, fontFamily: "monospace", marginTop: 6 }}>
+                  ✗ {aiRequestErr}
                 </div>
               )}
             </div>
-          </>
+            <button
+              onClick={handleRequestAi}
+              disabled={requestingAi || ["false_positive", "closed"].includes(inc.status)}
+              style={{
+                background: requestingAi ? "rgba(0,229,160,0.04)" : "rgba(0,229,160,0.08)",
+                border: "1px solid rgba(0,229,160,0.3)",
+                color: "#00e5a0", padding: "8px 16px", borderRadius: 4,
+                cursor: requestingAi ? "wait" : "pointer",
+                fontSize: 12, fontFamily: "monospace", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0,
+                opacity: ["false_positive", "closed"].includes(inc.status) ? 0.4 : 1,
+              }}>
+              {requestingAi ? "Analysing…" : "🤖 Request AI Analysis"}
+            </button>
+          </div>
         )}
 
         {/* Alerts table */}
@@ -1070,6 +1150,9 @@ export function SiemIncidentsPage() {
   const [sortDir, setSortDir]       = useState("asc");
   const [pageSize, setPageSize]     = useState(50);
   const [currentPage, setCurrentPage] = useState(1);
+  const [showFpPatterns, setShowFpPatterns] = useState(false);
+  const [fpPatterns, setFpPatterns]   = useState([]);
+  const [fpPatternsLoading, setFpPatternsLoading] = useState(false);
   const wsRef       = useRef(null);
   const wsDebounce  = useRef(null); // timer ref for WS-triggered refetch debounce
 
@@ -1097,6 +1180,23 @@ export function SiemIncidentsPage() {
     setTotal(merged.total || 0);
     setLoading(false);
   }, [filters]);
+
+  const loadFpPatterns = async () => {
+    setFpPatternsLoading(true);
+    const data = await siemFetch(siemApi.getFpPatterns());
+    setFpPatternsLoading(false);
+    if (!data._error && !data._offline) setFpPatterns(Array.isArray(data) ? data : []);
+  };
+
+  const handleToggleFpPattern = async (id, autoClose) => {
+    await siemFetch(siemApi.toggleFpPattern(id, { auto_close: autoClose }));
+    setFpPatterns(prev => prev.map(p => p.id === id ? { ...p, auto_close: autoClose } : p));
+  };
+
+  const handleDeleteFpPattern = async (id) => {
+    await siemFetch(siemApi.deleteFpPattern(id));
+    setFpPatterns(prev => prev.filter(p => p.id !== id));
+  };
 
   // Initial load + polling fallback (30s)
   useEffect(() => {
@@ -1337,6 +1437,17 @@ export function SiemIncidentsPage() {
               </button>
             </div>
           )}
+          {/* FP Patterns management */}
+          <button
+            onClick={() => { setShowFpPatterns(v => !v); if (!showFpPatterns) loadFpPatterns(); }}
+            title="View and manage learned false-positive suppression patterns"
+            style={{ background: showFpPatterns ? "rgba(179,107,255,0.15)" : "rgba(179,107,255,0.06)",
+              border: `1px solid ${showFpPatterns ? "rgba(179,107,255,0.5)" : "rgba(179,107,255,0.25)"}`,
+              color: "#b36bff", padding: "8px 16px", borderRadius: 4, cursor: "pointer",
+              fontSize: 12, fontFamily: "monospace" }}>
+            🧠 FP Patterns
+          </button>
+
           {/* Step 2: Purge Closed — hard-deletes closed incidents from DB */}
           {!purgeConfirm ? (
             <button onClick={() => setPurgeConfirm(true)}
@@ -1367,6 +1478,102 @@ export function SiemIncidentsPage() {
             </div>
           )}
         </div>
+
+        {/* FP Patterns panel */}
+        {showFpPatterns && (
+          <div style={{ background: "rgba(179,107,255,0.04)", border: "1px solid rgba(179,107,255,0.2)",
+            borderRadius: 6, padding: "18px 20px", marginBottom: 22 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+              marginBottom: 14 }}>
+              <div>
+                <div style={{ color: "#b36bff", fontSize: 13, fontWeight: 700, fontFamily: "monospace" }}>
+                  🧠 LEARNED FALSE-POSITIVE PATTERNS
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, marginTop: 4 }}>
+                  Alerts that match an active pattern are suppressed before opening an incident.
+                  Patterns promote to auto-close after analysts mark {" "}
+                  <span style={{ color: "#b36bff" }}>N</span> matching incidents as false positives
+                  (configurable via <code style={{ fontSize: 10 }}>FP_PATTERN_CLOSE_THRESHOLD</code> in cysiemstack.env).
+                </div>
+              </div>
+              <button onClick={loadFpPatterns} disabled={fpPatternsLoading}
+                style={{ background: "none", border: "1px solid rgba(179,107,255,0.3)",
+                  color: "#b36bff", padding: "6px 12px", borderRadius: 4, cursor: "pointer",
+                  fontSize: 11, fontFamily: "monospace", flexShrink: 0, marginLeft: 16 }}>
+                {fpPatternsLoading ? "Loading…" : "↻ Refresh"}
+              </button>
+            </div>
+
+            {fpPatterns.length === 0 ? (
+              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 12, fontFamily: "monospace",
+                padding: "20px 0", textAlign: "center" }}>
+                No learned patterns yet. Close incidents as False Positive to start building the pattern memory.
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11,
+                  fontFamily: "monospace" }}>
+                  <thead>
+                    <tr style={{ background: "rgba(179,107,255,0.06)" }}>
+                      {["Rule", "Description", "Closes", "Threshold", "Auto-Close", "Last Seen", "Actions"].map(h => (
+                        <th key={h} style={{ padding: "7px 10px", textAlign: "left",
+                          color: "rgba(255,255,255,0.3)", fontWeight: 600,
+                          borderBottom: "1px solid rgba(179,107,255,0.15)", whiteSpace: "nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fpPatterns.map(p => (
+                      <tr key={p.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
+                        onMouseEnter={e => e.currentTarget.style.background = "rgba(179,107,255,0.04)"}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                        <td style={{ padding: "7px 10px", color: "#4d9eff" }}>{p.rule_id || "—"}</td>
+                        <td style={{ padding: "7px 10px", color: "rgba(255,255,255,0.65)",
+                          maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                          title={p.raw_sample || p.description}>
+                          {p.description || p.fingerprint}
+                        </td>
+                        <td style={{ padding: "7px 10px", textAlign: "center" }}>
+                          <span style={{ background: "rgba(179,107,255,0.12)", color: "#b36bff",
+                            padding: "2px 8px", borderRadius: 2, fontWeight: 700 }}>
+                            {p.close_count}
+                          </span>
+                        </td>
+                        <td style={{ padding: "7px 10px", color: "rgba(255,255,255,0.5)",
+                          textAlign: "center" }}>{p.threshold}</td>
+                        <td style={{ padding: "7px 10px", textAlign: "center" }}>
+                          <button
+                            onClick={() => handleToggleFpPattern(p.id, !p.auto_close)}
+                            title={p.auto_close ? "Click to disable auto-close" : "Click to enable auto-close"}
+                            style={{ background: p.auto_close ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.04)",
+                              border: `1px solid ${p.auto_close ? "rgba(0,229,160,0.4)" : "rgba(255,255,255,0.12)"}`,
+                              color: p.auto_close ? "#00e5a0" : "rgba(255,255,255,0.35)",
+                              padding: "3px 10px", borderRadius: 3, cursor: "pointer",
+                              fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>
+                            {p.auto_close ? "✓ ACTIVE" : "INACTIVE"}
+                          </button>
+                        </td>
+                        <td style={{ padding: "7px 10px", color: "rgba(255,255,255,0.35)",
+                          whiteSpace: "nowrap" }}>
+                          {p.last_seen ? new Date(p.last_seen).toLocaleDateString() : "—"}
+                        </td>
+                        <td style={{ padding: "7px 10px" }}>
+                          <button
+                            onClick={() => { if (window.confirm(`Delete FP pattern for rule ${p.rule_id}?`)) handleDeleteFpPattern(p.id); }}
+                            style={{ background: "none", border: "1px solid rgba(255,59,59,0.25)",
+                              color: "rgba(255,100,100,0.7)", padding: "3px 8px", borderRadius: 3,
+                              cursor: "pointer", fontSize: 10, fontFamily: "monospace" }}>
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
 
         {loading ? (
           <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 13, padding: "40px 0" }}>

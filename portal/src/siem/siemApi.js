@@ -128,6 +128,29 @@ export const siemApi = {
     }),
 
   /**
+   * Trigger on-demand LLM AI analysis for any incident. Analyst+.
+   * @param {string} id Incident ID
+   */
+  requestAiAnalysis: (id) => _post(`/incidents/${id}/analyse`, {}),
+
+  /** List all learned FP patterns. */
+  getFpPatterns: () => _get("/fp-patterns"),
+
+  /**
+   * Toggle auto_close or update threshold/description for an FP pattern. Analyst+.
+   * @param {number} id Pattern ID
+   * @param {{ auto_close?: boolean, threshold?: number, description?: string }} body
+   */
+  toggleFpPattern: (id, body) => _patch(`/fp-patterns/${id}`, body),
+
+  /**
+   * Delete a learned FP pattern. Admin only.
+   * @param {number} id Pattern ID
+   */
+  deleteFpPattern: (id) =>
+    fetch(`${SIEM}/fp-patterns/${id}`, { method: "DELETE", credentials: "include" }),
+
+  /**
    * Create a WebSocket connection to the engine live feed.
    * Authenticated via same-origin cookie.
    * Returns a native WebSocket instance.

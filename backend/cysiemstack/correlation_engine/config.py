@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     # CySOAR (Node-RED) webhook URL — empty string means SOAR is not configured.
     soar_webhook_url: str = ""
 
+    # FP Pattern Auto-Close Threshold
+    # Number of times an analyst must manually close a matching incident
+    # before the system starts auto-closing future matches automatically.
+    # Increase for stricter control; decrease for faster learning.
+    fp_pattern_close_threshold: int = 5
+
     # CyMind integration — API key that CyMind must present to access /mcp/*
     # Generated and stored via POST /api/system/cymind in the portal.
     # Empty string disables key enforcement (MCP is still reachable internally).

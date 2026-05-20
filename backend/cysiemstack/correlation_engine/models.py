@@ -206,6 +206,30 @@ class CorrelationFeedback(Base):
     rules_fired   = Column(ARRAY(Text))
     notes         = Column(Text)
 
+
+class FpPattern(Base):
+    """Learned false-positive patterns — fingerprints of alerts analysts repeatedly close as FP."""
+    __tablename__ = "fp_patterns"
+
+    id           = Column(BigInteger, primary_key=True, autoincrement=True)
+    fingerprint  = Column(Text, nullable=False, unique=True)
+    raw_sample   = Column(Text)
+    agent_id     = Column(Text)          # NULL = matches any host
+    rule_id      = Column(Integer)
+    description  = Column(Text)
+    close_count  = Column(Integer, default=0)
+    threshold    = Column(Integer, default=5)
+    auto_close   = Column(Boolean, default=False)
+    last_seen    = Column(TIMESTAMP(timezone=True))
+    created_at   = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+    updated_at   = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+    created_by   = Column(Text)
+
+    __table_args__ = (
+        Index("ix_fp_patterns_fingerprint", "fingerprint"),
+        Index("ix_fp_patterns_auto_close",  "auto_close"),
+    )
+
 async def get_db():
     async with AsyncSessionLocal() as session:
         try:

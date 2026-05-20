@@ -27,6 +27,7 @@ from llm_enricher import enrich_incident as llm_enrich_incident
 from iris_connector import advance_incident_status, write_audit
 from ueba_ml import ml_analyse_alert
 from cysoar_connector import cysoar_trigger
+from fp_pattern_store import check_fp_pattern
 from config import get_settings
 
 log = structlog.get_logger()
@@ -99,6 +100,31 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
 
     async with AsyncSessionLocal() as db:
         try:
+            # 0. FP Pattern check — suppress alert before pipeline if it matches
+            #    a learned auto-close pattern (e.g. known-benign sudo commands).
+            fp_match = await check_fp_pattern(db, alert)
+            if fp_match:
+                log.info(
+                    "alert_suppressed_fp_pattern",
+                    rule_id=alert.get("rule_id"),
+                    agent_id=alert.get("agent_id"),
+                    pattern_id=fp_match.id,
+                    close_count=fp_match.close_count,
+                )
+                await write_audit(
+                    db, "incident", "suppressed",
+                    action="auto_fp",
+                    actor="system",
+                    comment=(
+                        f"Alert suppressed by FP pattern #{fp_match.id} "
+                        f"(rule {alert.get('rule_id')}, seen {fp_match.close_count}×)"
+                    ),
+                    extra={"fingerprint": fp_match.fingerprint[:16],
+                           "rule_id": alert.get("rule_id")},
+                )
+                await db.commit()
+                return
+
             # 1. Group → Incident
             incident, created = await group_alert(db, alert)
 

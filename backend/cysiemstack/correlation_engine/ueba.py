@@ -34,6 +34,7 @@ RISK_CONTRIBUTIONS = {
     'activity_volume_spike':    45,
     'suspicious_process':       65,
     'repeated_privesc_attempt': 50,
+    'c2_beaconing':             60,
 }
 
 DORMANT_THRESHOLD_DAYS = 90  # dormant account rebirth threshold

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from models import CorrelationFeedback, Incident, Alert
+from fp_pattern_store import record_fp_closure
 
 log = structlog.get_logger()
 
@@ -52,7 +53,42 @@ async def submit_feedback(
     if verdict == 'true_positive':
         asyncio.create_task(_push_tp_iocs(db, incident_id))
 
+    # Record FP pattern for learning — fire-and-forget
+    if verdict in ('false_positive', 'benign'):
+        asyncio.create_task(
+            _learn_fp_pattern(db, incident_id, analyst_email or "system")
+        )
+
     return fb
+
+
+async def _learn_fp_pattern(
+    db: AsyncSession,
+    incident_id: str,
+    analyst_email: str,
+) -> None:
+    """Fetch the primary alert for the incident and record an FP closure."""
+    try:
+        alerts_q = await db.execute(
+            select(Alert)
+            .where(Alert.incident_id == incident_id)
+            .order_by(Alert.id)
+            .limit(1)
+        )
+        alert = alerts_q.scalar_one_or_none()
+        if alert is None:
+            return
+        alert_dict = {
+            "rule_id":        alert.rule_id,
+            "rule_desc":      alert.rule_desc,
+            "raw_log":        alert.raw_log,
+            "agent_id":       alert.agent_id,
+            "misp_ioc_match": alert.misp_ioc_match,
+        }
+        await record_fp_closure(db, alert_dict, analyst_email)
+        await db.commit()
+    except Exception as exc:
+        log.warning("fp_pattern_learn_error", incident_id=incident_id, error=str(exc))
 
 
 async def _push_tp_iocs(db: AsyncSession, incident_id: str) -> None:

@@ -358,6 +358,58 @@ def siem_incident_escalate(incident_id):
     })
 
 
+@siem_bp.route("/incidents/<incident_id>/analyse", methods=["POST"])
+@require_siem_analyst
+def siem_incident_analyse(incident_id):
+    """Trigger on-demand LLM AI analysis for an incident. Analyst+."""
+    try:
+        resp = _req.post(
+            f"{SIEM_ENGINE_URL}/incidents/{incident_id}/analyse",
+            timeout=120,  # LLM calls can take up to 2 minutes
+        )
+        return Response(resp.content, status=resp.status_code,
+                        headers=dict(resp.headers))
+    except _req.exceptions.ConnectionError:
+        return _engine_offline_response()
+    except _req.exceptions.Timeout:
+        return jsonify({"error": "AI analysis request timed out"}), 504
+
+
+@siem_bp.route("/incidents/<incident_id>/analyse", methods=["OPTIONS"])
+def siem_incident_analyse_options(incident_id):
+    from core.helpers import add_cors_headers
+    return add_cors_headers(make_response('', 204))
+
+
+# ── FP Pattern management endpoints ───────────────────────────────────────────
+
+@siem_bp.route("/fp-patterns")
+@require_siem_auth
+def siem_fp_patterns_list():
+    """List all learned FP patterns."""
+    return _proxy("/fp-patterns")
+
+
+@siem_bp.route("/fp-patterns/<int:pattern_id>", methods=["PATCH"])
+@require_siem_analyst
+def siem_fp_pattern_patch(pattern_id):
+    """Toggle auto_close or update threshold/description. Analyst+."""
+    return _proxy(f"/fp-patterns/{pattern_id}", method="PATCH")
+
+
+@siem_bp.route("/fp-patterns/<int:pattern_id>", methods=["DELETE"])
+@require_siem_admin
+def siem_fp_pattern_delete(pattern_id):
+    """Delete a learned FP pattern. Admin only."""
+    return _proxy(f"/fp-patterns/{pattern_id}", method="DELETE")
+
+
+@siem_bp.route("/fp-patterns/<int:pattern_id>", methods=["OPTIONS"])
+def siem_fp_pattern_options(pattern_id):
+    from core.helpers import add_cors_headers
+    return add_cors_headers(make_response('', 204))
+
+
 @siem_bp.route("/risk-scores")
 @require_siem_auth
 def siem_risk_scores():

@@ -960,6 +960,22 @@ async def transition_incident(
         to_status=to_st,
         comment=body.comment.strip(),
     )
+
+    # Auto-submit feedback and record FP pattern when analyst marks as false_positive
+    if to_st == "false_positive":
+        rules = [
+            r.get("rule_id") if isinstance(r, dict) else r
+            for r in (inc.correlated_rules or [])
+        ]
+        await submit_feedback(
+            db,
+            incident_id   = incident_id,
+            verdict       = "false_positive",
+            rules_fired   = rules,
+            analyst_email = body.actor,
+            notes         = body.comment.strip(),
+        )
+
     await db.commit()
     return _incident_to_dict(inc)
 
@@ -1168,6 +1184,108 @@ async def post_feedback(body: FeedbackBody, db: AsyncSession = Depends(get_db)):
 async def rule_accuracy(db: AsyncSession = Depends(get_db)):
     """Per-rule TP/FP/accuracy stats for the last 90 days."""
     return await get_rule_accuracy(db)
+
+
+# ── On-demand AI analysis endpoint ────────────────────────────────────────────
+
+@app.post("/incidents/{incident_id}/analyse")
+async def analyse_incident(incident_id: str, db: AsyncSession = Depends(get_db)):
+    """Trigger LLM enrichment on demand for any incident regardless of severity/age."""
+    inc = (await db.execute(
+        select(Incident).where(Incident.id == incident_id)
+    )).scalar_one_or_none()
+    if not inc:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    from llm_enricher import enrich_incident as llm_enrich_incident
+    result = await llm_enrich_incident(db, inc)
+    await db.commit()
+
+    if not result:
+        raise HTTPException(status_code=503,
+                            detail="LLM enrichment failed or is disabled. "
+                                   "Check AI settings in the portal.")
+    return {
+        "ok":               True,
+        "llm_summary":      inc.llm_summary,
+        "llm_remediation":  inc.llm_remediation,
+        "llm_generated_at": inc.llm_generated_at.isoformat() if inc.llm_generated_at else None,
+    }
+
+
+# ── FP Pattern management endpoints ───────────────────────────────────────────
+from fp_pattern_store import check_fp_pattern as _check_fp_pattern
+from models import FpPattern
+
+
+class FpPatternPatch(BaseModel):
+    auto_close:  Optional[bool] = None
+    threshold:   Optional[int]  = None
+    description: Optional[str]  = None
+
+
+@app.get("/fp-patterns")
+async def list_fp_patterns(db: AsyncSession = Depends(get_db)):
+    """List all learned FP patterns."""
+    result = await db.execute(
+        select(FpPattern).order_by(desc(FpPattern.close_count))
+    )
+    patterns = result.scalars().all()
+    return [
+        {
+            "id":          p.id,
+            "fingerprint": p.fingerprint[:16] + "…",
+            "rule_id":     p.rule_id,
+            "description": p.description,
+            "agent_id":    p.agent_id,
+            "close_count": p.close_count,
+            "threshold":   p.threshold,
+            "auto_close":  p.auto_close,
+            "last_seen":   p.last_seen.isoformat() if p.last_seen else None,
+            "created_at":  p.created_at.isoformat() if p.created_at else None,
+            "created_by":  p.created_by,
+            "raw_sample":  p.raw_sample,
+        }
+        for p in patterns
+    ]
+
+
+@app.patch("/fp-patterns/{pattern_id}")
+async def patch_fp_pattern(
+    pattern_id: int,
+    body: FpPatternPatch,
+    db: AsyncSession = Depends(get_db),
+):
+    """Toggle auto_close, adjust threshold, or update description."""
+    p = (await db.execute(
+        select(FpPattern).where(FpPattern.id == pattern_id)
+    )).scalar_one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Pattern not found")
+
+    if body.auto_close is not None:
+        p.auto_close = body.auto_close
+    if body.threshold is not None:
+        p.threshold = body.threshold
+    if body.description is not None:
+        p.description = body.description
+    p.updated_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    return {"ok": True, "id": p.id, "auto_close": p.auto_close, "threshold": p.threshold}
+
+
+@app.delete("/fp-patterns/{pattern_id}")
+async def delete_fp_pattern(pattern_id: int, db: AsyncSession = Depends(get_db)):
+    """Remove a learned FP pattern entirely."""
+    p = (await db.execute(
+        select(FpPattern).where(FpPattern.id == pattern_id)
+    )).scalar_one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Pattern not found")
+    await db.delete(p)
+    await db.commit()
+    return {"ok": True, "deleted_id": pattern_id}
 
 
 @app.websocket("/ws/live")
