@@ -55,6 +55,7 @@ import { SiemIncidentsPage } from './siem/SiemIncidentsPage';
 import { SiemRiskScoresPage } from './siem/SiemRiskScoresPage';
 import { SiemUebaPage }       from './siem/SiemUebaPage';
 import { InternalExposureDashboard } from './siem/InternalExposureDashboard';
+import { HostsPage }           from './pages/hosts/HostsPage.jsx';
 
 import { LoginPage }         from './pages/login/LoginPage.jsx';
 import { ScanPage }          from './pages/scan/ScanPage.jsx';
@@ -346,10 +347,11 @@ export default function App() {
             {activeTab==="dashboard"      && <DashboardPage assets={assets} data={data} stats={stats} installedModules={installedModules} setActiveTab={setActiveTab} setSelectedAsset={setSelectedAsset} setShowImport={setShowImport}/>}
             {activeTab==="assets"         && <AssetsPage assets={assets} setSelectedAsset={setSelectedAsset} setShowImport={setShowImport}/>}
             {activeTab==="vulns"          && <VulnerabilityPage assets={assets} scanHistory={scanHistory} selectedScanId={selectedScanId} onScanSelect={handleScanSelect}/>}
-            {activeTab==="siem-incidents" && <SiemIncidentsPage/>}
-            {activeTab==="siem-risk"      && <SiemRiskScoresPage/>}
-            {activeTab==="siem-ueba"      && <SiemUebaPage/>}
+            {activeTab==="siem-incidents"   && <SiemIncidentsPage/>}
+            {activeTab==="siem-risk"        && <SiemRiskScoresPage/>}
+            {activeTab==="siem-ueba"        && <SiemUebaPage/>}
             {activeTab==="internal-dashboard" && <InternalExposureDashboard setActiveTab={setActiveTab}/>}
+            {activeTab==="host-inventory"   && <HostsPage/>}
             {activeTab==="marketplace"    && <MarketplacePage user={user} installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
             {activeTab==="benchmark"            && <BenchmarkPage />}
             {activeTab==="system-settings"     && <SystemSettingsPage />}

@@ -1,0 +1,15 @@
+id: HT-001
+name: "Low-and-Slow Brute Force (7-day window)"
+description: >
+  Detects more than 20 authentication failures spread across 7 days for the
+  same username — deliberately slow enough to evade hourly brute-force rules.
+mitre: ["T1110"]
+window_hours: 168
+conditions:
+  - category: authentication
+    rule_desc_contains: "authentication failed"
+    min_count: 20
+    same_field: username
+severity: medium
+confidence: 0.70
+frameworks: [pci_dss, hipaa, nist_csf]

@@ -4,7 +4,8 @@ cy_comp/services/enrichment.py
 Maps Wazuh rule IDs and MITRE ATT&CK techniques to compliance framework controls.
 Ported and extended from CyComp standalone enrichment service.
 
-Frameworks covered: NIS2, DORA, GDPR, ISO 27001:2022, SOC 2, NIST CSF 2.0, PCI DSS v4.0
+Frameworks covered: NIS2, DORA, GDPR, ISO 27001:2022, SOC 2, NIST CSF 2.0, PCI DSS v4.0,
+                    HIPAA Security Rule, TSC (Trust Services Criteria / SOC 2 CC/A/PI)
 """
 from typing import Dict, List
 
@@ -276,13 +277,80 @@ WAZUH_RULE_TO_CONTROLS: Dict[str, Dict[str, List[str]]] = {
     },
 }
 
+# ── HIPAA Security Rule — MITRE ATT&CK technique → §164 controls ─────────────
+# Refs: §164.312(a)(1) Access Control, §164.312(a)(2) Auto-logoff / Encryption,
+#       §164.312(b) Audit Controls, §164.312(c)(1) Integrity,
+#       §164.312(d) Person or Entity Auth, §164.312(e)(1)-(2) Transmission Security
+HIPAA_TECHNIQUE_MAP: Dict[str, List[str]] = {
+    "T1110": ["§164.312(a)(2)(i)", "§164.312(d)"],
+    "T1078": ["§164.312(a)(1)", "§164.312(d)"],
+    "T1556": ["§164.312(a)(2)(iii)", "§164.312(d)"],
+    "T1548": ["§164.312(a)(1)", "§164.312(a)(2)(iv)"],
+    "T1068": ["§164.312(a)(1)", "§164.308(a)(1)(ii)(D)"],
+    "T1070": ["§164.312(b)"],
+    "T1562": ["§164.312(b)", "§164.312(e)(2)(i)"],
+    "T1040": ["§164.312(e)(1)", "§164.312(e)(2)(ii)"],
+    "T1557": ["§164.312(e)(1)"],
+    "T1485": ["§164.312(c)(1)"],
+    "T1565": ["§164.312(c)(1)", "§164.312(c)(2)"],
+    "T1530": ["§164.312(a)(1)", "§164.308(a)(3)"],
+    "T1213": ["§164.312(a)(1)", "§164.308(a)(3)"],
+    "T1021": ["§164.312(a)(1)", "§164.312(e)(1)"],
+    "T1059": ["§164.312(b)", "§164.308(a)(1)(ii)(D)"],
+    "T1053": ["§164.308(a)(5)(ii)(B)", "§164.312(b)"],
+    "T1486": ["§164.312(c)(1)", "§164.308(a)(7)(ii)(A)"],
+    "T1041": ["§164.312(e)(1)", "§164.308(a)(6)(ii)"],
+    "T1566": ["§164.308(a)(5)(ii)(C)", "§164.308(a)(1)(ii)(D)"],
+}
+
+# ── TSC (Trust Services Criteria) — MITRE ATT&CK technique → CC/A/PI controls ─
+# Refs: CC6 Logical Access, CC7 System Ops, CC8 Change Mgmt, CC9 Risk Mitigation,
+#       A1 Availability, PI1 Processing Integrity
+TSC_TECHNIQUE_MAP: Dict[str, List[str]] = {
+    "T1110": ["CC6.1", "CC6.7"],
+    "T1078": ["CC6.1", "CC6.2", "CC6.3"],
+    "T1556": ["CC6.1", "CC6.8"],
+    "T1548": ["CC6.3", "CC6.8"],
+    "T1068": ["CC7.1", "CC6.8"],
+    "T1070": ["CC7.2", "CC7.3"],
+    "T1562": ["CC7.1", "CC7.2"],
+    "T1021": ["CC6.6", "CC6.7"],
+    "T1059": ["CC6.8", "CC7.2"],
+    "T1053": ["CC6.3", "CC8.1"],
+    "T1046": ["CC7.1", "CC6.6"],
+    "T1190": ["CC7.1", "CC9.2"],
+    "T1195": ["CC8.1", "CC9.1"],
+    "T1499": ["A1.1", "A1.2"],
+    "T1498": ["A1.1", "A1.2"],
+    "T1485": ["A1.3", "PI1.1"],
+    "T1565": ["PI1.1", "PI1.2"],
+    "T1486": ["A1.3", "CC9.1"],
+    "T1566": ["CC9.1", "CC9.2"],
+    "T1041": ["CC6.7", "CC7.3"],
+    "T1048": ["CC6.7", "CC7.3"],
+}
+
+# ── SCA rule ID range → compliance controls (hardening failures) ──────────────
+# SCA policy check failures map to configuration management controls
+_SCA_CONTROLS: Dict[str, List[str]] = {
+    "nis2":     ["NIS2-Art21-2e", "NIS2-Art21-2h"],
+    "dora":     ["DORA-Art9", "DORA-Art10"],
+    "gdpr":     ["GDPR-Art25", "GDPR-Art32"],
+    "iso27001": ["ISO-A8.8", "ISO-A8.9"],
+    "soc2":     ["CC7.1", "CC8.1"],
+    "nist_csf": ["PR.PS-01", "PR.PS-02", "ID.RA-01"],
+    "pci_dss":  ["Req 2.2", "Req 6.3"],
+    "hipaa":    ["§164.312(a)(2)(iv)", "§164.308(a)(1)(ii)(D)"],
+    "tsc":      ["CC7.1", "CC8.1"],
+}
+
 # ── Framework tag from Wazuh rule groups ─────────────────────────────────────
 _GROUP_TO_FRAMEWORK: Dict[str, str] = {
     "pci_dss":     "pci_dss",
     "gdpr":        "gdpr",
     "hipaa":       "hipaa",
     "nist_800_53": "nist_csf",
-    "tsc":         "soc2",
+    "tsc":         "tsc",
 }
 
 
@@ -306,7 +374,7 @@ def enrich_alert(alert: dict) -> dict:
 
     controls: Dict[str, List[str]] = {}
 
-    # 1. MITRE technique mapping
+    # 1. MITRE technique mapping (NIS2/DORA/GDPR/ISO/SOC2/NIST/PCI + HIPAA + TSC)
     for technique in str(mitre_field).replace(",", " ").split():
         technique = technique.strip()
         if technique in MITRE_TO_CONTROLS:
@@ -315,6 +383,24 @@ def enrich_alert(alert: dict) -> dict:
                     controls.setdefault(fw, [])
                     if c not in controls[fw]:
                         controls[fw].append(c)
+        if technique in HIPAA_TECHNIQUE_MAP:
+            for c in HIPAA_TECHNIQUE_MAP[technique]:
+                controls.setdefault("hipaa", [])
+                if c not in controls["hipaa"]:
+                    controls["hipaa"].append(c)
+        if technique in TSC_TECHNIQUE_MAP:
+            for c in TSC_TECHNIQUE_MAP[technique]:
+                controls.setdefault("tsc", [])
+                if c not in controls["tsc"]:
+                    controls["tsc"].append(c)
+
+    # 1b. SCA category — apply configuration management controls to all frameworks
+    if alert.get("category") == "sca":
+        for fw, ctrl_list in _SCA_CONTROLS.items():
+            for c in ctrl_list:
+                controls.setdefault(fw, [])
+                if c not in controls[fw]:
+                    controls[fw].append(c)
 
     # 2. Wazuh rule ID mapping
     if rule_id in WAZUH_RULE_TO_CONTROLS:

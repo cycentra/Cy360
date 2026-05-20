@@ -1,0 +1,16 @@
+id: HT-002
+name: "Lateral Movement via SSH (multi-host, 48h)"
+description: >
+  Detects a single source IP authenticating successfully to 3 or more distinct
+  hosts over a 48-hour window — indicative of lateral movement using harvested
+  credentials or SSH key abuse.
+mitre: ["T1021.004", "T1078"]
+window_hours: 48
+conditions:
+  - category: authentication
+    rule_desc_contains: "accepted"
+    min_count: 3
+    same_field: src_ip
+severity: high
+confidence: 0.75
+frameworks: [nis2, gdpr, pci_dss, hipaa]

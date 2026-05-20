@@ -735,24 +735,108 @@ def _collect_iris_mttr_subscore() -> tuple[Optional[float], str]:
         return None, "CyIRIS not configured or no incident data"
 
 
+def _collect_internal_posture_subscore() -> tuple[Optional[float], str, dict]:
+    """
+    Read the aggregated internal host posture from host_posture_cache.
+
+    Returns (score_0_100, detail_string, component_breakdown).
+    Uses psycopg2 (sync) to avoid importing the async engine into Flask context.
+    Falls back to (None, reason, {}) if the cache is empty or DB unavailable.
+    """
+    try:
+        import psycopg2
+        conn = psycopg2.connect(_CORR_DB_URL)
+        cur  = conn.cursor()
+        cur.execute("""
+            SELECT
+              agent_id, posture_score, asset_tier,
+              sca_score, vuln_score, siem_risk,
+              fim_event_count, malware_count, compliance_score,
+              posture_grade, wazuh_status
+            FROM host_posture_cache
+            WHERE computed_at > NOW() - INTERVAL '2 hours'
+        """)
+        rows = cur.fetchall()
+        conn.close()
+    except Exception as exc:
+        log.debug("[benchmark] host_posture_cache unavailable: %s", exc)
+        return None, "Host posture cache unavailable (cache not yet populated)", {}
+
+    if not rows:
+        return None, "Host posture cache empty — run /api/siem/hosts/refresh", {}
+
+    tier_weight = {1: 3.0, 2: 2.0, 3: 1.0}
+    weighted_sum  = 0.0
+    total_weight  = 0.0
+    comp_sums     = {"sca": 0.0, "vuln": 0.0, "siem_risk": 0.0, "compliance": 0.0}
+    comp_weights  = {k: 0.0 for k in comp_sums}
+    active_count  = critical_grade = total = 0
+
+    for row in rows:
+        agent_id, posture_score, asset_tier, sca_score, vuln_score, siem_risk, \
+            fim_count, malware_count, compliance_score, grade, status = row
+
+        if posture_score is None:
+            continue
+        total += 1
+        w  = tier_weight.get(asset_tier or 3, 1.0)
+        weighted_sum += float(posture_score) * w
+        total_weight += w
+
+        comps = {
+            "sca":        float(sca_score)        if sca_score        is not None else 50.0,
+            "vuln":       float(vuln_score)        if vuln_score       is not None else 50.0,
+            "siem_risk":  max(0, 100 - float(siem_risk)) if siem_risk is not None else 50.0,
+            "compliance": float(compliance_score)  if compliance_score is not None else 50.0,
+        }
+        for k in comp_sums:
+            comp_sums[k]    += comps[k] * w
+            comp_weights[k] += w
+
+        if status == "active":
+            active_count += 1
+        if grade in ("F", "D"):
+            critical_grade += 1
+
+    if total_weight == 0:
+        return None, "No scored hosts in posture cache", {}
+
+    overall  = round(weighted_sum / total_weight, 1)
+    breakdown = {k: round(comp_sums[k] / comp_weights[k], 1)
+                 for k in comp_sums if comp_weights[k] > 0}
+
+    detail = (f"Internal posture: {total} hosts · "
+              f"SCA {breakdown.get('sca', '?')} · "
+              f"Vuln {breakdown.get('vuln', '?')} · "
+              f"{critical_grade} critical-grade hosts")
+    return float(overall), detail, breakdown
+
+
 def _collect_vuln_score() -> dict:
     """
     Enterprise-grade vulnerability management score (0-100).
 
-    Combines three real sub-scores:
-      40% — Wazuh vulnerability detector (CVE severity counts per agent)
-      35% — Wazuh SCA policy pass rate (configuration compliance)
-      25% — CyIRIS mean time to remediate by severity
+    Primary:  reads from host_posture_cache (5-component posture model)
+              which covers SCA, vulnerability CVEs, FIM, malware, compliance.
+    Fallback: direct Wazuh API calls (original 3-component model).
+    Blended with CyIRIS MTTR.
 
-    Falls back to ASM-based heuristic if Wazuh API is unavailable.
+    Sub-score weights (primary path):
+      50% — Internal host posture (SCA + CVE + FIM/malware + compliance)
+      25% — Wazuh vulnerability detector (CVE severity counts)
+      25% — CyIRIS mean time to remediate by severity
     """
     token = _wazuh_token()
 
     sub_scores   = {}
     sub_details  = {}
-    sub_weights  = {"wazuh_vuln": 0.40, "wazuh_sca": 0.35, "iris_mttr": 0.25}
 
-    # ── Wazuh vulnerability detector ──────────────────────────────────────────
+    # ── Primary: host posture cache (richer, already computed) ───────────────
+    posture_score, posture_detail, posture_breakdown = _collect_internal_posture_subscore()
+    sub_scores["host_posture"]  = posture_score
+    sub_details["host_posture"] = posture_detail
+
+    # ── Wazuh vulnerability detector (direct, per-CVE) ────────────────────────
     if token:
         score, detail = _collect_wazuh_vuln_subscore(token)
         sub_scores["wazuh_vuln"]  = score
@@ -761,21 +845,23 @@ def _collect_vuln_score() -> dict:
         sub_scores["wazuh_vuln"]  = None
         sub_details["wazuh_vuln"] = "Wazuh API credentials not configured"
 
-    # ── Wazuh SCA ─────────────────────────────────────────────────────────────
-    if token:
+    # ── Wazuh SCA (direct) — only used when host posture cache is unavailable ─
+    if posture_score is None and token:
         score, detail = _collect_wazuh_sca_subscore(token)
         sub_scores["wazuh_sca"]  = score
         sub_details["wazuh_sca"] = detail
-    else:
-        sub_scores["wazuh_sca"]  = None
-        sub_details["wazuh_sca"] = "Wazuh API credentials not configured"
 
     # ── CyIRIS MTTR ───────────────────────────────────────────────────────────
     score, detail = _collect_iris_mttr_subscore()
     sub_scores["iris_mttr"]  = score
     sub_details["iris_mttr"] = detail
 
-    # ── Blend available sub-scores ─────────────────────────────────────────────
+    # ── Blend weights — prefer host_posture when available ────────────────────
+    if posture_score is not None:
+        sub_weights = {"host_posture": 0.50, "wazuh_vuln": 0.25, "iris_mttr": 0.25}
+    else:
+        sub_weights = {"wazuh_vuln": 0.40, "wazuh_sca": 0.35, "iris_mttr": 0.25}
+
     weighted_sum = 0.0
     weight_sum   = 0.0
     for key, w in sub_weights.items():
@@ -785,10 +871,6 @@ def _collect_vuln_score() -> dict:
             weight_sum   += w
 
     if weight_sum == 0:
-        # Wazuh API is unavailable and no IRIS MTTR data exists.
-        # Do NOT fall back to ASM scan data: ASM findings are already captured
-        # in the ASM dimension (weight 20%).  Re-reading them here would create
-        # double-counting and inflate the CSPI with the same raw data twice.
         return {
             "score":      None,
             "stale":      False,
@@ -797,16 +879,16 @@ def _collect_vuln_score() -> dict:
             "sub_scores": sub_scores,
         }
 
-    # Normalise if some sub-scores were missing
     composite = round(weighted_sum / weight_sum)
     available = [k for k, v in sub_scores.items() if v is not None]
     detail_lines = [sub_details[k] for k in available]
 
     return {
-        "score":      composite,
-        "stale":      False,
-        "detail":     " | ".join(detail_lines),
-        "sub_scores": sub_scores,
+        "score":              composite,
+        "stale":              False,
+        "detail":             " | ".join(detail_lines),
+        "sub_scores":         sub_scores,
+        "host_posture_breakdown": posture_breakdown,
     }
 
 

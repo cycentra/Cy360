@@ -1,0 +1,16 @@
+id: HT-005
+name: "SCA Hardening Regression (30-day window)"
+description: >
+  Detects more than 10 SCA policy check failures on the same host over 30 days.
+  A large number of failures may indicate a new deployment with poor hardening,
+  a rollback to an unpatched configuration, or deliberate config tampering.
+mitre: []
+window_hours: 720
+conditions:
+  - category: sca
+    rule_desc_contains: "failed"
+    min_count: 10
+    same_field: agent_id
+severity: medium
+confidence: 0.68
+frameworks: [nist_csf, cis, pci_dss, hipaa, tsc]

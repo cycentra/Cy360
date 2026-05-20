@@ -18,6 +18,7 @@ const SvgDoc   = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" str
 const SvgAsset = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>;
 const SvgVuln  = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4M12 16h.01"/></svg>;
 const SvgSIEM  = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>;
+const SvgHost  = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><circle cx="12" cy="10" r="2"/><path d="M8 10h1M15 10h1"/></svg>;
 const SvgScan  = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35M11 8v6M8 11h6"/></svg>;
 const SvgHist  = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/><path d="M3.05 11a9 9 0 1 1 .5 4"/><polyline points="1 12 3 10 5 12"/></svg>;
 const SvgMkt   = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>;
@@ -67,9 +68,10 @@ export function buildNavSections({ installedModules = {}, data = null }) {
       section: "INTERNAL EXPOSURE",
       items: [
         { id: "internal-dashboard", label: "Internal Attack Posture", icon: <span style={{ fontSize: 13 }}>🛡️</span>, accent: "#4d9eff" },
-        { id: "siem-incidents", label: "Active Incidents",     icon: <span style={{ fontSize: 13 }}>🔥</span>, accent: "#ff3b3b" },
-        { id: "siem-risk",      label: "Entity Risk",          icon: <span style={{ fontSize: 13 }}>⚡</span>, accent: "#ff8c00" },
-        { id: "siem-ueba",      label: "Behavioral Analytics", icon: <span style={{ fontSize: 13 }}>👤</span>, accent: "#b06eff" },
+        { id: "host-inventory",     label: "Host Inventory",          icon: SvgHost,                                  accent: "#00e5a0" },
+        { id: "siem-incidents",     label: "Active Incidents",        icon: <span style={{ fontSize: 13 }}>🔥</span>, accent: "#ff3b3b" },
+        { id: "siem-risk",          label: "Entity Risk",             icon: <span style={{ fontSize: 13 }}>⚡</span>, accent: "#ff8c00" },
+        { id: "siem-ueba",          label: "Behavioral Analytics",    icon: <span style={{ fontSize: 13 }}>👤</span>, accent: "#b06eff" },
       ],
     },
     {

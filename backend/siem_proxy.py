@@ -784,3 +784,373 @@ def ueba_anomaly_status_post(anomaly_id):
     data[anomaly_id] = entry
     _save_ueba_statuses(data)
     return jsonify({"status": to_status})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HOST INVENTORY ROUTES
+# All routes are Flask-native (not proxied to engine) — they read from the
+# host_posture_cache table populated by host_service.refresh_all_hosts().
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _run_async(coro):
+    """Run an async coroutine from a sync Flask route."""
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, coro)
+                return future.result(timeout=30)
+        return loop.run_until_complete(coro)
+    except Exception:
+        return asyncio.run(coro)
+
+
+async def _host_list_async(status_filter, sort_by, page, per_page):
+    from cysiemstack.correlation_engine.models import AsyncSessionLocal
+    from cysiemstack.host_service import get_all_hosts_summary
+    async with AsyncSessionLocal() as session:
+        return await get_all_hosts_summary(session, status_filter, sort_by, page, per_page)
+
+
+async def _host_detail_async(agent_id):
+    from cysiemstack.correlation_engine.models import AsyncSessionLocal
+    from cysiemstack.host_service import get_host_detail
+    async with AsyncSessionLocal() as session:
+        return await get_host_detail(agent_id, session)
+
+
+async def _internal_posture_async():
+    from cysiemstack.correlation_engine.models import AsyncSessionLocal
+    from cysiemstack.host_service import get_internal_posture
+    async with AsyncSessionLocal() as session:
+        return await get_internal_posture(session)
+
+
+async def _set_tier_async(agent_id, tier):
+    from cysiemstack.correlation_engine.models import AsyncSessionLocal
+    from cysiemstack.host_service import set_host_asset_tier
+    async with AsyncSessionLocal() as session:
+        return await set_host_asset_tier(agent_id, tier, session)
+
+
+async def _refresh_hosts_async():
+    from cysiemstack.correlation_engine.models import AsyncSessionLocal
+    from cysiemstack.host_service import refresh_all_hosts
+    async with AsyncSessionLocal() as session:
+        return await refresh_all_hosts(session)
+
+
+@siem_bp.route("/hosts", methods=["GET"])
+@require_siem_auth
+def siem_hosts_list():
+    """List all known hosts with posture summary + overall internal posture score.
+
+    Query params:
+      status  — active | disconnected | all (default: all)
+      sort    — posture_score | risk | name (default: posture_score)
+      page    — page number (default: 1)
+      per_page — items per page (default: 50, max: 200)
+    """
+    status_filter = request.args.get("status", "all")
+    sort_by       = request.args.get("sort", "posture_score")
+    try:
+        page     = max(1, int(request.args.get("page",     1)))
+        per_page = min(200, max(1, int(request.args.get("per_page", 50))))
+    except ValueError:
+        page, per_page = 1, 50
+
+    try:
+        result = _run_async(_host_list_async(status_filter, sort_by, page, per_page))
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@siem_bp.route("/hosts/refresh", methods=["POST"])
+@require_siem_admin
+def siem_hosts_refresh():
+    """Trigger an on-demand posture cache refresh for all hosts. Admin only."""
+    try:
+        count = _run_async(_refresh_hosts_async())
+        return jsonify({"refreshed": count, "status": "ok"})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@siem_bp.route("/hosts/<agent_id>", methods=["GET"])
+@require_siem_auth
+def siem_host_detail(agent_id):
+    """Full security profile for a single host.
+
+    Returns: posture score/breakdown, SCA findings, vulnerability counts,
+             active incidents, MITRE techniques, compliance gaps,
+             alerts by category.
+    """
+    try:
+        result = _run_async(_host_detail_async(agent_id))
+        if result is None:
+            return jsonify({"error": "Host not found"}), 404
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@siem_bp.route("/hosts/<agent_id>/vulnerabilities", methods=["GET"])
+@require_siem_auth
+def siem_host_vulnerabilities(agent_id):
+    """Live vulnerability list for a host directly from Wazuh API (paginated).
+
+    Query params: page, per_page, severity (Critical|High|Medium|Low)
+    """
+    import base64 as _b64i
+    try:
+        page     = max(1, int(request.args.get("page",      1)))
+        per_page = min(500, max(1, int(request.args.get("per_page", 100))))
+        severity = request.args.get("severity", "")
+        offset   = (page - 1) * per_page
+    except ValueError:
+        page, per_page, offset, severity = 1, 100, 0, ""
+
+    if not WAZUH_API_PASS:
+        return jsonify({"error": "Wazuh API credentials not configured"}), 503
+    try:
+        creds = _b64i.b64encode(f"{WAZUH_API_USER}:{WAZUH_API_PASS}".encode()).decode()
+        token_resp = _req.get(
+            f"{WAZUH_API_URL}/security/user/authenticate",
+            headers={"Authorization": f"Basic {creds}"},
+            timeout=8, verify=False,
+        )
+        token_resp.raise_for_status()
+        token = token_resp.json()["data"]["token"]
+
+        params = {"limit": per_page, "offset": offset, "status": "Active"}
+        if severity:
+            params["severity"] = severity
+        vuln_resp = _req.get(
+            f"{WAZUH_API_URL}/vulnerability/{agent_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            params=params, timeout=10, verify=False,
+        )
+        vuln_resp.raise_for_status()
+        data = vuln_resp.json().get("data", {})
+        return jsonify({
+            "vulnerabilities": data.get("affected_items", []),
+            "total":           data.get("total_affected_items", 0),
+            "page":            page,
+            "per_page":        per_page,
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@siem_bp.route("/hosts/<agent_id>/sca", methods=["GET"])
+@require_siem_auth
+def siem_host_sca(agent_id):
+    """SCA policy checks for a host directly from Wazuh API (paginated).
+
+    Query params: page, per_page, result (passed|failed|not applicable)
+    """
+    import base64 as _b64i
+    policy_id = request.args.get("policy_id", "")
+    result_filter = request.args.get("result", "")
+    try:
+        page     = max(1, int(request.args.get("page",      1)))
+        per_page = min(500, max(1, int(request.args.get("per_page", 100))))
+        offset   = (page - 1) * per_page
+    except ValueError:
+        page, per_page, offset = 1, 100, 0
+
+    if not WAZUH_API_PASS:
+        return jsonify({"error": "Wazuh API credentials not configured"}), 503
+    try:
+        creds = _b64i.b64encode(f"{WAZUH_API_USER}:{WAZUH_API_PASS}".encode()).decode()
+        token_resp = _req.get(
+            f"{WAZUH_API_URL}/security/user/authenticate",
+            headers={"Authorization": f"Basic {creds}"},
+            timeout=8, verify=False,
+        )
+        token_resp.raise_for_status()
+        token = token_resp.json()["data"]["token"]
+
+        # First fetch the list of SCA policies for this agent
+        policies_resp = _req.get(
+            f"{WAZUH_API_URL}/sca/{agent_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"limit": 50}, timeout=10, verify=False,
+        )
+        policies_resp.raise_for_status()
+        policies = policies_resp.json().get("data", {}).get("affected_items", [])
+
+        # Then fetch checks for the requested (or first) policy
+        target_policy = policy_id or (policies[0]["policy_id"] if policies else None)
+        if not target_policy:
+            return jsonify({"checks": [], "policies": policies, "total": 0})
+
+        check_params = {"limit": per_page, "offset": offset}
+        if result_filter:
+            check_params["result"] = result_filter
+        checks_resp = _req.get(
+            f"{WAZUH_API_URL}/sca/{agent_id}/checks/{target_policy}",
+            headers={"Authorization": f"Bearer {token}"},
+            params=check_params, timeout=10, verify=False,
+        )
+        checks_resp.raise_for_status()
+        checks_data = checks_resp.json().get("data", {})
+
+        return jsonify({
+            "policies":  policies,
+            "policy_id": target_policy,
+            "checks":    checks_data.get("affected_items", []),
+            "total":     checks_data.get("total_affected_items", 0),
+            "page":      page,
+            "per_page":  per_page,
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@siem_bp.route("/hosts/<agent_id>/alerts", methods=["GET"])
+@require_siem_auth
+def siem_host_alerts(agent_id):
+    """Recent alerts for a specific host (from correlation DB, not Wazuh directly)."""
+    category = request.args.get("category", "")
+    try:
+        page     = max(1, int(request.args.get("page",      1)))
+        per_page = min(200, max(1, int(request.args.get("per_page", 50))))
+    except ValueError:
+        page, per_page = 1, 50
+
+    async def _fetch():
+        from cysiemstack.correlation_engine.models import AsyncSessionLocal
+        from sqlalchemy import text as _text
+        async with AsyncSessionLocal() as db:
+            params = {"aid": agent_id, "limit": per_page, "offset": (page - 1) * per_page}
+            cat_clause = "AND category = :cat" if category else ""
+            if category:
+                params["cat"] = category
+            rows = await db.execute(
+                _text(f"""
+                    SELECT id, timestamp, rule_id, rule_desc, rule_level,
+                           category, mitre_id, mitre_tactic, base_score,
+                           src_ip, username, file_path, incident_id
+                    FROM alerts
+                    WHERE agent_id = :aid {cat_clause}
+                      AND timestamp > NOW() - INTERVAL '30 days'
+                    ORDER BY timestamp DESC
+                    LIMIT :limit OFFSET :offset
+                """),
+                params,
+            )
+            count_row = await db.execute(
+                _text(f"SELECT COUNT(*) FROM alerts WHERE agent_id = :aid {cat_clause} AND timestamp > NOW() - INTERVAL '30 days'"),
+                params,
+            )
+            total = count_row.scalar() or 0
+            alerts = [
+                {
+                    "id":          r.id,
+                    "timestamp":   r.timestamp.isoformat() if r.timestamp else None,
+                    "rule_id":     r.rule_id,
+                    "rule_desc":   r.rule_desc,
+                    "rule_level":  r.rule_level,
+                    "category":    r.category,
+                    "mitre_id":    r.mitre_id,
+                    "mitre_tactic":r.mitre_tactic,
+                    "base_score":  float(r.base_score) if r.base_score else None,
+                    "src_ip":      r.src_ip,
+                    "username":    r.username,
+                    "file_path":   r.file_path,
+                    "incident_id": r.incident_id,
+                }
+                for r in rows.fetchall()
+            ]
+            return {"alerts": alerts, "total": total, "page": page, "per_page": per_page}
+
+    try:
+        return jsonify(_run_async(_fetch()))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@siem_bp.route("/hosts/<agent_id>/tier", methods=["POST"])
+@require_siem_admin
+def siem_host_set_tier(agent_id):
+    """Set the asset criticality tier for a host. Admin only.
+
+    Body: { "tier": 1 }  — 1=crown jewel, 2=business critical, 3=standard
+    """
+    body = request.get_json(silent=True) or {}
+    tier = body.get("tier")
+    if tier not in (1, 2, 3):
+        return jsonify({"error": "tier must be 1, 2, or 3"}), 422
+    try:
+        ok = _run_async(_set_tier_async(agent_id, tier))
+        if not ok:
+            return jsonify({"error": "Host not found in posture cache"}), 404
+        return jsonify({"agent_id": agent_id, "tier": tier, "status": "updated"})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# THREAT HUNTING ROUTES
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _hunt_rules_async():
+    from cysiemstack.correlation_engine.models import AsyncSessionLocal
+    from cysiemstack.threat_hunter.hunter import get_hunt_rules_status
+    async with AsyncSessionLocal() as session:
+        return await get_hunt_rules_status(session)
+
+
+async def _hunt_run_async():
+    from cysiemstack.correlation_engine.models import AsyncSessionLocal
+    from cysiemstack.threat_hunter.hunter import run_all_hunts
+    async with AsyncSessionLocal() as session:
+        return await run_all_hunts(session)
+
+
+@siem_bp.route("/threat-hunting/rules", methods=["GET"])
+@require_siem_auth
+def siem_threat_hunt_rules():
+    """List all threat hunt rules with last-run finding counts."""
+    try:
+        return jsonify(_run_async(_hunt_rules_async()))
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@siem_bp.route("/threat-hunting/findings", methods=["GET"])
+@require_siem_auth
+def siem_threat_hunt_findings():
+    """List hunt_finding incidents (proxied to correlation engine)."""
+    return _proxy("/incidents?category=hunt_finding")
+
+
+@siem_bp.route("/threat-hunting/run", methods=["POST"])
+@require_siem_admin
+def siem_threat_hunt_run():
+    """On-demand threat hunt run across all rules. Admin only."""
+    try:
+        result = _run_async(_hunt_run_async())
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@siem_bp.route("/posture/internal", methods=["GET"])
+@require_siem_auth
+def siem_internal_posture():
+    """Overall internal security posture score across all hosts.
+
+    Aggregates host_posture_cache weighted by asset tier.
+    Returns: score (0-100), grade, component breakdown, worst hosts, host counts.
+    Used by: Host Inventory page banner, Benchmark CSPI internal bucket.
+    """
+    try:
+        result = _run_async(_internal_posture_async())
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500

@@ -194,6 +194,53 @@ class MISPIOCCache(Base):
 
 
 
+class HostPostureCache(Base):
+    """Per-host security posture snapshot — refreshed hourly by host_service.py.
+
+    Aggregates SCA pass rate, vulnerability counts, SIEM risk score, FIM/malware
+    event counts, and compliance gap rate into a single composite posture score
+    (0–100) with a letter grade.  Asset tier drives weighting in the overall
+    internal posture score.
+    """
+    __tablename__ = "host_posture_cache"
+
+    agent_id          = Column(Text, primary_key=True)
+    agent_name        = Column(Text)
+    agent_ip          = Column(Text)
+    os_platform       = Column(Text)
+    os_version        = Column(Text)
+    wazuh_status      = Column(Text)          # active | disconnected | never_connected
+    last_keepalive    = Column(TIMESTAMP(timezone=True))
+    posture_score     = Column(Numeric(5, 1))
+    posture_grade     = Column(Text)          # A+/A/B/C/D/F
+    sca_score         = Column(Numeric(5, 1))
+    sca_passed        = Column(Integer, default=0)
+    sca_failed        = Column(Integer, default=0)
+    sca_total         = Column(Integer, default=0)
+    vuln_score        = Column(Numeric(5, 1))
+    vuln_critical     = Column(Integer, default=0)
+    vuln_high         = Column(Integer, default=0)
+    vuln_medium       = Column(Integer, default=0)
+    vuln_low          = Column(Integer, default=0)
+    siem_risk         = Column(Numeric(5, 1))
+    fim_event_count   = Column(Integer, default=0)
+    malware_count     = Column(Integer, default=0)
+    incident_count    = Column(Integer, default=0)
+    compliance_score  = Column(Numeric(5, 1))
+    mitre_techniques  = Column(ARRAY(Text))
+    top_findings      = Column(JSONB, default=list)
+    score_breakdown   = Column(JSONB, default=dict)
+    asset_tier        = Column(Integer, default=3)  # 1=crown jewel, 2=biz critical, 3=standard
+    computed_at       = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_host_posture_score",     "posture_score"),
+        Index("ix_host_posture_grade",     "posture_grade"),
+        Index("ix_host_posture_tier",      "asset_tier"),
+        Index("ix_host_posture_computed",  "computed_at"),
+    )
+
+
 class CorrelationFeedback(Base):
     """ENH-6: analyst verdict on a fired incident."""
     __tablename__ = "correlation_feedback"

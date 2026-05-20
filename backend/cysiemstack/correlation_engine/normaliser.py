@@ -32,6 +32,9 @@ FIM_RULE_IDS     = set(range(550, 600)) | {2904}
 MALWARE_RULE_IDS = {554, 87105, 87106, 100200, 100201}
 WEB_RULE_IDS     = set(range(31100, 31200)) | set(range(30100, 30200))
 SCAN_RULE_IDS    = {40001, 40002, 40003}
+# Wazuh SCA (Security Configuration Assessment) rule IDs — policy scan results
+# 19001-19023: individual check pass/fail/notapplicable; 19100+ are summary rules
+SCA_RULE_IDS     = set(range(19001, 19024)) | set(range(19100, 19120))
 
 # Min rule level to ingest — drop noisy debug/info events below this
 MIN_RULE_LEVEL = 3
@@ -134,6 +137,10 @@ def _classify_category(rule_id: int, groups: list) -> str:
         return 'fim'
     if rule_id in MALWARE_RULE_IDS or 'virus' in groups or 'malware' in groups:
         return 'malware'
+    # SCA — checked before cloud/auth so hardening-failure alerts are never
+    # misclassified as generic 'system' events.
+    if rule_id in SCA_RULE_IDS or 'sca' in groups:
+        return 'sca'
     # Cloud integration sources — must be checked before generic 'authentication'
     # so that O365/Azure/AWS alert groups are not swallowed by the auth check.
     for grp in groups:
@@ -269,6 +276,21 @@ def normalise(raw: dict) -> Optional[dict]:
     # Category
     category = _classify_category(rule_id, groups)
 
+    # SCA extra fields — populated for 'sca' category alerts
+    sca_extras: dict = {}
+    if category == 'sca':
+        sca_block = raw.get('data', {}).get('sca', {}) or {}
+        check     = sca_block.get('check', {}) or {}
+        sca_extras = {
+            'sca_policy_id':   sca_block.get('policy_id'),
+            'sca_policy_name': sca_block.get('policy', {}).get('name') if isinstance(sca_block.get('policy'), dict) else None,
+            'sca_check_id':    check.get('id'),
+            'sca_check_title': check.get('title'),
+            'sca_result':      check.get('result'),      # 'passed' | 'failed' | 'not applicable'
+            'sca_rationale':   check.get('rationale'),
+            'sca_remediation': check.get('remediation'),
+        }
+
     # Raw log
     raw_log = raw.get('full_log') or raw.get('message') or ''
 
@@ -296,4 +318,5 @@ def normalise(raw: dict) -> Optional[dict]:
         'raw_log':      raw_log[:2000] if raw_log else '',  # cap at 2KB
         'full_alert':   raw,
         'geo':          geo,
+        **sca_extras,
     }

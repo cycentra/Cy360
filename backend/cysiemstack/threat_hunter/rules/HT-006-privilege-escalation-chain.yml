@@ -1,0 +1,16 @@
+id: HT-006
+name: "Repeated Privilege Escalation Attempts (48h)"
+description: >
+  Detects 5 or more sudo/su privilege escalation events from the same user
+  within 48 hours — may indicate credential theft reconnaissance or
+  a compromised low-privilege account probing for escalation paths.
+mitre: ["T1548", "T1078"]
+window_hours: 48
+conditions:
+  - category: authentication
+    rule_desc_contains: "sudo"
+    min_count: 5
+    same_field: username
+severity: medium
+confidence: 0.70
+frameworks: [nis2, iso27001, nist_csf, hipaa]

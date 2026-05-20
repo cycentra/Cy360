@@ -1,0 +1,15 @@
+id: HT-003
+name: "Unusual FIM Activity Spike (24h)"
+description: >
+  Detects more than 50 file integrity monitoring events on a single host within
+  24 hours — potential ransomware staging, data exfiltration prep, or unauthorized
+  configuration changes.
+mitre: ["T1486", "T1565"]
+window_hours: 24
+conditions:
+  - category: fim
+    min_count: 50
+    same_field: agent_id
+severity: high
+confidence: 0.72
+frameworks: [nis2, iso27001, hipaa, tsc]
