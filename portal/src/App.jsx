@@ -52,10 +52,9 @@ import { useAppState } from './hooks/useAppState.js';
 import { Sidebar } from './sidebar/Sidebar.jsx';
 
 import { SiemIncidentsPage } from './siem/SiemIncidentsPage';
-import { SiemRiskScoresPage } from './siem/SiemRiskScoresPage';
+import { HostIntelligencePage } from './pages/HostIntelligencePage.jsx';
 import { SiemUebaPage }       from './siem/SiemUebaPage';
 import { InternalExposureDashboard } from './siem/InternalExposureDashboard';
-import { HostsPage }           from './pages/hosts/HostsPage.jsx';
 
 import { LoginPage }         from './pages/login/LoginPage.jsx';
 import { ScanPage }          from './pages/scan/ScanPage.jsx';
@@ -348,10 +347,10 @@ export default function App() {
             {activeTab==="assets"         && <AssetsPage assets={assets} setSelectedAsset={setSelectedAsset} setShowImport={setShowImport}/>}
             {activeTab==="vulns"          && <VulnerabilityPage assets={assets} scanHistory={scanHistory} selectedScanId={selectedScanId} onScanSelect={handleScanSelect}/>}
             {activeTab==="siem-incidents"   && <SiemIncidentsPage/>}
-            {activeTab==="siem-risk"        && <SiemRiskScoresPage/>}
+            {activeTab==="siem-risk"        && <HostIntelligencePage/>}
             {activeTab==="siem-ueba"        && <SiemUebaPage/>}
             {activeTab==="internal-dashboard" && <InternalExposureDashboard setActiveTab={setActiveTab}/>}
-            {activeTab==="host-inventory"   && <HostsPage/>}
+            {activeTab==="host-inventory"   && <HostIntelligencePage/>}
             {activeTab==="marketplace"    && <MarketplacePage user={user} installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
             {activeTab==="benchmark"            && <BenchmarkPage />}
             {activeTab==="system-settings"     && <SystemSettingsPage />}

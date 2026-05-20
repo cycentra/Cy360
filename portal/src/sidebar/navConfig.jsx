@@ -68,9 +68,8 @@ export function buildNavSections({ installedModules = {}, data = null }) {
       section: "INTERNAL EXPOSURE",
       items: [
         { id: "internal-dashboard", label: "Internal Attack Posture", icon: <span style={{ fontSize: 13 }}>🛡️</span>, accent: "#4d9eff" },
-        { id: "host-inventory",     label: "Host Inventory",          icon: SvgHost,                                  accent: "#00e5a0" },
+        { id: "host-inventory",     label: "Host Intelligence",       icon: SvgHost,                                  accent: "#00e5a0" },
         { id: "siem-incidents",     label: "Active Incidents",        icon: <span style={{ fontSize: 13 }}>🔥</span>, accent: "#ff3b3b" },
-        { id: "siem-risk",          label: "Entity Risk",             icon: <span style={{ fontSize: 13 }}>⚡</span>, accent: "#ff8c00" },
         { id: "siem-ueba",          label: "Behavioral Analytics",    icon: <span style={{ fontSize: 13 }}>👤</span>, accent: "#b06eff" },
       ],
     },

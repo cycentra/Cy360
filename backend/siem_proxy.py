@@ -787,78 +787,379 @@ def ueba_anomaly_status_post(anomaly_id):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HOST INVENTORY ROUTES
-# All routes are Flask-native (not proxied to engine) — they read from the
-# host_posture_cache table populated by host_service.refresh_all_hosts().
+# HOST INVENTORY & THREAT HUNTING ROUTES
+# Flask-native routes that read directly from the correlation DB via psycopg2
+# (sync) to avoid asyncpg event-loop conflicts in werkzeug Flask workers.
+# The asyncpg connection pool binds to the startup event loop; subsequent
+# asyncio.run() calls create fresh loops that can't reuse those connections.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _run_async(coro):
-    """Run an async coroutine from a sync Flask route.
+_CORR_DB_URL = os.environ.get(
+    "CORRELATION_DB_URL",
+    os.environ.get("DATABASE_URL", "postgresql://corruser:changeme@127.0.0.1:5433/correlation"),
+).replace("+asyncpg", "")
 
-    Uses asyncio.run() which always creates a fresh event loop — safe for
-    sync werkzeug workers where a prior async init may have left a closed loop
-    on the thread, which would cause run_until_complete() to raise RuntimeError.
-    If a loop is already running (e.g., async WSGI server), offload to a thread.
-    """
-    import asyncio
+
+def _corr_conn():
+    import psycopg2
+    import psycopg2.extras
+    return psycopg2.connect(_CORR_DB_URL)
+
+
+def _iso(val):
+    return val.isoformat() if val and hasattr(val, "isoformat") else None
+
+
+def _f(val):
+    return float(val) if val is not None else None
+
+
+def _grade(score):
+    if score is None:
+        return "—"
+    for g, t in [("A+", 95), ("A", 85), ("B", 70), ("C", 55), ("D", 40)]:
+        if score >= t:
+            return g
+    return "F"
+
+
+def _sync_hosts_list(status_filter, sort_by, page, per_page):
+    import psycopg2.extras
+    conn = _corr_conn()
     try:
-        loop = asyncio.get_running_loop()
-        # Already inside a running loop — submit to a thread pool
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, coro)
-            return future.result(timeout=30)
-    except RuntimeError:
-        # No running loop — safe to call asyncio.run() directly
-        return asyncio.run(coro)
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            where = "WHERE wazuh_status = %s" if status_filter and status_filter != "all" else ""
+            wparams = [status_filter] if status_filter and status_filter != "all" else []
+            order = {
+                "posture_score": "posture_score ASC NULLS LAST",
+                "risk":          "siem_risk DESC NULLS LAST",
+                "name":          "agent_name ASC",
+            }.get(sort_by, "posture_score ASC NULLS LAST")
+
+            cur.execute(f"SELECT COUNT(*) AS n FROM host_posture_cache {where}", wparams)
+            total = cur.fetchone()["n"]
+
+            offset = (page - 1) * per_page
+            cur.execute(f"""
+                SELECT agent_id, agent_name, agent_ip, os_platform, wazuh_status,
+                       last_keepalive, posture_score, posture_grade, siem_risk,
+                       vuln_critical, vuln_high, incident_count, asset_tier, computed_at
+                FROM host_posture_cache {where}
+                ORDER BY {order} LIMIT %s OFFSET %s
+            """, wparams + [per_page, offset])
+            hosts = [{
+                "agent_id":       r["agent_id"],
+                "agent_name":     r["agent_name"],
+                "agent_ip":       r["agent_ip"],
+                "os_platform":    r["os_platform"],
+                "wazuh_status":   r["wazuh_status"],
+                "last_keepalive": _iso(r["last_keepalive"]),
+                "posture_score":  _f(r["posture_score"]),
+                "posture_grade":  r["posture_grade"],
+                "siem_risk":      _f(r["siem_risk"]),
+                "vuln_critical":  r["vuln_critical"],
+                "vuln_high":      r["vuln_high"],
+                "incident_count": r["incident_count"],
+                "asset_tier":     r["asset_tier"],
+                "computed_at":    _iso(r["computed_at"]),
+            } for r in cur.fetchall()]
+
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE wazuh_status = 'active') AS active,
+                    COUNT(*) FILTER (WHERE posture_grade IN ('D','F')) AS critical_grade,
+                    CASE WHEN SUM(CASE WHEN asset_tier=1 THEN 3 WHEN asset_tier=2 THEN 2 ELSE 1 END) > 0
+                         THEN SUM(posture_score * CASE WHEN asset_tier=1 THEN 3 WHEN asset_tier=2 THEN 2 ELSE 1 END)
+                              / SUM(CASE WHEN asset_tier=1 THEN 3.0 WHEN asset_tier=2 THEN 2.0 ELSE 1.0 END)
+                         ELSE NULL END AS weighted_score,
+                    AVG(sca_score)       FILTER (WHERE sca_score IS NOT NULL)    AS avg_sca,
+                    AVG(vuln_score)      FILTER (WHERE vuln_score IS NOT NULL)   AS avg_vuln,
+                    AVG(100 - siem_risk) FILTER (WHERE siem_risk IS NOT NULL)    AS avg_siem,
+                    AVG(CASE WHEN fim_event_count > 0 OR malware_count > 0 THEN 50.0 ELSE 100.0 END) AS avg_fim,
+                    AVG(compliance_score) FILTER (WHERE compliance_score IS NOT NULL) AS avg_comp
+                FROM host_posture_cache
+            """)
+            agg = cur.fetchone()
+            score = _f(agg["weighted_score"]) or 0.0
+            internal_posture = {
+                "score": round(score, 1),
+                "grade": _grade(score),
+                "host_count": {
+                    "total":          agg["total"],
+                    "active":         agg["active"],
+                    "critical_grade": agg["critical_grade"],
+                },
+                "components": {
+                    "sca":         {"score": round(_f(agg["avg_sca"])  or 0, 1), "weight": 0.30},
+                    "vuln":        {"score": round(_f(agg["avg_vuln"]) or 0, 1), "weight": 0.25},
+                    "siem_risk":   {"score": round(_f(agg["avg_siem"]) or 0, 1), "weight": 0.25},
+                    "fim_malware": {"score": round(_f(agg["avg_fim"])  or 0, 1), "weight": 0.10},
+                    "compliance":  {"score": round(_f(agg["avg_comp"]) or 0, 1), "weight": 0.10},
+                },
+                "worst_hosts": sorted(hosts, key=lambda x: x["posture_score"] or 100)[:5],
+            }
+            return {"hosts": hosts, "total": total, "page": page, "per_page": per_page,
+                    "internal_posture": internal_posture}
+    finally:
+        conn.close()
 
 
-async def _host_list_async(status_filter, sort_by, page, per_page):
-    from cysiemstack.correlation_engine.models import AsyncSessionLocal
-    from cysiemstack.host_service import get_all_hosts_summary
-    async with AsyncSessionLocal() as session:
-        return await get_all_hosts_summary(session, status_filter, sort_by, page, per_page)
+def _sync_host_detail(agent_id):
+    import psycopg2.extras
+    conn = _corr_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM host_posture_cache WHERE agent_id = %s", [agent_id])
+            host = cur.fetchone()
+            if not host:
+                return None
+
+            cur.execute("""
+                SELECT category, COUNT(*) AS cnt, MAX(timestamp) AS last_seen,
+                       MAX(rule_level) AS max_level
+                FROM alerts WHERE agent_id = %s AND timestamp > NOW() - INTERVAL '30 days'
+                GROUP BY category ORDER BY cnt DESC
+            """, [agent_id])
+            alerts_by_category = {
+                r["category"]: {"count": int(r["cnt"]), "last_seen": _iso(r["last_seen"]),
+                                "max_level": r["max_level"]}
+                for r in cur.fetchall()
+            }
+
+            cur.execute("""
+                SELECT id, severity, status, first_seen, last_seen,
+                       llm_summary, mitre_ids, iris_case_id
+                FROM incidents
+                WHERE %s = ANY(affected_agents)
+                  AND status NOT IN ('closed','false_positive')
+                ORDER BY last_seen DESC LIMIT 10
+            """, [agent_id])
+            active_incidents = [{
+                "id": r["id"], "severity": r["severity"], "status": r["status"],
+                "first_seen": _iso(r["first_seen"]), "last_seen": _iso(r["last_seen"]),
+                "summary": r["llm_summary"], "mitre_ids": r["mitre_ids"] or [],
+                "iris_case_id": r["iris_case_id"],
+            } for r in cur.fetchall()]
+
+            cur.execute("""
+                SELECT mitre_id, mitre_tactic, COUNT(*) AS cnt
+                FROM alerts WHERE agent_id = %s AND mitre_id IS NOT NULL
+                  AND timestamp > NOW() - INTERVAL '30 days'
+                GROUP BY mitre_id, mitre_tactic ORDER BY cnt DESC LIMIT 15
+            """, [agent_id])
+            mitre_breakdown = [{
+                "mitre_id": r["mitre_id"], "tactic": r["mitre_tactic"], "count": int(r["cnt"])
+            } for r in cur.fetchall()]
+
+            cur.execute("""
+                SELECT full_alert->'data'->'sca'->'check'->>'title'     AS title,
+                       full_alert->'data'->'sca'->'check'->>'result'    AS result,
+                       full_alert->'data'->'sca'->'check'->>'rationale' AS rationale,
+                       full_alert->'data'->'sca'->>'policy_id'          AS policy_id,
+                       timestamp
+                FROM alerts
+                WHERE agent_id = %s AND category = 'sca'
+                  AND (full_alert->'data'->'sca'->'check'->>'result') = 'failed'
+                  AND timestamp > NOW() - INTERVAL '7 days'
+                ORDER BY timestamp DESC LIMIT 20
+            """, [agent_id])
+            sca_failures = [{
+                "title": r["title"], "result": r["result"],
+                "rationale": r["rationale"], "policy_id": r["policy_id"],
+                "timestamp": _iso(r["timestamp"]),
+            } for r in cur.fetchall()]
+
+            return {
+                "agent_id": host["agent_id"], "agent_name": host["agent_name"],
+                "agent_ip": host["agent_ip"], "os_platform": host["os_platform"],
+                "os_version": host["os_version"], "wazuh_status": host["wazuh_status"],
+                "last_keepalive": _iso(host["last_keepalive"]),
+                "asset_tier": host["asset_tier"],
+                "posture": {
+                    "score": _f(host["posture_score"]), "grade": host["posture_grade"],
+                    "breakdown": host["score_breakdown"] or {},
+                    "computed_at": _iso(host["computed_at"]),
+                },
+                "sca": {
+                    "passed": host["sca_passed"], "failed": host["sca_failed"],
+                    "total": host["sca_total"], "score": _f(host["sca_score"]),
+                    "recent_failures": sca_failures,
+                },
+                "vulnerabilities": {
+                    "critical": host["vuln_critical"], "high": host["vuln_high"],
+                    "medium": host["vuln_medium"], "low": host["vuln_low"],
+                    "score": _f(host["vuln_score"]),
+                },
+                "siem": {
+                    "risk_score": _f(host["siem_risk"]),
+                    "fim_events": host["fim_event_count"],
+                    "malware_detections": host["malware_count"],
+                    "active_incidents": active_incidents,
+                    "incident_count": host["incident_count"],
+                },
+                "mitre": {
+                    "techniques": host["mitre_techniques"] or [],
+                    "breakdown": mitre_breakdown,
+                },
+                "compliance": {
+                    "score": _f(host["compliance_score"]),
+                    "sca_failures": len(sca_failures),
+                },
+                "alerts_by_category": alerts_by_category,
+            }
+    finally:
+        conn.close()
 
 
-async def _host_detail_async(agent_id):
-    from cysiemstack.correlation_engine.models import AsyncSessionLocal
-    from cysiemstack.host_service import get_host_detail
-    async with AsyncSessionLocal() as session:
-        return await get_host_detail(agent_id, session)
+def _sync_host_alerts(agent_id, category, page, per_page):
+    import psycopg2.extras
+    conn = _corr_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            params = [agent_id]
+            cat_clause = ""
+            if category:
+                cat_clause = "AND category = %s"
+                params.append(category)
+            offset = (page - 1) * per_page
+            cur.execute(f"""
+                SELECT id, timestamp, rule_id, rule_desc, rule_level, category,
+                       mitre_id, mitre_tactic, base_score, src_ip, username,
+                       file_path, incident_id
+                FROM alerts
+                WHERE agent_id = %s {cat_clause}
+                  AND timestamp > NOW() - INTERVAL '30 days'
+                ORDER BY timestamp DESC LIMIT %s OFFSET %s
+            """, params + [per_page, offset])
+            rows = cur.fetchall()
+            cur.execute(f"""
+                SELECT COUNT(*) AS n FROM alerts
+                WHERE agent_id = %s {cat_clause}
+                  AND timestamp > NOW() - INTERVAL '30 days'
+            """, params)
+            total = cur.fetchone()["n"]
+            return {
+                "alerts": [{
+                    "id": r["id"], "timestamp": _iso(r["timestamp"]),
+                    "rule_id": r["rule_id"], "rule_desc": r["rule_desc"],
+                    "rule_level": r["rule_level"], "category": r["category"],
+                    "mitre_id": r["mitre_id"], "mitre_tactic": r["mitre_tactic"],
+                    "base_score": _f(r["base_score"]), "src_ip": r["src_ip"],
+                    "username": r["username"], "file_path": r["file_path"],
+                    "incident_id": r["incident_id"],
+                } for r in rows],
+                "total": total, "page": page, "per_page": per_page,
+            }
+    finally:
+        conn.close()
 
 
-async def _internal_posture_async():
-    from cysiemstack.correlation_engine.models import AsyncSessionLocal
-    from cysiemstack.host_service import get_internal_posture
-    async with AsyncSessionLocal() as session:
-        return await get_internal_posture(session)
+def _sync_internal_posture():
+    import psycopg2.extras
+    conn = _corr_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE wazuh_status = 'active') AS active,
+                    COUNT(*) FILTER (WHERE posture_grade IN ('D','F')) AS critical_grade,
+                    CASE WHEN SUM(CASE WHEN asset_tier=1 THEN 3 WHEN asset_tier=2 THEN 2 ELSE 1 END) > 0
+                         THEN SUM(posture_score * CASE WHEN asset_tier=1 THEN 3 WHEN asset_tier=2 THEN 2 ELSE 1 END)
+                              / SUM(CASE WHEN asset_tier=1 THEN 3.0 WHEN asset_tier=2 THEN 2.0 ELSE 1.0 END)
+                         ELSE NULL END AS weighted_score,
+                    AVG(sca_score)       FILTER (WHERE sca_score IS NOT NULL)    AS avg_sca,
+                    AVG(vuln_score)      FILTER (WHERE vuln_score IS NOT NULL)   AS avg_vuln,
+                    AVG(100 - siem_risk) FILTER (WHERE siem_risk IS NOT NULL)    AS avg_siem,
+                    AVG(CASE WHEN fim_event_count > 0 OR malware_count > 0 THEN 50.0 ELSE 100.0 END) AS avg_fim,
+                    AVG(compliance_score) FILTER (WHERE compliance_score IS NOT NULL) AS avg_comp
+                FROM host_posture_cache
+            """)
+            agg = cur.fetchone()
+            if not agg or agg["total"] == 0:
+                return {"score": 0, "grade": "F",
+                        "host_count": {"total": 0, "active": 0, "critical_grade": 0},
+                        "components": {}, "worst_hosts": []}
+            score = _f(agg["weighted_score"]) or 0.0
+
+            cur.execute("""
+                SELECT agent_id, agent_name, posture_score, posture_grade, siem_risk
+                FROM host_posture_cache ORDER BY posture_score ASC NULLS LAST LIMIT 5
+            """)
+            worst = [{"agent_id": r["agent_id"], "agent_name": r["agent_name"],
+                      "score": _f(r["posture_score"]), "grade": r["posture_grade"],
+                      "siem_risk": _f(r["siem_risk"])} for r in cur.fetchall()]
+
+            return {
+                "score": round(score, 1), "grade": _grade(score),
+                "host_count": {"total": agg["total"], "active": agg["active"],
+                               "critical_grade": agg["critical_grade"]},
+                "components": {
+                    "sca":         {"score": round(_f(agg["avg_sca"])  or 0, 1), "weight": 0.30},
+                    "vuln":        {"score": round(_f(agg["avg_vuln"]) or 0, 1), "weight": 0.25},
+                    "siem_risk":   {"score": round(_f(agg["avg_siem"]) or 0, 1), "weight": 0.25},
+                    "fim_malware": {"score": round(_f(agg["avg_fim"])  or 0, 1), "weight": 0.10},
+                    "compliance":  {"score": round(_f(agg["avg_comp"]) or 0, 1), "weight": 0.10},
+                },
+                "worst_hosts": worst,
+            }
+    finally:
+        conn.close()
 
 
-async def _set_tier_async(agent_id, tier):
-    from cysiemstack.correlation_engine.models import AsyncSessionLocal
-    from cysiemstack.host_service import set_host_asset_tier
-    async with AsyncSessionLocal() as session:
-        return await set_host_asset_tier(agent_id, tier, session)
+def _sync_hunt_rules():
+    import psycopg2.extras
+    from cysiemstack.threat_hunter.hunter import load_hunt_rules
+    rules = load_hunt_rules()
+    conn = _corr_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT metadata->>'hunt_rule_id' AS rule_id,
+                       COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE status NOT IN ('closed','false_positive')) AS open
+                FROM incidents WHERE incident_type = 'hunt_finding'
+                GROUP BY metadata->>'hunt_rule_id'
+            """)
+            counts = {r["rule_id"]: {"total": r["total"], "open": r["open"]}
+                      for r in cur.fetchall()}
+        return [{
+            "id": r.get("id"), "name": r.get("name"),
+            "description": r.get("description"), "enabled": r.get("enabled", True),
+            "window_hours": r.get("window_hours"), "min_count": r.get("min_count"),
+            "total_findings": counts.get(r.get("id"), {}).get("total", 0),
+            "open_findings":  counts.get(r.get("id"), {}).get("open", 0),
+        } for r in rules]
+    finally:
+        conn.close()
 
 
-async def _refresh_hosts_async():
-    from cysiemstack.correlation_engine.models import AsyncSessionLocal
-    from cysiemstack.host_service import refresh_all_hosts
-    async with AsyncSessionLocal() as session:
-        return await refresh_all_hosts(session)
+def _run_hunts_background():
+    """Spawn threat hunt run in a background thread with a fresh async engine."""
+    import threading, asyncio
 
+    def _worker():
+        async def _run():
+            db_url = os.environ.get("DATABASE_URL",
+                "postgresql+asyncpg://corruser:changeme@127.0.0.1:5433/correlation")
+            from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+            engine = create_async_engine(db_url, echo=False)
+            session_factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with session_factory() as session:
+                from cysiemstack.threat_hunter.hunter import run_all_hunts
+                return await run_all_hunts(session)
+            await engine.dispose()
+        asyncio.run(_run())
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+
+# ── Flask routes ──────────────────────────────────────────────────────────────
 
 @siem_bp.route("/hosts", methods=["GET"])
 @require_siem_auth
 def siem_hosts_list():
-    """List all known hosts with posture summary + overall internal posture score.
-
-    Query params:
-      status  — active | disconnected | all (default: all)
-      sort    — posture_score | risk | name (default: posture_score)
-      page    — page number (default: 1)
-      per_page — items per page (default: 50, max: 200)
-    """
     status_filter = request.args.get("status", "all")
     sort_by       = request.args.get("sort", "posture_score")
     try:
@@ -866,10 +1167,8 @@ def siem_hosts_list():
         per_page = min(200, max(1, int(request.args.get("per_page", 50))))
     except ValueError:
         page, per_page = 1, 50
-
     try:
-        result = _run_async(_host_list_async(status_filter, sort_by, page, per_page))
-        return jsonify(result)
+        return jsonify(_sync_hosts_list(status_filter, sort_by, page, per_page))
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -877,10 +1176,10 @@ def siem_hosts_list():
 @siem_bp.route("/hosts/refresh", methods=["POST"])
 @require_siem_admin
 def siem_hosts_refresh():
-    """Trigger an on-demand posture cache refresh for all hosts. Admin only."""
     try:
-        count = _run_async(_refresh_hosts_async())
-        return jsonify({"refreshed": count, "status": "ok"})
+        _run_hunts_background()
+        return jsonify({"status": "refresh_queued",
+                        "message": "Posture refresh running in background"})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -888,14 +1187,8 @@ def siem_hosts_refresh():
 @siem_bp.route("/hosts/<agent_id>", methods=["GET"])
 @require_siem_auth
 def siem_host_detail(agent_id):
-    """Full security profile for a single host.
-
-    Returns: posture score/breakdown, SCA findings, vulnerability counts,
-             active incidents, MITRE techniques, compliance gaps,
-             alerts by category.
-    """
     try:
-        result = _run_async(_host_detail_async(agent_id))
+        result = _sync_host_detail(agent_id)
         if result is None:
             return jsonify({"error": "Host not found"}), 404
         return jsonify(result)
@@ -906,10 +1199,6 @@ def siem_host_detail(agent_id):
 @siem_bp.route("/hosts/<agent_id>/vulnerabilities", methods=["GET"])
 @require_siem_auth
 def siem_host_vulnerabilities(agent_id):
-    """Live vulnerability list for a host directly from Wazuh API (paginated).
-
-    Query params: page, per_page, severity (Critical|High|Medium|Low)
-    """
     import base64 as _b64i
     try:
         page     = max(1, int(request.args.get("page",      1)))
@@ -930,7 +1219,6 @@ def siem_host_vulnerabilities(agent_id):
         )
         token_resp.raise_for_status()
         token = token_resp.json()["data"]["token"]
-
         params = {"limit": per_page, "offset": offset, "status": "Active"}
         if severity:
             params["severity"] = severity
@@ -944,8 +1232,7 @@ def siem_host_vulnerabilities(agent_id):
         return jsonify({
             "vulnerabilities": data.get("affected_items", []),
             "total":           data.get("total_affected_items", 0),
-            "page":            page,
-            "per_page":        per_page,
+            "page": page, "per_page": per_page,
         })
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
@@ -954,12 +1241,8 @@ def siem_host_vulnerabilities(agent_id):
 @siem_bp.route("/hosts/<agent_id>/sca", methods=["GET"])
 @require_siem_auth
 def siem_host_sca(agent_id):
-    """SCA policy checks for a host directly from Wazuh API (paginated).
-
-    Query params: page, per_page, result (passed|failed|not applicable)
-    """
     import base64 as _b64i
-    policy_id = request.args.get("policy_id", "")
+    policy_id     = request.args.get("policy_id", "")
     result_filter = request.args.get("result", "")
     try:
         page     = max(1, int(request.args.get("page",      1)))
@@ -979,8 +1262,6 @@ def siem_host_sca(agent_id):
         )
         token_resp.raise_for_status()
         token = token_resp.json()["data"]["token"]
-
-        # First fetch the list of SCA policies for this agent
         policies_resp = _req.get(
             f"{WAZUH_API_URL}/sca/{agent_id}",
             headers={"Authorization": f"Bearer {token}"},
@@ -988,12 +1269,9 @@ def siem_host_sca(agent_id):
         )
         policies_resp.raise_for_status()
         policies = policies_resp.json().get("data", {}).get("affected_items", [])
-
-        # Then fetch checks for the requested (or first) policy
         target_policy = policy_id or (policies[0]["policy_id"] if policies else None)
         if not target_policy:
             return jsonify({"checks": [], "policies": policies, "total": 0})
-
         check_params = {"limit": per_page, "offset": offset}
         if result_filter:
             check_params["result"] = result_filter
@@ -1004,14 +1282,11 @@ def siem_host_sca(agent_id):
         )
         checks_resp.raise_for_status()
         checks_data = checks_resp.json().get("data", {})
-
         return jsonify({
-            "policies":  policies,
-            "policy_id": target_policy,
-            "checks":    checks_data.get("affected_items", []),
-            "total":     checks_data.get("total_affected_items", 0),
-            "page":      page,
-            "per_page":  per_page,
+            "policies": policies, "policy_id": target_policy,
+            "checks":   checks_data.get("affected_items", []),
+            "total":    checks_data.get("total_affected_items", 0),
+            "page": page, "per_page": per_page,
         })
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
@@ -1020,62 +1295,14 @@ def siem_host_sca(agent_id):
 @siem_bp.route("/hosts/<agent_id>/alerts", methods=["GET"])
 @require_siem_auth
 def siem_host_alerts(agent_id):
-    """Recent alerts for a specific host (from correlation DB, not Wazuh directly)."""
     category = request.args.get("category", "")
     try:
         page     = max(1, int(request.args.get("page",      1)))
         per_page = min(200, max(1, int(request.args.get("per_page", 50))))
     except ValueError:
         page, per_page = 1, 50
-
-    async def _fetch():
-        from cysiemstack.correlation_engine.models import AsyncSessionLocal
-        from sqlalchemy import text as _text
-        async with AsyncSessionLocal() as db:
-            params = {"aid": agent_id, "limit": per_page, "offset": (page - 1) * per_page}
-            cat_clause = "AND category = :cat" if category else ""
-            if category:
-                params["cat"] = category
-            rows = await db.execute(
-                _text(f"""
-                    SELECT id, timestamp, rule_id, rule_desc, rule_level,
-                           category, mitre_id, mitre_tactic, base_score,
-                           src_ip, username, file_path, incident_id
-                    FROM alerts
-                    WHERE agent_id = :aid {cat_clause}
-                      AND timestamp > NOW() - INTERVAL '30 days'
-                    ORDER BY timestamp DESC
-                    LIMIT :limit OFFSET :offset
-                """),
-                params,
-            )
-            count_row = await db.execute(
-                _text(f"SELECT COUNT(*) FROM alerts WHERE agent_id = :aid {cat_clause} AND timestamp > NOW() - INTERVAL '30 days'"),
-                params,
-            )
-            total = count_row.scalar() or 0
-            alerts = [
-                {
-                    "id":          r.id,
-                    "timestamp":   r.timestamp.isoformat() if r.timestamp else None,
-                    "rule_id":     r.rule_id,
-                    "rule_desc":   r.rule_desc,
-                    "rule_level":  r.rule_level,
-                    "category":    r.category,
-                    "mitre_id":    r.mitre_id,
-                    "mitre_tactic":r.mitre_tactic,
-                    "base_score":  float(r.base_score) if r.base_score else None,
-                    "src_ip":      r.src_ip,
-                    "username":    r.username,
-                    "file_path":   r.file_path,
-                    "incident_id": r.incident_id,
-                }
-                for r in rows.fetchall()
-            ]
-            return {"alerts": alerts, "total": total, "page": page, "per_page": per_page}
-
     try:
-        return jsonify(_run_async(_fetch()))
+        return jsonify(_sync_host_alerts(agent_id, category, page, per_page))
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -1083,17 +1310,23 @@ def siem_host_alerts(agent_id):
 @siem_bp.route("/hosts/<agent_id>/tier", methods=["POST"])
 @require_siem_admin
 def siem_host_set_tier(agent_id):
-    """Set the asset criticality tier for a host. Admin only.
-
-    Body: { "tier": 1 }  — 1=crown jewel, 2=business critical, 3=standard
-    """
     body = request.get_json(silent=True) or {}
     tier = body.get("tier")
     if tier not in (1, 2, 3):
         return jsonify({"error": "tier must be 1, 2, or 3"}), 422
     try:
-        ok = _run_async(_set_tier_async(agent_id, tier))
-        if not ok:
+        conn = _corr_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE host_posture_cache SET asset_tier = %s WHERE agent_id = %s",
+                    [tier, agent_id],
+                )
+                updated = cur.rowcount
+            conn.commit()
+        finally:
+            conn.close()
+        if not updated:
             return jsonify({"error": "Host not found in posture cache"}), 404
         return jsonify({"agent_id": agent_id, "tier": tier, "status": "updated"})
     except Exception as exc:
@@ -1104,26 +1337,11 @@ def siem_host_set_tier(agent_id):
 # THREAT HUNTING ROUTES
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def _hunt_rules_async():
-    from cysiemstack.correlation_engine.models import AsyncSessionLocal
-    from cysiemstack.threat_hunter.hunter import get_hunt_rules_status
-    async with AsyncSessionLocal() as session:
-        return await get_hunt_rules_status(session)
-
-
-async def _hunt_run_async():
-    from cysiemstack.correlation_engine.models import AsyncSessionLocal
-    from cysiemstack.threat_hunter.hunter import run_all_hunts
-    async with AsyncSessionLocal() as session:
-        return await run_all_hunts(session)
-
-
 @siem_bp.route("/threat-hunting/rules", methods=["GET"])
 @require_siem_auth
 def siem_threat_hunt_rules():
-    """List all threat hunt rules with last-run finding counts."""
     try:
-        return jsonify(_run_async(_hunt_rules_async()))
+        return jsonify(_sync_hunt_rules())
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -1131,17 +1349,16 @@ def siem_threat_hunt_rules():
 @siem_bp.route("/threat-hunting/findings", methods=["GET"])
 @require_siem_auth
 def siem_threat_hunt_findings():
-    """List hunt_finding incidents (proxied to correlation engine)."""
     return _proxy("/incidents?category=hunt_finding")
 
 
 @siem_bp.route("/threat-hunting/run", methods=["POST"])
 @require_siem_admin
 def siem_threat_hunt_run():
-    """On-demand threat hunt run across all rules. Admin only."""
     try:
-        result = _run_async(_hunt_run_async())
-        return jsonify(result)
+        _run_hunts_background()
+        return jsonify({"status": "hunt_queued",
+                        "message": "Threat hunt running in background"})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -1149,14 +1366,7 @@ def siem_threat_hunt_run():
 @siem_bp.route("/posture/internal", methods=["GET"])
 @require_siem_auth
 def siem_internal_posture():
-    """Overall internal security posture score across all hosts.
-
-    Aggregates host_posture_cache weighted by asset tier.
-    Returns: score (0-100), grade, component breakdown, worst hosts, host counts.
-    Used by: Host Inventory page banner, Benchmark CSPI internal bucket.
-    """
     try:
-        result = _run_async(_internal_posture_async())
-        return jsonify(result)
+        return jsonify(_sync_internal_posture())
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
