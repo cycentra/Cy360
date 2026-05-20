@@ -120,8 +120,8 @@ async def _compute_host_posture(
         sca_row = await session.execute(
             text("""
                 SELECT
-                  COUNT(*) FILTER (WHERE full_alert->>'data'->>'sca'->>'check'->>'result' = 'passed') AS passed,
-                  COUNT(*) FILTER (WHERE full_alert->>'data'->>'sca'->>'check'->>'result' = 'failed') AS failed
+                  COUNT(*) FILTER (WHERE full_alert->'data'->'sca'->'check'->>'result' = 'passed') AS passed,
+                  COUNT(*) FILTER (WHERE full_alert->'data'->'sca'->'check'->>'result' = 'failed') AS failed
                 FROM alerts
                 WHERE agent_id = :aid
                   AND category = 'sca'
@@ -330,42 +330,43 @@ async def refresh_all_hosts(session: AsyncSession) -> int:
     refreshed = 0
     for agent_id, agent_info in all_agents.items():
         try:
-            posture = await _compute_host_posture(agent_id, token, session)
+            async with session.begin_nested():
+                posture = await _compute_host_posture(agent_id, token, session)
 
-            # Upsert into host_posture_cache
-            existing = await session.get(HostPostureCache, agent_id)
-            if existing is None:
-                existing = HostPostureCache(agent_id=agent_id)
-                session.add(existing)
+                # Upsert into host_posture_cache
+                existing = await session.get(HostPostureCache, agent_id)
+                if existing is None:
+                    existing = HostPostureCache(agent_id=agent_id)
+                    session.add(existing)
 
-            existing.agent_name      = agent_info["name"]
-            existing.agent_ip        = agent_info["ip"]
-            existing.os_platform     = agent_info["os_platform"]
-            existing.os_version      = agent_info["os_version"]
-            existing.wazuh_status    = agent_info["status"]
-            existing.last_keepalive  = (
-                datetime.fromisoformat(agent_info["last_keepalive"].replace("Z", "+00:00"))
-                if agent_info.get("last_keepalive") else None
-            )
-            existing.posture_score   = posture["posture_score"]
-            existing.posture_grade   = posture["posture_grade"]
-            existing.sca_score       = posture["sca_score"]
-            existing.sca_passed      = posture["sca_passed"]
-            existing.sca_failed      = posture["sca_failed"]
-            existing.sca_total       = posture["sca_total"]
-            existing.vuln_score      = posture["vuln_score"]
-            existing.vuln_critical   = posture["vuln_critical"]
-            existing.vuln_high       = posture["vuln_high"]
-            existing.vuln_medium     = posture["vuln_medium"]
-            existing.vuln_low        = posture["vuln_low"]
-            existing.siem_risk       = posture["siem_risk"]
-            existing.fim_event_count = posture["fim_event_count"]
-            existing.malware_count   = posture["malware_count"]
-            existing.incident_count  = posture["incident_count"]
-            existing.compliance_score= posture["compliance_score"]
-            existing.mitre_techniques= posture["mitre_techniques"]
-            existing.score_breakdown = posture["score_breakdown"]
-            existing.computed_at     = datetime.now(timezone.utc)
+                existing.agent_name      = agent_info["name"]
+                existing.agent_ip        = agent_info["ip"]
+                existing.os_platform     = agent_info["os_platform"]
+                existing.os_version      = agent_info["os_version"]
+                existing.wazuh_status    = agent_info["status"]
+                existing.last_keepalive  = (
+                    datetime.fromisoformat(agent_info["last_keepalive"].replace("Z", "+00:00"))
+                    if agent_info.get("last_keepalive") else None
+                )
+                existing.posture_score   = posture["posture_score"]
+                existing.posture_grade   = posture["posture_grade"]
+                existing.sca_score       = posture["sca_score"]
+                existing.sca_passed      = posture["sca_passed"]
+                existing.sca_failed      = posture["sca_failed"]
+                existing.sca_total       = posture["sca_total"]
+                existing.vuln_score      = posture["vuln_score"]
+                existing.vuln_critical   = posture["vuln_critical"]
+                existing.vuln_high       = posture["vuln_high"]
+                existing.vuln_medium     = posture["vuln_medium"]
+                existing.vuln_low        = posture["vuln_low"]
+                existing.siem_risk       = posture["siem_risk"]
+                existing.fim_event_count = posture["fim_event_count"]
+                existing.malware_count   = posture["malware_count"]
+                existing.incident_count  = posture["incident_count"]
+                existing.compliance_score= posture["compliance_score"]
+                existing.mitre_techniques= posture["mitre_techniques"]
+                existing.score_breakdown = posture["score_breakdown"]
+                existing.computed_at     = datetime.now(timezone.utc)
             refreshed += 1
         except Exception as exc:
             log.warning("[host_service] posture compute failed for %s: %s", agent_id, exc)
