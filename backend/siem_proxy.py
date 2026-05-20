@@ -793,17 +793,23 @@ def ueba_anomaly_status_post(anomaly_id):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _run_async(coro):
-    """Run an async coroutine from a sync Flask route."""
+    """Run an async coroutine from a sync Flask route.
+
+    Uses asyncio.run() which always creates a fresh event loop — safe for
+    sync werkzeug workers where a prior async init may have left a closed loop
+    on the thread, which would cause run_until_complete() to raise RuntimeError.
+    If a loop is already running (e.g., async WSGI server), offload to a thread.
+    """
     import asyncio
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(asyncio.run, coro)
-                return future.result(timeout=30)
-        return loop.run_until_complete(coro)
-    except Exception:
+        loop = asyncio.get_running_loop()
+        # Already inside a running loop — submit to a thread pool
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, coro)
+            return future.result(timeout=30)
+    except RuntimeError:
+        # No running loop — safe to call asyncio.run() directly
         return asyncio.run(coro)
 
 
