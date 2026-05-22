@@ -4493,24 +4493,54 @@ def server_status_get():
     try:
         import psutil
         import time as _time
+        import platform as _platform
+        import socket as _socket
 
-        cpu     = psutil.cpu_percent(interval=0.5)
-        mem     = psutil.virtual_memory()
-        disk    = psutil.disk_usage("/")
-        uptime  = int(_time.time() - psutil.boot_time())
-        load    = list(psutil.getloadavg()) if hasattr(psutil, "getloadavg") else [0.0, 0.0, 0.0]
+        cpu      = psutil.cpu_percent(interval=0.5)
+        mem      = psutil.virtual_memory()
+        disk     = psutil.disk_usage("/")
+        uptime   = int(_time.time() - psutil.boot_time())
+        load     = list(psutil.getloadavg()) if hasattr(psutil, "getloadavg") else [0.0, 0.0, 0.0]
+        cpu_count = psutil.cpu_count(logical=True)
+
+        # Top 8 processes by CPU
+        top_procs = []
+        try:
+            procs = []
+            for p in psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent"]):
+                try:
+                    procs.append(p.info)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            procs.sort(key=lambda x: x.get("cpu_percent") or 0, reverse=True)
+            top_procs = [
+                {
+                    "pid":         p["pid"],
+                    "name":        p["name"],
+                    "cpu_percent": round(p.get("cpu_percent") or 0, 1),
+                    "mem_percent": round(p.get("memory_percent") or 0, 1),
+                }
+                for p in procs[:8]
+            ]
+        except Exception:
+            pass
 
         return add_cors_headers(jsonify({
-            "ok":           True,
-            "cpu_percent":  cpu,
-            "ram_used_gb":  round(mem.used  / 1_073_741_824, 2),
-            "ram_total_gb": round(mem.total / 1_073_741_824, 2),
-            "ram_percent":  mem.percent,
-            "disk_used_gb": round(disk.used  / 1_073_741_824, 2),
-            "disk_total_gb":round(disk.total / 1_073_741_824, 2),
-            "disk_percent": disk.percent,
+            "ok":             True,
+            "hostname":       _socket.gethostname(),
+            "platform":       _platform.system() + " " + _platform.release(),
+            "python_version": _platform.python_version(),
+            "cpu_percent":    cpu,
+            "cpu_count":      cpu_count,
+            "ram_used_gb":    round(mem.used  / 1_073_741_824, 2),
+            "ram_total_gb":   round(mem.total / 1_073_741_824, 2),
+            "ram_percent":    mem.percent,
+            "disk_used_gb":   round(disk.used  / 1_073_741_824, 2),
+            "disk_total_gb":  round(disk.total / 1_073_741_824, 2),
+            "disk_percent":   disk.percent,
             "uptime_seconds": uptime,
-            "load_avg":     load,
+            "load_avg":       load,
+            "top_processes":  top_procs,
         }))
 
     except ImportError:

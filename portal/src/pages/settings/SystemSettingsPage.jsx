@@ -3291,88 +3291,127 @@ function ServerStatusTab() {
     setLoading(true);
     setError(null);
     fetch("/api/system/server-status", { credentials: "include" })
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(d => { setData(d); setLoading(false); })
       .catch(e => { setError(e.message); setLoading(false); });
   };
 
   useEffect(() => { load(); }, []);
 
-  const row = (label, value, unit = "", warn = false) => (
-    <div key={label} style={{
-      display: "flex", justifyContent: "space-between", alignItems: "center",
-      padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.05)",
-    }}>
-      <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, fontFamily: "monospace" }}>{label}</span>
-      <span style={{
-        color: warn ? "#f87171" : "#00e5a0", fontSize: 13,
-        fontFamily: "monospace", fontWeight: 700,
-      }}>{value}{unit && <span style={{ color: "rgba(255,255,255,0.3)", fontWeight: 400 }}> {unit}</span>}</span>
-    </div>
-  );
+  function fmtUptime(s) {
+    if (!s) return "—";
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (d > 0) return `${d}d ${h}h ${m}m`;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  }
+
+  function MeterRow({ label, pct, rightText, warn }) {
+    const color = warn ? "#f87171" : "#00e5a0";
+    const safePct = Math.min(100, Math.max(0, pct || 0));
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+        <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace", width: 90, flexShrink: 0 }}>{label}</span>
+        <div style={{ flex: 1, background: "rgba(255,255,255,0.07)", borderRadius: 2, height: 5, overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${safePct}%`, background: color, borderRadius: 2, transition: "width 0.7s ease" }} />
+        </div>
+        <span style={{ color: warn ? "#f87171" : "rgba(255,255,255,0.75)", fontSize: 11, fontFamily: "monospace", minWidth: 200, textAlign: "right", flexShrink: 0 }}>
+          {rightText}
+        </span>
+      </div>
+    );
+  }
 
   if (loading) return (
-    <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12, padding: 24 }}>
-      Loading server status…
-    </div>
+    <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12, padding: 24 }}>Loading server status…</div>
   );
-
   if (error) return (
     <div style={{ color: "#f87171", fontFamily: "monospace", fontSize: 12, padding: 24 }}>
-      Failed to load server status: {error}
+      Failed: {error}
       <button onClick={load} style={{ marginLeft: 12, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.3)", color: "#f87171", borderRadius: 4, padding: "3px 10px", fontSize: 11, cursor: "pointer" }}>
         Retry
       </button>
     </div>
   );
-
   if (!data) return null;
 
   const cpuWarn  = (data.cpu_percent  ?? 0) > 85;
   const ramWarn  = (data.ram_percent  ?? 0) > 90;
   const diskWarn = (data.disk_percent ?? 0) > 90;
+  const loadVal  = data.load_avg?.[0] ?? 0;
+  const loadPct  = Math.min(100, (loadVal / Math.max(1, data.cpu_count ?? 1)) * 100);
+  const loadWarn = loadPct > 85;
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 13, fontFamily: "monospace", fontWeight: 700 }}>
-          Server Status
-        </span>
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+        <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 13, fontFamily: "monospace", fontWeight: 700 }}>Server Status</span>
         <button onClick={load} style={{ background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.25)", color: "#00e5a0", borderRadius: 4, padding: "4px 12px", fontSize: 10, fontFamily: "monospace", cursor: "pointer" }}>
           ↻ Refresh
         </button>
       </div>
 
-      <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "4px 16px", marginBottom: 16 }}>
-        {row("Hostname",          data.hostname ?? "—")}
-        {row("Platform",          data.platform ?? "—")}
-        {row("Uptime",            data.uptime   ?? "—")}
-        {row("Python",            data.python_version ?? "—")}
-        {row("CPU Usage",         data.cpu_percent ?? 0, "%", cpuWarn)}
-        {row("CPU Cores",         data.cpu_count   ?? "—")}
-        {row("RAM Used",          data.ram_percent ?? 0, "%", ramWarn)}
-        {row("RAM Total",         data.ram_total_gb != null ? data.ram_total_gb.toFixed(1) : "—", "GB")}
-        {row("Disk Used",         data.disk_percent ?? 0, "%", diskWarn)}
-        {row("Disk Total",        data.disk_total_gb != null ? data.disk_total_gb.toFixed(1) : "—", "GB")}
-        {row("Load Avg (1m)",     data.load_avg_1m  ?? "—")}
+      {/* System info grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 32px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "12px 16px", marginBottom: 14 }}>
+        {[
+          ["Hostname",   data.hostname],
+          ["Platform",   data.platform],
+          ["Uptime",     fmtUptime(data.uptime_seconds)],
+          ["Python",     data.python_version],
+          ["CPU Cores",  data.cpu_count],
+        ].map(([k, v]) => (
+          <div key={k} style={{ display: "flex", gap: 10, padding: "5px 0" }}>
+            <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, fontFamily: "monospace", minWidth: 76 }}>{k}</span>
+            <span style={{ color: "rgba(255,255,255,0.75)", fontSize: 11, fontFamily: "monospace" }}>{v ?? "—"}</span>
+          </div>
+        ))}
       </div>
 
+      {/* Resource meters */}
+      <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "4px 16px", marginBottom: 14 }}>
+        <MeterRow
+          label="CPU Usage"
+          pct={data.cpu_percent}
+          warn={cpuWarn}
+          rightText={`${(data.cpu_percent ?? 0).toFixed(1)}%`}
+        />
+        <MeterRow
+          label="RAM Usage"
+          pct={data.ram_percent}
+          warn={ramWarn}
+          rightText={`${(data.ram_percent ?? 0).toFixed(1)}%  (${(data.ram_used_gb ?? 0).toFixed(1)} GB / ${(data.ram_total_gb ?? 0).toFixed(1)} GB)`}
+        />
+        <MeterRow
+          label="Disk Usage"
+          pct={data.disk_percent}
+          warn={diskWarn}
+          rightText={`${(data.disk_percent ?? 0).toFixed(1)}%  (${(data.disk_used_gb ?? 0).toFixed(1)} GB / ${(data.disk_total_gb ?? 0).toFixed(1)} GB)`}
+        />
+        <MeterRow
+          label="Load Avg"
+          pct={loadPct}
+          warn={loadWarn}
+          rightText={`${loadVal.toFixed(2)} · 5m ${data.load_avg?.[1]?.toFixed(2) ?? "—"} · 15m ${data.load_avg?.[2]?.toFixed(2) ?? "—"}`}
+        />
+      </div>
+
+      {/* Top processes */}
       {data.top_processes && data.top_processes.length > 0 && (
         <>
-          <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace", marginBottom: 8 }}>
-            TOP PROCESSES BY CPU
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 8 }}>
+            TOP PROCESSES
           </div>
-          <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "4px 16px" }}>
+          <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "4px 16px" }}>
             {data.top_processes.map((p, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: i < data.top_processes.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
-                <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace", maxWidth: "60%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: i < data.top_processes.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
+                <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace", maxWidth: "55%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {p.name}
-                  <span style={{ color: "rgba(255,255,255,0.25)", marginLeft: 6 }}>pid {p.pid}</span>
+                  <span style={{ color: "rgba(255,255,255,0.2)", marginLeft: 8 }}>pid {p.pid}</span>
                 </span>
-                <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace" }}>
+                <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace" }}>
                   CPU {p.cpu_percent?.toFixed(1)}% · MEM {p.mem_percent?.toFixed(1)}%
                 </span>
               </div>
