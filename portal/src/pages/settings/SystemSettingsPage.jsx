@@ -3280,6 +3280,110 @@ function CompFrameworkDocsTab() {
   );
 }
 
+// ── Server Status Tab ─────────────────────────────────────────────────────────
+
+function ServerStatusTab() {
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+
+  const load = () => {
+    setLoading(true);
+    setError(null);
+    fetch("/api/system/server-status", { credentials: "include" })
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(d => { setData(d); setLoading(false); })
+      .catch(e => { setError(e.message); setLoading(false); });
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const row = (label, value, unit = "", warn = false) => (
+    <div key={label} style={{
+      display: "flex", justifyContent: "space-between", alignItems: "center",
+      padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.05)",
+    }}>
+      <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, fontFamily: "monospace" }}>{label}</span>
+      <span style={{
+        color: warn ? "#f87171" : "#00e5a0", fontSize: 13,
+        fontFamily: "monospace", fontWeight: 700,
+      }}>{value}{unit && <span style={{ color: "rgba(255,255,255,0.3)", fontWeight: 400 }}> {unit}</span>}</span>
+    </div>
+  );
+
+  if (loading) return (
+    <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12, padding: 24 }}>
+      Loading server status…
+    </div>
+  );
+
+  if (error) return (
+    <div style={{ color: "#f87171", fontFamily: "monospace", fontSize: 12, padding: 24 }}>
+      Failed to load server status: {error}
+      <button onClick={load} style={{ marginLeft: 12, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.3)", color: "#f87171", borderRadius: 4, padding: "3px 10px", fontSize: 11, cursor: "pointer" }}>
+        Retry
+      </button>
+    </div>
+  );
+
+  if (!data) return null;
+
+  const cpuWarn  = (data.cpu_percent  ?? 0) > 85;
+  const ramWarn  = (data.ram_percent  ?? 0) > 90;
+  const diskWarn = (data.disk_percent ?? 0) > 90;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 13, fontFamily: "monospace", fontWeight: 700 }}>
+          Server Status
+        </span>
+        <button onClick={load} style={{ background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.25)", color: "#00e5a0", borderRadius: 4, padding: "4px 12px", fontSize: 10, fontFamily: "monospace", cursor: "pointer" }}>
+          ↻ Refresh
+        </button>
+      </div>
+
+      <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "4px 16px", marginBottom: 16 }}>
+        {row("Hostname",          data.hostname ?? "—")}
+        {row("Platform",          data.platform ?? "—")}
+        {row("Uptime",            data.uptime   ?? "—")}
+        {row("Python",            data.python_version ?? "—")}
+        {row("CPU Usage",         data.cpu_percent ?? 0, "%", cpuWarn)}
+        {row("CPU Cores",         data.cpu_count   ?? "—")}
+        {row("RAM Used",          data.ram_percent ?? 0, "%", ramWarn)}
+        {row("RAM Total",         data.ram_total_gb != null ? data.ram_total_gb.toFixed(1) : "—", "GB")}
+        {row("Disk Used",         data.disk_percent ?? 0, "%", diskWarn)}
+        {row("Disk Total",        data.disk_total_gb != null ? data.disk_total_gb.toFixed(1) : "—", "GB")}
+        {row("Load Avg (1m)",     data.load_avg_1m  ?? "—")}
+      </div>
+
+      {data.top_processes && data.top_processes.length > 0 && (
+        <>
+          <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace", marginBottom: 8 }}>
+            TOP PROCESSES BY CPU
+          </div>
+          <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "4px 16px" }}>
+            {data.top_processes.map((p, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: i < data.top_processes.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
+                <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace", maxWidth: "60%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {p.name}
+                  <span style={{ color: "rgba(255,255,255,0.25)", marginLeft: 6 }}>pid {p.pid}</span>
+                </span>
+                <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace" }}>
+                  CPU {p.cpu_percent?.toFixed(1)}% · MEM {p.mem_percent?.toFixed(1)}%
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Two-column Settings layout ────────────────────────────────────────────────
 
 const PLATFORM_TABS = [
