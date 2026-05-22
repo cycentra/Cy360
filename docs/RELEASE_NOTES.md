@@ -1,3 +1,11 @@
+## v1.2.32 -- 2026-05-22
+
+### Bug Fixes
+
+  - server-status endpoint missing fields + redesign tab with progress bar meters
+
+---
+
 ## v1.2.31 -- 2026-05-22
 
 ### New Features
