@@ -3288,6 +3288,7 @@ const PLATFORM_TABS = [
   { id: "scheduler", label: "Scheduler" },
   { id: "users",     label: "Users & Auth" },
   { id: "backup",    label: "Backup & Restore" },
+  { id: "server",    label: "Server Status" },
 ];
 
 const COMP_TABS = [
@@ -3387,6 +3388,7 @@ export function SystemSettingsPage() {
                 </>
               )}
               {tab === "backup"    && <BackupTab />}
+              {tab === "server"    && <ServerStatusTab />}
             </>
           )}
 

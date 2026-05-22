@@ -4472,3 +4472,48 @@ def schedule_log_get(task_id):
         return add_cors_headers(jsonify({"ok": True, "lines": [], "path": str(log_path)}))
 
     return add_cors_headers(jsonify({"ok": True, "lines": tail, "path": str(log_path)}))
+
+
+# ── Server resource metrics ───────────────────────────────────────────────────
+
+@system_bp.route("/api/system/server-status", methods=["OPTIONS"])
+def server_status_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/server-status", methods=["GET"])
+def server_status_get():
+    """Return live host CPU, RAM, disk and uptime metrics via psutil."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
+        return jsonify({"error": "Admin or analyst role required"}), 403
+
+    try:
+        import psutil
+        import time as _time
+
+        cpu     = psutil.cpu_percent(interval=0.5)
+        mem     = psutil.virtual_memory()
+        disk    = psutil.disk_usage("/")
+        uptime  = int(_time.time() - psutil.boot_time())
+        load    = list(psutil.getloadavg()) if hasattr(psutil, "getloadavg") else [0.0, 0.0, 0.0]
+
+        return add_cors_headers(jsonify({
+            "ok":           True,
+            "cpu_percent":  cpu,
+            "ram_used_gb":  round(mem.used  / 1_073_741_824, 2),
+            "ram_total_gb": round(mem.total / 1_073_741_824, 2),
+            "ram_percent":  mem.percent,
+            "disk_used_gb": round(disk.used  / 1_073_741_824, 2),
+            "disk_total_gb":round(disk.total / 1_073_741_824, 2),
+            "disk_percent": disk.percent,
+            "uptime_seconds": uptime,
+            "load_avg":     load,
+        }))
+
+    except ImportError:
+        return jsonify({"ok": False, "error": "psutil not available — run: pip install psutil"}), 503
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500

@@ -22,6 +22,113 @@ import { SiemEngineStatus } from "./SiemEngineStatus";
 import { RISK_CONFIG } from "../core/constants";
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Detection Posture Score helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function siemScoreColor(s) {
+  if (s >= 75) return "#00e5a0";
+  if (s >= 60) return "#4d9eff";
+  if (s >= 45) return "#f5a623";
+  if (s >= 30) return "#ff8c00";
+  return "#ff3b3b";
+}
+
+function DetectionPostureWidget({ data, onViewBenchmark }) {
+  if (!data) return null;
+  const score = Math.round(data.score ?? 0);
+  const color = siemScoreColor(score);
+  const pct   = Math.min(100, Math.max(0, score));
+  const label = data.label || (score >= 75 ? "STRONG" : score >= 60 ? "MODERATE" : score >= 45 ? "FAIR" : score >= 30 ? "WEAK" : "CRITICAL");
+  const detail = data.detail || [
+    data.critical_alerts  != null ? `${data.critical_alerts} critical alert${data.critical_alerts  !== 1 ? "s" : ""}` : null,
+    data.open_incidents   != null ? `${data.open_incidents} open incident${data.open_incidents   !== 1 ? "s" : ""}` : null,
+  ].filter(Boolean).join(" · ") || "Entity risk · UEBA anomalies · Kill-chain coverage";
+
+  return (
+    <div style={{
+      background: `${color}09`,
+      border: `1px solid ${color}30`,
+      borderLeft: `4px solid ${color}`,
+      borderRadius: 6,
+      padding: "16px 22px",
+      marginBottom: 18,
+      display: "flex",
+      alignItems: "center",
+      gap: 22,
+    }}>
+      {/* Score circle */}
+      <div style={{ textAlign: "center", flexShrink: 0, minWidth: 76 }}>
+        <div style={{ color, fontSize: 44, fontWeight: 800, fontFamily: "'Space Mono',monospace", lineHeight: 1 }}>
+          {score}
+        </div>
+        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace", textTransform: "uppercase", letterSpacing: "1px", marginTop: 3 }}>
+          / 100
+        </div>
+      </div>
+
+      {/* Bar + labels */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 7 }}>
+          <span style={{ color: "rgba(255,255,255,0.75)", fontSize: 13, fontWeight: 700, fontFamily: "monospace" }}>
+            Internal Detection Posture
+          </span>
+          <span style={{
+            background: `${color}18`, color, border: `1px solid ${color}40`,
+            borderRadius: 3, padding: "1px 7px", fontSize: 10,
+            fontFamily: "monospace", fontWeight: 700, letterSpacing: "0.5px",
+          }}>
+            {label}
+          </span>
+        </div>
+        <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 3, height: 7, marginBottom: 8, overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 3, transition: "width 0.8s ease" }} />
+        </div>
+        <div style={{ color: "rgba(255,255,255,0.32)", fontSize: 10, fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {detail}
+        </div>
+        {/* Signal chips — only rendered when relevant */}
+        {(data.ueba_active_anomalies > 0 || data.kill_chain_deep > 0 || data.kill_chain_mid > 0 || data.active_agents === 0) && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 7 }}>
+            {data.ueba_active_anomalies > 0 && (
+              <span style={{ background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.35)", color: "#fbbf24", borderRadius: 3, padding: "1px 7px", fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>
+                UEBA {data.ueba_active_anomalies} anomaly{data.ueba_active_anomalies !== 1 ? "s" : ""}
+              </span>
+            )}
+            {data.kill_chain_deep > 0 && (
+              <span style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.35)", color: "#ef4444", borderRadius: 3, padding: "1px 7px", fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>
+                ⚠ {data.kill_chain_deep} deep kill-chain
+              </span>
+            )}
+            {data.kill_chain_mid > 0 && (
+              <span style={{ background: "rgba(249,115,22,0.1)", border: "1px solid rgba(249,115,22,0.35)", color: "#f97316", borderRadius: 3, padding: "1px 7px", fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>
+                {data.kill_chain_mid} mid kill-chain
+              </span>
+            )}
+            {data.active_agents === 0 && (
+              <span style={{ background: "rgba(156,163,175,0.1)", border: "1px solid rgba(156,163,175,0.35)", color: "#9ca3af", borderRadius: 3, padding: "1px 7px", fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>
+                ⚠ no active agents
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* CTA */}
+      {onViewBenchmark && (
+        <button onClick={onViewBenchmark} style={{
+          background: `${color}10`, border: `1px solid ${color}35`, color,
+          borderRadius: 4, padding: "8px 14px", fontSize: 10, fontFamily: "monospace",
+          fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+          letterSpacing: "0.5px",
+        }}>
+          Full Benchmark ↗
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Shared primitive components (self-contained, no external deps)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -671,22 +778,26 @@ function EntityTypeDonut({ riskScores }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function InternalExposureDashboard({ setActiveTab }) {
-  const [stats,      setStats]      = useState(null);
-  const [incidents,  setIncidents]  = useState([]);
-  const [riskScores, setRiskScores] = useState([]);
-  const [uebaUsers,  setUebaUsers]  = useState([]);
-  const [loading,    setLoading]    = useState(true);
-  const [offline,    setOffline]    = useState(false);
-  const [lastRefresh, setLastRefresh] = useState(null);
+  const [stats,        setStats]        = useState(null);
+  const [incidents,    setIncidents]    = useState([]);
+  const [riskScores,   setRiskScores]   = useState([]);
+  const [uebaUsers,    setUebaUsers]    = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [offline,      setOffline]      = useState(false);
+  const [lastRefresh,  setLastRefresh]  = useState(null);
+  const [postureScore, setPostureScore] = useState(null);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
 
-    const [statsData, incData, riskData, uebaData] = await Promise.all([
+    const [statsData, incData, riskData, uebaData, benchData] = await Promise.all([
       siemFetch(siemApi.getStats()),
       siemFetch(siemApi.getIncidents({ limit: 200 })),
       siemFetch(siemApi.getRiskScores({ limit: 100 })),
       siemFetch(siemApi.getUebaUsers({ limit: 100 })),
+      fetch("/api/benchmark/score", { credentials: "include" })
+        .then(r => r.ok ? r.json() : null)
+        .catch(() => null),
     ]);
 
     if (statsData._offline || incData._offline) {
@@ -699,6 +810,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
     if (!incData._error)   setIncidents(incData.incidents || []);
     if (!riskData._error)  setRiskScores((riskData.scores || riskData.entities || riskData || []).sort((a, b) => (b.score || 0) - (a.score || 0)));
     if (!uebaData._error)  setUebaUsers(Array.isArray(uebaData) ? uebaData : (uebaData.users || []));
+    if (benchData?.breakdown?.siem) setPostureScore(benchData.breakdown.siem);
     setLoading(false);
     setLastRefresh(new Date());
   }, []);
@@ -765,7 +877,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
       )}
 
       {/* ── KPI Row ── */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
         <KpiCard label="Total Incidents" value={totalInc}      accent="#4d9eff"  icon="📊" />
         <KpiCard label="Open / Active"   value={openInc}       accent="#ff3b3b"  icon="🔥" sub="Requires attention" />
         <KpiCard label="Critical & High" value={critHighInc}   accent="#ff8c00"  icon="⚡" sub="High-severity incidents" />
@@ -773,6 +885,12 @@ export function InternalExposureDashboard({ setActiveTab }) {
         <KpiCard label="AI Auto-Closed"  value={aiAutoClose}   accent="#00e5a0"  icon="🤖" sub="FP ≥ 70% confidence" />
         <KpiCard label="Tickets Raised"  value={ticketsRaised} accent="#f5c518"  icon="🎫" sub="Escalated to IRIS" />
       </div>
+
+      {/* ── Detection Posture Score ── */}
+      <DetectionPostureWidget
+        data={postureScore}
+        onViewBenchmark={() => setActiveTab?.("benchmark")}
+      />
 
       {/* ── Row 1: State Overview + Severity Donut + Category Histogram ── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>

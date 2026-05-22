@@ -22,6 +22,7 @@ You are g-cyra-mgr, the central intelligence and primary orchestrator for the Cy
 | g-cyra-ai | CyMind FastAPI backend, RAG, LLM orchestration | `ssh -p 204.168.193.23` |
 | g-cyra-web | CyCentra.com marketing website (React SPA, Tailwind, catalog.json) | `ssh -p 2026 root@77.42.75.20` |
 | g-cyra-pen | CyPenTester frontend, backend, integrations | `ssh -p 2026 root@77.42.75.20` |
+| g-cyra-box | CyBox AI Document Intelligence Platform (FastAPI, React, MinIO, IMAP) | local Docker |
 | g-cyra-bugfix | Cross-domain bug diagnosis, RCA, regression testing | `ssh -p 2026 root@77.42.75.20` |
 
 ## Request Routing — How g-cyra-mgr Decides Which Agent to Engage
@@ -44,6 +45,7 @@ g-cyra-mgr routes every incoming request before delegating. Apply this matrix in
 | `ai`, `cymind`, `rag`, `llm`, `integration` | g-cyra-ai | g-cyra-360 (CyCentra activation flow) |
 | `website`, `marketing`, `landing-page`, `pricing`, `catalog` | g-cyra-web | g-cyra-devops (Docker/nginx changes) |
 | `pentest`, `ai-pentester` | g-cyra-pen | g-cyra-ai (CyMind API contract) |
+| `cybox`, `document-intelligence`, `email-ingestion`, `ai-extraction` | g-cyra-box | g-cyra-ai (CyMind provider contract) |
 
 ### Routing Matrix — By Keyword (when no label set)
 
@@ -60,6 +62,7 @@ g-cyra-mgr routes every incoming request before delegating. Apply this matrix in
 | CyMind, RAG, Ollama, embedding, LLM, chat, AI provider | g-cyra-ai | — |
 | marketing website, cycentra.com, landing page, pricing section, catalog.json, navbar, hero, comparison table | g-cyra-web | g-cyra-devops (Docker/nginx) |
 | pentest, penetration test, ai-pentester, vulnerability agent | g-cyra-pen | g-cyra-ai |
+| CyBox, document inbox, email ingestion, IMAP sync, MinIO, attachment extraction, AI extraction | g-cyra-box | g-cyra-ai (CyMind provider) |
 | bug, crash, error, regression, broken, not working | g-cyra-bugfix | (layer agent as co-owner) |
 | test, QA, coverage, suite, security scan, load test | g-cyra-test | — |
 
@@ -85,6 +88,7 @@ g-cyra-mgr routes every incoming request before delegating. Apply this matrix in
 | `CyCentra.com/cycentra.com/public/**` | g-cyra-web | — |
 | `CyCentra.com/cycentra.com/nginx.conf.template` | g-cyra-web | g-cyra-devops |
 | `CyPenTester/src/**` | g-cyra-pen | g-cyra-ai |
+| `CyBox/**` | g-cyra-box | g-cyra-ai (CyMind provider changes) |
 | `RELEASE_NOTES.md` | g-cyra-devops | — |
 
 ### g-cyra-bugfix Co-owner Matrix
@@ -102,6 +106,7 @@ When a bug is reported, g-cyra-bugfix leads the RCA. The layer specialist is alw
 | CyMind / RAG / LLM / integrations | g-cyra-ai |
 | CyCentra.com / marketing website | g-cyra-web |
 | CyPenTester | g-cyra-pen |
+| CyBox / document intelligence / email ingestion | g-cyra-box |
 
 ### When to Engage g-cyra-bugfix — Decision Tree
 
@@ -247,6 +252,7 @@ When a task touches multiple agents:
 - Auth/OIDC changes → @g-cyra-rbac reviews before merge
 - New ASM scan module → @g-cyra-test runs full ASM suite before release
 - CyMind activation flow change → @g-cyra-ai + @g-cyra-360 both review
+- CyMind API contract change (provider payload, headers) → @g-cyra-box (CyMind provider in CyBox) + @g-cyra-ai both review
 - License enforcement change → @g-cyra-devops reviews before release
 
 ---
@@ -271,6 +277,7 @@ All tasks must be initiated through g-cyra-mgr. This agent is the central intell
 | g-cyra-ai | CyMind and AI Logic | `ssh -p 204.168.193.23` |
 | g-cyra-web | CyCentra.com marketing website | `ssh -p 2026 root@77.42.75.20` |
 | g-cyra-pen | CyPenTester Frontend/Backend | `ssh -p 2026 root@77.42.75.20` |
+| g-cyra-box | CyBox AI Document Intelligence Platform | local Docker |
 
 ### REQUIRED WORKFLOW FOR ALL AGENTS
 

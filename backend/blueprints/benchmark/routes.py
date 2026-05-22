@@ -354,13 +354,66 @@ def _collect_siem_score() -> dict:
         except Exception:
             pass  # risk-scores unavailable — still score from /stats alone
 
-        # ── Compute health score ───────────────────────────────────────────────
+        # ── UEBA: active anomaly count (gap v2) ───────────────────────────────
+        ueba_active_anomalies = 0
+        try:
+            r_ueba = _req.get(
+                f"{_SIEM_ENGINE}/ueba/users",
+                params={"has_anomaly": "true"},
+                timeout=_SIEM_TIMEOUT,
+            )
+            if r_ueba.status_code == 200:
+                ueba_users = r_ueba.json()
+                if not isinstance(ueba_users, list):
+                    ueba_users = ueba_users.get("items") or ueba_users.get("users") or []
+                ueba_active_anomalies = sum(
+                    int(u.get("active_anomalies", 0)) for u in ueba_users
+                )
+        except Exception as _ueba_err:
+            log.debug("[benchmark] UEBA fetch failed: %s", _ueba_err)
+
+        # ── Kill chain depth from DB (gap v2) ─────────────────────────────────
+        # Deep = stage >= 10 (Lateral Movement / Collection / Exfiltration / Impact)
+        # Mid  = stage 7–9  (Defense Evasion / Credential Access / Discovery)
+        kill_chain_deep = 0
+        kill_chain_mid  = 0
+        try:
+            import psycopg2 as _psycopg2
+            _kc_conn = _psycopg2.connect(_CORR_DB_URL)
+            _kc_cur  = _kc_conn.cursor()
+            _kc_cur.execute("""
+                SELECT kill_chain_stage, COUNT(*) AS n
+                FROM incidents
+                WHERE status IN ('open', 'investigating', 'in_review')
+                  AND kill_chain_stage IS NOT NULL
+                  AND kill_chain_stage >= 7
+                GROUP BY kill_chain_stage
+            """)
+            for _stage, _cnt in _kc_cur.fetchall():
+                if int(_stage) >= 10:
+                    kill_chain_deep += int(_cnt)
+                else:
+                    kill_chain_mid  += int(_cnt)
+            _kc_conn.close()
+        except Exception as _kc_err:
+            log.debug("[benchmark] kill chain DB query failed: %s", _kc_err)
+
+        # ── Compute health score (v2) ─────────────────────────────────────────
         score = 100
-        score -= min(critical_alerts   * 3,  30)
-        score -= min(open_incidents    * 2,  20)
-        score -= min(critical_entities * 5,  25)
-        score -= min(high_entities     * 2,  10)
-        score  = max(0, min(100, score))
+        # Existing threat signal penalties
+        score -= min(critical_alerts   * 3,  30)   # active critical alerts
+        score -= min(open_incidents    * 2,  20)   # open incidents
+        score -= min(critical_entities * 5,  25)   # critical risk entities
+        score -= min(high_entities     * 2,  10)   # high risk entities
+        # UEBA behavioral anomaly penalty
+        score -= min(ueba_active_anomalies * 3, 12)
+        # Kill chain depth penalty — open incidents at advanced MITRE stages
+        score -= min(kill_chain_deep * 6, 18)      # lateral movement / exfil / impact
+        score -= min(kill_chain_mid  * 2,  8)      # defense evasion / credential access
+        # Monitoring coverage baseline
+        if active_agents == 0:
+            score -= 10                            # no endpoint visibility
+        score = max(0, min(100, score))
 
         detail_parts = []
         if alerts_24h:
@@ -371,8 +424,14 @@ def _collect_siem_score() -> dict:
             detail_parts.append(
                 f"{critical_entities} critical / {high_entities} high risk entities"
             )
+        if ueba_active_anomalies:
+            detail_parts.append(f"{ueba_active_anomalies} UEBA anomalies")
+        if kill_chain_deep:
+            detail_parts.append(f"{kill_chain_deep} deep kill-chain incident(s)")
         if active_agents:
             detail_parts.append(f"{active_agents} active agents")
+        elif active_agents == 0:
+            detail_parts.append("⚠ no active agents")
         if not detail_parts:
             detail_parts.append("Engine healthy — no active threats")
 
@@ -398,6 +457,9 @@ def _collect_siem_score() -> dict:
             "active_agents":         active_agents,
             "open_incidents":        open_incidents,
             "critical_alerts":       critical_alerts,
+            "ueba_active_anomalies": ueba_active_anomalies,
+            "kill_chain_deep":       kill_chain_deep,
+            "kill_chain_mid":        kill_chain_mid,
             "severity_distribution": severity_distribution,
             "status_distribution":   status_distribution,
             "category_distribution": category_distribution,

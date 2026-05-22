@@ -1,7 +1,12 @@
 # CyCentra 360 — Benchmark Intelligence Engine: Score Calculations Reference
 
-**Version:** Post-Accuracy-Fix (May 2026)  
+**Version:** v2 — Gap Patch (June 2026)  
 **Applies to:** `backend/blueprints/benchmark/routes.py`
+
+| Revision | Date | Changes |
+|----------|------|---------|
+| v1 Post-Accuracy-Fix | May 2026 | Data isolation fix; ext_benchmark overlap guard |
+| **v2 Gap Patch** | **June 2026** | **Dimension 2 (SIEM) extended: UEBA anomalies, kill chain depth, no-agents coverage penalty** |
 
 ---
 
@@ -26,7 +31,7 @@ Where for each enabled dimension $i$:
 | # | Dimension | Default Weight | Data Source | Status |
 |---|-----------|---------------|-------------|--------|
 | 1 | External Attack Surface (ASM) | 20% | ASM scan JSON | Always available after first scan |
-| 2 | Internal Detection Posture (SIEM) | 20% | Correlation engine `/stats` + `/risk-scores` | Available when CySIEM is running |
+| 2 | Internal Detection Posture (SIEM) | 20% | Correlation engine `/stats`, `/risk-scores`, `/ueba/users` + correlation DB (kill chain) | Available when CySIEM is running |
 | 3 | Compliance Coverage | 20% | `cy_compliance_controls` PostgreSQL table | Requires CyComp module |
 | 4 | Vulnerability Management | 20% | Wazuh API (vuln detector + SCA + CyIRIS MTTR) | Requires Wazuh + WAZUH_API_PASSWORD |
 | 5 | Threat Intelligence | 15% | MISP API (feeds + IOC count + actionable ratio) | Requires MISP configured in System Settings |
@@ -73,28 +78,98 @@ final = clamp(score, 0, 100)
 
 ## Dimension 2: Internal Detection Posture (SIEM)
 
-**Source:** Correlation engine HTTP API at `http://127.0.0.1:8100`  
-**Endpoints used:** `GET /stats`, `GET /risk-scores`
+**Source:** Correlation engine HTTP API at `http://127.0.0.1:8100` + Correlation DB  
+**Endpoints used:** `GET /stats`, `GET /risk-scores`, `GET /ueba/users`, direct DB query
 
-### Algorithm
+### Algorithm (v2 — Gap Patch)
 
 ```
 score = 100  (start from perfect)
 
-from /stats:
-  critical_alerts (24 h window) : -3 each   cap -30
-  open_incidents                : -2 each   cap -20
+── Signal group 1: Threat load (from /stats + /risk-scores) ──────────────────
+  critical_alerts (24 h window)   : -3 each   cap -30
+  open_incidents                  : -2 each   cap -20
+  critical risk entities          : -5 each   cap -25
+  high risk entities              : -2 each   cap -10
 
-from /risk-scores (entity list):
-  critical risk entities        : -5 each   cap -25
-  high risk entities            : -2 each   cap -10
+── Signal group 2: UEBA behavioral anomalies (NEW — from /ueba/users) ────────
+  active UEBA anomalies (summed   : -3 each   cap -12
+  across all users with unresolved
+  anomalies)
+
+── Signal group 3: Kill chain depth (NEW — from correlation DB) ──────────────
+  open incidents at MITRE stage   : -6 each   cap -18
+  >= 10 (Lateral Movement,
+  Collection, Exfiltration, Impact)
+
+  open incidents at MITRE stage   : -2 each   cap  -8
+  7–9 (Defense Evasion,
+  Credential Access, Discovery)
+
+── Signal group 4: Coverage baseline (NEW) ───────────────────────────────────
+  active_agents == 0              : -10 flat  (no endpoint visibility)
 
 final = clamp(score, 0, 100)
 ```
 
-**What is counted:** Only **currently open/active** incidents and **current 24-hour** alert counts. Closed or resolved incidents do not appear in `open_incidents`. Risk entity scores reflect current entity state.
+**Maximum total deduction breakdown:**
 
-**What this dimension does NOT count:** Historical resolved incidents, ASM findings, vulnerability CVEs, or MISP IOCs. Fully independent from all other dimensions.
+| Signal | Max deduction |
+|--------|--------------|
+| Critical alerts | −30 |
+| Open incidents | −20 |
+| Critical entities | −25 |
+| High entities | −10 |
+| UEBA anomalies (new) | −12 |
+| Deep kill chain incidents (new) | −18 |
+| Mid kill chain incidents (new) | −8 |
+| No agents coverage penalty (new) | −10 |
+| **Total theoretical max** | **−133 → clamped to 0** |
+
+### UEBA Signal Detail (new in v2)
+
+- **Endpoint:** `GET /ueba/users?has_anomaly=true`
+- **Field used:** `active_anomalies` (count of unresolved anomalies per user, injected by the `list_ueba_users` route)
+- **Aggregation:** sum of `active_anomalies` across all returned users
+- **Penalty:** −3 per anomaly, cap −12 (4+ anomalies = full deduction)
+- **Degradation:** if endpoint unreachable, `ueba_active_anomalies = 0` — score not affected (graceful)
+
+### Kill Chain Depth Signal Detail (new in v2)
+
+- **Source:** Direct psycopg2 query to `CORRELATION_DB_URL` — `incidents` table  
+- **Filter:** `status IN ('open', 'investigating', 'in_review') AND kill_chain_stage >= 7`
+- **MITRE ATT&CK stage map (from correlator.py):**
+
+| Stage # | MITRE Tactic | Group |
+|---------|-------------|-------|
+| 7 | Defense Evasion | Mid |
+| 8 | Credential Access | Mid |
+| 9 | Discovery | Mid |
+| 10 | Lateral Movement | **Deep** |
+| 11 | Collection | **Deep** |
+| 12 | Exfiltration | **Deep** |
+| 13 | Impact | **Deep** |
+
+- **Rationale:** An open incident reaching stage 10+ means the threat actor progressed past initial access and is actively moving laterally or exfiltrating — a severe detection failure that warrants a significant score penalty beyond the baseline "open incident" deduction already applied.
+
+### Coverage Baseline (new in v2)
+
+- **Field:** `active_agents` from `/stats`
+- **Condition:** if `active_agents == 0` → −10 flat penalty
+- **Rationale:** Zero active agents means the SIEM has no telemetry source — any score above 0 would be misleading. The penalty ensures the dimension reflects the absence of monitoring visibility.
+
+### What is counted vs. not counted
+
+| Counted | Not counted |
+|---------|-------------|
+| Active critical alerts (24 h window) | Historical resolved alerts |
+| Open / in-progress incidents | Closed/resolved incidents (those are in Vuln MTTR) |
+| Current entity risk levels | Static host metadata |
+| Unresolved UEBA anomalies | Resolved UEBA anomalies |
+| Open incidents at advanced kill chain stages | Kill chain stage of closed incidents |
+| Endpoint coverage (agent count baseline) | ASM findings, CVEs, MISP IOCs |
+
+This dimension is **strictly independent** from all others — no shared data sources.
 
 ---
 
@@ -230,18 +305,20 @@ Phase 2 will replace this with a bundled CIS Controls v8 JSON dataset and nightl
 
 ---
 
-## Data Isolation Guarantee (post-fix)
+## Data Isolation Guarantee (v2)
 
 Each active, scored dimension reads from a strictly separate data source:
 
 | Dimension | Unique data source | Shares data with |
 |-----------|-------------------|-----------------|
 | ASM | ASM scan JSON (external surface) | None |
-| SIEM | Correlation engine `/stats`, `/risk-scores` | None |
+| SIEM | Correlation engine `/stats`, `/risk-scores`, `/ueba/users` + correlation DB (kill chain) | None |
 | Compliance | `cy_compliance_controls` DB table | None |
-| Vuln | Wazuh API + CyIRIS incidents DB | None |
+| Vuln | Wazuh API + CyIRIS incidents DB (MTTR only — closed incidents) | None |
 | Threat Intel | MISP API | None |
 | ext_benchmark | Suppressed when ASM + Compliance both active | Would share with ASM + Compliance |
+
+> **Note:** The SIEM dimension uses the correlation DB for kill chain depth queries, and the Vuln dimension uses the same DB for MTTR (closed incidents). There is no data overlap because the kill chain query filters `status IN ('open', 'investigating', 'in_review')` while MTTR filters `closed_at IS NOT NULL`. These are disjoint sets.
 
 ---
 
@@ -294,11 +371,39 @@ Any dimension whose underlying data is older than **48 hours** contributes at **
 
 ---
 
+## Gap Analysis & Resolution History
+
+### Identified Gaps in Dimension 2 (addressed in v2)
+
+Prior to v2, the Internal Detection Posture score used only four signals derived from two HTTP endpoints (`/stats` + `/risk-scores`). The following gaps were identified and addressed:
+
+| Gap | Impact | Resolution |
+|-----|--------|------------|
+| **UEBA behavioral anomalies ignored** | Users with unusual behaviour patterns (off-hours logins, anomalous event volumes, impossible travel) were not reflected in the score even when the UEBA engine had active unresolved anomalies | Added `GET /ueba/users?has_anomaly=true` fetch; sum of `active_anomalies` across all users penalises −3/anomaly, cap −12 |
+| **Kill chain depth invisible** | An incident where a threat actor had reached Lateral Movement or Exfiltration stages received the same score deduction as a Reconnaissance-stage incident. The `kill_chain_stage` field was set by `correlator.py` on all incidents but never read by the benchmark | Added direct DB query for `kill_chain_stage >= 7` on open incidents; deep-stage (≥10) incidents penalise −6 each, mid-stage (7–9) penalise −2 each |
+| **No monitoring coverage baseline** | A score of 90+ was possible when `active_agents == 0` (no endpoint telemetry) — effectively a perfect score with no data to support it | Added flat −10 penalty when `active_agents == 0` |
+| **`/incidents/distribution` data fetched but unused** | Distribution data (by severity / status / category) was fetched from the engine but only returned in the API response — not used in the formula | Still returned for UI display; kill chain gap addressed separately via DB query (more granular) |
+
+### Remaining Known Gaps (Phase 3 candidates)
+
+| Dimension | Gap | Planned fix |
+|-----------|-----|-------------|
+| SIEM | AI auto-close effectiveness (FP auto-close rate = healthy detection; not reflected) | Add `GET /feedback/accuracy` or `GET /fp-patterns` query; bonus points for high FP suppression rate |
+| SIEM | No differentiation between "engine running but no alerts" vs. "engine offline" | Distinguish using `/health` endpoint: engine healthy + no alerts = stronger positive signal |
+| Threat Intel | Feed freshness not measured — stale feeds count same as active | Add last-sync timestamp check from `/feeds/index` → `last_fetched_timestamp`; penalise feeds inactive > 7 days |
+| Threat Intel | Only MISP used; no OpenCTI, TAXII, or in-house IOC sources | Phase 3: multi-source TI aggregation |
+| Vuln | `host_posture_cache` staleness window (2 h) may miss recent scan updates | Reduce cache TTL or add invalidation on scan completion event |
+| All | Industry percentile bands are static (updated annually) | Phase 3: live anonymised cohort pool with monthly refresh |
+
+---
+
 ## Phase Roadmap
 
 | Phase | Planned improvement |
 |-------|-------------------|
-| **Current** | Wazuh API (active CVEs only) + CyIRIS MTTR + MISP direct + CyComp DB |
-| **Phase 2** | Bundle CIS Controls v8 JSON; nightly NVD/MITRE sync for ext_benchmark |
-| **Phase 3** | Live anonymised cohort pool in PostgreSQL; opt-in contributor data pipeline |
-| **Phase 4** | CSPI export to executive PDF report (extend `executive_report.py`) |
+| **v1 (May 2026)** | Wazuh API (active CVEs only) + CyIRIS MTTR + MISP direct + CyComp DB; data isolation fix |
+| **v2 (June 2026)** | SIEM gap patch: UEBA anomalies + kill chain depth + coverage baseline |
+| **Phase 3** | FP auto-close rate; TI feed freshness; multi-source TI; live cohort pool |
+| **Phase 4** | Bundle CIS Controls v8 JSON; nightly NVD/MITRE sync for ext_benchmark |
+| **Phase 5** | CSPI export to executive PDF report (extend `executive_report.py`) |
+
