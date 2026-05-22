@@ -1,3 +1,11 @@
+## v1.2.31 -- 2026-05-22
+
+### New Features
+
+  - add missing ServerStatusTab component definition (ReferenceError
+
+---
+
 ## v1.2.30 -- 2026-05-22
 
 ### Improvements
