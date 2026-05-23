@@ -1395,19 +1395,30 @@ def _call_ai_for_enrichment(prompt: str, timeout: float = 90.0) -> tuple[str, st
         if provider == "cymind":
             base_url = fields.get("baseUrl", "").rstrip("/")
             api_key  = fields.get("apiKey", "")
-            model    = fields.get("model", "").strip() or "llama3:8b"
+            model    = fields.get("model", "").strip()
             if not base_url or not api_key:
                 raise ValueError("CyMind not configured")
+            _body: dict = {
+                "messages":        [{"role": "user", "content": prompt}],
+                "system":          _HOST_ENRICH_SYSTEM,
+                "use_rag":         False,
+                "use_external":    False,
+                "use_mcp":         False,
+                "use_integrations": False,
+                "use_operational": False,
+                "temperature":     0.1,
+            }
+            if model:
+                _body["model"] = model
             resp = _req.post(
                 f"{base_url}/api/v1/chat",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"message": prompt, "system_prompt": _HOST_ENRICH_SYSTEM,
-                      "model": model, "stream": False},
+                json=_body,
                 timeout=timeout,
             )
             resp.raise_for_status()
             data = resp.json()
-            raw_text = data.get("response") or data.get("message") or ""
+            raw_text = data.get("content") or ""
 
         elif provider == "anthropic":
             api_key = fields.get("apiKey", "")

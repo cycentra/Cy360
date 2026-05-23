@@ -51,11 +51,14 @@ async def _cymind(fields: dict, system: str, prompt: str, timeout: float) -> str
         raise RuntimeError("CyMind: baseUrl and apiKey are required but not configured in AI Settings")
 
     body: dict = {
-        "messages":     [{"role": "user", "content": prompt}],
-        "system":       system,
-        "use_rag":      False,
-        "use_external": False,
-        "temperature":  0.1,
+        "messages":        [{"role": "user", "content": prompt}],
+        "system":          system,
+        "use_rag":         False,
+        "use_external":    False,
+        "use_mcp":         False,
+        "use_integrations": False,
+        "use_operational": False,
+        "temperature":     0.1,
     }
     if model:
         body["model"] = model
