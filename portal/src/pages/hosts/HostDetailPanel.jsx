@@ -1,13 +1,15 @@
 /**
  * HostDetailPanel.jsx
- * Full-screen overlay with 7-tab security profile for a single host.
+ * Full-screen overlay — 7-tab security profile for a single host.
  * Tabs: Overview · SCA · Vulnerabilities · FIM · Malware · MITRE · Compliance
  *
- * Each tab supports click-to-enrich: clicking any row opens an AI + MISP
- * enrichment panel with explanation, remediation steps, and a Raise Ticket button.
+ * Each tab supports click-to-expand with:
+ *   • Status buttons (persisted in tab-level statusMap while panel is open)
+ *   • Manual "Analyze with AI" button (on-demand enrichment; results cached in tab)
+ *   • "Raise CyIRIS Ticket" (available with or without AI enrichment)
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 const API = "/api/siem";
 
@@ -19,9 +21,21 @@ const SEV_COLOR = {
   Critical: "#ff3b3b", High: "#ff8c00", Medium: "#ffcc00", Low: "#4d9eff",
   critical: "#ff3b3b", high: "#ff8c00", medium: "#ffcc00", low: "#4d9eff",
 };
+const STATUS_LABELS = {
+  investigating: "Investigating",
+  in_review:     "In Review",
+  resolved:      "Resolved",
+  false_positive:"False Positive",
+};
+const STATUS_COLORS = {
+  investigating:  "#4d9eff",
+  in_review:      "#ff8c00",
+  resolved:       "#00e5a0",
+  false_positive: "#888",
+};
 const TABS = ["Overview", "SCA", "Vulnerabilities", "FIM", "Malware", "MITRE", "Compliance"];
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function Pill({ label, color = "#4d9eff" }) {
   return (
@@ -57,19 +71,35 @@ function ScoreBar({ score, color = "#4d9eff" }) {
 }
 
 // ── EnrichmentPanel ───────────────────────────────────────────────────────────
-// Inline AI + MISP enrichment shown when a row is clicked.
-
-function EnrichmentPanel({ agentId, hostName, itemType, item, onClose }) {
-  const [loading, setLoading]     = useState(true);
-  const [result, setResult]       = useState(null);
+/**
+ * Props:
+ *   agentId, hostName, itemType, item  — what to enrich
+ *   onClose                            — collapse this panel
+ *   initialStatus                      — restored from tab's statusMap
+ *   onStatusChange(status)             — lift status up to tab
+ *   cachedResult                       — previously fetched enrichment (or null)
+ *   onEnrichResult(result)             — lift enrichment result up to tab for caching
+ */
+function EnrichmentPanel({
+  agentId, hostName, itemType, item, onClose,
+  initialStatus, onStatusChange,
+  cachedResult,  onEnrichResult,
+}) {
+  const [loading, setLoading]     = useState(false);
+  const [result, setResult]       = useState(cachedResult || null);
   const [error, setError]         = useState(null);
-  const [ticketStatus, setTicket] = useState(null); // null | "loading" | {case_id,case_url} | "error"
-  const [localStatus, setStatus]  = useState(item._localStatus || null);
+  const [ticketStatus, setTicket] = useState(null);
+  const [localStatus, setStatus]  = useState(initialStatus || null);
 
-  useEffect(() => {
+  function handleSetStatus(s) {
+    const next = localStatus === s ? null : s;
+    setStatus(next);
+    onStatusChange?.(next);
+  }
+
+  function doEnrich() {
     setLoading(true);
     setError(null);
-    setResult(null);
     fetch(`${API}/hosts/${agentId}/enrich`, {
       method: "POST",
       credentials: "include",
@@ -77,12 +107,15 @@ function EnrichmentPanel({ agentId, hostName, itemType, item, onClose }) {
       body: JSON.stringify({ item_type: itemType, item, host_name: hostName }),
     })
       .then(r => r.json())
-      .then(d => { setResult(d); setLoading(false); })
+      .then(d => {
+        setResult(d);
+        setLoading(false);
+        onEnrichResult?.(d);
+      })
       .catch(e => { setError(e.message); setLoading(false); });
-  }, [agentId, itemType, JSON.stringify(item)]);
+  }
 
   function raiseTicket() {
-    if (!result) return;
     setTicket("loading");
     fetch(`${API}/hosts/${agentId}/raise-ticket`, {
       method: "POST",
@@ -90,7 +123,8 @@ function EnrichmentPanel({ agentId, hostName, itemType, item, onClose }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         item_type: itemType, item, host_name: hostName,
-        explanation: result.explanation, remediation: result.remediation,
+        explanation: result?.explanation || "",
+        remediation: result?.remediation || "",
       }),
     })
       .then(r => r.json())
@@ -103,125 +137,197 @@ function EnrichmentPanel({ agentId, hostName, itemType, item, onClose }) {
     .map(l => l.replace(/^\s*\d+[\.\)]\s*/, "").trim())
     .filter(Boolean);
 
+  const alreadyEnriched = result !== null;
+  const enrichBtnLabel  = loading ? "Analyzing…"
+    : alreadyEnriched   ? "✓ Analyzed"
+    : "Analyze with AI";
+
   return (
     <div style={{
       margin: "0 -12px",
-      borderTop: "1px solid rgba(0,229,160,0.2)",
-      borderBottom: "1px solid rgba(0,229,160,0.2)",
-      background: "rgba(0,229,160,0.03)",
-      padding: "14px 16px",
+      borderTop: "1px solid rgba(0,229,160,0.18)",
+      background: "rgba(0,229,160,0.025)",
+      padding: "12px 16px 14px",
     }}>
-      {/* Header row */}
+
+      {/* ── Header row ── */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-        <span style={{ fontSize: 10, color: "#00e5a0", letterSpacing: "1px", fontFamily: "monospace" }}>
-          AI + THREAT INTEL ENRICHMENT
+        <span style={{ fontSize: 9, color: "#00e5a0", letterSpacing: "1.2px", fontFamily: "monospace" }}>
+          ITEM ACTIONS
         </span>
         <button
           onClick={onClose}
-          style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}>✕</button>
+          style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}>
+          ✕
+        </button>
       </div>
 
-      {loading && (
-        <div style={{ color: "#888", fontSize: 11, padding: "8px 0" }}>Fetching AI analysis…</div>
-      )}
-
-      {error && (
-        <div style={{ color: "#ff6b6b", fontSize: 11 }}>Failed to load enrichment: {error}</div>
-      )}
-
-      {result && !loading && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {/* AI Explanation */}
-          {result.explanation ? (
-            <div>
-              <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.8px", marginBottom: 6 }}>ANALYST BRIEFING</div>
-              <div style={{ fontSize: 12, color: "#e8eaed", lineHeight: 1.6 }}>{result.explanation}</div>
-            </div>
-          ) : (
-            <div style={{ fontSize: 11, color: "#555" }}>
-              AI not configured — enable an AI provider in System Settings → AI Config.
-            </div>
-          )}
-
-          {/* Remediation Steps */}
-          {remLines.length > 0 && (
-            <div>
-              <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.8px", marginBottom: 6 }}>REMEDIATION STEPS</div>
-              <ol style={{ margin: 0, paddingLeft: 18, color: "#e8eaed", fontSize: 12, lineHeight: 1.7 }}>
-                {remLines.map((step, i) => <li key={i}>{step}</li>)}
-              </ol>
-            </div>
-          )}
-
-          {/* MISP Hits */}
-          {result.misp_hits?.length > 0 && (
-            <div>
-              <div style={{ fontSize: 10, color: "#ff8c00", letterSpacing: "0.8px", marginBottom: 6 }}>
-                ⚠ MISP THREAT INTELLIGENCE ({result.misp_hits.length} match{result.misp_hits.length > 1 ? "es" : ""})
-              </div>
-              {result.misp_hits.map((hit, i) => (
-                <div key={i} style={{
-                  background: "rgba(255,140,0,0.07)", border: "1px solid rgba(255,140,0,0.2)",
-                  borderRadius: 4, padding: "6px 10px", marginBottom: 5, fontSize: 11,
-                }}>
-                  <span style={{ color: "#ff8c00", fontFamily: "monospace" }}>{hit.ioc}</span>
-                  <span style={{ color: "#888", marginLeft: 8 }}>[{hit.type}]</span>
-                  {hit.comment && <span style={{ color: "#888", marginLeft: 8 }}>{hit.comment}</span>}
-                  <Pill label={`Event #${hit.event_id}`} color="#ff8c00" />
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Actions row */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", paddingTop: 6, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-            {/* Status buttons */}
-            <div style={{ fontSize: 10, color: "#888", marginRight: 2 }}>Status:</div>
-            {["investigating", "in_review", "resolved", "false_positive"].map(s => (
-              <button
-                key={s}
-                onClick={() => setStatus(s)}
-                style={{
-                  padding: "4px 10px", borderRadius: 3, cursor: "pointer", fontSize: 10,
-                  fontFamily: "monospace", textTransform: "uppercase",
-                  background: localStatus === s ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.04)",
-                  border: localStatus === s ? "1px solid rgba(0,229,160,0.4)" : "1px solid rgba(255,255,255,0.1)",
-                  color: localStatus === s ? "#00e5a0" : "#888",
-                }}>
-                {s.replace("_", " ")}
-              </button>
-            ))}
-
-            {/* Raise Ticket button */}
+      {/* ── Status row ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <span style={{ fontSize: 10, color: "#666", marginRight: 2, flexShrink: 0 }}>Status:</span>
+        {Object.entries(STATUS_LABELS).map(([s, label]) => {
+          const active = localStatus === s;
+          const col = STATUS_COLORS[s] || "#888";
+          return (
             <button
-              onClick={raiseTicket}
-              disabled={ticketStatus === "loading" || (ticketStatus && ticketStatus !== "error")}
+              key={s}
+              onClick={() => handleSetStatus(s)}
               style={{
-                marginLeft: "auto", padding: "6px 14px", borderRadius: 4, cursor: "pointer",
-                fontSize: 11, fontFamily: "monospace",
-                background: ticketStatus && ticketStatus !== "error" && ticketStatus !== "loading"
-                  ? "rgba(176,110,255,0.15)" : "rgba(77,158,255,0.1)",
-                border: ticketStatus && ticketStatus !== "error" && ticketStatus !== "loading"
-                  ? "1px solid rgba(176,110,255,0.4)" : "1px solid rgba(77,158,255,0.3)",
-                color: ticketStatus && ticketStatus !== "error" && ticketStatus !== "loading"
-                  ? "#b06eff" : "#4d9eff",
+                padding: "4px 10px", borderRadius: 3, cursor: "pointer",
+                fontSize: 10, fontFamily: "monospace",
+                background: active ? `${col}18` : "rgba(255,255,255,0.04)",
+                border: active ? `1px solid ${col}60` : "1px solid rgba(255,255,255,0.1)",
+                color: active ? col : "#666",
+                transition: "all 0.15s",
               }}>
-              {ticketStatus === "loading" ? "Creating…"
-                : ticketStatus === "error" ? "⚠ Ticket Failed"
-                : ticketStatus?.case_id ? `✓ IRIS #${ticketStatus.case_id}`
-                : "↗ Raise Ticket"}
+              {active ? "✓ " : ""}{label}
             </button>
+          );
+        })}
+        {localStatus && (
+          <Pill label={STATUS_LABELS[localStatus] || localStatus} color={STATUS_COLORS[localStatus] || "#888"} />
+        )}
+      </div>
 
-            {ticketStatus?.case_url && ticketStatus.case_url !== "error" && (
-              <a
-                href={ticketStatus.case_url} target="_blank" rel="noopener noreferrer"
-                style={{ fontSize: 10, color: "#b06eff", textDecoration: "underline" }}>
-                Open in CyIRIS →
-              </a>
-            )}
-          </div>
+      {/* ── AI enrichment block ── */}
+      <div style={{
+        background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+        borderRadius: 5, padding: "10px 12px", marginBottom: 10,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: alreadyEnriched ? 10 : 0 }}>
+          <span style={{ fontSize: 10, color: "#888", flex: 1 }}>
+            {alreadyEnriched ? "AI ANALYSIS" : "AI + MISP ENRICHMENT"}
+          </span>
+          <button
+            onClick={doEnrich}
+            disabled={loading || alreadyEnriched}
+            style={{
+              padding: "5px 12px", borderRadius: 3, cursor: alreadyEnriched ? "default" : "pointer",
+              fontSize: 10, fontFamily: "monospace",
+              background: alreadyEnriched ? "rgba(0,229,160,0.07)" : "rgba(77,158,255,0.1)",
+              border: alreadyEnriched ? "1px solid rgba(0,229,160,0.25)" : "1px solid rgba(77,158,255,0.3)",
+              color: alreadyEnriched ? "#00e5a0" : loading ? "#555" : "#4d9eff",
+              opacity: loading ? 0.7 : 1,
+            }}>
+            {enrichBtnLabel}
+          </button>
         </div>
-      )}
+
+        {loading && (
+          <div style={{ color: "#888", fontSize: 11, padding: "4px 0" }}>Fetching AI analysis…</div>
+        )}
+
+        {error && (
+          <div style={{ color: "#ff6b6b", fontSize: 11, marginTop: 6 }}>
+            Enrichment failed: {error}
+            <button
+              onClick={doEnrich}
+              style={{ marginLeft: 8, background: "none", border: "none", color: "#4d9eff", cursor: "pointer", fontSize: 11 }}>
+              Retry
+            </button>
+          </div>
+        )}
+
+        {result && !loading && (
+          <>
+            {/* AI not configured */}
+            {!result.ai_configured && (
+              <div style={{
+                background: "rgba(255,140,0,0.07)", border: "1px solid rgba(255,140,0,0.2)",
+                borderRadius: 4, padding: "8px 10px", fontSize: 11, color: "#ff8c00", marginTop: 4,
+              }}>
+                ⚠ No AI provider configured. Go to{" "}
+                <strong>System Settings → AI Config</strong> to set up CyMind, Anthropic, Gemini, or DeepSeek.
+              </div>
+            )}
+
+            {/* AI call failed but was configured */}
+            {result.ai_configured && !result.ai_available && result.ai_error && (
+              <div style={{
+                background: "rgba(255,59,59,0.07)", border: "1px solid rgba(255,59,59,0.2)",
+                borderRadius: 4, padding: "8px 10px", fontSize: 11, color: "#ff6b6b", marginTop: 4,
+              }}>
+                AI call failed — {result.ai_error.startsWith("call_failed:") ? result.ai_error.slice(13) : result.ai_error}
+                <button
+                  onClick={doEnrich}
+                  style={{ marginLeft: 8, background: "none", border: "none", color: "#4d9eff", cursor: "pointer", fontSize: 11 }}>
+                  Retry
+                </button>
+              </div>
+            )}
+
+            {/* Explanation */}
+            {result.explanation && (
+              <div style={{ marginTop: 6 }}>
+                <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>ANALYST BRIEFING</div>
+                <div style={{ fontSize: 12, color: "#e8eaed", lineHeight: 1.65 }}>{result.explanation}</div>
+              </div>
+            )}
+
+            {/* Remediation steps */}
+            {remLines.length > 0 && (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>REMEDIATION STEPS</div>
+                <ol style={{ margin: 0, paddingLeft: 18, color: "#e8eaed", fontSize: 12, lineHeight: 1.7 }}>
+                  {remLines.map((step, i) => <li key={i}>{step}</li>)}
+                </ol>
+              </div>
+            )}
+
+            {/* MISP hits */}
+            {result.misp_hits?.length > 0 && (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 10, color: "#ff8c00", marginBottom: 5 }}>
+                  ⚠ MISP THREAT INTEL ({result.misp_hits.length} match{result.misp_hits.length > 1 ? "es" : ""})
+                </div>
+                {result.misp_hits.map((hit, i) => (
+                  <div key={i} style={{
+                    background: "rgba(255,140,0,0.07)", border: "1px solid rgba(255,140,0,0.2)",
+                    borderRadius: 4, padding: "5px 10px", marginBottom: 4, fontSize: 11,
+                  }}>
+                    <span style={{ color: "#ff8c00", fontFamily: "monospace" }}>{hit.ioc}</span>
+                    <span style={{ color: "#888", marginLeft: 8 }}>[{hit.type}]</span>
+                    {hit.comment && <span style={{ color: "#888", marginLeft: 8 }}>{hit.comment}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* ── Raise Ticket ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button
+          onClick={raiseTicket}
+          disabled={ticketStatus === "loading" || (ticketStatus && ticketStatus !== "error")}
+          style={{
+            padding: "6px 14px", borderRadius: 4, cursor: "pointer",
+            fontSize: 11, fontFamily: "monospace",
+            background: ticketStatus?.case_id
+              ? "rgba(176,110,255,0.15)" : "rgba(77,158,255,0.08)",
+            border: ticketStatus?.case_id
+              ? "1px solid rgba(176,110,255,0.4)" : "1px solid rgba(77,158,255,0.25)",
+            color: ticketStatus?.case_id ? "#b06eff" : "#4d9eff",
+          }}>
+          {ticketStatus === "loading"  ? "Creating ticket…"
+            : ticketStatus === "error" ? "⚠ Ticket Failed — Retry"
+            : ticketStatus?.case_id    ? `✓ IRIS #${ticketStatus.case_id}`
+            : "↗ Raise CyIRIS Ticket"}
+        </button>
+        {ticketStatus?.case_url && (
+          <a href={ticketStatus.case_url} target="_blank" rel="noopener noreferrer"
+            style={{ fontSize: 10, color: "#b06eff", textDecoration: "underline" }}>
+            Open in CyIRIS →
+          </a>
+        )}
+        {ticketStatus === "error" && (
+          <button onClick={raiseTicket}
+            style={{ background: "none", border: "none", color: "#4d9eff", cursor: "pointer", fontSize: 10 }}>
+            Retry
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -231,28 +337,20 @@ function EnrichmentPanel({ agentId, hostName, itemType, item, onClose }) {
 function OverviewTab({ detail }) {
   const { posture = {}, sca = {}, vulnerabilities = {}, siem = {}, mitre = {}, compliance = {} } = detail;
   const bd = posture.breakdown || {};
-
   const topMitre = (mitre.breakdown || []).slice(0, 5);
   const topInc   = (siem.active_incidents || []).slice(0, 3);
 
   return (
     <div>
-      {/* Posture score cards */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 20 }}>
-        <StatCard
-          label="Posture Score"
-          value={posture.score?.toFixed(0)}
-          sub={`Grade ${posture.grade || "—"}`}
-          color={GRADE_COLOR[posture.grade] || "#888"}
-          wide
-        />
+        <StatCard label="Posture Score" value={posture.score?.toFixed(0)} sub={`Grade ${posture.grade || "—"}`}
+          color={GRADE_COLOR[posture.grade] || "#888"} wide />
         <StatCard label="SCA Pass Rate" value={sca.score?.toFixed(0)} sub={`${sca.passed}/${sca.total} checks`} color="#00e5a0" />
         <StatCard label="Critical CVEs"  value={vulnerabilities.critical} sub={`${vulnerabilities.high} High`} color="#ff3b3b" />
         <StatCard label="SIEM Risk"       value={siem.risk_score?.toFixed(0)} sub="/100" color={siem.risk_score > 70 ? "#ff3b3b" : "#ff8c00"} />
         <StatCard label="Open Incidents"  value={siem.incident_count} color={siem.incident_count > 0 ? "#ff8c00" : "#888"} />
       </div>
 
-      {/* Posture component breakdown */}
       {Object.keys(bd).length > 0 && (
         <div style={{
           background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
@@ -273,7 +371,6 @@ function OverviewTab({ detail }) {
         </div>
       )}
 
-      {/* MITRE techniques */}
       {topMitre.length > 0 && (
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.8px", marginBottom: 8 }}>MITRE ATT&CK (LAST 30 DAYS)</div>
@@ -292,7 +389,6 @@ function OverviewTab({ detail }) {
         </div>
       )}
 
-      {/* Active incidents */}
       {topInc.length > 0 && (
         <div>
           <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.8px", marginBottom: 8 }}>ACTIVE INCIDENTS</div>
@@ -317,11 +413,14 @@ function OverviewTab({ detail }) {
 // ── Tab: SCA ──────────────────────────────────────────────────────────────────
 
 function SCATab({ agentId, hostName }) {
-  const [data, setData]           = useState(null);
-  const [loading, setLoading]     = useState(true);
-  const [filter, setFilter]       = useState("failed");
-  const [page, setPage]           = useState(1);
+  const [data, setData]         = useState(null);
+  const [loading, setLoading]   = useState(true);
+  const [filter, setFilter]     = useState("failed");
+  const [page, setPage]         = useState(1);
   const [selectedId, setSelected] = useState(null);
+  // Persistence across item clicks
+  const [statusMap, setStatusMap]   = useState({});   // { checkId: statusString }
+  const [enrichCache, setEnrichCache] = useState({}); // { checkId: enrichResult }
   const PER_PAGE = 50;
 
   useEffect(() => {
@@ -362,11 +461,9 @@ function SCATab({ agentId, hostName }) {
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
         {["all", "failed", "passed", "not applicable"].map(f => (
-          <button
-            key={f}
-            onClick={() => { setFilter(f); setPage(1); }}
+          <button key={f} onClick={() => { setFilter(f); setPage(1); }}
             style={{
               background: filter === f ? "rgba(0,229,160,0.1)" : "rgba(255,255,255,0.04)",
               border: filter === f ? "1px solid rgba(0,229,160,0.4)" : "1px solid rgba(255,255,255,0.1)",
@@ -376,40 +473,49 @@ function SCATab({ agentId, hostName }) {
             {f === "all" ? "All" : f.charAt(0).toUpperCase() + f.slice(1)}
           </button>
         ))}
-        <span style={{ marginLeft: "auto", fontSize: 11, color: "#888", padding: "4px 0" }}>{total} checks</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "#888" }}>{total} checks</span>
       </div>
 
       <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 6, overflow: "hidden" }}>
         <div style={{
-          display: "grid", gridTemplateColumns: "60px 1fr 100px",
+          display: "grid", gridTemplateColumns: "60px 1fr 100px 90px",
           padding: "6px 12px", fontSize: 10, color: "#888",
           background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.06)",
         }}>
-          <div>ID</div><div>CHECK</div><div>RESULT</div>
+          <div>ID</div><div>CHECK</div><div>RESULT</div><div>STATUS</div>
         </div>
         {checks.length === 0
           ? <div style={{ padding: 20, color: "#888", textAlign: "center", fontSize: 12 }}>No checks found.</div>
           : checks.map(c => {
+            const key = String(c.id);
             const resultCol = c.result === "passed" ? "#00e5a0" : c.result === "failed" ? "#ff3b3b" : "#888";
-            const isOpen = selectedId === c.id;
+            const isOpen = selectedId === key;
+            const curStatus = statusMap[key];
             return (
-              <div key={c.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+              <div key={key} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                 <div
-                  onClick={() => setSelected(isOpen ? null : c.id)}
+                  onClick={() => setSelected(isOpen ? null : key)}
                   style={{
-                    display: "grid", gridTemplateColumns: "60px 1fr 100px",
+                    display: "grid", gridTemplateColumns: "60px 1fr 100px 90px",
                     padding: "8px 12px", cursor: "pointer", fontSize: 12,
                     background: isOpen ? "rgba(0,229,160,0.04)" : "transparent",
                   }}>
                   <span style={{ color: "#888", fontFamily: "monospace" }}>{c.id}</span>
                   <span style={{ color: "#e8eaed" }}>{c.title}</span>
                   <span style={{ color: resultCol, textTransform: "uppercase", fontSize: 10 }}>{c.result}</span>
+                  <span style={{ fontSize: 10, color: curStatus ? STATUS_COLORS[curStatus] : "#444" }}>
+                    {curStatus ? STATUS_LABELS[curStatus] : "—"}
+                  </span>
                 </div>
                 {isOpen && (
                   <EnrichmentPanel
                     agentId={agentId} hostName={hostName}
                     itemType="sca" item={c}
                     onClose={() => setSelected(null)}
+                    initialStatus={statusMap[key]}
+                    onStatusChange={s => setStatusMap(prev => ({ ...prev, [key]: s }))}
+                    cachedResult={enrichCache[key] || null}
+                    onEnrichResult={r => setEnrichCache(prev => ({ ...prev, [key]: r }))}
                   />
                 )}
               </div>
@@ -433,11 +539,13 @@ function SCATab({ agentId, hostName }) {
 // ── Tab: Vulnerabilities ──────────────────────────────────────────────────────
 
 function VulnerabilitiesTab({ agentId, hostName }) {
-  const [data, setData]           = useState(null);
-  const [loading, setLoading]     = useState(true);
-  const [sevFilter, setSev]       = useState("");
-  const [page, setPage]           = useState(1);
-  const [selectedIdx, setSelected] = useState(null);
+  const [data, setData]            = useState(null);
+  const [loading, setLoading]      = useState(true);
+  const [sevFilter, setSev]        = useState("");
+  const [page, setPage]            = useState(1);
+  const [selectedKey, setSelected] = useState(null);
+  const [statusMap, setStatusMap]     = useState({});
+  const [enrichCache, setEnrichCache] = useState({});
   const PER_PAGE = 100;
 
   useEffect(() => {
@@ -473,23 +581,25 @@ function VulnerabilitiesTab({ agentId, hostName }) {
 
       <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 6, overflow: "hidden" }}>
         <div style={{
-          display: "grid", gridTemplateColumns: "160px 60px 140px 1fr",
+          display: "grid", gridTemplateColumns: "160px 60px 140px 1fr 90px",
           padding: "6px 12px", fontSize: 10, color: "#888",
           background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.06)",
         }}>
-          <div>CVE</div><div>CVSS</div><div>PACKAGE</div><div>DESCRIPTION</div>
+          <div>CVE</div><div>CVSS</div><div>PACKAGE</div><div>DESCRIPTION</div><div>STATUS</div>
         </div>
         {vulns.length === 0
           ? <div style={{ padding: 20, color: "#888", textAlign: "center" }}>No active CVEs found.</div>
           : vulns.map((v, i) => {
-            const col   = SEV_COLOR[v.severity] || "#888";
-            const isOpen = selectedIdx === i;
+            const key = v.cve || String(i);
+            const col = SEV_COLOR[v.severity] || "#888";
+            const isOpen = selectedKey === key;
+            const curStatus = statusMap[key];
             return (
-              <div key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+              <div key={key} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                 <div
-                  onClick={() => setSelected(isOpen ? null : i)}
+                  onClick={() => setSelected(isOpen ? null : key)}
                   style={{
-                    display: "grid", gridTemplateColumns: "160px 60px 140px 1fr",
+                    display: "grid", gridTemplateColumns: "160px 60px 140px 1fr 90px",
                     padding: "8px 12px", fontSize: 11, alignItems: "start",
                     cursor: "pointer",
                     background: isOpen ? "rgba(255,140,0,0.04)" : "transparent",
@@ -498,6 +608,9 @@ function VulnerabilitiesTab({ agentId, hostName }) {
                   <span style={{ color: col }}>{v.cvss || "—"}</span>
                   <span style={{ color: "#e8eaed" }}>{v.name || "—"} {v.version || ""}</span>
                   <span style={{ color: "#888" }}>{v.title || v.condition || "—"}</span>
+                  <span style={{ fontSize: 10, color: curStatus ? STATUS_COLORS[curStatus] : "#444" }}>
+                    {curStatus ? STATUS_LABELS[curStatus] : "—"}
+                  </span>
                 </div>
                 {isOpen && (
                   <EnrichmentPanel
@@ -505,6 +618,10 @@ function VulnerabilitiesTab({ agentId, hostName }) {
                     itemType="vulnerability"
                     item={{ ...v, package_name: v.name, package_version: v.version, cvss3_score: v.cvss }}
                     onClose={() => setSelected(null)}
+                    initialStatus={statusMap[key]}
+                    onStatusChange={s => setStatusMap(prev => ({ ...prev, [key]: s }))}
+                    cachedResult={enrichCache[key] || null}
+                    onEnrichResult={r => setEnrichCache(prev => ({ ...prev, [key]: r }))}
                   />
                 )}
               </div>
@@ -525,13 +642,15 @@ function VulnerabilitiesTab({ agentId, hostName }) {
   );
 }
 
-// ── Tab: Alerts (generic, used for FIM and Malware) ───────────────────────────
+// ── Tab: Alerts (FIM + Malware) ───────────────────────────────────────────────
 
 function AlertsTab({ agentId, hostName, category, label }) {
   const [data, setData]            = useState(null);
   const [loading, setLoading]      = useState(true);
   const [page, setPage]            = useState(1);
-  const [selectedIdx, setSelected] = useState(null);
+  const [selectedKey, setSelected] = useState(null);
+  const [statusMap, setStatusMap]     = useState({});
+  const [enrichCache, setEnrichCache] = useState({});
   const PER_PAGE = 50;
 
   useEffect(() => {
@@ -558,24 +677,26 @@ function AlertsTab({ agentId, hostName, category, label }) {
 
       <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 6, overflow: "hidden" }}>
         <div style={{
-          display: "grid", gridTemplateColumns: "140px 50px 1fr 120px",
+          display: "grid", gridTemplateColumns: "140px 50px 1fr 120px 90px",
           padding: "6px 12px", fontSize: 10, color: "#888",
           background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.06)",
         }}>
-          <div>TIMESTAMP</div><div>LEVEL</div><div>DESCRIPTION</div><div>FILE / USER</div>
+          <div>TIMESTAMP</div><div>LEVEL</div><div>DESCRIPTION</div><div>FILE / USER</div><div>STATUS</div>
         </div>
         {alerts.length === 0
           ? <div style={{ padding: 20, color: "#888", textAlign: "center" }}>No {label} events in last 30 days.</div>
           : alerts.map((a, i) => {
+            const key = a.id ? String(a.id) : `${category}-${i}`;
             const ts  = a.timestamp ? new Date(a.timestamp).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
             const col = a.rule_level >= 12 ? "#ff3b3b" : a.rule_level >= 7 ? "#ff8c00" : "#888";
-            const isOpen = selectedIdx === i;
+            const isOpen = selectedKey === key;
+            const curStatus = statusMap[key];
             return (
-              <div key={a.id || i} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+              <div key={key} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                 <div
-                  onClick={() => setSelected(isOpen ? null : i)}
+                  onClick={() => setSelected(isOpen ? null : key)}
                   style={{
-                    display: "grid", gridTemplateColumns: "140px 50px 1fr 120px",
+                    display: "grid", gridTemplateColumns: "140px 50px 1fr 120px 90px",
                     padding: "7px 12px", fontSize: 11, alignItems: "start",
                     cursor: "pointer",
                     background: isOpen ? "rgba(255,140,0,0.04)" : "transparent",
@@ -586,6 +707,9 @@ function AlertsTab({ agentId, hostName, category, label }) {
                   <span style={{ color: "#888", fontSize: 10, wordBreak: "break-all" }}>
                     {a.file_path ? a.file_path.slice(-30) : a.username || "—"}
                   </span>
+                  <span style={{ fontSize: 10, color: curStatus ? STATUS_COLORS[curStatus] : "#444" }}>
+                    {curStatus ? STATUS_LABELS[curStatus] : "—"}
+                  </span>
                 </div>
                 {isOpen && (
                   <EnrichmentPanel
@@ -593,6 +717,10 @@ function AlertsTab({ agentId, hostName, category, label }) {
                     itemType="alert"
                     item={{ ...a, rule_description: a.rule_desc, description: a.rule_desc }}
                     onClose={() => setSelected(null)}
+                    initialStatus={statusMap[key]}
+                    onStatusChange={s => setStatusMap(prev => ({ ...prev, [key]: s }))}
+                    cachedResult={enrichCache[key] || null}
+                    onEnrichResult={r => setEnrichCache(prev => ({ ...prev, [key]: r }))}
                   />
                 )}
               </div>
@@ -618,7 +746,9 @@ function AlertsTab({ agentId, hostName, category, label }) {
 function MitreTab({ detail, agentId, hostName }) {
   const { mitre = {}, alerts_by_category = {} } = detail;
   const breakdown = mitre.breakdown || [];
-  const [selectedId, setSelected] = useState(null);
+  const [selectedId, setSelected]         = useState(null);
+  const [statusMap, setStatusMap]         = useState({});
+  const [enrichCache, setEnrichCache]     = useState({});
 
   return (
     <div>
@@ -628,24 +758,33 @@ function MitreTab({ detail, agentId, hostName }) {
       {breakdown.length === 0 ? (
         <div style={{ color: "#888", textAlign: "center", padding: 30 }}>No MITRE techniques observed.</div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+        <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 6, overflow: "hidden" }}>
+          <div style={{
+            display: "grid", gridTemplateColumns: "100px 1fr 60px 90px",
+            padding: "6px 14px", fontSize: 10, color: "#888",
+            background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.06)",
+          }}>
+            <div>TECHNIQUE</div><div>TACTIC</div><div>COUNT</div><div>STATUS</div>
+          </div>
           {breakdown.map(t => {
-            const isOpen = selectedId === t.mitre_id;
+            const key = t.mitre_id;
+            const isOpen = selectedId === key;
+            const curStatus = statusMap[key];
             return (
-              <div key={t.mitre_id} style={{ borderBottom: "1px solid rgba(77,158,255,0.08)" }}>
+              <div key={key} style={{ borderBottom: "1px solid rgba(77,158,255,0.08)" }}>
                 <div
-                  onClick={() => setSelected(isOpen ? null : t.mitre_id)}
+                  onClick={() => setSelected(isOpen ? null : key)}
                   style={{
-                    display: "flex", alignItems: "center", gap: 12,
-                    background: isOpen ? "rgba(77,158,255,0.08)" : "rgba(77,158,255,0.04)",
-                    padding: "8px 14px", cursor: "pointer",
+                    display: "grid", gridTemplateColumns: "100px 1fr 60px 90px",
+                    padding: "8px 14px", cursor: "pointer", alignItems: "center",
+                    background: isOpen ? "rgba(77,158,255,0.08)" : "rgba(77,158,255,0.03)",
                   }}>
-                  <span style={{ color: "#4d9eff", fontFamily: "monospace", fontWeight: 700, width: 90, flexShrink: 0 }}>{t.mitre_id}</span>
-                  <span style={{ color: "#888", fontSize: 11, flex: 1 }}>{t.tactic || "—"}</span>
-                  <span style={{
-                    background: "rgba(77,158,255,0.12)", color: "#4d9eff",
-                    fontFamily: "monospace", fontSize: 11, padding: "2px 8px", borderRadius: 3,
-                  }}>×{t.count}</span>
+                  <span style={{ color: "#4d9eff", fontFamily: "monospace", fontWeight: 700 }}>{t.mitre_id}</span>
+                  <span style={{ color: "#888", fontSize: 11 }}>{t.tactic || "—"}</span>
+                  <span style={{ color: "#4d9eff", fontFamily: "monospace", fontSize: 11 }}>×{t.count}</span>
+                  <span style={{ fontSize: 10, color: curStatus ? STATUS_COLORS[curStatus] : "#444" }}>
+                    {curStatus ? STATUS_LABELS[curStatus] : "—"}
+                  </span>
                 </div>
                 {isOpen && (
                   <EnrichmentPanel
@@ -653,6 +792,10 @@ function MitreTab({ detail, agentId, hostName }) {
                     itemType="mitre"
                     item={{ technique: t.mitre_id, tactic: t.tactic, count: t.count }}
                     onClose={() => setSelected(null)}
+                    initialStatus={statusMap[key]}
+                    onStatusChange={s => setStatusMap(prev => ({ ...prev, [key]: s }))}
+                    cachedResult={enrichCache[key] || null}
+                    onEnrichResult={r => setEnrichCache(prev => ({ ...prev, [key]: r }))}
                   />
                 )}
               </div>
@@ -687,16 +830,18 @@ function MitreTab({ detail, agentId, hostName }) {
 function ComplianceTab({ detail, agentId, hostName }) {
   const { sca = {}, compliance = {}, mitre = {} } = detail;
   const scaFailures = sca.recent_failures || [];
-  const [selectedIdx, setSelected] = useState(null);
+  const [selectedIdx, setSelected]        = useState(null);
+  const [statusMap, setStatusMap]         = useState({});
+  const [enrichCache, setEnrichCache]     = useState({});
 
   const FRAMEWORKS = [
-    { key: "pci_dss",  label: "PCI DSS",    color: "#ff8c00" },
-    { key: "gdpr",     label: "GDPR",       color: "#4d9eff" },
-    { key: "hipaa",    label: "HIPAA",      color: "#b06eff" },
-    { key: "nist_csf", label: "NIST CSF",   color: "#00e5a0" },
-    { key: "tsc",      label: "TSC / SOC 2",color: "#ffcc00" },
-    { key: "iso27001", label: "ISO 27001",  color: "#ff8c00" },
-    { key: "nis2",     label: "NIS2",       color: "#4d9eff" },
+    { key: "pci_dss",  label: "PCI DSS",     color: "#ff8c00" },
+    { key: "gdpr",     label: "GDPR",        color: "#4d9eff" },
+    { key: "hipaa",    label: "HIPAA",       color: "#b06eff" },
+    { key: "nist_csf", label: "NIST CSF",    color: "#00e5a0" },
+    { key: "tsc",      label: "TSC / SOC 2", color: "#ffcc00" },
+    { key: "iso27001", label: "ISO 27001",   color: "#ff8c00" },
+    { key: "nis2",     label: "NIS2",        color: "#4d9eff" },
   ];
 
   return (
@@ -710,7 +855,6 @@ function ComplianceTab({ detail, agentId, hostName }) {
           <div style={{ fontSize: 26, fontWeight: 700, color: "#00e5a0", fontFamily: "monospace" }}>
             {compliance.score?.toFixed(0) ?? "—"}
           </div>
-          <div style={{ fontSize: 10, color: "#888" }}>based on SCA pass rate</div>
         </div>
         <div style={{
           background: "rgba(255,59,59,0.04)", border: "1px solid rgba(255,59,59,0.15)",
@@ -724,23 +868,9 @@ function ComplianceTab({ detail, agentId, hostName }) {
         </div>
       </div>
 
-      <div style={{
-        background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
-        borderRadius: 6, padding: "10px 14px", marginBottom: 20,
-        fontSize: 11, color: "#888",
-      }}>
-        <span style={{ color: "#e8eaed" }}>Compliance impact:</span>{" "}
-        SCA failures on this host map to controls across{" "}
-        <span style={{ color: "#00e5a0" }}>PCI DSS Req 2.2</span>,{" "}
-        <span style={{ color: "#b06eff" }}>HIPAA §164.312</span>,{" "}
-        <span style={{ color: "#4d9eff" }}>NIST CM-6/CM-7</span>,{" "}
-        and <span style={{ color: "#ffcc00" }}>TSC CC7.1/CC8.1</span>.
-        MITRE techniques observed also contribute to framework control coverage gaps.
-      </div>
-
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20 }}>
         {FRAMEWORKS.map(fw => {
-          const hasGap = (sca.failed || 0) > 0 || (mitre.techniques || []).length > 0;
+          const hasGap = (sca.failed || 0) > 0;
           return (
             <div key={fw.key} style={{
               background: hasGap ? `${fw.color}12` : "rgba(255,255,255,0.02)",
@@ -757,39 +887,53 @@ function ComplianceTab({ detail, agentId, hostName }) {
       {scaFailures.length > 0 && (
         <div>
           <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.8px", marginBottom: 8 }}>
-            RECENT SCA FAILURES (LAST 7 DAYS) — click any row for AI analysis
+            RECENT SCA FAILURES — click a row to set status or analyze with AI
           </div>
-          {scaFailures.map((f, i) => {
-            const isOpen = selectedIdx === i;
-            return (
-              <div key={i} style={{ marginBottom: 6 }}>
-                <div
-                  onClick={() => setSelected(isOpen ? null : i)}
-                  style={{
-                    background: isOpen ? "rgba(255,59,59,0.08)" : "rgba(255,59,59,0.04)",
-                    border: "1px solid rgba(255,59,59,0.12)",
-                    borderRadius: isOpen ? "4px 4px 0 0" : 4,
-                    padding: "8px 12px", cursor: "pointer",
-                  }}>
-                  <div style={{ fontSize: 12, color: "#e8eaed", marginBottom: 3 }}>{f.title || "Unknown check"}</div>
-                  {f.rationale && <div style={{ fontSize: 10, color: "#888" }}>{f.rationale}</div>}
-                  <div style={{ fontSize: 9, color: "#555", marginTop: 3 }}>
-                    Policy: {f.policy_id || "—"} · {f.timestamp ? new Date(f.timestamp).toLocaleDateString() : "—"}
+          <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 6, overflow: "hidden" }}>
+            <div style={{
+              display: "grid", gridTemplateColumns: "1fr 90px",
+              padding: "6px 12px", fontSize: 10, color: "#888",
+              background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.06)",
+            }}>
+              <div>CHECK</div><div>STATUS</div>
+            </div>
+            {scaFailures.map((f, i) => {
+              const key = f.title ? String(i) + f.title.slice(0, 20) : String(i);
+              const isOpen = selectedIdx === i;
+              const curStatus = statusMap[key];
+              return (
+                <div key={i} style={{ borderBottom: "1px solid rgba(255,59,59,0.08)" }}>
+                  <div
+                    onClick={() => setSelected(isOpen ? null : i)}
+                    style={{
+                      display: "grid", gridTemplateColumns: "1fr 90px",
+                      padding: "8px 12px", cursor: "pointer",
+                      background: isOpen ? "rgba(255,59,59,0.06)" : "transparent",
+                    }}>
+                    <div>
+                      <div style={{ fontSize: 12, color: "#e8eaed", marginBottom: 2 }}>{f.title || "Unknown check"}</div>
+                      {f.rationale && <div style={{ fontSize: 10, color: "#888" }}>{f.rationale}</div>}
+                    </div>
+                    <span style={{ fontSize: 10, color: curStatus ? STATUS_COLORS[curStatus] : "#444", alignSelf: "center" }}>
+                      {curStatus ? STATUS_LABELS[curStatus] : "—"}
+                    </span>
                   </div>
-                </div>
-                {isOpen && (
-                  <div style={{ border: "1px solid rgba(255,59,59,0.12)", borderTop: "none", borderRadius: "0 0 4px 4px" }}>
+                  {isOpen && (
                     <EnrichmentPanel
                       agentId={agentId} hostName={hostName}
                       itemType="compliance"
                       item={{ ...f, framework: f.policy_id, requirement: f.title, result: "failed", description: f.rationale }}
                       onClose={() => setSelected(null)}
+                      initialStatus={statusMap[key]}
+                      onStatusChange={s => setStatusMap(prev => ({ ...prev, [key]: s }))}
+                      cachedResult={enrichCache[key] || null}
+                      onEnrichResult={r => setEnrichCache(prev => ({ ...prev, [key]: r }))}
                     />
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
@@ -818,16 +962,14 @@ export function HostDetailPanel({ agentId, onClose }) {
   const hostName = detail?.agent_name || agentId;
 
   return (
-    /* Backdrop */
     <div
       onClick={e => e.target === e.currentTarget && onClose()}
       style={{
         position: "fixed", inset: 0, zIndex: 900,
         background: "rgba(0,0,0,0.75)", display: "flex", justifyContent: "flex-end",
       }}>
-      {/* Panel */}
       <div style={{
-        width: "min(900px, 95vw)", height: "100vh", overflowY: "auto",
+        width: "min(920px, 96vw)", height: "100vh", overflowY: "auto",
         background: "#0d1117", borderLeft: "1px solid rgba(255,255,255,0.08)",
         display: "flex", flexDirection: "column", fontFamily: "monospace",
       }}>
@@ -839,9 +981,7 @@ export function HostDetailPanel({ agentId, onClose }) {
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 10, color: "#888", letterSpacing: "1.5px", marginBottom: 3 }}>HOST SECURITY PROFILE</div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <h3 style={{ margin: 0, fontSize: 17, color: "#e8eaed", fontWeight: 600 }}>
-                {hostName}
-              </h3>
+              <h3 style={{ margin: 0, fontSize: 17, color: "#e8eaed", fontWeight: 600 }}>{hostName}</h3>
               {detail && (
                 <>
                   <span style={{ fontSize: 11, color: "#888" }}>{detail.agent_ip || "—"}</span>
@@ -886,26 +1026,20 @@ export function HostDetailPanel({ agentId, onClose }) {
           borderBottom: "1px solid rgba(255,255,255,0.08)", overflowX: "auto",
         }}>
           {TABS.map(t => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              style={{
-                background: activeTab === t ? "rgba(0,229,160,0.08)" : "transparent",
-                border: "none", borderBottom: activeTab === t ? "2px solid #00e5a0" : "2px solid transparent",
-                color: activeTab === t ? "#00e5a0" : "#888",
-                padding: "6px 14px", cursor: "pointer", fontSize: 11, fontFamily: "monospace",
-                whiteSpace: "nowrap", transition: "color 0.15s",
-              }}>
-              {t}
-            </button>
+            <button key={t} onClick={() => setTab(t)} style={{
+              background: activeTab === t ? "rgba(0,229,160,0.08)" : "transparent",
+              border: "none",
+              borderBottom: activeTab === t ? "2px solid #00e5a0" : "2px solid transparent",
+              color: activeTab === t ? "#00e5a0" : "#888",
+              padding: "6px 14px", cursor: "pointer", fontSize: 11, fontFamily: "monospace",
+              whiteSpace: "nowrap", transition: "color 0.15s",
+            }}>{t}</button>
           ))}
         </div>
 
-        {/* Tab content */}
+        {/* Content */}
         <div style={{ flex: 1, padding: "18px 20px", overflowY: "auto" }}>
-          {loading && (
-            <div style={{ padding: 40, textAlign: "center", color: "#888" }}>Loading host profile…</div>
-          )}
+          {loading && <div style={{ padding: 40, textAlign: "center", color: "#888" }}>Loading host profile…</div>}
           {error && (
             <div style={{
               background: "rgba(255,59,59,0.08)", border: "1px solid rgba(255,59,59,0.3)",

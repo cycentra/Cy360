@@ -1356,23 +1356,40 @@ REMEDIATION:
 Be specific. No preamble."""
 
 
-def _call_ai_for_enrichment(prompt: str, timeout: float = 90.0) -> tuple[str, str]:
+def _call_ai_for_enrichment(prompt: str, timeout: float = 90.0) -> tuple[str, str, str | None]:
     """
     Call the configured LLM provider (reads ai_settings.json).
-    Returns (explanation, remediation_text). Falls back to empty strings on failure.
+    Returns (explanation, remediation_text, error_reason).
+    error_reason: None on success,
+                  "not_configured" if no provider/key is present,
+                  "call_failed" if config exists but the network/API call failed.
     """
     import logging as _log
     _logger = _log.getLogger(__name__)
     from core.config import AI_SETTINGS_FILE
 
     try:
-        raw = AI_SETTINGS_FILE.read_text() if AI_SETTINGS_FILE.exists() else "{}"
+        if not AI_SETTINGS_FILE.exists():
+            return "", "", "not_configured"
+        raw = AI_SETTINGS_FILE.read_text()
         cfg = json.loads(raw)
     except Exception:
-        cfg = {}
+        return "", "", "not_configured"
 
-    provider = cfg.get("provider", "local")
+    provider = cfg.get("provider", "").strip()
     fields   = cfg.get("fields", {})
+
+    # Guard: must have a recognised provider with required credentials
+    if provider in ("anthropic", "gemini", "deepseek"):
+        if not fields.get("apiKey"):
+            return "", "", "not_configured"
+    elif provider == "cymind":
+        if not fields.get("baseUrl") or not fields.get("apiKey"):
+            return "", "", "not_configured"
+    elif provider == "local":
+        pass  # Ollama — always attempt; may fail at call time
+    else:
+        return "", "", "not_configured"
 
     try:
         if provider == "cymind":
@@ -1459,11 +1476,11 @@ def _call_ai_for_enrichment(prompt: str, timeout: float = 90.0) -> tuple[str, st
         else:
             explanation = raw_text.strip()
 
-        return explanation, remediation
+        return explanation, remediation, None
 
     except Exception as exc:
         _logger.warning(f"[host-enrich] AI call failed: {exc}")
-        return "", ""
+        return "", "", f"call_failed: {exc}"
 
 
 def _misp_lookup_ioc(ioc: str, ioc_type: str = "any") -> list[dict]:
@@ -1646,7 +1663,7 @@ def siem_host_item_enrich(agent_id):
     prompt, iocs = _build_enrich_prompt(item_type, item, host_name)
 
     # Call AI
-    explanation, remediation = _call_ai_for_enrichment(prompt)
+    explanation, remediation, ai_error = _call_ai_for_enrichment(prompt)
 
     # MISP lookup for any IOCs found in the item
     misp_hits: list[dict] = []
@@ -1655,10 +1672,12 @@ def siem_host_item_enrich(agent_id):
         misp_hits.extend(hits)
 
     return jsonify({
-        "explanation":  explanation,
-        "remediation":  remediation,
-        "misp_hits":    misp_hits,
-        "ai_available": bool(explanation),
+        "explanation":    explanation,
+        "remediation":    remediation,
+        "misp_hits":      misp_hits,
+        "ai_available":   bool(explanation),
+        "ai_configured":  ai_error != "not_configured",
+        "ai_error":       ai_error,
     })
 
 
