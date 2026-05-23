@@ -1335,6 +1335,491 @@ def siem_host_set_tier(agent_id):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# HOST POSTURE ITEM ENRICHMENT (AI + MISP)
+# ══════════════════════════════════════════════════════════════════════════════
+
+_HOST_ENRICH_SYSTEM = """You are a senior SOC analyst assistant. You receive a single security finding from a host posture scan and produce a concise analyst briefing with:
+
+1. EXPLANATION: 2-3 sentences. Plain English. What is this finding, why does it matter, and what is the risk?
+
+2. REMEDIATION: Numbered list (3-5 steps). Specific, actionable steps to fix or mitigate. Include commands or config changes where applicable.
+
+Format EXACTLY as:
+EXPLANATION:
+<your explanation>
+
+REMEDIATION:
+1. <step>
+2. <step>
+...
+
+Be specific. No preamble."""
+
+
+def _call_ai_for_enrichment(prompt: str, timeout: float = 90.0) -> tuple[str, str]:
+    """
+    Call the configured LLM provider (reads ai_settings.json).
+    Returns (explanation, remediation_text). Falls back to empty strings on failure.
+    """
+    import logging as _log
+    _logger = _log.getLogger(__name__)
+    from core.config import AI_SETTINGS_FILE
+
+    try:
+        raw = AI_SETTINGS_FILE.read_text() if AI_SETTINGS_FILE.exists() else "{}"
+        cfg = json.loads(raw)
+    except Exception:
+        cfg = {}
+
+    provider = cfg.get("provider", "local")
+    fields   = cfg.get("fields", {})
+
+    try:
+        if provider == "cymind":
+            base_url = fields.get("baseUrl", "").rstrip("/")
+            api_key  = fields.get("apiKey", "")
+            model    = fields.get("model", "").strip() or "llama3:8b"
+            if not base_url or not api_key:
+                raise ValueError("CyMind not configured")
+            resp = _req.post(
+                f"{base_url}/api/v1/chat",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"message": prompt, "system_prompt": _HOST_ENRICH_SYSTEM,
+                      "model": model, "stream": False},
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            raw_text = data.get("response") or data.get("message") or ""
+
+        elif provider == "anthropic":
+            api_key = fields.get("apiKey", "")
+            model   = fields.get("model", "claude-3-haiku-20240307").strip()
+            resp = _req.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": api_key, "anthropic-version": "2023-06-01",
+                         "Content-Type": "application/json"},
+                json={"model": model, "max_tokens": 1024,
+                      "system": _HOST_ENRICH_SYSTEM,
+                      "messages": [{"role": "user", "content": prompt}]},
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            raw_text = resp.json()["content"][0]["text"]
+
+        elif provider == "gemini":
+            api_key  = fields.get("apiKey", "")
+            model    = fields.get("model", "gemini-1.5-flash").strip()
+            endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            resp = _req.post(
+                endpoint,
+                params={"key": api_key},
+                json={"contents": [{"parts": [{"text": f"{_HOST_ENRICH_SYSTEM}\n\n{prompt}"}]}]},
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            raw_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+        elif provider == "deepseek":
+            api_key = fields.get("apiKey", "")
+            model   = fields.get("model", "deepseek-chat").strip()
+            resp = _req.post(
+                "https://api.deepseek.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": model, "messages": [
+                    {"role": "system", "content": _HOST_ENRICH_SYSTEM},
+                    {"role": "user",   "content": prompt},
+                ]},
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            raw_text = resp.json()["choices"][0]["message"]["content"]
+
+        else:  # local / ollama
+            ollama_url = fields.get("baseUrl", "http://127.0.0.1:11434").rstrip("/")
+            model      = fields.get("model", "llama3.1:8b").strip()
+            resp = _req.post(
+                f"{ollama_url}/api/generate",
+                json={"model": model, "stream": False,
+                      "system": _HOST_ENRICH_SYSTEM, "prompt": prompt},
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            raw_text = resp.json().get("response", "")
+
+        # Parse explanation + remediation
+        explanation  = ""
+        remediation  = ""
+        if "EXPLANATION:" in raw_text and "REMEDIATION:" in raw_text:
+            parts       = raw_text.split("REMEDIATION:")
+            explanation = parts[0].replace("EXPLANATION:", "").strip()
+            remediation = parts[1].strip() if len(parts) > 1 else ""
+        elif "EXPLANATION:" in raw_text:
+            explanation = raw_text.replace("EXPLANATION:", "").strip()
+        else:
+            explanation = raw_text.strip()
+
+        return explanation, remediation
+
+    except Exception as exc:
+        _logger.warning(f"[host-enrich] AI call failed: {exc}")
+        return "", ""
+
+
+def _misp_lookup_ioc(ioc: str, ioc_type: str = "any") -> list[dict]:
+    """Query MISP for a single IOC. Returns list of attribute hits (may be empty)."""
+    import logging as _log
+    _logger = _log.getLogger(__name__)
+    from core.helpers import get_misp_config
+
+    cfg = get_misp_config()
+    if not cfg:
+        return []
+
+    misp_url = cfg["url"].rstrip("/")
+    misp_key = cfg["apiKey"]
+
+    try:
+        type_filter = {} if ioc_type == "any" else {"type": ioc_type}
+        resp = _req.post(
+            f"{misp_url}/attributes/restSearch",
+            headers={"Authorization": misp_key, "Accept": "application/json",
+                     "Content-Type": "application/json"},
+            json={"returnFormat": "json", "value": ioc, "limit": 5, **type_filter},
+            timeout=10,
+            verify=False,  # MISP often uses self-signed certs in local installs
+        )
+        resp.raise_for_status()
+        attrs = resp.json().get("response", {}).get("Attribute", [])
+        return [
+            {
+                "ioc":          a.get("value", ""),
+                "type":         a.get("type", ""),
+                "category":     a.get("category", ""),
+                "comment":      a.get("comment", ""),
+                "threat_level": a.get("Event", {}).get("threat_level_id", "3"),
+                "event_id":     a.get("event_id", ""),
+            }
+            for a in attrs[:5]
+        ]
+    except Exception as exc:
+        _logger.debug(f"[host-enrich] MISP lookup failed for {ioc!r}: {exc}")
+        return []
+
+
+def _build_enrich_prompt(item_type: str, item: dict, host_name: str) -> tuple[str, list[str]]:
+    """
+    Build LLM prompt + list of IOCs to check in MISP for a given item.
+    Returns (prompt_text, ioc_list).
+    """
+    iocs: list[str] = []
+
+    if item_type == "vulnerability":
+        cve      = item.get("cve", item.get("name", "unknown CVE"))
+        severity = item.get("severity", "")
+        pkg      = item.get("package_name", item.get("component", ""))
+        version  = item.get("package_version", item.get("version", ""))
+        desc     = item.get("description", item.get("summary", ""))
+        cvss     = item.get("cvss3_score", item.get("cvss_score", ""))
+        if cve and cve.startswith("CVE-"):
+            iocs.append(cve)
+        prompt = (
+            f"Host: {host_name}\n"
+            f"Finding type: Vulnerability\n"
+            f"CVE: {cve}\n"
+            f"Severity: {severity}\n"
+            f"Package: {pkg} {version}\n"
+            f"CVSS score: {cvss}\n"
+            f"Description: {desc}\n\n"
+            f"Provide a SOC analyst briefing for this vulnerability."
+        )
+
+    elif item_type == "sca":
+        title   = item.get("title", item.get("description", "Unknown check"))
+        result  = item.get("result", "failed")
+        policy  = item.get("policy", "")
+        rationale = item.get("rationale", "")
+        remediation = item.get("remediation", item.get("command", ""))
+        prompt = (
+            f"Host: {host_name}\n"
+            f"Finding type: Security Configuration Assessment (SCA)\n"
+            f"Check: {title}\n"
+            f"Result: {result}\n"
+            f"Policy: {policy}\n"
+            f"Rationale: {rationale}\n"
+            f"Suggested remediation from scanner: {remediation}\n\n"
+            f"Provide a SOC analyst briefing for this failed configuration check."
+        )
+
+    elif item_type == "alert":
+        rule_id   = item.get("rule_id", item.get("id", ""))
+        rule_desc = item.get("rule_description", item.get("description", "Alert"))
+        category  = item.get("category", item.get("groups", ""))
+        agent     = item.get("agent_name", host_name)
+        src_ip    = item.get("src_ip", "")
+        username  = item.get("username", "")
+        full_log  = item.get("full_log", item.get("data", ""))[:500]
+        if src_ip:
+            iocs.append(src_ip)
+        prompt = (
+            f"Host: {agent}\n"
+            f"Finding type: Security Alert\n"
+            f"Rule: [{rule_id}] {rule_desc}\n"
+            f"Category: {category}\n"
+            f"Source IP: {src_ip or 'N/A'}\n"
+            f"User: {username or 'N/A'}\n"
+            f"Log excerpt: {full_log}\n\n"
+            f"Provide a SOC analyst briefing for this security alert."
+        )
+
+    elif item_type == "mitre":
+        technique = item.get("technique", item.get("id", ""))
+        tactic    = item.get("tactic", item.get("phase", ""))
+        desc      = item.get("description", "")
+        count     = item.get("count", item.get("alert_count", ""))
+        prompt = (
+            f"Host: {host_name}\n"
+            f"Finding type: MITRE ATT&CK Technique\n"
+            f"Technique: {technique}\n"
+            f"Tactic: {tactic}\n"
+            f"Description: {desc}\n"
+            f"Alert count on this host: {count}\n\n"
+            f"Provide a SOC analyst briefing for this MITRE ATT&CK technique observed on the host."
+        )
+
+    elif item_type == "compliance":
+        requirement = item.get("requirement", item.get("id", ""))
+        framework   = item.get("framework", item.get("policy", ""))
+        result      = item.get("result", item.get("status", "failed"))
+        description = item.get("description", item.get("title", ""))
+        prompt = (
+            f"Host: {host_name}\n"
+            f"Finding type: Compliance Check\n"
+            f"Framework: {framework}\n"
+            f"Requirement: {requirement}\n"
+            f"Status: {result}\n"
+            f"Description: {description}\n\n"
+            f"Provide a SOC analyst briefing for this compliance failure."
+        )
+
+    else:
+        prompt = (
+            f"Host: {host_name}\n"
+            f"Finding type: {item_type}\n"
+            f"Item data: {json.dumps(item, default=str)[:800]}\n\n"
+            f"Provide a SOC analyst briefing for this security finding."
+        )
+
+    return prompt, iocs
+
+
+@siem_bp.route("/hosts/<agent_id>/enrich", methods=["POST"])
+@require_siem_analyst
+def siem_host_item_enrich(agent_id):
+    """
+    AI + MISP enrichment for a single host posture item.
+
+    Request body:
+      {
+        "item_type": "vulnerability|sca|alert|mitre|compliance",
+        "item": { ...item fields from the relevant tab },
+        "host_name": "optional-hostname"
+      }
+
+    Response:
+      {
+        "explanation": "...",
+        "remediation": "...",
+        "misp_hits": [...],
+        "ai_available": true|false
+      }
+    """
+    body      = request.get_json(silent=True) or {}
+    item_type = body.get("item_type", "generic").strip().lower()
+    item      = body.get("item", {})
+    host_name = body.get("host_name", agent_id)
+
+    if not item:
+        return jsonify({"error": "item is required"}), 422
+
+    # Build prompt + extract IOCs
+    prompt, iocs = _build_enrich_prompt(item_type, item, host_name)
+
+    # Call AI
+    explanation, remediation = _call_ai_for_enrichment(prompt)
+
+    # MISP lookup for any IOCs found in the item
+    misp_hits: list[dict] = []
+    for ioc in iocs[:3]:  # cap at 3 to avoid long waits
+        hits = _misp_lookup_ioc(ioc)
+        misp_hits.extend(hits)
+
+    return jsonify({
+        "explanation":  explanation,
+        "remediation":  remediation,
+        "misp_hits":    misp_hits,
+        "ai_available": bool(explanation),
+    })
+
+
+@siem_bp.route("/hosts/<agent_id>/enrich", methods=["OPTIONS"])
+def siem_host_item_enrich_options(agent_id):
+    from core.helpers import add_cors_headers
+    return add_cors_headers(make_response('', 204))
+
+
+_HOST_SEV_MAP = {"critical": 1, "high": 2, "medium": 3, "low": 4, "info": 5}
+
+
+@siem_bp.route("/hosts/<agent_id>/raise-ticket", methods=["POST"])
+@require_siem_analyst
+def siem_host_raise_ticket(agent_id):
+    """
+    Create a CyIRIS case from a host posture finding (SCA/CVE/Alert/MITRE/Compliance).
+
+    Request body:
+      {
+        "item_type":   "vulnerability|sca|alert|mitre|compliance",
+        "item":        { ...item fields },
+        "host_name":   "hostname",
+        "explanation": "AI explanation from /enrich (optional, enriches case body)",
+        "remediation": "AI remediation steps (optional)"
+      }
+    """
+    from core.helpers import get_iris_config
+    import hashlib
+
+    cfg = get_iris_config()
+    if not cfg:
+        return jsonify({
+            "error": "CyIRIS is not configured. Enable it in System Settings → Integrations → CyIRIS."
+        }), 503
+
+    body        = request.get_json(silent=True) or {}
+    item_type   = body.get("item_type", "finding").strip().lower()
+    item        = body.get("item", {})
+    host_name   = body.get("host_name", agent_id)
+    explanation = body.get("explanation", "")
+    remediation = body.get("remediation", "")
+    analyst     = session.get("user_email", "analyst")
+
+    # Derive title, severity, soc_id from item_type
+    if item_type == "vulnerability":
+        cve      = item.get("cve", item.get("name", "CVE-Unknown"))
+        pkg      = item.get("name", item.get("package_name", ""))
+        ver      = item.get("version", item.get("package_version", ""))
+        sev_key  = (item.get("severity") or "medium").lower()
+        case_name = f"[HOST-VULN] {cve} — {host_name}"
+        soc_id_raw = f"{host_name}|{cve}".lower()
+        detail_md = (
+            f"**CVE:** `{cve}`  \n"
+            f"**Package:** {pkg} {ver}  \n"
+            f"**CVSS:** {item.get('cvss', item.get('cvss3_score', '—'))}  \n"
+            f"**Description:** {item.get('title', item.get('description', '—'))}  \n"
+        )
+    elif item_type == "sca":
+        title    = item.get("title", item.get("description", "SCA Failure"))
+        sev_key  = "medium"
+        case_name = f"[HOST-SCA] {title[:80]} — {host_name}"
+        soc_id_raw = f"{host_name}|sca|{item.get('id', title)}".lower()
+        detail_md = (
+            f"**Check:** {title}  \n"
+            f"**Policy:** {item.get('policy', '—')}  \n"
+            f"**Result:** {item.get('result', 'failed')}  \n"
+            f"**Rationale:** {item.get('rationale', '—')}  \n"
+        )
+    elif item_type == "alert":
+        rule_desc = item.get("rule_description", item.get("description", "Security Alert"))
+        lvl       = int(item.get("rule_level", 7))
+        sev_key   = "critical" if lvl >= 15 else "high" if lvl >= 12 else "medium" if lvl >= 7 else "low"
+        case_name = f"[HOST-ALERT] {rule_desc[:80]} — {host_name}"
+        soc_id_raw = f"{host_name}|alert|{item.get('rule_id', rule_desc)}".lower()
+        detail_md = (
+            f"**Rule:** [{item.get('rule_id', '—')}] {rule_desc}  \n"
+            f"**Level:** {lvl}  \n"
+            f"**Category:** {item.get('category', '—')}  \n"
+            f"**Source IP:** {item.get('src_ip', '—')}  \n"
+            f"**User:** {item.get('username', '—')}  \n"
+        )
+    elif item_type == "mitre":
+        tech  = item.get("technique", item.get("id", "Unknown Technique"))
+        tactic = item.get("tactic", "—")
+        sev_key = "high"
+        case_name = f"[HOST-MITRE] {tech} — {host_name}"
+        soc_id_raw = f"{host_name}|mitre|{tech}".lower()
+        detail_md = (
+            f"**Technique:** {tech}  \n"
+            f"**Tactic:** {tactic}  \n"
+            f"**Alert count:** {item.get('count', '—')}  \n"
+            f"**Description:** {item.get('description', '—')}  \n"
+        )
+    else:  # compliance or generic
+        title   = item.get("requirement", item.get("title", item.get("description", "Compliance Finding")))
+        sev_key = "medium"
+        case_name = f"[HOST-COMP] {str(title)[:80]} — {host_name}"
+        soc_id_raw = f"{host_name}|compliance|{title}".lower()
+        detail_md = (
+            f"**Framework:** {item.get('framework', item.get('policy', '—'))}  \n"
+            f"**Requirement:** {title}  \n"
+            f"**Status:** {item.get('result', item.get('status', '—'))}  \n"
+        )
+
+    severity_id = _HOST_SEV_MAP.get(sev_key, 3)
+    soc_id = "HPST-" + hashlib.sha256(soc_id_raw.encode()).hexdigest()[:6].upper()
+
+    case_body = (
+        f"## Host Posture Finding: {item_type.upper()}\n\n"
+        f"**Host:** `{host_name}` (agent ID: `{agent_id}`)  \n"
+        f"**Severity:** {sev_key.upper()}  \n\n"
+        f"### Finding Details\n{detail_md}\n"
+    )
+    if explanation:
+        case_body += f"\n### AI Analysis\n{explanation}\n"
+    if remediation:
+        case_body += f"\n### Recommended Remediation\n{remediation}\n"
+    case_body += f"\n---\n*Raised by `{analyst}` via CyCentra360 Host Intelligence*"
+
+    payload = {
+        "case_name":        case_name,
+        "case_description": case_body,
+        "case_customer":    cfg["customerId"],
+        "case_severity_id": severity_id,
+        "case_soc_id":      soc_id,
+    }
+    try:
+        resp = _req.post(
+            f"{cfg['url'].rstrip('/')}/api/v2/cases",
+            headers={
+                "Authorization": f"Bearer {cfg['apiKey']}",
+                "Content-Type":  "application/json",
+                "Accept":        "application/json",
+            },
+            json=payload,
+            timeout=10,
+            verify=False,
+        )
+        if resp.status_code in (200, 201):
+            data    = resp.json()
+            case    = data if "case_id" in data else data.get("data", data)
+            case_id = case.get("case_id")
+            case_url = f"{cfg['url'].rstrip('/')}/case?cid={case_id}" if case_id else cfg["url"]
+            return jsonify({"case_id": case_id, "case_url": case_url, "case_name": case_name})
+        return jsonify({"error": f"IRIS returned HTTP {resp.status_code}", "detail": resp.text[:300]}), 502
+    except _req.exceptions.ConnectionError:
+        return jsonify({"error": "Cannot reach CyIRIS. Check URL in System Settings."}), 503
+    except _req.exceptions.Timeout:
+        return jsonify({"error": "CyIRIS request timed out."}), 504
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@siem_bp.route("/hosts/<agent_id>/raise-ticket", methods=["OPTIONS"])
+def siem_host_raise_ticket_options(agent_id):
+    from core.helpers import add_cors_headers
+    return add_cors_headers(make_response('', 204))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # THREAT HUNTING ROUTES
 # ══════════════════════════════════════════════════════════════════════════════
 

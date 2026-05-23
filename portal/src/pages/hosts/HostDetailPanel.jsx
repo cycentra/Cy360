@@ -2,6 +2,9 @@
  * HostDetailPanel.jsx
  * Full-screen overlay with 7-tab security profile for a single host.
  * Tabs: Overview · SCA · Vulnerabilities · FIM · Malware · MITRE · Compliance
+ *
+ * Each tab supports click-to-enrich: clicking any row opens an AI + MISP
+ * enrichment panel with explanation, remediation steps, and a Raise Ticket button.
  */
 
 import { useState, useEffect } from "react";
@@ -49,6 +52,176 @@ function ScoreBar({ score, color = "#4d9eff" }) {
   return (
     <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 2, height: 4, flex: 1 }}>
       <div style={{ width: `${pct}%`, height: "100%", background: color, transition: "width 0.4s" }} />
+    </div>
+  );
+}
+
+// ── EnrichmentPanel ───────────────────────────────────────────────────────────
+// Inline AI + MISP enrichment shown when a row is clicked.
+
+function EnrichmentPanel({ agentId, hostName, itemType, item, onClose }) {
+  const [loading, setLoading]     = useState(true);
+  const [result, setResult]       = useState(null);
+  const [error, setError]         = useState(null);
+  const [ticketStatus, setTicket] = useState(null); // null | "loading" | {case_id,case_url} | "error"
+  const [localStatus, setStatus]  = useState(item._localStatus || null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    fetch(`${API}/hosts/${agentId}/enrich`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_type: itemType, item, host_name: hostName }),
+    })
+      .then(r => r.json())
+      .then(d => { setResult(d); setLoading(false); })
+      .catch(e => { setError(e.message); setLoading(false); });
+  }, [agentId, itemType, JSON.stringify(item)]);
+
+  function raiseTicket() {
+    if (!result) return;
+    setTicket("loading");
+    fetch(`${API}/hosts/${agentId}/raise-ticket`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        item_type: itemType, item, host_name: hostName,
+        explanation: result.explanation, remediation: result.remediation,
+      }),
+    })
+      .then(r => r.json())
+      .then(d => setTicket(d.error ? "error" : d))
+      .catch(() => setTicket("error"));
+  }
+
+  const remLines = (result?.remediation || "")
+    .split("\n")
+    .map(l => l.replace(/^\s*\d+[\.\)]\s*/, "").trim())
+    .filter(Boolean);
+
+  return (
+    <div style={{
+      margin: "0 -12px",
+      borderTop: "1px solid rgba(0,229,160,0.2)",
+      borderBottom: "1px solid rgba(0,229,160,0.2)",
+      background: "rgba(0,229,160,0.03)",
+      padding: "14px 16px",
+    }}>
+      {/* Header row */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <span style={{ fontSize: 10, color: "#00e5a0", letterSpacing: "1px", fontFamily: "monospace" }}>
+          AI + THREAT INTEL ENRICHMENT
+        </span>
+        <button
+          onClick={onClose}
+          style={{ background: "none", border: "none", color: "#555", cursor: "pointer", fontSize: 14 }}>✕</button>
+      </div>
+
+      {loading && (
+        <div style={{ color: "#888", fontSize: 11, padding: "8px 0" }}>Fetching AI analysis…</div>
+      )}
+
+      {error && (
+        <div style={{ color: "#ff6b6b", fontSize: 11 }}>Failed to load enrichment: {error}</div>
+      )}
+
+      {result && !loading && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {/* AI Explanation */}
+          {result.explanation ? (
+            <div>
+              <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.8px", marginBottom: 6 }}>ANALYST BRIEFING</div>
+              <div style={{ fontSize: 12, color: "#e8eaed", lineHeight: 1.6 }}>{result.explanation}</div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: "#555" }}>
+              AI not configured — enable an AI provider in System Settings → AI Config.
+            </div>
+          )}
+
+          {/* Remediation Steps */}
+          {remLines.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.8px", marginBottom: 6 }}>REMEDIATION STEPS</div>
+              <ol style={{ margin: 0, paddingLeft: 18, color: "#e8eaed", fontSize: 12, lineHeight: 1.7 }}>
+                {remLines.map((step, i) => <li key={i}>{step}</li>)}
+              </ol>
+            </div>
+          )}
+
+          {/* MISP Hits */}
+          {result.misp_hits?.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, color: "#ff8c00", letterSpacing: "0.8px", marginBottom: 6 }}>
+                ⚠ MISP THREAT INTELLIGENCE ({result.misp_hits.length} match{result.misp_hits.length > 1 ? "es" : ""})
+              </div>
+              {result.misp_hits.map((hit, i) => (
+                <div key={i} style={{
+                  background: "rgba(255,140,0,0.07)", border: "1px solid rgba(255,140,0,0.2)",
+                  borderRadius: 4, padding: "6px 10px", marginBottom: 5, fontSize: 11,
+                }}>
+                  <span style={{ color: "#ff8c00", fontFamily: "monospace" }}>{hit.ioc}</span>
+                  <span style={{ color: "#888", marginLeft: 8 }}>[{hit.type}]</span>
+                  {hit.comment && <span style={{ color: "#888", marginLeft: 8 }}>{hit.comment}</span>}
+                  <Pill label={`Event #${hit.event_id}`} color="#ff8c00" />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Actions row */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", paddingTop: 6, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+            {/* Status buttons */}
+            <div style={{ fontSize: 10, color: "#888", marginRight: 2 }}>Status:</div>
+            {["investigating", "in_review", "resolved", "false_positive"].map(s => (
+              <button
+                key={s}
+                onClick={() => setStatus(s)}
+                style={{
+                  padding: "4px 10px", borderRadius: 3, cursor: "pointer", fontSize: 10,
+                  fontFamily: "monospace", textTransform: "uppercase",
+                  background: localStatus === s ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.04)",
+                  border: localStatus === s ? "1px solid rgba(0,229,160,0.4)" : "1px solid rgba(255,255,255,0.1)",
+                  color: localStatus === s ? "#00e5a0" : "#888",
+                }}>
+                {s.replace("_", " ")}
+              </button>
+            ))}
+
+            {/* Raise Ticket button */}
+            <button
+              onClick={raiseTicket}
+              disabled={ticketStatus === "loading" || (ticketStatus && ticketStatus !== "error")}
+              style={{
+                marginLeft: "auto", padding: "6px 14px", borderRadius: 4, cursor: "pointer",
+                fontSize: 11, fontFamily: "monospace",
+                background: ticketStatus && ticketStatus !== "error" && ticketStatus !== "loading"
+                  ? "rgba(176,110,255,0.15)" : "rgba(77,158,255,0.1)",
+                border: ticketStatus && ticketStatus !== "error" && ticketStatus !== "loading"
+                  ? "1px solid rgba(176,110,255,0.4)" : "1px solid rgba(77,158,255,0.3)",
+                color: ticketStatus && ticketStatus !== "error" && ticketStatus !== "loading"
+                  ? "#b06eff" : "#4d9eff",
+              }}>
+              {ticketStatus === "loading" ? "Creating…"
+                : ticketStatus === "error" ? "⚠ Ticket Failed"
+                : ticketStatus?.case_id ? `✓ IRIS #${ticketStatus.case_id}`
+                : "↗ Raise Ticket"}
+            </button>
+
+            {ticketStatus?.case_url && ticketStatus.case_url !== "error" && (
+              <a
+                href={ticketStatus.case_url} target="_blank" rel="noopener noreferrer"
+                style={{ fontSize: 10, color: "#b06eff", textDecoration: "underline" }}>
+                Open in CyIRIS →
+              </a>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -143,15 +316,17 @@ function OverviewTab({ detail }) {
 
 // ── Tab: SCA ──────────────────────────────────────────────────────────────────
 
-function SCATab({ agentId }) {
-  const [data, setData]         = useState(null);
-  const [loading, setLoading]   = useState(true);
-  const [filter, setFilter]     = useState("failed");
-  const [page, setPage]         = useState(1);
+function SCATab({ agentId, hostName }) {
+  const [data, setData]           = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [filter, setFilter]       = useState("failed");
+  const [page, setPage]           = useState(1);
+  const [selectedId, setSelected] = useState(null);
   const PER_PAGE = 50;
 
   useEffect(() => {
     setLoading(true);
+    setSelected(null);
     const qs = new URLSearchParams({ result: filter, page: String(page), per_page: String(PER_PAGE) });
     fetch(`${API}/hosts/${agentId}/sca?${qs}`, { credentials: "include" })
       .then(r => r.json())
@@ -168,7 +343,6 @@ function SCATab({ agentId }) {
 
   return (
     <div>
-      {/* Policy summary */}
       {policies.length > 0 && (
         <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
           {policies.map(p => (
@@ -188,7 +362,6 @@ function SCATab({ agentId }) {
         </div>
       )}
 
-      {/* Filter */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         {["all", "failed", "passed", "not applicable"].map(f => (
           <button
@@ -203,12 +376,9 @@ function SCATab({ agentId }) {
             {f === "all" ? "All" : f.charAt(0).toUpperCase() + f.slice(1)}
           </button>
         ))}
-        <span style={{ marginLeft: "auto", fontSize: 11, color: "#888", padding: "4px 0" }}>
-          {total} checks
-        </span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "#888", padding: "4px 0" }}>{total} checks</span>
       </div>
 
-      {/* Checks table */}
       <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 6, overflow: "hidden" }}>
         <div style={{
           display: "grid", gridTemplateColumns: "60px 1fr 100px",
@@ -221,26 +391,32 @@ function SCATab({ agentId }) {
           ? <div style={{ padding: 20, color: "#888", textAlign: "center", fontSize: 12 }}>No checks found.</div>
           : checks.map(c => {
             const resultCol = c.result === "passed" ? "#00e5a0" : c.result === "failed" ? "#ff3b3b" : "#888";
+            const isOpen = selectedId === c.id;
             return (
-              <details key={c.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                <summary style={{
-                  display: "grid", gridTemplateColumns: "60px 1fr 100px",
-                  padding: "8px 12px", cursor: "pointer", fontSize: 12, listStyle: "none",
-                }}>
+              <div key={c.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                <div
+                  onClick={() => setSelected(isOpen ? null : c.id)}
+                  style={{
+                    display: "grid", gridTemplateColumns: "60px 1fr 100px",
+                    padding: "8px 12px", cursor: "pointer", fontSize: 12,
+                    background: isOpen ? "rgba(0,229,160,0.04)" : "transparent",
+                  }}>
                   <span style={{ color: "#888", fontFamily: "monospace" }}>{c.id}</span>
                   <span style={{ color: "#e8eaed" }}>{c.title}</span>
                   <span style={{ color: resultCol, textTransform: "uppercase", fontSize: 10 }}>{c.result}</span>
-                </summary>
-                <div style={{ padding: "0 12px 10px 12px", fontSize: 11, color: "#888" }}>
-                  {c.rationale && <div style={{ marginBottom: 4 }}><b style={{ color: "#bbb" }}>Rationale:</b> {c.rationale}</div>}
-                  {c.remediation && <div><b style={{ color: "#bbb" }}>Remediation:</b> {c.remediation}</div>}
                 </div>
-              </details>
+                {isOpen && (
+                  <EnrichmentPanel
+                    agentId={agentId} hostName={hostName}
+                    itemType="sca" item={c}
+                    onClose={() => setSelected(null)}
+                  />
+                )}
+              </div>
             );
           })}
       </div>
 
-      {/* Pagination */}
       {total > PER_PAGE && (
         <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 12 }}>
           <button disabled={page === 1} onClick={() => setPage(p => p - 1)}
@@ -256,15 +432,17 @@ function SCATab({ agentId }) {
 
 // ── Tab: Vulnerabilities ──────────────────────────────────────────────────────
 
-function VulnerabilitiesTab({ agentId }) {
-  const [data, setData]       = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [sevFilter, setSev]   = useState("");
-  const [page, setPage]       = useState(1);
+function VulnerabilitiesTab({ agentId, hostName }) {
+  const [data, setData]           = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [sevFilter, setSev]       = useState("");
+  const [page, setPage]           = useState(1);
+  const [selectedIdx, setSelected] = useState(null);
   const PER_PAGE = 100;
 
   useEffect(() => {
     setLoading(true);
+    setSelected(null);
     const qs = new URLSearchParams({ page: String(page), per_page: String(PER_PAGE), ...(sevFilter ? { severity: sevFilter } : {}) });
     fetch(`${API}/hosts/${agentId}/vulnerabilities?${qs}`, { credentials: "include" })
       .then(r => r.json())
@@ -304,17 +482,31 @@ function VulnerabilitiesTab({ agentId }) {
         {vulns.length === 0
           ? <div style={{ padding: 20, color: "#888", textAlign: "center" }}>No active CVEs found.</div>
           : vulns.map((v, i) => {
-            const col = SEV_COLOR[v.severity] || "#888";
+            const col   = SEV_COLOR[v.severity] || "#888";
+            const isOpen = selectedIdx === i;
             return (
-              <div key={i} style={{
-                display: "grid", gridTemplateColumns: "160px 60px 140px 1fr",
-                padding: "8px 12px", borderBottom: "1px solid rgba(255,255,255,0.04)",
-                fontSize: 11, alignItems: "start",
-              }}>
-                <span style={{ color: col, fontFamily: "monospace" }}>{v.cve || "—"}</span>
-                <span style={{ color: col }}>{v.cvss || "—"}</span>
-                <span style={{ color: "#e8eaed" }}>{v.name || "—"} {v.version || ""}</span>
-                <span style={{ color: "#888" }}>{v.title || v.condition || "—"}</span>
+              <div key={i} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                <div
+                  onClick={() => setSelected(isOpen ? null : i)}
+                  style={{
+                    display: "grid", gridTemplateColumns: "160px 60px 140px 1fr",
+                    padding: "8px 12px", fontSize: 11, alignItems: "start",
+                    cursor: "pointer",
+                    background: isOpen ? "rgba(255,140,0,0.04)" : "transparent",
+                  }}>
+                  <span style={{ color: col, fontFamily: "monospace" }}>{v.cve || "—"}</span>
+                  <span style={{ color: col }}>{v.cvss || "—"}</span>
+                  <span style={{ color: "#e8eaed" }}>{v.name || "—"} {v.version || ""}</span>
+                  <span style={{ color: "#888" }}>{v.title || v.condition || "—"}</span>
+                </div>
+                {isOpen && (
+                  <EnrichmentPanel
+                    agentId={agentId} hostName={hostName}
+                    itemType="vulnerability"
+                    item={{ ...v, package_name: v.name, package_version: v.version, cvss3_score: v.cvss }}
+                    onClose={() => setSelected(null)}
+                  />
+                )}
               </div>
             );
           })}
@@ -335,14 +527,16 @@ function VulnerabilitiesTab({ agentId }) {
 
 // ── Tab: Alerts (generic, used for FIM and Malware) ───────────────────────────
 
-function AlertsTab({ agentId, category, label }) {
-  const [data, setData]       = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [page, setPage]       = useState(1);
+function AlertsTab({ agentId, hostName, category, label }) {
+  const [data, setData]            = useState(null);
+  const [loading, setLoading]      = useState(true);
+  const [page, setPage]            = useState(1);
+  const [selectedIdx, setSelected] = useState(null);
   const PER_PAGE = 50;
 
   useEffect(() => {
     setLoading(true);
+    setSelected(null);
     const qs = new URLSearchParams({ category, page: String(page), per_page: String(PER_PAGE) });
     fetch(`${API}/hosts/${agentId}/alerts?${qs}`, { credentials: "include" })
       .then(r => r.json())
@@ -372,21 +566,35 @@ function AlertsTab({ agentId, category, label }) {
         </div>
         {alerts.length === 0
           ? <div style={{ padding: 20, color: "#888", textAlign: "center" }}>No {label} events in last 30 days.</div>
-          : alerts.map(a => {
-            const ts = a.timestamp ? new Date(a.timestamp).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+          : alerts.map((a, i) => {
+            const ts  = a.timestamp ? new Date(a.timestamp).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
             const col = a.rule_level >= 12 ? "#ff3b3b" : a.rule_level >= 7 ? "#ff8c00" : "#888";
+            const isOpen = selectedIdx === i;
             return (
-              <div key={a.id} style={{
-                display: "grid", gridTemplateColumns: "140px 50px 1fr 120px",
-                padding: "7px 12px", borderBottom: "1px solid rgba(255,255,255,0.04)",
-                fontSize: 11, alignItems: "start",
-              }}>
-                <span style={{ color: "#888" }}>{ts}</span>
-                <span style={{ color: col, fontFamily: "monospace" }}>{a.rule_level}</span>
-                <span style={{ color: "#e8eaed" }}>{a.rule_desc || "—"}</span>
-                <span style={{ color: "#888", fontSize: 10, wordBreak: "break-all" }}>
-                  {a.file_path ? a.file_path.slice(-30) : a.username || "—"}
-                </span>
+              <div key={a.id || i} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                <div
+                  onClick={() => setSelected(isOpen ? null : i)}
+                  style={{
+                    display: "grid", gridTemplateColumns: "140px 50px 1fr 120px",
+                    padding: "7px 12px", fontSize: 11, alignItems: "start",
+                    cursor: "pointer",
+                    background: isOpen ? "rgba(255,140,0,0.04)" : "transparent",
+                  }}>
+                  <span style={{ color: "#888" }}>{ts}</span>
+                  <span style={{ color: col, fontFamily: "monospace" }}>{a.rule_level}</span>
+                  <span style={{ color: "#e8eaed" }}>{a.rule_desc || "—"}</span>
+                  <span style={{ color: "#888", fontSize: 10, wordBreak: "break-all" }}>
+                    {a.file_path ? a.file_path.slice(-30) : a.username || "—"}
+                  </span>
+                </div>
+                {isOpen && (
+                  <EnrichmentPanel
+                    agentId={agentId} hostName={hostName}
+                    itemType="alert"
+                    item={{ ...a, rule_description: a.rule_desc, description: a.rule_desc }}
+                    onClose={() => setSelected(null)}
+                  />
+                )}
               </div>
             );
           })}
@@ -407,9 +615,10 @@ function AlertsTab({ agentId, category, label }) {
 
 // ── Tab: MITRE ────────────────────────────────────────────────────────────────
 
-function MitreTab({ detail }) {
+function MitreTab({ detail, agentId, hostName }) {
   const { mitre = {}, alerts_by_category = {} } = detail;
   const breakdown = mitre.breakdown || [];
+  const [selectedId, setSelected] = useState(null);
 
   return (
     <div>
@@ -419,25 +628,39 @@ function MitreTab({ detail }) {
       {breakdown.length === 0 ? (
         <div style={{ color: "#888", textAlign: "center", padding: 30 }}>No MITRE techniques observed.</div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {breakdown.map(t => (
-            <div key={t.mitre_id} style={{
-              display: "flex", alignItems: "center", gap: 12,
-              background: "rgba(77,158,255,0.04)", border: "1px solid rgba(77,158,255,0.12)",
-              borderRadius: 5, padding: "8px 14px",
-            }}>
-              <span style={{ color: "#4d9eff", fontFamily: "monospace", fontWeight: 700, width: 90, flexShrink: 0 }}>{t.mitre_id}</span>
-              <span style={{ color: "#888", fontSize: 11, flex: 1 }}>{t.tactic || "—"}</span>
-              <span style={{
-                background: "rgba(77,158,255,0.12)", color: "#4d9eff",
-                fontFamily: "monospace", fontSize: 11, padding: "2px 8px", borderRadius: 3,
-              }}>×{t.count}</span>
-            </div>
-          ))}
+        <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+          {breakdown.map(t => {
+            const isOpen = selectedId === t.mitre_id;
+            return (
+              <div key={t.mitre_id} style={{ borderBottom: "1px solid rgba(77,158,255,0.08)" }}>
+                <div
+                  onClick={() => setSelected(isOpen ? null : t.mitre_id)}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 12,
+                    background: isOpen ? "rgba(77,158,255,0.08)" : "rgba(77,158,255,0.04)",
+                    padding: "8px 14px", cursor: "pointer",
+                  }}>
+                  <span style={{ color: "#4d9eff", fontFamily: "monospace", fontWeight: 700, width: 90, flexShrink: 0 }}>{t.mitre_id}</span>
+                  <span style={{ color: "#888", fontSize: 11, flex: 1 }}>{t.tactic || "—"}</span>
+                  <span style={{
+                    background: "rgba(77,158,255,0.12)", color: "#4d9eff",
+                    fontFamily: "monospace", fontSize: 11, padding: "2px 8px", borderRadius: 3,
+                  }}>×{t.count}</span>
+                </div>
+                {isOpen && (
+                  <EnrichmentPanel
+                    agentId={agentId} hostName={hostName}
+                    itemType="mitre"
+                    item={{ technique: t.mitre_id, tactic: t.tactic, count: t.count }}
+                    onClose={() => setSelected(null)}
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
-      {/* Alert category breakdown */}
       {Object.keys(alerts_by_category).length > 0 && (
         <div style={{ marginTop: 24 }}>
           <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.8px", marginBottom: 10 }}>ALERT CATEGORIES (LAST 30 DAYS)</div>
@@ -461,23 +684,23 @@ function MitreTab({ detail }) {
 
 // ── Tab: Compliance ───────────────────────────────────────────────────────────
 
-function ComplianceTab({ detail }) {
+function ComplianceTab({ detail, agentId, hostName }) {
   const { sca = {}, compliance = {}, mitre = {} } = detail;
   const scaFailures = sca.recent_failures || [];
+  const [selectedIdx, setSelected] = useState(null);
 
   const FRAMEWORKS = [
-    { key: "pci_dss",  label: "PCI DSS",       color: "#ff8c00" },
-    { key: "gdpr",     label: "GDPR",           color: "#4d9eff" },
-    { key: "hipaa",    label: "HIPAA",          color: "#b06eff" },
-    { key: "nist_csf", label: "NIST CSF",       color: "#00e5a0" },
-    { key: "tsc",      label: "TSC / SOC 2",    color: "#ffcc00" },
-    { key: "iso27001", label: "ISO 27001",      color: "#ff8c00" },
-    { key: "nis2",     label: "NIS2",           color: "#4d9eff" },
+    { key: "pci_dss",  label: "PCI DSS",    color: "#ff8c00" },
+    { key: "gdpr",     label: "GDPR",       color: "#4d9eff" },
+    { key: "hipaa",    label: "HIPAA",      color: "#b06eff" },
+    { key: "nist_csf", label: "NIST CSF",   color: "#00e5a0" },
+    { key: "tsc",      label: "TSC / SOC 2",color: "#ffcc00" },
+    { key: "iso27001", label: "ISO 27001",  color: "#ff8c00" },
+    { key: "nis2",     label: "NIS2",       color: "#4d9eff" },
   ];
 
   return (
     <div>
-      {/* Compliance score + SCA summary */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         <div style={{
           background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.08)",
@@ -501,7 +724,6 @@ function ComplianceTab({ detail }) {
         </div>
       </div>
 
-      {/* Framework impact note */}
       <div style={{
         background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
         borderRadius: 6, padding: "10px 14px", marginBottom: 20,
@@ -516,7 +738,6 @@ function ComplianceTab({ detail }) {
         MITRE techniques observed also contribute to framework control coverage gaps.
       </div>
 
-      {/* Framework indicators */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20 }}>
         {FRAMEWORKS.map(fw => {
           const hasGap = (sca.failed || 0) > 0 || (mitre.techniques || []).length > 0;
@@ -533,24 +754,42 @@ function ComplianceTab({ detail }) {
         })}
       </div>
 
-      {/* Recent SCA failures */}
       {scaFailures.length > 0 && (
         <div>
           <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.8px", marginBottom: 8 }}>
-            RECENT SCA FAILURES (LAST 7 DAYS)
+            RECENT SCA FAILURES (LAST 7 DAYS) — click any row for AI analysis
           </div>
-          {scaFailures.map((f, i) => (
-            <div key={i} style={{
-              background: "rgba(255,59,59,0.04)", border: "1px solid rgba(255,59,59,0.12)",
-              borderRadius: 4, padding: "8px 12px", marginBottom: 6,
-            }}>
-              <div style={{ fontSize: 12, color: "#e8eaed", marginBottom: 3 }}>{f.title || "Unknown check"}</div>
-              {f.rationale && <div style={{ fontSize: 10, color: "#888" }}>{f.rationale}</div>}
-              <div style={{ fontSize: 9, color: "#555", marginTop: 3 }}>
-                Policy: {f.policy_id || "—"} · {f.timestamp ? new Date(f.timestamp).toLocaleDateString() : "—"}
+          {scaFailures.map((f, i) => {
+            const isOpen = selectedIdx === i;
+            return (
+              <div key={i} style={{ marginBottom: 6 }}>
+                <div
+                  onClick={() => setSelected(isOpen ? null : i)}
+                  style={{
+                    background: isOpen ? "rgba(255,59,59,0.08)" : "rgba(255,59,59,0.04)",
+                    border: "1px solid rgba(255,59,59,0.12)",
+                    borderRadius: isOpen ? "4px 4px 0 0" : 4,
+                    padding: "8px 12px", cursor: "pointer",
+                  }}>
+                  <div style={{ fontSize: 12, color: "#e8eaed", marginBottom: 3 }}>{f.title || "Unknown check"}</div>
+                  {f.rationale && <div style={{ fontSize: 10, color: "#888" }}>{f.rationale}</div>}
+                  <div style={{ fontSize: 9, color: "#555", marginTop: 3 }}>
+                    Policy: {f.policy_id || "—"} · {f.timestamp ? new Date(f.timestamp).toLocaleDateString() : "—"}
+                  </div>
+                </div>
+                {isOpen && (
+                  <div style={{ border: "1px solid rgba(255,59,59,0.12)", borderTop: "none", borderRadius: "0 0 4px 4px" }}>
+                    <EnrichmentPanel
+                      agentId={agentId} hostName={hostName}
+                      itemType="compliance"
+                      item={{ ...f, framework: f.policy_id, requirement: f.title, result: "failed", description: f.rationale }}
+                      onClose={() => setSelected(null)}
+                    />
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -576,6 +815,7 @@ export function HostDetailPanel({ agentId, onClose }) {
 
   const grade    = detail?.posture?.grade || "—";
   const gradeCol = GRADE_COLOR[grade] || "#888";
+  const hostName = detail?.agent_name || agentId;
 
   return (
     /* Backdrop */
@@ -600,7 +840,7 @@ export function HostDetailPanel({ agentId, onClose }) {
             <div style={{ fontSize: 10, color: "#888", letterSpacing: "1.5px", marginBottom: 3 }}>HOST SECURITY PROFILE</div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <h3 style={{ margin: 0, fontSize: 17, color: "#e8eaed", fontWeight: 600 }}>
-                {detail?.agent_name || agentId}
+                {hostName}
               </h3>
               {detail && (
                 <>
@@ -675,12 +915,12 @@ export function HostDetailPanel({ agentId, onClose }) {
           {detail && !loading && (
             <>
               {activeTab === "Overview"        && <OverviewTab detail={detail} />}
-              {activeTab === "SCA"             && <SCATab agentId={agentId} />}
-              {activeTab === "Vulnerabilities" && <VulnerabilitiesTab agentId={agentId} />}
-              {activeTab === "FIM"             && <AlertsTab agentId={agentId} category="fim"     label="FIM" />}
-              {activeTab === "Malware"         && <AlertsTab agentId={agentId} category="malware" label="Malware" />}
-              {activeTab === "MITRE"           && <MitreTab detail={detail} />}
-              {activeTab === "Compliance"      && <ComplianceTab detail={detail} />}
+              {activeTab === "SCA"             && <SCATab agentId={agentId} hostName={hostName} />}
+              {activeTab === "Vulnerabilities" && <VulnerabilitiesTab agentId={agentId} hostName={hostName} />}
+              {activeTab === "FIM"             && <AlertsTab agentId={agentId} hostName={hostName} category="fim"     label="FIM" />}
+              {activeTab === "Malware"         && <AlertsTab agentId={agentId} hostName={hostName} category="malware" label="Malware" />}
+              {activeTab === "MITRE"           && <MitreTab detail={detail} agentId={agentId} hostName={hostName} />}
+              {activeTab === "Compliance"      && <ComplianceTab detail={detail} agentId={agentId} hostName={hostName} />}
             </>
           )}
         </div>

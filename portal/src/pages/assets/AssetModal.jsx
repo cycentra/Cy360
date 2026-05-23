@@ -688,12 +688,15 @@ function StatusButtons({ asset, onStatusChange, onClose }) {
     <div style={{ marginTop: 24, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
       <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 10, letterSpacing: "1px", textTransform: "uppercase", marginBottom: 10, fontFamily: "monospace" }}>Update Status</div>
       <div style={{ display: "flex", gap: 8 }}>
-        {["open", "in-review", "resolved"].map(s => (
-          <button key={s} onClick={() => { onStatusChange(asset.id, s); onClose(); }}
-            style={{ padding: "8px 16px", borderRadius: 3, border: `1px solid ${STATUS_CONFIG[s].color}40`, background: asset.status === s ? `${STATUS_CONFIG[s].color}20` : "transparent", color: STATUS_CONFIG[s].color, fontFamily: "monospace", fontSize: 11, letterSpacing: "1px", cursor: "pointer", textTransform: "uppercase", fontWeight: asset.status === s ? 700 : 400 }}>
-            {s}
-          </button>
-        ))}
+        {["open", "in_review", "resolved"].map(s => {
+          const cfg = STATUS_CONFIG[s] || { color: "#888", label: s };
+          return (
+            <button key={s} onClick={() => { onStatusChange(asset.id, s); onClose(); }}
+              style={{ padding: "8px 16px", borderRadius: 3, border: `1px solid ${cfg.color}40`, background: asset.status === s ? `${cfg.color}20` : "transparent", color: cfg.color, fontFamily: "monospace", fontSize: 11, letterSpacing: "1px", cursor: "pointer", textTransform: "uppercase", fontWeight: asset.status === s ? 700 : 400 }}>
+              {cfg.label}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
