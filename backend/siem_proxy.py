@@ -815,6 +815,37 @@ def _f(val):
     return float(val) if val is not None else None
 
 
+# ── Analyst acknowledgement helpers ──────────────────────────────────────────
+_acks_table_ready = False
+
+
+def _ensure_acks_table():
+    """Idempotent: create host_item_acks if it doesn't exist yet."""
+    global _acks_table_ready
+    if _acks_table_ready:
+        return
+    try:
+        conn = _corr_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS host_item_acks (
+                        agent_id   TEXT NOT NULL,
+                        item_type  TEXT NOT NULL,
+                        item_key   TEXT NOT NULL,
+                        status     TEXT,
+                        updated_at TIMESTAMPTZ DEFAULT NOW(),
+                        PRIMARY KEY (agent_id, item_type, item_key)
+                    );
+                    CREATE INDEX IF NOT EXISTS ix_host_item_acks_agent
+                        ON host_item_acks (agent_id, item_type);
+                """)
+        conn.close()
+        _acks_table_ready = True
+    except Exception as _te:
+        _logger.warning("[host-acks] Table setup failed: %s", _te)
+
+
 def _grade(score):
     if score is None:
         return "—"
@@ -1694,6 +1725,91 @@ def siem_host_item_enrich(agent_id):
 
 @siem_bp.route("/hosts/<agent_id>/enrich", methods=["OPTIONS"])
 def siem_host_item_enrich_options(agent_id):
+    from core.helpers import add_cors_headers
+    return add_cors_headers(make_response('', 204))
+
+
+# ── Host posture item acknowledgements ────────────────────────────────────────
+
+@siem_bp.route("/hosts/<agent_id>/item-statuses", methods=["GET"])
+@require_siem_auth
+def siem_host_item_statuses_get(agent_id):
+    """
+    Return all saved item acknowledgements for a host, grouped by item_type.
+
+    Response: { "sca": {"<key>": "<status>", ...}, "vulnerability": {...}, ... }
+    """
+    _ensure_acks_table()
+    try:
+        import psycopg2.extras
+        conn = _corr_conn()
+        result: dict = {}
+        with conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT item_type, item_key, status FROM host_item_acks WHERE agent_id = %s",
+                    [agent_id],
+                )
+                for row in cur.fetchall():
+                    result.setdefault(row["item_type"], {})[row["item_key"]] = row["status"]
+        conn.close()
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@siem_bp.route("/hosts/<agent_id>/item-statuses", methods=["POST"])
+@require_siem_analyst
+def siem_host_item_statuses_post(agent_id):
+    """
+    Upsert or delete a single item acknowledgement.
+
+    Request body: { "item_type": "sca|vulnerability|alert|mitre|compliance",
+                    "item_key": "<stable item identifier>",
+                    "status": "investigating|in_review|resolved|false_positive" }
+    Pass status=null or omit to clear the acknowledgement.
+    """
+    _ensure_acks_table()
+    body      = request.get_json(silent=True) or {}
+    item_type = body.get("item_type", "").strip()
+    item_key  = body.get("item_key",  "").strip()
+    status    = body.get("status")        # None or empty → delete
+
+    _valid_types    = {"sca", "vulnerability", "alert", "mitre", "compliance"}
+    _valid_statuses = {"investigating", "in_review", "resolved", "false_positive"}
+
+    if not item_type or item_type not in _valid_types:
+        return jsonify({"error": "invalid item_type"}), 400
+    if not item_key:
+        return jsonify({"error": "item_key required"}), 400
+    if status and status not in _valid_statuses:
+        return jsonify({"error": "invalid status"}), 400
+    try:
+        conn = _corr_conn()
+        with conn:
+            with conn.cursor() as cur:
+                if not status:
+                    cur.execute(
+                        "DELETE FROM host_item_acks "
+                        "WHERE agent_id=%s AND item_type=%s AND item_key=%s",
+                        [agent_id, item_type, item_key],
+                    )
+                else:
+                    cur.execute("""
+                        INSERT INTO host_item_acks
+                            (agent_id, item_type, item_key, status, updated_at)
+                        VALUES (%s, %s, %s, %s, NOW())
+                        ON CONFLICT (agent_id, item_type, item_key)
+                        DO UPDATE SET status=EXCLUDED.status, updated_at=NOW()
+                    """, [agent_id, item_type, item_key, status])
+        conn.close()
+        return jsonify({"ok": True})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@siem_bp.route("/hosts/<agent_id>/item-statuses", methods=["OPTIONS"])
+def siem_host_item_statuses_options(agent_id):
     from core.helpers import add_cors_headers
     return add_cors_headers(make_response('', 204))
 

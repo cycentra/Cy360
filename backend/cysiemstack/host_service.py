@@ -158,6 +158,39 @@ async def _compute_host_posture(
         raw -= min(20, vuln_medium   *  2)
         vuln_score = max(0, min(100, round(raw, 1)))
 
+    # ── Analyst acknowledgement adjustments ───────────────────────────────────
+    # Items marked false_positive or resolved are excluded from score penalty.
+    # The host_item_acks table is owned by siem_proxy.py and may not exist on
+    # first boot — the try/except silently skips the adjustment in that case.
+    try:
+        ack_res = await session.execute(
+            text("""
+                SELECT item_type, COUNT(*) AS n
+                FROM host_item_acks
+                WHERE agent_id = :aid
+                  AND status IN ('false_positive', 'resolved')
+                  AND item_type IN ('sca', 'vulnerability')
+                GROUP BY item_type
+            """),
+            {"aid": agent_id},
+        )
+        _acks = {r.item_type: int(r.n) for r in ack_res.fetchall()}
+
+        # Adjust SCA: each acked item shifts one failure → pass
+        acked_sca = _acks.get("sca", 0)
+        if acked_sca > 0 and sca_total > 0 and sca_failed > 0:
+            adj_failed = max(0, sca_failed - acked_sca)
+            sca_passed = sca_passed + (sca_failed - adj_failed)
+            sca_failed = adj_failed
+            sca_score  = round((sca_passed / sca_total) * 100, 1)
+
+        # Adjust Vuln: treat each acked CVE as ~medium removal (+4 pts)
+        acked_vulns = _acks.get("vulnerability", 0)
+        if acked_vulns > 0 and vuln_score is not None:
+            vuln_score = min(100.0, round(vuln_score + acked_vulns * 4, 1))
+    except Exception:
+        pass  # table not yet created or query failed — use unadjusted scores
+
     # ── Component 3: SIEM risk score inverted (weight 25%) ───────────────────
     risk_row = await session.execute(
         text("""

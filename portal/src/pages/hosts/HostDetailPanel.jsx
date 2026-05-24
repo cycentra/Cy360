@@ -35,6 +35,19 @@ const STATUS_COLORS = {
 };
 const TABS = ["Overview", "SCA", "Vulnerabilities", "FIM", "Malware", "MITRE", "Compliance"];
 
+// Derive a stable string key for an item — must match the tab-level statusMap key.
+function _deriveItemKey(itemType, item) {
+  if (!item) return null;
+  switch (itemType) {
+    case "sca":          return item.id != null ? String(item.id) : item.title?.slice(0, 100) || null;
+    case "vulnerability":return item.cve || null;
+    case "alert":        return item.id != null ? String(item.id) : null;
+    case "mitre":        return item.technique || item.mitre_id || null;
+    case "compliance":   return item.requirement?.slice(0, 100) || item.title?.slice(0, 100) || null;
+    default:             return null;
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function Pill({ label, color = "#4d9eff" }) {
@@ -81,7 +94,7 @@ function ScoreBar({ score, color = "#4d9eff" }) {
  *   onEnrichResult(result)             — lift enrichment result up to tab for caching
  */
 function EnrichmentPanel({
-  agentId, hostName, itemType, item, onClose,
+  agentId, hostName, itemType, item, itemKey, onClose,
   initialStatus, onStatusChange,
   cachedResult,  onEnrichResult,
 }) {
@@ -95,6 +108,16 @@ function EnrichmentPanel({
     const next = localStatus === s ? null : s;
     setStatus(next);
     onStatusChange?.(next);
+    // Persist to backend (fire-and-forget)
+    const resolvedKey = itemKey || _deriveItemKey(itemType, item);
+    if (agentId && resolvedKey) {
+      fetch(`${API}/hosts/${agentId}/item-statuses`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_type: itemType, item_key: resolvedKey, status: next }),
+      }).catch(() => {});
+    }
   }
 
   function doEnrich() {
@@ -433,6 +456,14 @@ function SCATab({ agentId, hostName }) {
       .catch(() => setLoading(false));
   }, [agentId, filter, page]);
 
+  // Load persisted analyst acknowledgements for SCA items
+  useEffect(() => {
+    fetch(`${API}/hosts/${agentId}/item-statuses`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => setStatusMap(d["sca"] || {}))
+      .catch(() => {});
+  }, [agentId]);
+
   if (loading) return <div style={{ padding: 30, color: "#888", textAlign: "center" }}>Loading SCA data…</div>;
   if (!data)   return <div style={{ padding: 30, color: "#ff6b6b" }}>Failed to load SCA data.</div>;
 
@@ -510,7 +541,7 @@ function SCATab({ agentId, hostName }) {
                 {isOpen && (
                   <EnrichmentPanel
                     agentId={agentId} hostName={hostName}
-                    itemType="sca" item={c}
+                    itemType="sca" item={c} itemKey={key}
                     onClose={() => setSelected(null)}
                     initialStatus={statusMap[key]}
                     onStatusChange={s => setStatusMap(prev => ({ ...prev, [key]: s }))}
@@ -557,6 +588,14 @@ function VulnerabilitiesTab({ agentId, hostName }) {
       .then(d => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
   }, [agentId, sevFilter, page]);
+
+  // Load persisted analyst acknowledgements for vulnerability items
+  useEffect(() => {
+    fetch(`${API}/hosts/${agentId}/item-statuses`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => setStatusMap(d["vulnerability"] || {}))
+      .catch(() => {});
+  }, [agentId]);
 
   if (loading) return <div style={{ padding: 30, color: "#888", textAlign: "center" }}>Loading vulnerabilities…</div>;
   if (!data)   return <div style={{ padding: 30, color: "#ff6b6b" }}>Failed to load vulnerabilities.</div>;
@@ -615,7 +654,7 @@ function VulnerabilitiesTab({ agentId, hostName }) {
                 {isOpen && (
                   <EnrichmentPanel
                     agentId={agentId} hostName={hostName}
-                    itemType="vulnerability"
+                    itemType="vulnerability" itemKey={key}
                     item={{ ...v, package_name: v.name, package_version: v.version, cvss3_score: v.cvss }}
                     onClose={() => setSelected(null)}
                     initialStatus={statusMap[key]}
@@ -662,6 +701,14 @@ function AlertsTab({ agentId, hostName, category, label }) {
       .then(d => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
   }, [agentId, category, page]);
+
+  // Load persisted analyst acknowledgements for alert items
+  useEffect(() => {
+    fetch(`${API}/hosts/${agentId}/item-statuses`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => setStatusMap(d["alert"] || {}))
+      .catch(() => {});
+  }, [agentId]);
 
   if (loading) return <div style={{ padding: 30, color: "#888", textAlign: "center" }}>Loading {label} events…</div>;
   if (!data)   return <div style={{ padding: 30, color: "#ff6b6b" }}>Failed to load {label} data.</div>;
@@ -714,7 +761,7 @@ function AlertsTab({ agentId, hostName, category, label }) {
                 {isOpen && (
                   <EnrichmentPanel
                     agentId={agentId} hostName={hostName}
-                    itemType="alert"
+                    itemType="alert" itemKey={key}
                     item={{ ...a, rule_description: a.rule_desc, description: a.rule_desc }}
                     onClose={() => setSelected(null)}
                     initialStatus={statusMap[key]}
@@ -749,6 +796,14 @@ function MitreTab({ detail, agentId, hostName }) {
   const [selectedId, setSelected]         = useState(null);
   const [statusMap, setStatusMap]         = useState({});
   const [enrichCache, setEnrichCache]     = useState({});
+
+  // Load persisted analyst acknowledgements for MITRE techniques
+  useEffect(() => {
+    fetch(`${API}/hosts/${agentId}/item-statuses`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => setStatusMap(d["mitre"] || {}))
+      .catch(() => {});
+  }, [agentId]);
 
   return (
     <div>
@@ -789,7 +844,7 @@ function MitreTab({ detail, agentId, hostName }) {
                 {isOpen && (
                   <EnrichmentPanel
                     agentId={agentId} hostName={hostName}
-                    itemType="mitre"
+                    itemType="mitre" itemKey={key}
                     item={{ technique: t.mitre_id, tactic: t.tactic, count: t.count }}
                     onClose={() => setSelected(null)}
                     initialStatus={statusMap[key]}
@@ -843,6 +898,14 @@ function ComplianceTab({ detail, agentId, hostName }) {
     { key: "iso27001", label: "ISO 27001",   color: "#ff8c00" },
     { key: "nis2",     label: "NIS2",        color: "#4d9eff" },
   ];
+
+  // Load persisted analyst acknowledgements for compliance items
+  useEffect(() => {
+    fetch(`${API}/hosts/${agentId}/item-statuses`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => setStatusMap(d["compliance"] || {}))
+      .catch(() => {});
+  }, [agentId]);
 
   return (
     <div>
@@ -898,7 +961,8 @@ function ComplianceTab({ detail, agentId, hostName }) {
               <div>CHECK</div><div>STATUS</div>
             </div>
             {scaFailures.map((f, i) => {
-              const key = f.title ? String(i) + f.title.slice(0, 20) : String(i);
+              // Use title-based key (stable across reloads) instead of index+title
+              const key = f.title ? f.title.slice(0, 100) : String(i);
               const isOpen = selectedIdx === i;
               const curStatus = statusMap[key];
               return (
@@ -921,7 +985,7 @@ function ComplianceTab({ detail, agentId, hostName }) {
                   {isOpen && (
                     <EnrichmentPanel
                       agentId={agentId} hostName={hostName}
-                      itemType="compliance"
+                      itemType="compliance" itemKey={key}
                       item={{ ...f, framework: f.policy_id, requirement: f.title, result: "failed", description: f.rationale }}
                       onClose={() => setSelected(null)}
                       initialStatus={statusMap[key]}
