@@ -8,9 +8,17 @@
 
 ## v1.2.37 -- 2026-05-24
 
-### Improvements
+### Bug Fixes
 
-  - Stability and performance improvements.
+  - **Active Incidents — "Request AI Enhancement" button returning 503:** Root cause was `LLM_ENABLED=false` set explicitly in `/opt/cycentra/cysiemstack.env`, which caused `enrich_incident()` in the SIEM correlation engine to short-circuit and return `{}`. The `analyse_incident` endpoint then raised 503 on an empty result. Fixed by setting `LLM_ENABLED=true` and restarting `cysiemstack-engine`. AI analysis now flows through to CyMind correctly.
+
+### New Features
+
+  - **Host Intelligence — Item status persistence across sessions:** Status labels set on items in the SCA, Vulnerabilities, Alerts, MITRE, and Compliance detail tabs are now persisted to the database (new `host_item_acks` PostgreSQL table in the correlation DB). Status is restored on every panel open via a `GET /api/siem/hosts/<agent_id>/item-statuses` call on tab mount. Previously, status labels were React-only state and were lost on panel close.
+
+  - **Host Intelligence — Analyst acknowledgements feed into security posture score:** Items marked as `false_positive` or `resolved` now reduce the effective failure count when computing the per-host posture score in `host_service.py`. Acknowledged SCA checks count as passes; each acknowledged vulnerability adds approximately 4 points to the vulnerability sub-score (medium-severity-removal approximation). The adjustment is applied during the hourly posture recalculation and is wrapped in a safe try/except so the score degrades gracefully if the acks table is not yet initialised.
+
+  - **Host Intelligence — New API endpoints:** `GET /api/siem/hosts/<agent_id>/item-statuses` returns all current ack statuses for a host as a nested dict `{item_type: {item_key: status}}`. `POST /api/siem/hosts/<agent_id>/item-statuses` upserts or clears a single ack. Accepted `item_type` values: `sca`, `vulnerability`, `alert`, `mitre`, `compliance`. Accepted `status` values: `investigating`, `in_review`, `resolved`, `false_positive` (null = delete).
 
 ---
 
