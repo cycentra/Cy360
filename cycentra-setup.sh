@@ -810,8 +810,11 @@ if [[ -f "$WAZUH_YML" ]]; then
     # (re-run / --update) or will be configured this run (CYSIEM_OIDC_SECRET is
     # set), the kibanaserver credential block is not needed and its absence is
     # not an error.  Skip with an info message in those cases.
-    _oidc_already_active=$(grep -c "^opensearch_security.auth.type: openid" "$WAZUH_YML" 2>/dev/null || echo "0")
-    if [[ "$_oidc_already_active" -gt 0 ]]; then
+    # grep -c exits 1 on zero matches (and outputs "0") — using || echo "0" would
+    # produce "0\n0" and break the [[ ]] arithmetic test.  Use || true instead and
+    # fall back via parameter expansion for the file-not-found (empty output) case.
+    _oidc_already_active=$(grep -c "^opensearch_security.auth.type: openid" "$WAZUH_YML" 2>/dev/null || true)
+    if [[ "${_oidc_already_active:-0}" -gt 0 ]]; then
         info "CySIEM Dashboard: OIDC auth already active — kibanaserver credentials not required"
     else
         _ks_line_user=$(grep -E "^#?\s*opensearch\.username:" "$WAZUH_YML" | head -1 || true)
