@@ -157,9 +157,13 @@ WAZUH_URL    = os.environ.get("WAZUH_URL", "")
 
 # ── Cloud Marketplace ─────────────────────────────────────────────────────────
 # Pre-shared token sent as X-CyCentra-Token when the backend proxies the
-# cloud catalog from cycentra.com. Set the same value in the cycentra.com
-# container env as MARKETPLACE_CATALOG_TOKEN so nginx can validate it.
-# Generate with: python3 -c "import secrets; print(secrets.token_hex(32))"
+# cloud catalog from cycentra.com. One token covers all installations —
+# store it in vault once (MARKETPLACE-CATALOG-TOKEN); it is fetched at startup
+# via FLASK_KV_MAP in kv_secrets.py. The same value must be set in the
+# cycentra.com container env as MARKETPLACE_CATALOG_TOKEN so nginx can validate
+# it. To rotate: update vault + cycentra.com env → all instances pick up the
+# new token at their next daily secret refresh without manual intervention.
+# Leave empty on both sides to allow open catalog access (backwards compat).
 MARKETPLACE_CATALOG_TOKEN = os.environ.get("MARKETPLACE_CATALOG_TOKEN", "")
 MARKETPLACE_CATALOG_URL   = os.environ.get(
     "MARKETPLACE_CATALOG_URL",
