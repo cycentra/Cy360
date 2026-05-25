@@ -1,3 +1,18 @@
+## v1.2.40 -- 2026-05-25
+
+### New Features
+
+  - add VALID_MODULES to compose.py — ImportError crash on Flask startup
+
+### Bug Fixes
+
+  - grep -c produces 0
+0 when no match — use || true + ${:-0} fallback to avoid [[ ]] syntax error
+  - handle Azure Arc AZCM0044 (resource already exists) and disconnected state gracefully
+  - handle unsupported OS in Azure Arc installer — skip gracefully instead of aborting setup
+
+---
+
 ## v1.2.39 -- 2026-05-25
 
 ### New Features
