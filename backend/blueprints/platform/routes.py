@@ -945,6 +945,48 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
                         _master_env.write_text(_env_text)
                         os.environ["CLOUD_IRIS_API_KEY"] = _key
                         log(f"CyIRIS: CLOUD_IRIS_API_KEY captured and written to master .env")
+
+                        # Activate mode=cloud in ai_settings.json so get_iris_config()
+                        # returns a valid config without requiring a manual UI save.
+                        _ai_file = Path("/opt/cycentra/ai_settings.json")
+                        try:
+                            _ai = json.loads(_ai_file.read_text()) if _ai_file.exists() else {}
+                            _ai.setdefault("iris", {})["mode"] = "cloud"
+                            _ai_file.parent.mkdir(parents=True, exist_ok=True)
+                            _ai_file.write_text(json.dumps(_ai, indent=2))
+                            log("CyIRIS: ai_settings.json → iris.mode=cloud activated")
+                        except Exception as _ae:
+                            log(f"CyIRIS: WARNING — ai_settings.json update failed: {_ae}")
+
+                        # Sync integration settings into cysiemstack.env so the
+                        # correlation engine activates without a manual restart.
+                        _siem_path = Path("/opt/cycentra/cysiemstack.env")
+                        if _siem_path.exists():
+                            try:
+                                _iris_updates = {
+                                    "IRIS_MODE":        "cloud",
+                                    "IRIS_ENABLED":     "true",
+                                    "IRIS_URL":         _iris_url_default,
+                                    "IRIS_API_KEY":     _key,
+                                    "IRIS_CUSTOMER_ID": "1",
+                                }
+                                _siem_lines = _siem_path.read_text().splitlines()
+                                _siem_result, _siem_seen = [], set()
+                                for _sl in _siem_lines:
+                                    _sk = _sl.split("=", 1)[0].strip()
+                                    if _sk in _iris_updates:
+                                        _siem_result.append(f"{_sk}={_iris_updates[_sk]}")
+                                        _siem_seen.add(_sk)
+                                    else:
+                                        _siem_result.append(_sl)
+                                for _sk, _sv in _iris_updates.items():
+                                    if _sk not in _siem_seen:
+                                        _siem_result.append(f"{_sk}={_sv}")
+                                _siem_path.write_text("\n".join(_siem_result) + "\n")
+                                log("CyIRIS: cysiemstack.env → IRIS_MODE=cloud, IRIS_ENABLED=true")
+                            except Exception as _se:
+                                log(f"CyIRIS: WARNING — cysiemstack.env update failed: {_se}")
+
                         _iris_key_captured = True
                     break
                 log(f"CyIRIS: DB not ready yet ({_attempt + 1}/24)")

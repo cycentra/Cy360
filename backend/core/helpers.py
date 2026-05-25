@@ -150,6 +150,12 @@ def get_iris_config() -> dict | None:
     iris = stored.get("iris", {})
     mode = iris.get("mode", "disabled")
 
+    # Auto-activate: if the post-install capture wrote CLOUD_IRIS_API_KEY into
+    # os.environ (platform/routes.py) but ai_settings.json was not yet updated,
+    # treat this as cloud mode so the integration works immediately after install.
+    if mode in ("disabled", "") and os.environ.get("CLOUD_IRIS_API_KEY", "").strip():
+        mode = "cloud"
+
     if mode == "cloud":
         url = os.environ.get("CLOUD_IRIS_URL", _CLOUD_IRIS_URL_DEFAULT).rstrip("/")
         # Prefer env var; fall back to key stored in ai_settings.json by the UI
