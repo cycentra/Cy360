@@ -150,18 +150,19 @@ FLASK_KV_MAP: dict[str, str] = {
     "GOOGLE_CLIENT_SECRET":     "GOOGLE-CLIENT-SECRET",
     "MICROSOFT_CLIENT_ID":      "MICROSOFT-CLIENT-ID",
     "MICROSOFT_CLIENT_SECRET":  "MICROSOFT-CLIENT-SECRET",
-    # ── Email ──────────────────────────────────────────────────────────────────
-    "SMTP_PASSWORD":            "SMTP-PASSWORD",
     # ── External integrations (company-level credentials) ─────────────────────
     "GH_TOKEN":                 "GH-TOKEN",
     "MAXMIND_KEY":              "MAXMIND-KEY",
     "CLOUD_MISP_URL":           "CLOUD-MISP-URL",
     "CLOUD_MISP_API_KEY":       "CLOUD-MISP-API-KEY",
-    "CLOUD_IRIS_URL":           "CLOUD-IRIS-URL",
     "CYMIND_API_URL":           "CYMIND-API-URL",
     "CYMIND_API_KEY":           "CYMIND-API-KEY",
     #
-    # ── Server-only (install-specific — NOT in vault) ──────────────────────────
+    # ── NOT in vault — reason ─────────────────────────────────────────────────
+    # SMTP_PASSWORD       — UI-managed (cy_sso_config DB); host/user/from are
+    #                       also UI fields so vault can't bootstrap SMTP alone
+    # CLOUD_IRIS_URL      — hardcoded default in helpers.py + setup.sh writes
+    #                       https://cyiris.cycentra.com to .env at install time
     # SECRET_KEY, JWT_SECRET, ADMIN_API_KEY         — openssl rand per install
     # CYCENTRA_DB_URL, POSTGRES_PASSWORD             — per-install DB credentials
     # OAUTH2PROXY_SECRET, OAUTH2PROXY_COOKIE_SECRET  — openssl rand per install
@@ -180,7 +181,6 @@ FLASK_KV_MAP: dict[str, str] = {
 #   WAZUH_API_*        — auto-detected by setup.sh from local Wazuh config
 #   IRIS_API_KEY, CLOUD_IRIS_API_KEY — written by UI (_sync_iris_to_siem_env)
 ENGINE_KV_MAP: dict[str, str] = {
-    "CLOUD_IRIS_URL":     "CLOUD-IRIS-URL",
     "CLOUD_MISP_URL":     "CLOUD-MISP-URL",
     "CLOUD_MISP_API_KEY": "CLOUD-MISP-API-KEY",
     "CYMIND_API_URL":     "CYMIND-API-URL",

@@ -1706,11 +1706,9 @@ SIEMEOF
             SSO_CLIENT_ID SSO_CLIENT_SECRET
             GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET
             MICROSOFT_CLIENT_ID MICROSOFT_CLIENT_SECRET
-            # Email
-            SMTP_PASSWORD
             # External integrations (company-level credentials)
             GH_TOKEN MAXMIND_KEY
-            CLOUD_MISP_URL CLOUD_MISP_API_KEY CLOUD_IRIS_URL
+            CLOUD_MISP_URL CLOUD_MISP_API_KEY
             CYMIND_API_URL CYMIND_API_KEY
         )
 
