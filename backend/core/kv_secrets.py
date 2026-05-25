@@ -155,12 +155,16 @@ FLASK_KV_MAP: dict[str, str] = {
     "MICROSOFT_CLIENT_ID":      "MICROSOFT-CLIENT-ID",
     "MICROSOFT_CLIENT_SECRET":  "MICROSOFT-CLIENT-SECRET",
     # ── Sub-service credentials ────────────────────────────────────────────────
-    "IRIS_API_KEY":             "IRIS-API-KEY",
+    # NOTE: IRIS_API_KEY and CLOUD_IRIS_API_KEY are intentionally excluded —
+    # they are captured and written to .env by the platform UI at CyIRIS deploy
+    # time (platform/routes.py).  Vaulting them would cause startup-time stale
+    # overwrites every time the CyIRIS API key is rotated from the portal.
     "IRIS_SECRET_KEY":          "IRIS-SECRET-KEY",
     "IRIS_DB_PASS":             "IRIS-DB-PASS",
     "IRIS_ADM_PASSWORD":        "IRIS-ADM-PASSWORD",
+    # NOTE: CYSOAR_SESSION_SECRET excluded — it is derived from
+    # NODE_RED_CREDENTIAL_SECRET at runtime (platform/routes.py L742).
     "NODE_RED_CREDENTIAL_SECRET": "NODE-RED-CREDENTIAL-SECRET",
-    "CYSOAR_SESSION_SECRET":    "CYSOAR-SESSION-SECRET",
     # ── Email ──────────────────────────────────────────────────────────────────
     "SMTP_PASSWORD":            "SMTP-PASSWORD",
     # ── External integrations ──────────────────────────────────────────────────
@@ -169,19 +173,17 @@ FLASK_KV_MAP: dict[str, str] = {
     "CLOUD_MISP_URL":           "CLOUD-MISP-URL",
     "CLOUD_MISP_API_KEY":       "CLOUD-MISP-API-KEY",
     "CLOUD_IRIS_URL":           "CLOUD-IRIS-URL",
-    "CLOUD_IRIS_API_KEY":       "CLOUD-IRIS-API-KEY",
 }
 
 # Correlation engine (/opt/cycentra/cysiemstack.env) — separate process
+# NOTE: WAZUH_API_* excluded — auto-detected by setup.sh from Wazuh manager
+# config on every --update; vault would hold stale values between rotations.
+# NOTE: IRIS_API_KEY and CLOUD_IRIS_API_KEY excluded — written to cysiemstack.env
+# dynamically by _sync_iris_to_siem_env() when CyIRIS config changes from UI.
 ENGINE_KV_MAP: dict[str, str] = {
-    "WAZUH_API_URL":      "WAZUH-API-URL",
-    "WAZUH_API_USER":     "WAZUH-API-USER",
-    "WAZUH_API_PASSWORD": "WAZUH-API-PASSWORD",
     "CORRELATION_DB_URL": "CORRELATION-DB-URL",
     "CYMIND_API_KEY":     "CYMIND-API-KEY",
-    "IRIS_API_KEY":       "IRIS-API-KEY",
     "CLOUD_IRIS_URL":     "CLOUD-IRIS-URL",
-    "CLOUD_IRIS_API_KEY": "CLOUD-IRIS-API-KEY",
     "CLOUD_MISP_URL":     "CLOUD-MISP-URL",
     "CLOUD_MISP_API_KEY": "CLOUD-MISP-API-KEY",
 }
