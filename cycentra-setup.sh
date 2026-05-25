@@ -345,8 +345,10 @@ if [[ -n "${ARC_SP_ID:-}" && -n "${ARC_SP_SECRET:-}" ]]; then
     _arc_tenant="${ARC_TENANT_ID:?ARC_TENANT_ID must be set for Arc enrollment}"
     _arc_location="${ARC_LOCATION:-westeurope}"
 
-    if command -v azcmagent >/dev/null 2>&1 && azcmagent show 2>/dev/null | grep -q "Connected"; then
-        success "Azure Arc agent already connected — skipping enrollment"
+    # Check both "Connected" and "Disconnected" states — a disconnected resource
+    # still exists in Azure Arc and re-running connect would fail with AZCM0044.
+    if command -v azcmagent >/dev/null 2>&1 && azcmagent show 2>/dev/null | grep -qE "Status\s*:\s*(Connected|Disconnected)"; then
+        success "Azure Arc agent already registered ($(azcmagent show 2>/dev/null | grep -oP '(?<=Status\s:\s)\S+' || echo 'see azcmagent show')) — skipping enrollment"
     else
         info "Downloading Azure Connected Machine Agent ..."
         LINUX_INSTALL_SCRIPT="/tmp/install_linux_azcmagent.sh"
@@ -365,6 +367,7 @@ if [[ -n "${ARC_SP_ID:-}" && -n "${ARC_SP_SECRET:-}" ]]; then
         sleep 5
 
         info "Connecting server to Azure Arc ..."
+        _arc_connect_rc=0
         sudo azcmagent connect \
             --service-principal-id     "$ARC_SP_ID" \
             --service-principal-secret "$ARC_SP_SECRET" \
@@ -372,12 +375,23 @@ if [[ -n "${ARC_SP_ID:-}" && -n "${ARC_SP_SECRET:-}" ]]; then
             --tenant-id                "$_arc_tenant" \
             --location                 "$_arc_location" \
             --subscription-id          "$_arc_sub" \
-            --cloud "AzureCloud"
+            --cloud "AzureCloud" || _arc_connect_rc=$?
 
         # Clear SP secret from memory immediately after use
         unset ARC_SP_SECRET
-        success "Azure Arc enrollment complete — Managed Identity is now active"
-        info "Set AZURE_KEYVAULT_URL in /opt/cycentra/.env to enable Key Vault bootstrap"
+
+        # Exit code 44 = AZCM0044 — resource already exists in Azure Arc from a
+        # previous enrollment.  Treat as success; the resource is already registered.
+        if [[ $_arc_connect_rc -eq 44 ]]; then
+            warn "Azure Arc resource already exists in Azure (AZCM0044) — server was previously enrolled."
+            warn "  Managed Identity is already active. Run 'azcmagent show' to confirm."
+        elif [[ $_arc_connect_rc -ne 0 ]]; then
+            warn "azcmagent connect exited with code $_arc_connect_rc — Arc enrollment incomplete."
+            warn "  Managed Identity will not be available. Check 'azcmagent show' for details."
+        else
+            success "Azure Arc enrollment complete — Managed Identity is now active"
+            info "Set AZURE_KEYVAULT_URL in /opt/cycentra/.env to enable Key Vault bootstrap"
+        fi
         fi
     fi
 else
