@@ -73,14 +73,43 @@ that variable — existing env values always win.  This allows local overrides
 during dev without touching the vault.
 
 ──────────────────────────────────────────────────────────────────────────────
-ADDING A NEW SECRET (either backend)
+INFISICAL
+──────────────────────────────────────────────────────────────────────────────
+Set SECRETS_BACKEND=infisical plus:
+
+  INFISICAL_URL=https://infisical.yourdomain.com   (self-hosted) or omit for cloud
+  INFISICAL_CLIENT_ID=<machine-identity-client-id>
+  INFISICAL_CLIENT_SECRET=<machine-identity-client-secret>
+  INFISICAL_PROJECT_ID=<project-id>
+  INFISICAL_ENVIRONMENT=prod   (dev | staging | prod)
+
+Secret naming:  env var FOO_BAR  →  Infisical secret name  FOO_BAR  (underscores kept)
+
+Required package:
+  infisicalsdk>=2.0.0
+
+Infisical Machine Identity setup (run once in Infisical UI):
+  1. Create a Machine Identity in your Infisical project
+  2. Assign it the "developer" or "reader" role on the project
+  3. Copy the Client ID and Client Secret into your .env as above
+
+For production (Azure Arc):
+  Use Infisical's "Native Azure Auth" machine identity — the machine identity
+  authenticates with Azure Arc MSI instead of a client secret.
+  Set INFISICAL_AZURE_RESOURCE=https://management.azure.com/ (or any resource URL).
+  Remove INFISICAL_CLIENT_SECRET; Infisical SDK will call the Arc MSI endpoint.
+
+──────────────────────────────────────────────────────────────────────────────
+ADDING A NEW SECRET (any backend)
 ──────────────────────────────────────────────────────────────────────────────
 1. Store it in the vault:
      Azure:      az keyvault secret set --vault-name ... --name MY-NEW-SECRET --value ...
      HashiCorp:  vault kv put secret/cycentra/MY-NEW-SECRET value=...
+     Infisical:  infisical secrets set MY_NEW_SECRET=value --env prod
 
 2. Add the mapping below in the correct map (FLASK_KV_MAP / ENGINE_KV_MAP / ASM_KV_MAP):
-     "MY_NEW_SECRET": "MY-NEW-SECRET",
+     Azure/HashiCorp:  "MY_NEW_SECRET": "MY-NEW-SECRET",
+     Infisical:        "MY_NEW_SECRET": "MY_NEW_SECRET",
 
 3. Read it in code as usual:
      MY_NEW_SECRET = os.environ.get("MY_NEW_SECRET", "")
@@ -100,22 +129,49 @@ log = logging.getLogger("cycentra.kv_secrets")
 
 # Flask backend (/opt/cycentra/.env)
 FLASK_KV_MAP: dict[str, str] = {
-    "GOOGLE_CLIENT_ID":        "GOOGLE-CLIENT-ID",
-    "GOOGLE_CLIENT_SECRET":    "GOOGLE-CLIENT-SECRET",
-    "MICROSOFT_CLIENT_ID":     "MICROSOFT-CLIENT-ID",
-    "MICROSOFT_CLIENT_SECRET": "MICROSOFT-CLIENT-SECRET",
-    "IRIS_ADM_PASSWORD":       "IRIS-ADM-PASSWORD",
-    "GH_TOKEN":                "GH-TOKEN",
-    "MAXMIND_KEY":             "MAXMIND-KEY",
-    "CLOUD_MISP_URL":          "CLOUD-MISP-URL",
-    "CLOUD_MISP_API_KEY":      "CLOUD-MISP-API-KEY",
-    "CLOUD_IRIS_URL":          "CLOUD-IRIS-URL",
-    "CLOUD_IRIS_API_KEY":      "CLOUD-IRIS-API-KEY",
+    # ── Core platform ──────────────────────────────────────────────────────────
+    "SECRET_KEY":               "SECRET-KEY",
+    "JWT_SECRET":               "JWT-SECRET",
+    "ADMIN_API_KEY":            "ADMIN-API-KEY",
+    "CYCENTRA_DB_URL":          "CYCENTRA-DB-URL",
+    "POSTGRES_PASSWORD":        "POSTGRES-PASSWORD",
+    "MARKETPLACE_CATALOG_TOKEN": "MARKETPLACE-CATALOG-TOKEN",
+    # ── OIDC / OAuth2 ──────────────────────────────────────────────────────────
+    "OAUTH2PROXY_SECRET":        "OAUTH2PROXY-SECRET",
+    "OAUTH2PROXY_COOKIE_SECRET": "OAUTH2PROXY-COOKIE-SECRET",
+    "CYIRIS_OIDC_SECRET":       "CYIRIS-OIDC-SECRET",
+    "CYSIEM_OIDC_SECRET":       "CYSIEM-OIDC-SECRET",
+    "CY360SSO_OIDC_SECRET":     "CY360SSO-OIDC-SECRET",
+    "SSO_CLIENT_ID":            "SSO-CLIENT-ID",
+    "SSO_CLIENT_SECRET":        "SSO-CLIENT-SECRET",
+    "GOOGLE_CLIENT_ID":         "GOOGLE-CLIENT-ID",
+    "GOOGLE_CLIENT_SECRET":     "GOOGLE-CLIENT-SECRET",
+    "MICROSOFT_CLIENT_ID":      "MICROSOFT-CLIENT-ID",
+    "MICROSOFT_CLIENT_SECRET":  "MICROSOFT-CLIENT-SECRET",
+    # ── Sub-service credentials ────────────────────────────────────────────────
+    "IRIS_API_KEY":             "IRIS-API-KEY",
+    "IRIS_SECRET_KEY":          "IRIS-SECRET-KEY",
+    "IRIS_DB_PASS":             "IRIS-DB-PASS",
+    "IRIS_ADM_PASSWORD":        "IRIS-ADM-PASSWORD",
+    "NODE_RED_CREDENTIAL_SECRET": "NODE-RED-CREDENTIAL-SECRET",
+    "CYSOAR_SESSION_SECRET":    "CYSOAR-SESSION-SECRET",
+    # ── Email ──────────────────────────────────────────────────────────────────
+    "SMTP_PASSWORD":            "SMTP-PASSWORD",
+    # ── External integrations ──────────────────────────────────────────────────
+    "GH_TOKEN":                 "GH-TOKEN",
+    "MAXMIND_KEY":              "MAXMIND-KEY",
+    "CLOUD_MISP_URL":           "CLOUD-MISP-URL",
+    "CLOUD_MISP_API_KEY":       "CLOUD-MISP-API-KEY",
+    "CLOUD_IRIS_URL":           "CLOUD-IRIS-URL",
+    "CLOUD_IRIS_API_KEY":       "CLOUD-IRIS-API-KEY",
 }
 
 # Correlation engine (/opt/cycentra/cysiemstack.env) — separate process
 ENGINE_KV_MAP: dict[str, str] = {
+    "WAZUH_API_URL":      "WAZUH-API-URL",
+    "WAZUH_API_USER":     "WAZUH-API-USER",
     "WAZUH_API_PASSWORD": "WAZUH-API-PASSWORD",
+    "CORRELATION_DB_URL": "CORRELATION-DB-URL",
     "CLOUD_IRIS_URL":     "CLOUD-IRIS-URL",
     "CLOUD_IRIS_API_KEY": "CLOUD-IRIS-API-KEY",
     "CLOUD_MISP_URL":     "CLOUD-MISP-URL",
@@ -132,6 +188,7 @@ ASM_KV_MAP: dict[str, str] = {
     "GOOGLE_GEMINI_KEY":      "GOOGLE-GEMINI-KEY",
     "HUNTER_API_KEY":         "HUNTER-API-KEY",
     "HIBP_API_KEY":           "HIBP-API-KEY",
+    "GVM_PASSWORD":           "GVM-PASSWORD",
 }
 
 
@@ -254,6 +311,84 @@ def _hashicorp_fetch(kv_map: dict[str, str]) -> int:
     return fetched
 
 
+# ── Infisical backend ──────────────────────────────────────────────────────────
+
+def _infisical_fetch(kv_map: dict[str, str]) -> int:
+    """
+    Fetches secrets from Infisical using Machine Identity (Universal Auth or
+    Native Azure Auth when running under Azure Arc).
+
+    Universal Auth  → set INFISICAL_CLIENT_ID + INFISICAL_CLIENT_SECRET
+    Azure Native Auth (Arc MSI) → set INFISICAL_CLIENT_ID only;
+                                   Infisical SDK calls the local MSI endpoint.
+    """
+    project_id = os.environ.get("INFISICAL_PROJECT_ID", "").strip()
+    environment = os.environ.get("INFISICAL_ENVIRONMENT", "prod").strip()
+    if not project_id:
+        log.debug("INFISICAL_PROJECT_ID not set — Infisical backend skipped")
+        return 0
+
+    try:
+        from infisicalsdk import InfisicalSDKClient
+    except ImportError:
+        log.warning(
+            "infisicalsdk not installed — run: pip install infisicalsdk>=2.0.0"
+        )
+        return 0
+
+    client_id = os.environ.get("INFISICAL_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("INFISICAL_CLIENT_SECRET", "").strip()
+
+    if not client_id:
+        log.error("Infisical: INFISICAL_CLIENT_ID is required")
+        return 0
+
+    infisical_url = os.environ.get("INFISICAL_URL", "https://app.infisical.com").rstrip("/")
+
+    try:
+        client = InfisicalSDKClient(host=infisical_url)
+
+        if client_secret:
+            # Universal Auth — developer machines and staging environments
+            client.auth.universal_auth.login(
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+            log.debug("Infisical: authenticated via Universal Auth")
+        else:
+            # Native Azure Auth — production servers running under Azure Arc
+            # The SDK calls the local MSI endpoint; no secret ever touches disk.
+            client.auth.azure_auth.login(client_id=client_id)
+            log.debug("Infisical: authenticated via Azure Native Auth (Arc MSI)")
+    except Exception as exc:
+        log.error("Infisical: authentication failed: %s", exc)
+        return 0
+
+    fetched = 0
+    for env_key, secret_name in kv_map.items():
+        if os.environ.get(env_key):
+            continue
+        try:
+            secret = client.secrets.get_secret_by_name(
+                secret_name=secret_name,
+                project_id=project_id,
+                environment_slug=environment,
+                secret_path="/",
+            )
+            value = secret.secret_value
+            if value:
+                os.environ[env_key] = value
+                fetched += 1
+                log.debug("Infisical → loaded %s", env_key)
+            else:
+                log.warning("Infisical: secret '%s' exists but is empty", secret_name)
+        except Exception as exc:
+            log.warning("Infisical: could not fetch '%s': %s", secret_name, exc)
+
+    log.info("Infisical: %d/%d secret(s) loaded", fetched, len(kv_map))
+    return fetched
+
+
 # ── Public entry point ─────────────────────────────────────────────────────────
 
 def load_kv_secrets(kv_map: dict[str, str] | None = None) -> None:
@@ -268,6 +403,7 @@ def load_kv_secrets(kv_map: dict[str, str] | None = None) -> None:
     Switch backends by setting SECRETS_BACKEND in .env:
       SECRETS_BACKEND=azure       (default)
       SECRETS_BACKEND=hashicorp
+      SECRETS_BACKEND=infisical
     """
     if kv_map is None:
         kv_map = FLASK_KV_MAP
@@ -276,5 +412,7 @@ def load_kv_secrets(kv_map: dict[str, str] | None = None) -> None:
 
     if backend == "hashicorp":
         _hashicorp_fetch(kv_map)
+    elif backend == "infisical":
+        _infisical_fetch(kv_map)
     else:
         _azure_fetch(kv_map)

@@ -310,6 +310,60 @@ fi
 
 if [[ "$MODE" != "update" ]]; then
 
+# ── Step 0: Azure Arc enrollment (optional — enables Managed Identity for KV) ─
+# If ARC_SP_ID and ARC_SP_SECRET are set in the environment, the server is
+# enrolled with Azure Arc before any app component is installed.  Once enrolled
+# the server gets a Managed Identity and the app uses DefaultAzureCredential()
+# to authenticate to Azure Key Vault — no static secrets needed at runtime.
+#
+# Pass credentials as environment variables, never hardcode them:
+#   export ARC_SP_ID="<service-principal-app-id>"
+#   export ARC_SP_SECRET="<service-principal-secret>"
+#   export ARC_SUBSCRIPTION_ID="<subscription-id>"
+#   export ARC_RESOURCE_GROUP="<resource-group>"
+#   export ARC_TENANT_ID="<tenant-id>"
+#   export ARC_LOCATION="westeurope"   # or your region
+#   bash cycentra-setup.sh
+#
+# The SP only needs "Azure Connected Machine Onboarding" role — rotate or
+# revoke it after all servers are enrolled.  The runtime app never uses it.
+if [[ -n "${ARC_SP_ID:-}" && -n "${ARC_SP_SECRET:-}" ]]; then
+    step_header "AZURE ARC ENROLLMENT"
+    _arc_sub="${ARC_SUBSCRIPTION_ID:?ARC_SUBSCRIPTION_ID must be set for Arc enrollment}"
+    _arc_rg="${ARC_RESOURCE_GROUP:?ARC_RESOURCE_GROUP must be set for Arc enrollment}"
+    _arc_tenant="${ARC_TENANT_ID:?ARC_TENANT_ID must be set for Arc enrollment}"
+    _arc_location="${ARC_LOCATION:-westeurope}"
+
+    if command -v azcmagent >/dev/null 2>&1 && azcmagent show 2>/dev/null | grep -q "Connected"; then
+        success "Azure Arc agent already connected — skipping enrollment"
+    else
+        info "Downloading Azure Connected Machine Agent ..."
+        LINUX_INSTALL_SCRIPT="/tmp/install_linux_azcmagent.sh"
+        [[ -f "$LINUX_INSTALL_SCRIPT" ]] && rm -f "$LINUX_INSTALL_SCRIPT"
+        wget -q https://gbl.his.arc.azure.com/azcmagent-linux -O "$LINUX_INSTALL_SCRIPT"
+        bash "$LINUX_INSTALL_SCRIPT"
+        sleep 5
+
+        info "Connecting server to Azure Arc ..."
+        sudo azcmagent connect \
+            --service-principal-id     "$ARC_SP_ID" \
+            --service-principal-secret "$ARC_SP_SECRET" \
+            --resource-group           "$_arc_rg" \
+            --tenant-id                "$_arc_tenant" \
+            --location                 "$_arc_location" \
+            --subscription-id          "$_arc_sub" \
+            --cloud "AzureCloud"
+
+        # Clear SP secret from memory immediately after use
+        unset ARC_SP_SECRET
+        success "Azure Arc enrollment complete — Managed Identity is now active"
+        info "Set AZURE_KEYVAULT_URL in /opt/cycentra/.env to enable Key Vault bootstrap"
+    fi
+else
+    info "ARC_SP_ID not set — skipping Azure Arc enrollment"
+    info "  To enable: export ARC_SP_ID=... ARC_SP_SECRET=... then re-run setup"
+fi
+
 # ── Step 1: System packages ───────────────────────────────────────────────────
 step_header "SYSTEM DEPENDENCIES"
 apt-get update -y -qq
@@ -1329,12 +1383,35 @@ CLOUD_IRIS_URL=${CLOUD_IRIS_URL:-}
 CLOUD_IRIS_API_KEY=${CLOUD_IRIS_API_KEY:-}
 CLOUD_IRIS_CUSTOMER_ID=${CLOUD_IRIS_CUSTOMER_ID:-1}
 
+# ── Secrets backend selection ─────────────────────────────────────────────────
+# Choose ONE backend to use for secret injection at startup:
+#   azure      → Azure Key Vault via DefaultAzureCredential
+#                (supports Azure Arc Managed Identity automatically)
+#   hashicorp  → HashiCorp Vault via Token or AppRole auth
+#   infisical  → Infisical via Machine Identity (Universal Auth or Native Azure Auth)
+# Leave blank to rely solely on values in this .env file.
+SECRETS_BACKEND=${SECRETS_BACKEND:-azure}
+
 # ── Azure Key Vault — set to your vault URL to enable secret bootstrap ─────────
-# The app fetches GOOGLE_CLIENT_ID/SECRET, MICROSOFT_CLIENT_ID/SECRET,
-# MAXMIND_KEY, GH_TOKEN, IRIS_ADM_PASSWORD, CLOUD_MISP_*, CLOUD_IRIS_*
-# from Key Vault at startup when this is set.
-# Auth: Managed Identity (Azure VM) or AZURE_CLIENT_ID/SECRET/TENANT_ID env vars.
+# The app fetches secrets from Key Vault at startup when this is set.
+# Auth (tried in order by DefaultAzureCredential):
+#   1. Azure Arc Managed Identity  ← recommended for Arc-enrolled servers
+#   2. AZURE_CLIENT_ID + AZURE_CLIENT_SECRET + AZURE_TENANT_ID  ← Service Principal
+#   3. `az login` CLI session  ← local dev
 AZURE_KEYVAULT_URL=${AZURE_KEYVAULT_URL:-}
+
+# ── Infisical — set these to use Infisical as the secrets backend ──────────────
+# INFISICAL_URL: your self-hosted Infisical URL (omit for Infisical Cloud)
+# INFISICAL_CLIENT_ID: Machine Identity client ID
+# INFISICAL_CLIENT_SECRET: Machine Identity client secret
+#   (omit when using Native Azure Auth with Azure Arc — MSI is used automatically)
+# INFISICAL_PROJECT_ID: your Infisical project ID
+# INFISICAL_ENVIRONMENT: secret environment to pull from (dev | staging | prod)
+INFISICAL_URL=${INFISICAL_URL:-}
+INFISICAL_CLIENT_ID=${INFISICAL_CLIENT_ID:-}
+INFISICAL_CLIENT_SECRET=${INFISICAL_CLIENT_SECRET:-}
+INFISICAL_PROJECT_ID=${INFISICAL_PROJECT_ID:-}
+INFISICAL_ENVIRONMENT=${INFISICAL_ENVIRONMENT:-prod}
 ENVEOF
     echo "MAXMIND_KEY=${MAXMIND_KEY:-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}" >> /opt/cycentra/.env
 
@@ -1392,8 +1469,14 @@ UEBA_ML_MODEL_DIR=/opt/cycentra/ml_models
 MISP_ENABLED=false
 # Standalone key so --update mode can read the password without parsing DATABASE_URL
 POSTGRES_PASSWORD=${CORR_DB_PASS}
-# Azure Key Vault — engine fetches WAZUH_API_PASSWORD from KV when set
+# Secrets backend — must match /opt/cycentra/.env SECRETS_BACKEND setting
+SECRETS_BACKEND=${SECRETS_BACKEND:-azure}
 AZURE_KEYVAULT_URL=${AZURE_KEYVAULT_URL:-}
+INFISICAL_URL=${INFISICAL_URL:-}
+INFISICAL_CLIENT_ID=${INFISICAL_CLIENT_ID:-}
+INFISICAL_CLIENT_SECRET=${INFISICAL_CLIENT_SECRET:-}
+INFISICAL_PROJECT_ID=${INFISICAL_PROJECT_ID:-}
+INFISICAL_ENVIRONMENT=${INFISICAL_ENVIRONMENT:-prod}
 SIEMEOF
     chmod 600 /opt/cycentra/cysiemstack.env
     success "cysiemstack.env written → /opt/cycentra/cysiemstack.env"

@@ -25,3 +25,12 @@ matplotlib>=3.7
 numpy>=1.24
 Pillow>=10.0
 psutil>=5.9
+
+# ── Secrets backends (optional — install only what you use) ───────────────────
+# Azure Key Vault + Azure Arc Managed Identity
+azure-identity>=1.15.0
+azure-keyvault-secrets>=4.7.0
+# HashiCorp Vault
+# hvac>=2.0.0
+# Infisical (developer secrets management — also supports Native Azure Auth for Arc)
+# infisicalsdk>=2.0.0
