@@ -21,8 +21,7 @@ logger = setup_logging()
 
 _MISP_ATTRIBUTE_TYPES = ["hostname", "domain", "ip-dst", "ip-src", "url", "domain|ip"]
 
-# Shodan API Key from config or env
-SHODAN_API_KEY = os.environ.get("SHODAN_API_KEY")
+from config import SHODAN_API_KEY
 
 
 async def search_shodan(domain: str, session: aiohttp.ClientSession) -> list[dict]:

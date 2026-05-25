@@ -37,7 +37,9 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", f"https://cy360.{BASE_DOMAIN}")
 BASE_URL     = os.environ.get("BASE_URL",      f"https://cyasm.{BASE_DOMAIN}")
 
 # ── Secrets ────────────────────────────────────────────────────────────────────
-SECRET_KEY            = os.environ.get("SECRET_KEY", "change_this_to_something_secure_32ch")
+SECRET_KEY = os.environ.get("SECRET_KEY", "")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY not configured — set it in /opt/cycentra/.env or vault")
 JWT_SECRET            = os.environ.get("JWT_SECRET", SECRET_KEY)
 TOKEN_TTL             = 3600  # seconds
 OAUTH2PROXY_SECRET    = os.environ.get("OAUTH2PROXY_SECRET", "")

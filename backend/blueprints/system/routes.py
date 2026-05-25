@@ -675,7 +675,10 @@ def _get_server_gh_token() -> str:
         except Exception:
             pass
     # Fallback: process environment (dev / docker / systemd EnvironmentFile)
-    return os.environ.get("GH_TOKEN", "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").strip()
+    token = os.environ.get("GH_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("GH_TOKEN not configured — set it in /opt/cycentra/.env or vault")
+    return token
 
 
 def _run_setup_in_background(flags: list[str], label: str) -> None:

@@ -29,6 +29,7 @@ import aiohttp
 from config import (
     HTTP_TIMEOUT, NVD_API_KEY, EPSS_API_URL,
     CVSS_CRITICAL, CVSS_HIGH, CVSS_MEDIUM,
+    GVM_USER, GVM_PASSWORD,
 )
 from utils import setup_logging, create_async_session
 
@@ -439,8 +440,8 @@ async def run_openvas_scan(
         transform  = EtreeCheckCommandTransform()
         with Gmp(connection=connection, transform=transform) as gmp:
             gmp.authenticate(
-                os.environ.get("GVM_USER", "admin"),
-                os.environ.get("GVM_PASSWORD", ""),
+                GVM_USER or "admin",
+                GVM_PASSWORD,
             )
             # Create target
             target_resp = gmp.create_target(

@@ -15,7 +15,7 @@ except Exception:
 class Settings(BaseSettings):
     # Database — native PostgreSQL on localhost
     # Port 5433 used to avoid conflict with CyIRIS postgres on :5432
-    database_url: str = "postgresql+asyncpg://corruser:changeme@127.0.0.1:5433/correlation"
+    database_url: str = "postgresql+asyncpg://corruser:@127.0.0.1:5433/correlation"
 
     # Redis — native Redis on localhost
     redis_url: str = "redis://127.0.0.1:6379/0"

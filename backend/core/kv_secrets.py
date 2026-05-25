@@ -178,6 +178,8 @@ ENGINE_KV_MAP: dict[str, str] = {
     "WAZUH_API_USER":     "WAZUH-API-USER",
     "WAZUH_API_PASSWORD": "WAZUH-API-PASSWORD",
     "CORRELATION_DB_URL": "CORRELATION-DB-URL",
+    "CYMIND_API_KEY":     "CYMIND-API-KEY",
+    "IRIS_API_KEY":       "IRIS-API-KEY",
     "CLOUD_IRIS_URL":     "CLOUD-IRIS-URL",
     "CLOUD_IRIS_API_KEY": "CLOUD-IRIS-API-KEY",
     "CLOUD_MISP_URL":     "CLOUD-MISP-URL",
@@ -195,6 +197,7 @@ ASM_KV_MAP: dict[str, str] = {
     "HUNTER_API_KEY":         "HUNTER-API-KEY",
     "HIBP_API_KEY":           "HIBP-API-KEY",
     "GVM_PASSWORD":           "GVM-PASSWORD",
+    "GVM_USER":               "GVM-USER",
 }
 
 

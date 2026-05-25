@@ -70,6 +70,8 @@ SHODAN_API_KEY          = os.environ.get("SHODAN_API_KEY", "")
 GOOGLE_GEMINI_KEY       = os.environ.get("GOOGLE_GEMINI_KEY", "")
 HUNTER_API_KEY          = os.environ.get("HUNTER_API_KEY", "")
 HIBP_API_KEY            = os.environ.get("HIBP_API_KEY", "")
+GVM_PASSWORD            = os.environ.get("GVM_PASSWORD", "")
+GVM_USER                = os.environ.get("GVM_USER", "")
 
 # ---------------------------------------------------------------------------
 # Network
