@@ -23,6 +23,17 @@
 #   Let's Encrypt      → SSL certificates via certbot
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# ── TEMP: Azure Arc Service Principal (TESTING ONLY — remove before go-live) ──
+# Replace with env var injection before deploying to production:
+#   export ARC_SP_ID=... ARC_SP_SECRET=... bash cycentra-setup.sh
+export ARC_SP_ID="${ARC_SP_ID:-e61cedfb-0e04-4d0f-81a7-4b881240bb35}"
+export ARC_SP_SECRET="${ARC_SP_SECRET:-1Wr8Q~woFk1eXNL~YSbwcIsJPwzXhzIBNj~jMb24}"
+export ARC_SUBSCRIPTION_ID="${ARC_SUBSCRIPTION_ID:-968ad81f-3859-45b7-b9b3-c8bcd0361e32}"
+export ARC_RESOURCE_GROUP="${ARC_RESOURCE_GROUP:-cy-keyvault-group}"
+export ARC_TENANT_ID="${ARC_TENANT_ID:-00864d66-c8a8-443f-8d0a-3df93346e266}"
+export ARC_LOCATION="${ARC_LOCATION:-westeurope}"
+# ─────────────────────────────────────────────────────────────────────────────
+
 set -euo pipefail
 
 
@@ -363,6 +374,125 @@ else
     info "ARC_SP_ID not set — skipping Azure Arc enrollment"
     info "  To enable: export ARC_SP_ID=... ARC_SP_SECRET=... then re-run setup"
 fi
+
+# ── Step 0.5: Infisical CLI + secret refresh timer ────────────────────────────
+# Installs the Infisical CLI for developer tooling and provisions a daily
+# systemd timer that restarts the backend service so any rotated secrets are
+# picked up without manual intervention.
+#
+# "Going native with the SDK" means the app fetches secrets in-process at
+# startup (via kv_secrets.py).  The timer simply triggers that path daily by
+# gracefully restarting the backend — no daemon or sidecar required.
+#
+# Set INFISICAL_PROJECT_ID in .env (or pass as env var before running setup)
+# to enable the Infisical path.  See kv_secrets.py for full auth method docs.
+step_header "INFISICAL CLI + SECRET REFRESH"
+
+# ── Install Infisical CLI ──────────────────────────────────────────────────────
+if command -v infisical >/dev/null 2>&1; then
+    success "Infisical CLI already installed — $(infisical --version 2>/dev/null || echo 'ok')"
+else
+    info "Installing Infisical CLI ..."
+    curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' \
+        | bash 2>/dev/null
+    apt-get install -y -qq infisical 2>/dev/null
+    if command -v infisical >/dev/null 2>&1; then
+        success "Infisical CLI installed"
+    else
+        warn "Infisical CLI install failed — manual install may be required"
+        warn "  See: https://infisical.com/docs/cli/overview"
+    fi
+fi
+
+# ── Write secret refresh script ───────────────────────────────────────────────
+# This script is called by the systemd timer.  It gracefully reloads the
+# backend (SIGHUP to gunicorn triggers a worker restart without dropping
+# connections), which re-runs load_kv_secrets() and picks up any rotated values.
+mkdir -p /opt/cycentra/scripts
+cat > /opt/cycentra/scripts/infisical-refresh.sh << 'REFRESHEOF'
+#!/bin/bash
+# /opt/cycentra/scripts/infisical-refresh.sh
+# Triggered daily by cycentra-secret-refresh.timer
+# Reloads the backend to pick up any rotated secrets from the vault.
+set -euo pipefail
+
+LOG="/var/log/cycentra/secret-refresh.log"
+mkdir -p "$(dirname "$LOG")"
+
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting secret refresh" >> "$LOG"
+
+# Test vault connectivity before reloading
+BACKEND="${SECRETS_BACKEND:-$(grep '^SECRETS_BACKEND=' /opt/cycentra/.env 2>/dev/null | cut -d= -f2)}"
+
+case "${BACKEND:-azure}" in
+  infisical)
+    PROJECT_ID="$(grep '^INFISICAL_PROJECT_ID=' /opt/cycentra/.env 2>/dev/null | cut -d= -f2)"
+    if [[ -z "$PROJECT_ID" ]]; then
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] INFISICAL_PROJECT_ID not set — skipping" >> "$LOG"
+        exit 0
+    fi
+    # Validate Arc MSI endpoint is reachable (confirms Arc agent is healthy)
+    if ! curl -sf --max-time 3 \
+        -H "Metadata: true" \
+        "http://localhost:40342/identity/oauth2/token?api-version=2020-06-01&resource=https://management.azure.com/" \
+        > /dev/null 2>&1; then
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARN: Arc MSI endpoint unreachable — skipping reload" >> "$LOG"
+        exit 1
+    fi
+    ;;
+  azure)
+    VAULT_URL="$(grep '^AZURE_KEYVAULT_URL=' /opt/cycentra/.env 2>/dev/null | cut -d= -f2)"
+    [[ -z "$VAULT_URL" ]] && { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] AZURE_KEYVAULT_URL not set — skipping" >> "$LOG"; exit 0; }
+    ;;
+esac
+
+# Graceful reload: SIGHUP to gunicorn triggers worker restart, picks up new secrets
+if systemctl is-active --quiet cycentra-backend.service; then
+    systemctl reload-or-restart cycentra-backend.service
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Backend reloaded — secrets refreshed" >> "$LOG"
+else
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Backend service not active — skipping reload" >> "$LOG"
+fi
+REFRESHEOF
+chmod 700 /opt/cycentra/scripts/infisical-refresh.sh
+
+# ── Install systemd service + timer for daily secret refresh ──────────────────
+cat > /etc/systemd/system/cycentra-secret-refresh.service << 'SRVCEOF'
+[Unit]
+Description=CyCentra Secret Refresh — reload backend to pick up rotated vault secrets
+After=network-online.target cycentra-backend.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/cycentra/scripts/infisical-refresh.sh
+StandardOutput=journal
+StandardError=journal
+SRVCEOF
+
+cat > /etc/systemd/system/cycentra-secret-refresh.timer << 'TIMEREOF'
+[Unit]
+Description=Daily CyCentra secret refresh (03:00 UTC)
+Requires=cycentra-secret-refresh.service
+
+[Timer]
+# Runs at 03:00 UTC every day — backend restarts in off-peak hours and
+# re-fetches all secrets from the vault, picking up any rotations.
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=300
+Persistent=true
+Unit=cycentra-secret-refresh.service
+
+[Install]
+WantedBy=timers.target
+TIMEREOF
+
+systemctl daemon-reload
+systemctl enable cycentra-secret-refresh.timer
+systemctl start  cycentra-secret-refresh.timer
+success "Secret refresh timer installed — daily at 03:00 UTC"
+info    "  Logs: journalctl -u cycentra-secret-refresh.service"
+info    "  Manual trigger: systemctl start cycentra-secret-refresh.service"
 
 # ── Step 1: System packages ───────────────────────────────────────────────────
 step_header "SYSTEM DEPENDENCIES"
@@ -1402,13 +1532,18 @@ AZURE_KEYVAULT_URL=${AZURE_KEYVAULT_URL:-}
 
 # ── Infisical — set these to use Infisical as the secrets backend ──────────────
 # INFISICAL_URL: your self-hosted Infisical URL (omit for Infisical Cloud)
-# INFISICAL_CLIENT_ID: Machine Identity client ID
-# INFISICAL_CLIENT_SECRET: Machine Identity client secret
-#   (omit when using Native Azure Auth with Azure Arc — MSI is used automatically)
+# INFISICAL_CLIENT_ID: Machine Identity client ID (UUID from Infisical UI)
+# INFISICAL_AUTH_METHOD: how to authenticate to Infisical
+#   azure      → Azure Native Auth via Arc MSI (default, recommended for prod)
+#   oidc       → Manual Arc JWT exchange (Machine Identity must be OIDC type in Infisical UI)
+#   universal  → Client ID + Secret (dev/staging — not Arc-enrolled machines)
+# INFISICAL_CLIENT_SECRET: required for universal auth only
+#   (omit when using azure or oidc — Arc MSI is used instead)
 # INFISICAL_PROJECT_ID: your Infisical project ID
 # INFISICAL_ENVIRONMENT: secret environment to pull from (dev | staging | prod)
 INFISICAL_URL=${INFISICAL_URL:-}
 INFISICAL_CLIENT_ID=${INFISICAL_CLIENT_ID:-}
+INFISICAL_AUTH_METHOD=${INFISICAL_AUTH_METHOD:-azure}
 INFISICAL_CLIENT_SECRET=${INFISICAL_CLIENT_SECRET:-}
 INFISICAL_PROJECT_ID=${INFISICAL_PROJECT_ID:-}
 INFISICAL_ENVIRONMENT=${INFISICAL_ENVIRONMENT:-prod}

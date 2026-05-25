@@ -10,6 +10,12 @@ Set SECRETS_BACKEND in /opt/cycentra/.env (or cysiemstack.env):
 
   SECRETS_BACKEND=azure       → Azure Key Vault  (default)
   SECRETS_BACKEND=hashicorp   → HashiCorp Vault
+  SECRETS_BACKEND=infisical   → Infisical
+
+For Infisical, also set INFISICAL_AUTH_METHOD:
+  INFISICAL_AUTH_METHOD=azure      → Azure Native Auth via Arc MSI (default)
+  INFISICAL_AUTH_METHOD=oidc       → Manual Arc JWT exchange (OIDC identity type)
+  INFISICAL_AUTH_METHOD=universal  → Client ID + Secret (dev/staging)
 
 Leave unset (or omit VAULT_ADDR / AZURE_KEYVAULT_URL) to skip entirely —
 the app will rely on values already in .env or the process environment.
@@ -315,12 +321,24 @@ def _hashicorp_fetch(kv_map: dict[str, str]) -> int:
 
 def _infisical_fetch(kv_map: dict[str, str]) -> int:
     """
-    Fetches secrets from Infisical using Machine Identity (Universal Auth or
-    Native Azure Auth when running under Azure Arc).
+    Fetches secrets from Infisical using one of three auth methods.
+    Select via INFISICAL_AUTH_METHOD in .env:
 
-    Universal Auth  → set INFISICAL_CLIENT_ID + INFISICAL_CLIENT_SECRET
-    Azure Native Auth (Arc MSI) → set INFISICAL_CLIENT_ID only;
-                                   Infisical SDK calls the local MSI endpoint.
+      azure     (default) — Azure Native Auth via Arc Managed Identity.
+                            SDK calls the local Arc MSI endpoint internally.
+                            Machine Identity must be configured as "Azure Auth"
+                            type in Infisical UI.
+                            Required: INFISICAL_CLIENT_ID (Machine Identity ID)
+
+      oidc      — Manually fetches the Arc JWT from localhost:40342 and trades
+                  it for an Infisical session via OIDC login.  Equivalent to
+                  the JS pattern: fetch Arc token → client.auth.oidc.login().
+                  Machine Identity must be configured as "OIDC" type in Infisical UI.
+                  Required: INFISICAL_CLIENT_ID (Machine Identity ID)
+
+      universal — Client ID + Secret (for dev machines and staging environments
+                  that are not Arc-enrolled).
+                  Required: INFISICAL_CLIENT_ID + INFISICAL_CLIENT_SECRET
     """
     project_id = os.environ.get("INFISICAL_PROJECT_ID", "").strip()
     environment = os.environ.get("INFISICAL_ENVIRONMENT", "prod").strip()
@@ -337,29 +355,63 @@ def _infisical_fetch(kv_map: dict[str, str]) -> int:
         return 0
 
     client_id = os.environ.get("INFISICAL_CLIENT_ID", "").strip()
-    client_secret = os.environ.get("INFISICAL_CLIENT_SECRET", "").strip()
-
     if not client_id:
         log.error("Infisical: INFISICAL_CLIENT_ID is required")
         return 0
+
+    client_secret = os.environ.get("INFISICAL_CLIENT_SECRET", "").strip()
+    auth_method = os.environ.get("INFISICAL_AUTH_METHOD", "azure").strip().lower()
+    # Infer method from presence of client secret if not explicitly set
+    if os.environ.get("INFISICAL_AUTH_METHOD", "").strip() == "" and client_secret:
+        auth_method = "universal"
 
     infisical_url = os.environ.get("INFISICAL_URL", "https://app.infisical.com").rstrip("/")
 
     try:
         client = InfisicalSDKClient(host=infisical_url)
 
-        if client_secret:
-            # Universal Auth — developer machines and staging environments
+        if auth_method == "universal":
+            # Developer machines and staging — client ID + secret
+            if not client_secret:
+                log.error("Infisical universal auth: INFISICAL_CLIENT_SECRET is required")
+                return 0
             client.auth.universal_auth.login(
                 client_id=client_id,
                 client_secret=client_secret,
             )
             log.debug("Infisical: authenticated via Universal Auth")
+
+        elif auth_method == "oidc":
+            # OIDC path — manually fetch Arc JWT from localhost:40342 and trade
+            # for an Infisical session.  Mirrors the JS SDK pattern:
+            #   fetch(arcIdentityUrl) → arcData.access_token → client.auth.oidc.login()
+            # Machine Identity must be "OIDC" type in Infisical UI.
+            import json
+            import urllib.request
+            arc_url = (
+                "http://localhost:40342/identity/oauth2/token"
+                "?api-version=2020-06-01"
+                "&resource=https://management.azure.com/"
+            )
+            try:
+                req = urllib.request.Request(arc_url, headers={"Metadata": "true"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    arc_jwt = json.loads(resp.read().decode())["access_token"]
+            except Exception as exc:
+                log.error(
+                    "Infisical OIDC: could not reach Azure Arc MSI endpoint "
+                    "(localhost:40342) — is azcmagent running? %s", exc
+                )
+                return 0
+            client.auth.oidc.login(identity_id=client_id, jwt=arc_jwt)
+            log.debug("Infisical: authenticated via Arc OIDC (manual JWT exchange)")
+
         else:
-            # Native Azure Auth — production servers running under Azure Arc
-            # The SDK calls the local MSI endpoint; no secret ever touches disk.
+            # azure (default) — SDK calls Arc MSI endpoint internally.
+            # Machine Identity must be "Azure Auth" type in Infisical UI.
             client.auth.azure_auth.login(client_id=client_id)
             log.debug("Infisical: authenticated via Azure Native Auth (Arc MSI)")
+
     except Exception as exc:
         log.error("Infisical: authentication failed: %s", exc)
         return 0
