@@ -27,6 +27,7 @@ portal/.env
 /opt/
 *.pem
 *.key
+docs/infisical-secrets-upload.csv
 
 # Ignore push script
 git-push.sh
