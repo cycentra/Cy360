@@ -154,3 +154,6 @@ volumes:
   cymisp_redis_data:
 """,
 }
+
+# Derived from template keys — used for validation in routes.py
+VALID_MODULES = set(COMPOSE_TEMPLATES.keys())
