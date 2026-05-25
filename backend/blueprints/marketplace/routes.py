@@ -97,14 +97,21 @@ def _write_json(path, data):
 def _fetch_cloud_catalog():
     """Fetch the catalog from cycentra.com.
 
-    catalog.json is public information — no token required.
+    Sends X-CyCentra-Token when MARKETPLACE_CATALOG_TOKEN is configured,
+    allowing cycentra.com/marketplace/ to restrict access to licensed instances.
+    When the token is not set on either side the endpoint is open (backwards compat).
+
     Returns a (items, status) tuple where status is one of:
       'ok'          — successfully fetched
       'fetch_error' — network/parse error
     """
     try:
+        headers = {}
+        if MARKETPLACE_CATALOG_TOKEN:
+            headers["X-CyCentra-Token"] = MARKETPLACE_CATALOG_TOKEN
         resp = http_requests.get(
             MARKETPLACE_CATALOG_URL,
+            headers=headers,
             timeout=6,
         )
         if resp.ok:
