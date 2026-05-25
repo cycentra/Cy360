@@ -1055,262 +1055,35 @@ const TABS = [
 ];
 
 // ════════════════════════════════════════════════════════════════════════════
-// TAB 3 — Integrations (MISP + CyIRIS)
+// TAB 3 — Integrations (CyIRIS)
 // ════════════════════════════════════════════════════════════════════════════
 
-function MispTab() {
-  const [misp,       setMisp]       = useState({});
-  const [loading,    setLoading]    = useState(true);
-  const [saving,     setSaving]     = useState(false);
-  const [saved,      setSaved]      = useState(false);
-  const [testStatus, setTestStatus] = useState(null);  // null | "testing" | "ok" | "fail"
-  const [testMsg,    setTestMsg]    = useState("");
-
-  useEffect(() => {
-    fetch(`${API_BASE}/api/ai/settings`, { credentials: "include" })
-      .then(r => r.json())
-      .then(d => {
-        const raw = d.misp || {};
-        // Backward compat: infer mode when absent
-        // - old enabled=true (pre-mode field) → "local"
-        // - apiKey present + no url → was saved as cloud (matches get_misp_config() inference)
-        // - anything else → "disabled"
-        if (!raw.mode) {
-          if (raw.enabled) raw.mode = "local";
-          else if (raw.apiKey && !raw.url) raw.mode = "cloud";
-          else raw.mode = "disabled";
-        }
-        setMisp(raw);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
-  const mode = misp.mode || "disabled";
-
-  const setMode = (m) => {
-    setMisp(prev => ({ ...prev, mode: m }));
-    setTestStatus(null);
-    setTestMsg("");
-  };
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await fetch(`${API_BASE}/api/ai/settings`, {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ misp }),
-      });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
-    } finally { setSaving(false); }
-  };
-
-  const testConnection = async () => {
-    if (mode === "cloud") {
-      // Credentials are in .env — always delegate to backend
-      setTestStatus("testing"); setTestMsg("");
-      try {
-        const r = await fetch(`${API_BASE}/api/system/misp/test`, {
-          method: "POST", credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: "https://cymisp.cycentra.com", apiKey: "", useStored: true }),
-        });
-        const d = await r.json();
-        if (d.ok) { setTestStatus("ok");   setTestMsg(d.message || "Connected"); }
-        else       { setTestStatus("fail"); setTestMsg(d.error  || "Connection failed"); }
-      } catch { setTestStatus("fail"); setTestMsg("Cannot reach backend"); }
-      return;
-    }
-    // Local mode
-    const _MASK = "\u2022".repeat(8);
-    const url = misp.url || "";
-    const key = (misp.apiKey && misp.apiKey !== _MASK) ? misp.apiKey : "";
-    if (!url) { setTestStatus("fail"); setTestMsg("MISP Server URL is required"); return; }
-    if (!key) { setTestStatus("fail"); setTestMsg("API key required"); return; }
-    setTestStatus("testing"); setTestMsg("");
-    try {
-      const r = await fetch(`${API_BASE}/api/system/misp/test`, {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, apiKey: key, useStored: false }),
-      });
-      const d = await r.json();
-      if (d.ok) { setTestStatus("ok");   setTestMsg(d.message || "Connected"); }
-      else       { setTestStatus("fail"); setTestMsg(d.error  || "Connection failed"); }
-    } catch { setTestStatus("fail"); setTestMsg("Cannot reach backend"); }
-  };
-
-  if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
-
-  // Mode selector config
-  const MODES = [
-    { id: "disabled", label: "Disabled",      desc: "No MISP IOC lookups — all enrichment bypassed", icon: "⭕", color: "rgba(255,255,255,0.3)" },
-    { id: "cloud",    label: "Cloud CyMISP",  desc: "Connect to Cycentra-managed MISP at cymisp.cycentra.com", icon: "☁️", color: "#4d9eff" },
-    { id: "local",    label: "Local CyMISP",  desc: "Your self-hosted MISP instance — configure URL & key below", icon: "🏠", color: "#ff6b6b" },
-  ];
-
-  return (
-    <div style={{ maxWidth: 640 }}>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-        <span style={{ fontSize: 18 }}>🔴</span>
-        <div style={{ color: "rgba(255,100,100,0.9)", fontSize: 10, letterSpacing: "1.5px",
-          textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
-          MISP Threat Intelligence
-        </div>
-      </div>
-      <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, marginBottom: 20, lineHeight: 1.6 }}>
-        MISP settings apply to <strong style={{ color: "rgba(255,255,255,0.5)" }}>all modules</strong> —
-        CySIEM Correlation Engine, ASM Deep Scans, CySOAR, and CyIRIS all read from this single configuration.
-      </div>
-
-      {/* Mode selector */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
-        {MODES.map(m => (
-          <button key={m.id} onClick={() => setMode(m.id)}
-            style={{
-              flex: 1, padding: "12px 10px", borderRadius: 5, cursor: "pointer",
-              border: `1px solid ${mode === m.id ? m.color : "rgba(255,255,255,0.08)"}`,
-              background: mode === m.id ? `${m.color}12` : "rgba(255,255,255,0.02)",
-              transition: "all 0.15s",
-            }}>
-            <div style={{ fontSize: 18, marginBottom: 4 }}>{m.icon}</div>
-            <div style={{ color: mode === m.id ? m.color : "rgba(255,255,255,0.5)", fontSize: 11,
-              fontFamily: "monospace", fontWeight: 700, marginBottom: 4 }}>
-              {m.label}
-            </div>
-            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, lineHeight: 1.4 }}>
-              {m.desc}
-            </div>
-          </button>
-        ))}
-      </div>
-
-      {/* Mode: Disabled */}
-      {mode === "disabled" && (
-        <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "18px 20px" }}>
-          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, fontFamily: "monospace" }}>
-            ⭕ MISP is disabled — IOC lookups and threat intelligence enrichment are bypassed for all modules.
-          </div>
-        </div>
-      )}
-
-      {/* Mode: Cloud CyMISP — credentials live in .env, no UI input needed */}
-      {mode === "cloud" && (
-        <div style={{ background: "rgba(77,158,255,0.04)", border: "1px solid rgba(77,158,255,0.2)", borderRadius: 6, padding: "18px 20px" }}>
-          <div style={{ color: "#4d9eff", fontSize: 11, fontFamily: "monospace", fontWeight: 700, marginBottom: 4 }}>
-            ☁️ Cycentra Cloud MISP — cymisp.cycentra.com
-          </div>
-          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginBottom: 16, lineHeight: 1.6 }}>
-            Credentials are provisioned server-side via <code style={{ color: "#4d9eff" }}>CLOUD_MISP_URL</code> and{" "}
-            <code style={{ color: "#4d9eff" }}>CLOUD_MISP_API_KEY</code> in{" "}
-            <code style={{ color: "rgba(255,255,255,0.65)" }}>/opt/cycentra/.env</code>. No manual entry required.
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
-            <button onClick={testConnection} disabled={testStatus === "testing"}
-              style={{ background: "rgba(77,158,255,0.12)", color: "#4d9eff",
-                border: "1px solid rgba(77,158,255,0.35)", borderRadius: 4,
-                padding: "8px 18px", fontFamily: "monospace", fontSize: 11,
-                fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px",
-                opacity: testStatus === "testing" ? 0.6 : 1 }}>
-              {testStatus === "testing" ? "Testing…" : "Test Connection"}
-            </button>
-            {testStatus === "ok"   && <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ {testMsg}</span>}
-            {testStatus === "fail" && <span style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace" }}>✗ {testMsg}</span>}
-          </div>
-          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.55)" }}>
-            ℹ️ Cloud credentials are set at install time — contact Cycentra support to rotate your key.
-          </div>
-        </div>
-      )}
-
-      {/* Mode: Local CyMISP */}
-      {mode === "local" && (
-        <div style={{ background: "rgba(255,59,59,0.04)", border: "1px solid rgba(255,59,59,0.2)", borderRadius: 6, padding: "22px 24px" }}>
-          {/* URL */}
-          <div style={{ marginBottom: 14 }}>
-            <div style={LABEL}>MISP Server URL</div>
-            <input type="text" value={misp.url || ""}
-              onChange={e => setMisp(prev => ({ ...prev, url: e.target.value }))}
-              placeholder="https://cymisp.yourdomain.com"
-              style={INPUT} />
-          </div>
-
-          {/* API Key */}
-          <div style={{ marginBottom: 22 }}>
-            <div style={LABEL}>MISP API Key</div>
-            <input type="password" value={misp.apiKey || ""}
-              onChange={e => setMisp(prev => ({ ...prev, apiKey: e.target.value }))}
-              placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-              style={INPUT} />
-          </div>
-
-          {/* Test Connection */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-            <button onClick={testConnection} disabled={testStatus === "testing"}
-              style={{ background: "rgba(255,59,59,0.12)", color: "#ff6b6b",
-                border: "1px solid rgba(255,59,59,0.35)", borderRadius: 4,
-                padding: "8px 18px", fontFamily: "monospace", fontSize: 11,
-                fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px",
-                opacity: testStatus === "testing" ? 0.6 : 1 }}>
-              {testStatus === "testing" ? "Testing…" : "Test Connection"}
-            </button>
-            {testStatus === "ok"   && <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ {testMsg}</span>}
-            {testStatus === "fail" && <span style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace" }}>✗ {testMsg}</span>}
-          </div>
-
-          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.55)" }}>
-            {misp.url && misp.apiKey
-              ? <span style={{ color: "#ff6b6b" }}>✓ Configured — IOC lookups active on Deep scans</span>
-              : <span style={{ color: "#ff8c00" }}>⚠ URL and API Key required to activate</span>}
-          </div>
-
-          {/* Install CyMISP locally */}
-          <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace", marginBottom: 6 }}>
-              NEED A LOCAL MISP INSTANCE?
-            </div>
-            <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11, lineHeight: 1.5 }}>
-              Install CyMISP via <strong style={{ color: "rgba(255,255,255,0.5)" }}>Platform Modules</strong> — a fully containerised
-              MISP appliance will be deployed at{" "}
-              <code style={{ color: "#ff6b6b", fontSize: 10 }}>cymisp.{"{yourdomain}"}</code> with an auto-generated admin passphrase.
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Save */}
-      <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 20 }}>
-        <button onClick={handleSave} disabled={saving}
-          style={{ ...BTN(), opacity: saving ? 0.5 : 1 }}>
-          {saving ? "Saving…" : "Save MISP Configuration"}
-        </button>
-        {saved && <span style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace" }}>✓ Saved — all modules updated</span>}
-      </div>
-    </div>
-  );
-}
+// NOTE: CyMISP is configured server-side via vault secrets (CLOUD_MISP_URL +
+// CLOUD_MISP_API_KEY). There is no UI for MISP — it activates automatically
+// when those secrets are present in the Infisical / KV vault.
 
 // ════════════════════════════════════════════════════════════════════════════
 // TAB 3b — CyIRIS (DFIR IRIS Integration)
 // ════════════════════════════════════════════════════════════════════════════
 
 function CyIrisTab() {
-  const [iris,       setIris]       = useState({});
-  const [loading,    setLoading]    = useState(true);
-  const [saving,     setSaving]     = useState(false);
-  const [saved,      setSaved]      = useState(false);
-  const [testStatus, setTestStatus] = useState(null);   // null | "testing" | "ok" | "fail"
-  const [testMsg,    setTestMsg]    = useState("");
+  const [iris,             setIris]             = useState({});
+  const [loading,          setLoading]          = useState(true);
+  const [saving,           setSaving]           = useState(false);
+  const [saved,            setSaved]            = useState(false);
+  const [platformStatus,   setPlatformStatus]   = useState(null);
+  const [irisPassword,     setIrisPassword]     = useState("");
+  const [installLog,       setInstallLog]       = useState([]);
+  const [installStage,     setInstallStage]     = useState(null);
+  const [installProgress,  setInstallProgress]  = useState(0);
+  const [confirmUninstall, setConfirmUninstall] = useState(false);
+  const irisPollRef = useRef(null);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/ai/settings`, { credentials: "include" })
       .then(r => r.json())
       .then(d => {
         const raw = d.iris || {};
-        if (!raw.mode) raw.mode = "disabled";
         if (raw.fpThreshold === undefined) raw.fpThreshold = 90;
         setIris(raw);
         setLoading(false);
@@ -1318,8 +1091,87 @@ function CyIrisTab() {
       .catch(() => setLoading(false));
   }, []);
 
-  const mode    = iris.mode || "disabled";
-  const setMode = (m) => { setIris(prev => ({ ...prev, mode: m })); setTestStatus(null); setTestMsg(""); };
+  useEffect(() => {
+    const fetchStatus = () => {
+      fetch(`${API_BASE}/api/platform/status`, { credentials: "include" })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => { if (d) setPlatformStatus(d.cyiris?.status || "not_installed"); })
+        .catch(() => {});
+    };
+    fetchStatus();
+    const t = setInterval(fetchStatus, 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  const isInstalled            = platformStatus === "running";
+  const isCurrentlyInstalling  = platformStatus === "installing" || installStage === "installing";
+
+  const handleInstall = async () => {
+    if (!irisPassword.trim()) return;
+    setInstallStage("installing");
+    setInstallLog(["Preparing CyIRIS installation…"]);
+    setInstallProgress(5);
+    try {
+      const res = await fetch(`${API_BASE}/api/platform/install`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ module: "cyiris", config: { IRIS_ADM_PASSWORD: irisPassword } }),
+      });
+      if (!res.ok) {
+        const e = await res.json();
+        setInstallLog(prev => [...prev, `ERROR: ${e.error || "Install failed"}`]);
+        setInstallStage("error");
+        return;
+      }
+      irisPollRef.current = setInterval(async () => {
+        try {
+          const lr = await fetch(`${API_BASE}/api/platform/logs/cyiris`, { credentials: "include" });
+          if (lr.ok) {
+            const l = await lr.json();
+            if (l.lines?.length) {
+              setInstallLog(l.lines);
+              const last = l.lines[l.lines.length - 1].toLowerCase();
+              if      (last.includes("pulling"))         setInstallProgress(p => Math.max(p, 15));
+              else if (last.includes("starting"))        setInstallProgress(p => Math.max(p, 35));
+              else if (last.includes("waiting"))         setInstallProgress(p => Math.max(p, 55));
+              else if (last.includes("api key"))         setInstallProgress(p => Math.max(p, 85));
+              else if (last.includes("done — status"))   setInstallProgress(100);
+            }
+          }
+          const sr = await fetch(`${API_BASE}/api/platform/status`, { credentials: "include" });
+          if (!sr.ok) return;
+          const all = await sr.json();
+          const s = all.cyiris;
+          if (!s) return;
+          if (s.status === "running") {
+            clearInterval(irisPollRef.current);
+            setInstallStage("done");
+            setInstallProgress(100);
+            setPlatformStatus("running");
+          } else if (s.status === "failed") {
+            clearInterval(irisPollRef.current);
+            setInstallStage("error");
+          }
+        } catch {}
+      }, 5000);
+    } catch (e) {
+      setInstallLog(prev => [...prev, `Network error: ${e.message}`]);
+      setInstallStage("error");
+    }
+  };
+
+  const handleUninstall = async () => {
+    setConfirmUninstall(false);
+    await fetch(`${API_BASE}/api/platform/uninstall`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ module: "cyiris" }),
+    });
+    setPlatformStatus("not_installed");
+    setInstallStage(null);
+    setInstallLog([]);
+    setInstallProgress(0);
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -1334,184 +1186,123 @@ function CyIrisTab() {
     } finally { setSaving(false); }
   };
 
-  const testConnection = async () => {
-    if (mode === "cloud") {
-      // Credentials are in .env — always delegate to backend
-      setTestStatus("testing"); setTestMsg("");
-      try {
-        const r = await fetch(`${API_BASE}/api/system/iris/test`, {
-          method: "POST", credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: "https://cyiris.cycentra.com", apiKey: "", useStored: true }),
-        });
-        const d = await r.json();
-        if (d.ok) { setTestStatus("ok");   setTestMsg(d.message || "Connected"); }
-        else       { setTestStatus("fail"); setTestMsg(d.error  || "Connection failed"); }
-      } catch { setTestStatus("fail"); setTestMsg("Cannot reach backend"); }
-      return;
-    }
-    // Local mode
-    const _MASK = "\u2022".repeat(8);
-    const url = iris.url || "";
-    const key = (iris.apiKey && iris.apiKey !== _MASK) ? iris.apiKey : "";
-    if (!url) { setTestStatus("fail"); setTestMsg("CyIRIS URL is required"); return; }
-    if (!key) { setTestStatus("fail"); setTestMsg("API key required"); return; }
-    setTestStatus("testing"); setTestMsg("");
-    try {
-      const r = await fetch(`${API_BASE}/api/system/iris/test`, {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, apiKey: key, useStored: false }),
-      });
-      const d = await r.json();
-      if (d.ok) { setTestStatus("ok");   setTestMsg(d.message || "Connected"); }
-      else       { setTestStatus("fail"); setTestMsg(d.error  || "Connection failed"); }
-    } catch { setTestStatus("fail"); setTestMsg("Cannot reach backend"); }
-  };
-
   if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
-
-  const MODES = [
-    { id: "disabled", label: "No CyIRIS",      desc: "Incident escalation disabled — no tickets will be raised in DFIR IRIS", icon: "⭕", color: "rgba(255,255,255,0.3)" },
-    { id: "cloud",    label: "Cloud CyIRIS",    desc: "Connect to Cycentra-managed DFIR IRIS at cyiris.cycentra.com", icon: "☁️",  color: "#4d9eff" },
-    { id: "local",    label: "Local CyIRIS",    desc: "Your self-hosted DFIR IRIS instance — configure URL, API key, and customer ID below", icon: "🏠", color: "#00e5a0" },
-  ];
 
   return (
     <div style={{ maxWidth: 640 }}>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-        <span style={{ fontSize: 18 }}>🔵</span>
-        <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px",
+        <span style={{ fontSize: 18 }}>🎫</span>
+        <div style={{ color: "rgba(176,110,255,0.9)", fontSize: 10, letterSpacing: "1.5px",
           textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
           CyIRIS — DFIR IRIS Incident Response
         </div>
       </div>
       <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, marginBottom: 20, lineHeight: 1.6 }}>
-        When enabled, <strong style={{ color: "rgba(255,255,255,0.5)" }}>CySIEM Correlation Engine</strong> will
-        automatically raise tickets in DFIR IRIS for incidents that require analyst investigation.
-        Incidents with a high false-positive confidence score are auto-closed without a ticket.
+        When installed, <strong style={{ color: "rgba(255,255,255,0.5)" }}>CySIEM Correlation Engine</strong> will
+        automatically raise tickets in DFIR IRIS for incidents requiring analyst investigation.
+        The API key is captured automatically during install.
       </div>
 
-      {/* Mode selector */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
-        {MODES.map(m => (
-          <button key={m.id} onClick={() => setMode(m.id)}
-            style={{
-              flex: 1, padding: "12px 10px", borderRadius: 5, cursor: "pointer",
-              border: `1px solid ${mode === m.id ? m.color : "rgba(255,255,255,0.08)"}`,
-              background: mode === m.id ? `${m.color}12` : "rgba(255,255,255,0.02)",
-              transition: "all 0.15s",
-            }}>
-            <div style={{ fontSize: 18, marginBottom: 4 }}>{m.icon}</div>
-            <div style={{ color: mode === m.id ? m.color : "rgba(255,255,255,0.5)", fontSize: 11,
-              fontFamily: "monospace", fontWeight: 700, marginBottom: 4 }}>
-              {m.label}
+      {/* Install / Uninstall widget */}
+      <div style={{ background: "rgba(176,110,255,0.04)", border: "1px solid rgba(176,110,255,0.15)",
+        borderRadius: 6, padding: "18px 20px", marginBottom: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+          marginBottom: (isCurrentlyInstalling || installStage === "error") ? 16 : 0 }}>
+          <div>
+            {isCurrentlyInstalling
+              ? <span style={{ color: "#f5c518", fontSize: 11, fontFamily: "monospace" }}>⏳ Installing CyIRIS…</span>
+              : isInstalled
+              ? <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ CyIRIS — Running</span>
+              : <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>○ CyIRIS — Not installed</span>}
+          </div>
+          {!isInstalled && !isCurrentlyInstalling && installStage !== "installing" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="password" value={irisPassword}
+                onChange={e => setIrisPassword(e.target.value)}
+                placeholder="Admin password for CyIRIS"
+                style={{ ...INPUT, width: 220, marginBottom: 0 }} />
+              <button onClick={handleInstall} disabled={!irisPassword.trim()}
+                style={{ background: "rgba(176,110,255,0.18)", color: "#b06eff",
+                  border: "1px solid rgba(176,110,255,0.45)", borderRadius: 4,
+                  padding: "6px 16px", fontFamily: "monospace", fontSize: 11, fontWeight: 700,
+                  cursor: "pointer", opacity: !irisPassword.trim() ? 0.4 : 1, whiteSpace: "nowrap" }}>
+                Install CyIRIS
+              </button>
             </div>
-            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, lineHeight: 1.4 }}>
-              {m.desc}
+          )}
+          {isInstalled && !confirmUninstall && (
+            <button onClick={() => setConfirmUninstall(true)}
+              style={{ background: "rgba(255,59,59,0.1)", color: "#ff4444",
+                border: "1px solid rgba(255,59,59,0.3)", borderRadius: 4,
+                padding: "6px 16px", fontFamily: "monospace", fontSize: 11, cursor: "pointer" }}>
+              Uninstall CyIRIS
+            </button>
+          )}
+          {isInstalled && confirmUninstall && (
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={handleUninstall}
+                style={{ background: "#ff3b3b", color: "#fff", border: "none", borderRadius: 4,
+                  padding: "6px 14px", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                Confirm Remove
+              </button>
+              <button onClick={() => setConfirmUninstall(false)}
+                style={{ background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.6)",
+                  border: "1px solid rgba(255,255,255,0.12)", borderRadius: 4,
+                  padding: "6px 14px", fontFamily: "monospace", fontSize: 11, cursor: "pointer" }}>
+                Cancel
+              </button>
             </div>
-          </button>
-        ))}
+          )}
+        </div>
+
+        {/* Install progress */}
+        {installStage === "installing" && (
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+              <span style={{ color: "#f5c518", fontFamily: "monospace", fontSize: 11 }}>Installing CyIRIS — 4–6 min</span>
+              <span style={{ color: "#f5c518", fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{installProgress}%</span>
+            </div>
+            <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 2, height: 4, marginBottom: 12 }}>
+              <div style={{ height: "100%", width: `${installProgress}%`, background: "#b06eff", borderRadius: 2, transition: "width 0.4s ease" }} />
+            </div>
+            <div style={{ background: "#0d0d0d", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 4,
+              padding: "10px 12px", maxHeight: 160, overflowY: "auto", fontFamily: "monospace",
+              fontSize: 10, color: "rgba(255,255,255,0.55)", lineHeight: 1.6 }}>
+              {installLog.map((l, i) => <div key={i}>{l}</div>)}
+            </div>
+          </div>
+        )}
+
+        {/* Done */}
+        {installStage === "done" && (
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 12 }}>
+            <div style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>
+              ✓ CyIRIS installed — API key captured automatically. Incidents will now escalate to DFIR IRIS.
+            </div>
+          </div>
+        )}
+
+        {/* Error */}
+        {installStage === "error" && (
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 12 }}>
+            <div style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace", marginBottom: 8 }}>
+              ✗ Installation failed. Check logs above.
+            </div>
+            <div style={{ background: "#0d0d0d", border: "1px solid rgba(255,0,0,0.15)", borderRadius: 4,
+              padding: "10px 12px", maxHeight: 120, overflowY: "auto",
+              fontFamily: "monospace", fontSize: 10, color: "rgba(255,150,150,0.8)" }}>
+              {installLog.map((l, i) => <div key={i}>{l}</div>)}
+            </div>
+            <button onClick={() => { setInstallStage(null); setInstallLog([]); setInstallProgress(0); }}
+              style={{ marginTop: 8, background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.5)",
+                border: "1px solid rgba(255,255,255,0.12)", borderRadius: 4,
+                padding: "5px 14px", fontFamily: "monospace", fontSize: 11, cursor: "pointer" }}>
+              Retry
+            </button>
+          </div>
+        )}
       </div>
-
-      {/* Mode: Disabled */}
-      {mode === "disabled" && (
-        <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "18px 20px" }}>
-          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, fontFamily: "monospace" }}>
-            ⭕ CyIRIS is disabled — incidents will not escalate to DFIR IRIS. False-positive auto-close still active based on threshold.
-          </div>
-        </div>
-      )}
-
-      {/* Mode: Cloud CyIRIS — credentials live in .env, no UI input needed */}
-      {mode === "cloud" && (
-        <div style={{ background: "rgba(77,158,255,0.04)", border: "1px solid rgba(77,158,255,0.2)", borderRadius: 6, padding: "18px 20px" }}>
-          <div style={{ color: "#4d9eff", fontSize: 11, fontFamily: "monospace", fontWeight: 700, marginBottom: 4 }}>
-            ☁️ Cycentra Cloud CyIRIS — cyiris.cycentra.com
-          </div>
-          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginBottom: 16, lineHeight: 1.6 }}>
-            Credentials are provisioned server-side via <code style={{ color: "#4d9eff" }}>CLOUD_IRIS_URL</code>,{" "}
-            <code style={{ color: "#4d9eff" }}>CLOUD_IRIS_API_KEY</code>, and{" "}
-            <code style={{ color: "#4d9eff" }}>CLOUD_IRIS_CUSTOMER_ID</code> in{" "}
-            <code style={{ color: "rgba(255,255,255,0.65)" }}>/opt/cycentra/.env</code>. No manual entry required.
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
-            <button onClick={testConnection} disabled={testStatus === "testing"}
-              style={{ background: "rgba(77,158,255,0.12)", color: "#4d9eff",
-                border: "1px solid rgba(77,158,255,0.35)", borderRadius: 4,
-                padding: "8px 18px", fontFamily: "monospace", fontSize: 11,
-                fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px",
-                opacity: testStatus === "testing" ? 0.6 : 1 }}>
-              {testStatus === "testing" ? "Testing…" : "Test Connection"}
-            </button>
-            {testStatus === "ok"   && <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ {testMsg}</span>}
-            {testStatus === "fail" && <span style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace" }}>✗ {testMsg}</span>}
-          </div>
-          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.55)" }}>
-            ℹ️ Cloud credentials are set at install time — contact Cycentra support to rotate your key.
-          </div>
-        </div>
-      )}
-
-      {/* Mode: Local CyIRIS */}
-      {mode === "local" && (
-        <div style={{ background: "rgba(0,229,160,0.03)", border: "1px solid rgba(0,229,160,0.2)", borderRadius: 6, padding: "22px 24px" }}>
-          {/* URL */}
-          <div style={{ marginBottom: 14 }}>
-            <div style={LABEL}>CyIRIS Server URL</div>
-            <input type="text" value={iris.url || ""}
-              onChange={e => setIris(prev => ({ ...prev, url: e.target.value }))}
-              placeholder="https://cyiris.yourdomain.com  or  http://127.0.0.1"
-              style={INPUT} />
-          </div>
-
-          {/* API Key */}
-          <div style={{ marginBottom: 14 }}>
-            <div style={LABEL}>API Key</div>
-            <input type="password" value={iris.apiKey || ""}
-              onChange={e => setIris(prev => ({ ...prev, apiKey: e.target.value }))}
-              placeholder="IRIS Bearer token — from IRIS → My Profile → API Key"
-              style={INPUT} />
-            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
-              In DFIR IRIS: click your avatar → My Settings → scroll to API Key → copy or generate
-            </div>
-          </div>
-
-          {/* Customer ID */}
-          <div style={{ marginBottom: 22 }}>
-            <div style={LABEL}>Customer ID</div>
-            <input type="number" value={iris.customerId || 1} min={1}
-              onChange={e => setIris(prev => ({ ...prev, customerId: parseInt(e.target.value) || 1 }))}
-              placeholder="1"
-              style={{ ...INPUT, width: 120 }} />
-            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
-              In DFIR IRIS: Global Settings → Customers → copy the numeric ID
-            </div>
-          </div>
-
-          {/* Test Connection */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-            <button onClick={testConnection} disabled={testStatus === "testing"}
-              style={{ background: "rgba(0,229,160,0.1)", color: "#00e5a0",
-                border: "1px solid rgba(0,229,160,0.35)", borderRadius: 4,
-                padding: "8px 18px", fontFamily: "monospace", fontSize: 11,
-                fontWeight: 700, cursor: "pointer", letterSpacing: "0.5px",
-                opacity: testStatus === "testing" ? 0.6 : 1 }}>
-              {testStatus === "testing" ? "Testing…" : "Test Connection"}
-            </button>
-            {testStatus === "ok"   && <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ {testMsg}</span>}
-            {testStatus === "fail" && <span style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace" }}>✗ {testMsg}</span>}
-          </div>
-
-          {/* Status hint */}
-          <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.55)" }}>
-            {iris.url && iris.apiKey
-              ? <span style={{ color: "#00e5a0" }}>✓ Configured — incidents will be escalated to CyIRIS</span>
-              : <span style={{ color: "#ff8c00" }}>⚠ URL and API Key required to activate</span>}
-          </div>
-        </div>
-      )}
 
       {/* False-positive threshold slider — always visible */}
       <div style={{ marginTop: 24, background: "rgba(255,255,255,0.02)",
@@ -1522,8 +1313,7 @@ function CyIrisTab() {
             {iris.fpThreshold ?? 90}%
           </span>
         </div>
-        <input
-          type="range" min={50} max={99} step={1}
+        <input type="range" min={50} max={99} step={1}
           value={iris.fpThreshold ?? 90}
           onChange={e => setIris(prev => ({ ...prev, fpThreshold: parseInt(e.target.value) }))}
           style={{ width: "100%", accentColor: "#00e5a0", cursor: "pointer", marginBottom: 8 }}
@@ -2791,14 +2581,6 @@ function BackupTab() {
 function IntegrationsTab() {
   return (
     <div>
-      {/* MISP Section */}
-      <div style={{ marginBottom: 40 }}>
-        <MispTab />
-      </div>
-
-      {/* Divider */}
-      <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", marginBottom: 40 }} />
-
       {/* CyIRIS Section */}
       <div style={{ marginBottom: 40 }}>
         <CyIrisTab />

@@ -102,73 +102,26 @@ _CLOUD_MISP_URL_DEFAULT = "https://cymisp.cycentra.com"
 
 def get_misp_config() -> dict | None:
     """
-    Single source of truth for MISP connection configuration.
+    Returns MISP connection config sourced exclusively from vault secrets.
 
-    Reads ``misp.mode`` from ``/opt/cycentra/ai_settings.json`` and resolves
-    the effective URL + API key based on the selected mode.
+    CLOUD_MISP_URL and CLOUD_MISP_API_KEY are injected into os.environ at
+    process startup by core/kv_secrets.py (FLASK_KV_MAP / ENGINE_KV_MAP).
+    No UI configuration or ai_settings.json reads — vault is the only source.
 
-    Modes
-    -----
-    - ``disabled``  → returns None (all MISP calls should be skipped)
-    - ``cloud``     → URL from ``CLOUD_MISP_URL`` env / default; key from
-                      ``CLOUD_MISP_API_KEY`` env, falling back to stored
-                      ``misp.apiKey`` (set via UI cloud-mode save)
-    - ``local``     → customer-configured URL + key from ai_settings.json
-
-    Backward-compat: if ``mode`` is absent but ``apiKey`` is stored without a
-    ``url``, the settings were saved in cloud mode before the mode field was
-    added — treat as ``cloud``.
-
-    Returns
-    -------
-    dict with keys ``url``, ``apiKey``, ``mode`` — or ``None`` if disabled /
-    credentials are missing.
+    Returns dict with keys url, apiKey, mode — or None if key is absent.
     """
     import logging as _log
     _logger = _log.getLogger(__name__)
-    from core.config import AI_SETTINGS_FILE  # lazy to avoid circular imports at module load
-    try:
-        raw = AI_SETTINGS_FILE.read_text() if AI_SETTINGS_FILE.exists() else "{}"
-        settings = json.loads(raw)
-    except Exception:
-        settings = {}
-
-    misp = settings.get("misp", {})
-    mode = misp.get("mode", "")
-
-    # Backward-compat: mode missing + apiKey present + no url → old cloud-mode save
-    if not mode:
-        stored_key = misp.get("apiKey", "").strip()
-        if stored_key and not misp.get("url", "").strip():
-            mode = "cloud"
-        else:
-            mode = "disabled"
-
-    if mode == "cloud":
-        url = os.environ.get("CLOUD_MISP_URL", _CLOUD_MISP_URL_DEFAULT).rstrip("/")
-        # Prefer env var; fall back to key stored in ai_settings.json by the UI
-        key = os.environ.get("CLOUD_MISP_API_KEY", "").strip() or misp.get("apiKey", "").strip()
-        if not key:
-            _logger.warning("⚠️ [MISP] Cloud mode selected but no API key found "
-                            "(set CLOUD_MISP_API_KEY env var or configure via System Settings → CyMISP).")
-            return None
-        return {"url": url, "apiKey": key, "mode": "cloud"}
-
-    if mode == "local":
-        url = misp.get("url", "").strip().rstrip("/")
-        key = misp.get("apiKey", "").strip()
-        if not url or not key:
-            missing = []
-            if not url: missing.append("url")
-            if not key: missing.append("apiKey")
-            _logger.warning(f"⚠️ [MISP] Local mode selected but missing: {', '.join(missing)}. "
-                            "Configure via System Settings → CyMISP.")
-            return None
-        return {"url": url, "apiKey": key, "mode": "local"}
-
-    # "disabled" or unrecognised
-    _logger.info("⏭️  [MISP] MISP is disabled — IOC lookups skipped.")
-    return None
+    url = os.environ.get("CLOUD_MISP_URL", _CLOUD_MISP_URL_DEFAULT).rstrip("/")
+    key = os.environ.get("CLOUD_MISP_API_KEY", "").strip()
+    if not key:
+        _logger.warning(
+            "⏭️  [MISP] CLOUD_MISP_API_KEY not set — IOC lookups disabled. "
+            "Add the secret to your vault (Infisical / Azure KV / HashiCorp) "
+            "under key CLOUD_MISP_API_KEY."
+        )
+        return None
+    return {"url": url, "apiKey": key, "mode": "cloud"}
 
 
 _CLOUD_IRIS_URL_DEFAULT = "https://cyiris.cycentra.com"
