@@ -352,7 +352,16 @@ if [[ -n "${ARC_SP_ID:-}" && -n "${ARC_SP_SECRET:-}" ]]; then
         LINUX_INSTALL_SCRIPT="/tmp/install_linux_azcmagent.sh"
         [[ -f "$LINUX_INSTALL_SCRIPT" ]] && rm -f "$LINUX_INSTALL_SCRIPT"
         wget -q https://gbl.his.arc.azure.com/azcmagent-linux -O "$LINUX_INSTALL_SCRIPT"
-        bash "$LINUX_INSTALL_SCRIPT"
+        _arc_install_rc=0
+        bash "$LINUX_INSTALL_SCRIPT" || _arc_install_rc=$?
+        if [[ $_arc_install_rc -ne 0 ]]; then
+            warn "Azure Arc agent installer exited with code $_arc_install_rc"
+            warn "  This OS may not yet be supported by the Azure Connected Machine Agent."
+            warn "  Skipping Arc enrollment — Managed Identity will not be available."
+            warn "  Use static credentials in /opt/cycentra/.env as an alternative."
+            warn "  Re-run setup once Microsoft adds support for this OS distribution."
+            unset ARC_SP_SECRET
+        else
         sleep 5
 
         info "Connecting server to Azure Arc ..."
@@ -369,6 +378,7 @@ if [[ -n "${ARC_SP_ID:-}" && -n "${ARC_SP_SECRET:-}" ]]; then
         unset ARC_SP_SECRET
         success "Azure Arc enrollment complete — Managed Identity is now active"
         info "Set AZURE_KEYVAULT_URL in /opt/cycentra/.env to enable Key Vault bootstrap"
+        fi
     fi
 else
     info "ARC_SP_ID not set — skipping Azure Arc enrollment"
