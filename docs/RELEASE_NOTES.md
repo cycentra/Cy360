@@ -1,3 +1,11 @@
+## v1.2.41 -- 2026-05-25
+
+### Bug Fixes
+
+  - create wazuh_ui_user OpenSearch role if absent before rolesmapping PUT (was 404
+
+---
+
 ## v1.2.40 -- 2026-05-25
 
 ### New Features
