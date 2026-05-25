@@ -1,3 +1,27 @@
+## v1.2.39 -- 2026-05-25
+
+### New Features
+
+  - setup): add CYMIND_API_URL + CYMIND_API_KEY to vault bootstrap
+  - add CyMind to central vault (Infisical) management
+  - remove CyMISP from UI; make MISP vault-only via hardcoded backend
+  - vault): scope vault maps to company-wide secrets only
+  - vault): self-bootstrap vault on install + add pull_to_env rotation sync
+  - Infisical OIDC path + CLI install + daily secret refresh timer
+  - Azure Arc + Infisical secrets architecture
+
+### Bug Fixes
+
+  - remove SMTP_PASSWORD and CLOUD_IRIS_URL from vault maps
+  - CyIRIS post-install auto-activates integration without manual key entry
+  - vault): remove app-managed and non-secret keys from vault maps
+
+### Improvements
+
+  - security: remove all hardcoded secrets, complete vault coverage
+
+---
+
 ## v1.2.38 -- 2026-05-24
 
 ### Improvements
