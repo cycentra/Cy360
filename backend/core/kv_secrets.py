@@ -205,7 +205,7 @@ ASM_KV_MAP: dict[str, str] = {
 
 # ── Azure Key Vault backend ────────────────────────────────────────────────────
 
-def _azure_fetch(kv_map: dict[str, str]) -> int:
+def _azure_fetch(kv_map: dict[str, str], force: bool = False) -> int:
     vault_url = os.environ.get("AZURE_KEYVAULT_URL", "").strip()
     if not vault_url:
         log.debug("AZURE_KEYVAULT_URL not set — Azure backend skipped")
@@ -232,7 +232,7 @@ def _azure_fetch(kv_map: dict[str, str]) -> int:
 
     fetched = 0
     for env_key, secret_name in kv_map.items():
-        if os.environ.get(env_key):
+        if not force and os.environ.get(env_key):
             continue
         try:
             secret = client.get_secret(secret_name)
@@ -249,7 +249,7 @@ def _azure_fetch(kv_map: dict[str, str]) -> int:
 
 # ── HashiCorp Vault backend ────────────────────────────────────────────────────
 
-def _hashicorp_fetch(kv_map: dict[str, str]) -> int:
+def _hashicorp_fetch(kv_map: dict[str, str], force: bool = False) -> int:
     vault_addr = os.environ.get("VAULT_ADDR", "").strip()
     if not vault_addr:
         log.debug("VAULT_ADDR not set — HashiCorp backend skipped")
@@ -295,7 +295,7 @@ def _hashicorp_fetch(kv_map: dict[str, str]) -> int:
     # ── Fetch secrets ─────────────────────────────────────────────────────────
     fetched = 0
     for env_key, secret_name in kv_map.items():
-        if os.environ.get(env_key):
+        if not force and os.environ.get(env_key):
             continue
         path = f"{prefix}/{secret_name}"
         try:
@@ -324,7 +324,7 @@ def _hashicorp_fetch(kv_map: dict[str, str]) -> int:
 
 # ── Infisical backend ──────────────────────────────────────────────────────────
 
-def _infisical_fetch(kv_map: dict[str, str]) -> int:
+def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
     """
     Fetches secrets from Infisical using one of three auth methods.
     Select via INFISICAL_AUTH_METHOD in .env:
@@ -423,7 +423,7 @@ def _infisical_fetch(kv_map: dict[str, str]) -> int:
 
     fetched = 0
     for env_key, secret_name in kv_map.items():
-        if os.environ.get(env_key):
+        if not force and os.environ.get(env_key):
             continue
         try:
             secret = client.secrets.get_secret_by_name(
@@ -448,7 +448,7 @@ def _infisical_fetch(kv_map: dict[str, str]) -> int:
 
 # ── Public entry point ─────────────────────────────────────────────────────────
 
-def load_kv_secrets(kv_map: dict[str, str] | None = None) -> None:
+def load_kv_secrets(kv_map: dict[str, str] | None = None, force: bool = False) -> None:
     """
     Fetch secrets from the configured backend and inject into os.environ.
 
@@ -456,6 +456,14 @@ def load_kv_secrets(kv_map: dict[str, str] | None = None) -> None:
       core/config.py                              → FLASK_KV_MAP
       cysiemstack/correlation_engine/config.py    → ENGINE_KV_MAP
       cy_asm/config.py                            → ASM_KV_MAP
+
+    Parameters
+    ----------
+    force : bool
+        When False (default), keys already present in os.environ are skipped
+        (systemd EnvironmentFile wins over vault — safe fallback mode).
+        When True, vault values overwrite existing os.environ values.
+        Use force=True only in the rotation sync path (pull_to_env).
 
     Switch backends by setting SECRETS_BACKEND in .env:
       SECRETS_BACKEND=azure       (default)
@@ -468,8 +476,65 @@ def load_kv_secrets(kv_map: dict[str, str] | None = None) -> None:
     backend = os.environ.get("SECRETS_BACKEND", "azure").strip().lower()
 
     if backend == "hashicorp":
-        _hashicorp_fetch(kv_map)
+        _hashicorp_fetch(kv_map, force=force)
     elif backend == "infisical":
-        _infisical_fetch(kv_map)
+        _infisical_fetch(kv_map, force=force)
     else:
-        _azure_fetch(kv_map)
+        _azure_fetch(kv_map, force=force)
+
+
+def pull_to_env(
+    env_path: str = "/opt/cycentra/.env",
+    kv_map: dict[str, str] | None = None,
+) -> int:
+    """
+    Pull the latest values from the vault and write them back to the .env file.
+
+    Use this for **secret rotation**:
+      1. Update the secret in your vault (Infisical / Azure KV / HashiCorp)
+      2. Run:  python3 -c "from core.kv_secrets import pull_to_env; pull_to_env()"
+      3. Restart the service: systemctl restart cycentra
+
+    This is the correct way to rotate secrets without a full reinstall.
+    The .env file is updated in-place — only keys present in kv_map are touched.
+    Returns the number of keys written.
+    """
+    import pathlib
+    import re as _re
+
+    if kv_map is None:
+        kv_map = FLASK_KV_MAP
+
+    # Force-fetch vault values into a scratch copy of os.environ
+    saved = {k: os.environ.get(k) for k in kv_map}
+    load_kv_secrets(kv_map, force=True)
+
+    env_file = pathlib.Path(env_path)
+    lines = env_file.read_text().splitlines() if env_file.exists() else []
+
+    updated, seen = [], set()
+    for line in lines:
+        key = line.split("=", 1)[0].strip()
+        if key in kv_map and os.environ.get(key):
+            updated.append(f"{key}={os.environ[key]}")
+            seen.add(key)
+        else:
+            updated.append(line)
+
+    # Append any keys that were not already in the file
+    for key in kv_map:
+        if key not in seen and os.environ.get(key):
+            updated.append(f"{key}={os.environ[key]}")
+
+    env_file.write_text("\n".join(updated) + "\n")
+    written = sum(1 for k in kv_map if os.environ.get(k))
+    log.info("pull_to_env: %d/%d secrets written to %s", written, len(kv_map), env_path)
+
+    # Restore os.environ so this call is side-effect-free for the running process
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+    return written

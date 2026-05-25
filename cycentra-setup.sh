@@ -1638,6 +1638,78 @@ SIEMEOF
     chmod 755 /opt/cycentra/ml_models
     success "ML model directory created → /opt/cycentra/ml_models"
 
+    # ── Vault bootstrap: push freshly-generated secrets to Infisical ────────
+    # If SECRETS_BACKEND=infisical is set in the installer environment AND the
+    # infisical CLI is available, push every vault-managed key from .env into
+    # Infisical immediately after the .env is written.  This makes vault the
+    # source of truth from the very first install — no manual CSV export needed.
+    #
+    # Skipped silently if:
+    #   - SECRETS_BACKEND != infisical
+    #   - infisical CLI is not installed
+    #   - INFISICAL_PROJECT_ID / INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET not set
+    #
+    # Keys that are intentionally excluded from vault (app-managed at runtime)
+    # are also excluded here: IRIS_API_KEY, CLOUD_IRIS_API_KEY,
+    # CYSOAR_SESSION_SECRET, WAZUH_API_URL, WAZUH_API_USER, WAZUH_API_PASSWORD.
+    _vault_push_env() {
+        local env_file="$1"
+        local env_tag="${INFISICAL_ENVIRONMENT:-prod}"
+        local project_id="${INFISICAL_PROJECT_ID:-}"
+        local client_id="${INFISICAL_CLIENT_ID:-}"
+        local client_secret="${INFISICAL_CLIENT_SECRET:-}"
+        local infisical_url="${INFISICAL_URL:-}"
+
+        [[ "${SECRETS_BACKEND:-}" != "infisical" ]] && return 0
+        command -v infisical &>/dev/null || { warn "infisical CLI not found — skipping vault push (install with: curl -1sLf 'https://dl.infisical.com/deb/infisical.list' | tee /etc/apt/sources.list.d/infisical.list && apt-get install -y infisical)"; return 0; }
+        [[ -z "$project_id" || -z "$client_id" || -z "$client_secret" ]] && { warn "INFISICAL_PROJECT_ID / INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET not set — skipping vault push"; return 0; }
+
+        step_header "VAULT BOOTSTRAP (Infisical)"
+
+        # Keys managed by vault (mirrors FLASK_KV_MAP + ENGINE_KV_MAP in kv_secrets.py)
+        # Excludes app-managed: IRIS_API_KEY, CLOUD_IRIS_API_KEY, CYSOAR_SESSION_SECRET,
+        # WAZUH_API_*, CORRELATION_DB_URL (engine-only), CYMIND_API_KEY (engine-only)
+        local -a VAULT_KEYS=(
+            SECRET_KEY JWT_SECRET ADMIN_API_KEY
+            CYCENTRA_DB_URL POSTGRES_PASSWORD MARKETPLACE_CATALOG_TOKEN
+            OAUTH2PROXY_SECRET OAUTH2PROXY_COOKIE_SECRET
+            CYIRIS_OIDC_SECRET CYSIEM_OIDC_SECRET CY360SSO_OIDC_SECRET
+            SSO_CLIENT_ID SSO_CLIENT_SECRET
+            GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET
+            MICROSOFT_CLIENT_ID MICROSOFT_CLIENT_SECRET
+            IRIS_SECRET_KEY IRIS_DB_PASS IRIS_ADM_PASSWORD
+            NODE_RED_CREDENTIAL_SECRET
+            SMTP_PASSWORD GH_TOKEN MAXMIND_KEY
+            CLOUD_MISP_URL CLOUD_MISP_API_KEY CLOUD_IRIS_URL
+            CORRELATION_DB_URL CYMIND_API_KEY
+        )
+
+        local _auth_args=(
+            "--clientId=${client_id}"
+            "--clientSecret=${client_secret}"
+            "--projectId=${project_id}"
+            "--env=${env_tag}"
+        )
+        [[ -n "$infisical_url" ]] && _auth_args+=("--domain=${infisical_url}")
+
+        local pushed=0 skipped=0
+        for key in "${VAULT_KEYS[@]}"; do
+            local val
+            val=$(grep -m1 "^${key}=" "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
+            if [[ -z "$val" ]]; then
+                ((skipped++)) || true
+                continue
+            fi
+            if infisical secrets set "${key}=${val}" "${_auth_args[@]}" --silent 2>/dev/null; then
+                ((pushed++)) || true
+            else
+                warn "Vault push failed for ${key} — check Infisical credentials"
+            fi
+        done
+        success "Vault bootstrap complete: ${pushed} secrets pushed, ${skipped} skipped (empty)"
+    }
+    _vault_push_env /opt/cycentra/.env
+
 fi  # end full env block
 
 # ── Step 4.3b: IAP Gateway + CySIEM OIDC ────────────────────────────────────
