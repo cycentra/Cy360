@@ -17,6 +17,7 @@ CyMind RAG API base: /api/v1/rag/
 
 import json
 import logging
+import os
 import uuid
 from pathlib import Path
 
@@ -47,7 +48,8 @@ def get_cymind_url() -> str:
     settings = _load_cymind_settings()
     ci = _cymind_integration(settings)
     return (
-        ci.get("cymindUrl")
+        os.environ.get("CYMIND_API_URL")
+        or ci.get("cymindUrl")
         or settings.get("fields", {}).get("baseUrl")
         or settings.get("cymind_url")
         or settings.get("CYMIND_API_URL")
@@ -57,12 +59,13 @@ def get_cymind_url() -> str:
 
 def get_cymind_api_key() -> str:
     """
-    Priority: explicit cymind_admin_key → M2M cymk_ key → chat pak_ key.
+    Priority: vault env → explicit cymind_admin_key → M2M cymk_ key → chat pak_ key.
     """
     settings = _load_cymind_settings()
     ci = _cymind_integration(settings)
     return (
-        settings.get("cymind_admin_key")
+        os.environ.get("CYMIND_API_KEY")
+        or settings.get("cymind_admin_key")
         or ci.get("apiKey")
         or ci.get("chatApiKey")
         or ""

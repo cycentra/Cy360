@@ -17,6 +17,7 @@ Supported providers (matching portal aiProviders.js):
 Falls back to local Ollama on localhost:11434 if no settings file exists.
 """
 import json
+import os
 from pathlib import Path
 import httpx
 import structlog
@@ -182,6 +183,11 @@ async def call_llm(system: str, user_prompt: str, timeout: float = 90.0) -> str:
     log.debug("ai_router_dispatch", provider=provider)
 
     if provider == "cymind":
+        # Vault-injected env vars take precedence over ai_settings.json fields
+        if os.environ.get("CYMIND_API_URL"):
+            fields = {**fields, "baseUrl": os.environ["CYMIND_API_URL"]}
+        if os.environ.get("CYMIND_API_KEY"):
+            fields = {**fields, "apiKey": os.environ["CYMIND_API_KEY"]}
         return await _cymind(fields, system, user_prompt, timeout)
     elif provider == "local":
         return await _ollama(fields, system, user_prompt, timeout)
