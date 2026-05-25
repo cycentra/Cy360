@@ -2058,6 +2058,22 @@ OS_OIDC_PY
                     -H 'Content-Type: application/json' \
                     -d '{"backend_roles":["viewer","kibanauser"],"hosts":[],"users":[]}' \
                     2>/dev/null || true)
+                # wazuh_ui_user is a Wazuh-defined OpenSearch role that may be absent in
+                # some installations (renamed or not pre-loaded).  Ensure it exists before
+                # attempting the rolesmapping PUT — a missing role returns 404 from the API.
+                _role_wu_status=$(curl -sk -o /dev/null -w '%{http_code}' \
+                    --cert "${_CERT_DIR}/admin.pem" --key "${_CERT_DIR}/admin-key.pem" \
+                    "https://127.0.0.1:9200/_plugins/_security/api/roles/wazuh_ui_user" \
+                    2>/dev/null || true)
+                if [[ "$_role_wu_status" == "404" ]]; then
+                    info "wazuh_ui_user role absent — creating with read-only Wazuh index permissions ..."
+                    curl -sk -o /dev/null \
+                        --cert "${_CERT_DIR}/admin.pem" --key "${_CERT_DIR}/admin-key.pem" \
+                        -X PUT "https://127.0.0.1:9200/_plugins/_security/api/roles/wazuh_ui_user" \
+                        -H 'Content-Type: application/json' \
+                        -d '{"cluster_permissions":["cluster_composite_ops_ro"],"index_permissions":[{"index_patterns":["wazuh-*",".wazuh",".wazuh-version",".kibana*"],"allowed_actions":["read","indices:data/read/search"]}],"tenant_permissions":[]}' \
+                        2>/dev/null || true
+                fi
                 _rm_wu=$(curl -sk -o /dev/null -w '%{http_code}' \
                     --cert "${_CERT_DIR}/admin.pem" --key "${_CERT_DIR}/admin-key.pem" \
                     -X PUT "https://127.0.0.1:9200/_plugins/_security/api/rolesmapping/wazuh_ui_user" \
