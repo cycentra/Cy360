@@ -53,7 +53,7 @@ def _get_model() -> str:
 def _call_llm(prompt: str, system: str = _GRC_SYSTEM_PROMPT,
               max_tokens: int = 600) -> tuple[str, int]:
     """
-    Call CyMind /api/chat endpoint.
+    Call CyMind /api/v1/chat endpoint.
     Returns (response_text, duration_ms).
     """
     url   = get_cymind_url()
@@ -78,7 +78,7 @@ def _call_llm(prompt: str, system: str = _GRC_SYSTEM_PROMPT,
     t0 = time.time()
     try:
         resp = requests.post(
-            f"{url}/api/chat",
+            f"{url}/api/v1/chat",
             headers=headers,
             json=payload,
             timeout=60,

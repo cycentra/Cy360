@@ -241,10 +241,15 @@ async def _host_refresh_scheduler():
     reports active agents.
     """
     import sys, os as _os
-    # host_service lives one directory above (cysiemstack/), not in engine/
-    _svc_path = _os.path.join(_os.path.dirname(__file__), "..")
-    if _svc_path not in sys.path:
-        sys.path.insert(0, _svc_path)
+    _engine_dir = _os.path.abspath(_os.path.dirname(__file__))
+    # host_service.py is one level up (cysiemstack/); its internal import
+    # "from cysiemstack.correlation_engine.models import ..." requires the
+    # grandparent directory to also be on sys.path.
+    _svc_path  = _os.path.normpath(_os.path.join(_engine_dir, ".."))
+    _base_path = _os.path.normpath(_os.path.join(_engine_dir, "..", ".."))
+    for _p in (_svc_path, _base_path):
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
     from host_service import refresh_all_hosts
     from models import AsyncSessionLocal
     await asyncio.sleep(30)   # wait for ingestor / DB to be ready

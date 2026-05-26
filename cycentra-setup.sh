@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.2.50 -- 2026-05-26 18:35 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.2.51 -- 2026-05-26 21:43 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -26,11 +26,11 @@
 # ── TEMP: Azure Arc Service Principal (TESTING ONLY — remove before go-live) ──
 # Replace with env var injection before deploying to production:
 #   export ARC_SP_ID=... ARC_SP_SECRET=... bash cycentra-setup.sh
-export ARC_SP_ID="${ARC_SP_ID:-e61cedfb-0e04-4d0f-81a7-4b881240bb35}"
-export ARC_SP_SECRET="${ARC_SP_SECRET:-1Wr8Q~woFk1eXNL~YSbwcIsJPwzXhzIBNj~jMb24}"
-export ARC_SUBSCRIPTION_ID="${ARC_SUBSCRIPTION_ID:-968ad81f-3859-45b7-b9b3-c8bcd0361e32}"
-export ARC_RESOURCE_GROUP="${ARC_RESOURCE_GROUP:-cy-keyvault-group}"
-export ARC_TENANT_ID="${ARC_TENANT_ID:-00864d66-c8a8-443f-8d0a-3df93346e266}"
+export ARC_SP_ID="${ARC_SP_ID:-e61cedfb-0e04-4d0f-81a7-4b881240bb35}" # Application (client) ID under App Registration 
+export ARC_SP_SECRET="${ARC_SP_SECRET:-1Wr8Q~woFk1eXNL~YSbwcIsJPwzXhzIBNj~jMb24}" # Application Client secret value (rotate after use)
+export ARC_SUBSCRIPTION_ID="${ARC_SUBSCRIPTION_ID:-968ad81f-3859-45b7-b9b3-c8bcd0361e32}" # Azure subscription ID
+export ARC_RESOURCE_GROUP="${ARC_RESOURCE_GROUP:-cy-keyvault-group}" # Resource group where the Key Vault is located
+export ARC_TENANT_ID="${ARC_TENANT_ID:-00864d66-c8a8-443f-8d0a-3df93346e266}" # Tenant ID of the Azure AD where the service principal is registered
 export ARC_LOCATION="${ARC_LOCATION:-westeurope}"
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1455,6 +1455,27 @@ PATCHEOF
             grep -q "^WAZUH_API_USER=" "$_env" || echo "WAZUH_API_USER=wazuh-wui"              >> "$_env"
             info "Wazuh API vars synced from cysiemstack.env → .env"
         fi
+    fi
+
+    # Remove stale CYMIND_API_KEY / CYMIND_API_URL from cysiemstack.env.
+    # v1.2.45+ moves these shared keys to .env which the engine service now loads
+    # FIRST via EnvironmentFile=/opt/cycentra/.env. If the old cymk_ admin key is
+    # still present in cysiemstack.env it wins (last EnvironmentFile wins for
+    # duplicate keys) and overrides the correct CyM_ chat key, causing 401 on
+    # every SIEM AI analysis call.
+    _siem_env_cymi="/opt/cycentra/cysiemstack.env"
+    if [[ -f "$_siem_env_cymi" ]]; then
+        _cymi_changed=false
+        if grep -q "^CYMIND_API_KEY=" "$_siem_env_cymi" 2>/dev/null; then
+            sed -i "/^CYMIND_API_KEY=/d" "$_siem_env_cymi"
+            _cymi_changed=true
+        fi
+        if grep -q "^CYMIND_API_URL=" "$_siem_env_cymi" 2>/dev/null; then
+            sed -i "/^CYMIND_API_URL=/d" "$_siem_env_cymi"
+            _cymi_changed=true
+        fi
+        [[ "$_cymi_changed" == "true" ]] && \
+            info "Removed stale CYMIND_API_KEY/URL from cysiemstack.env (now inherited from .env)"
     fi
 
     chmod 600 "$_env"

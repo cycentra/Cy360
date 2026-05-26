@@ -102,7 +102,7 @@ Set SECRETS_BACKEND=infisical plus:
 Secret naming:  env var FOO_BAR  →  Infisical secret name  FOO_BAR  (underscores kept)
 
 Required package:
-  infisicalsdk>=2.0.0
+  infisical-sdk>=1.0.0
 
 Infisical Machine Identity setup (run once in Infisical UI):
   1. Create a Machine Identity in your Infisical project
@@ -368,10 +368,10 @@ def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
         return 0
 
     try:
-        from infisicalsdk import InfisicalSDKClient
+        from infisical_sdk import InfisicalSDKClient
     except ImportError:
         log.warning(
-            "infisicalsdk not installed — run: pip install infisicalsdk>=2.0.0"
+            "infisical-sdk not installed — run: pip install infisical-sdk>=1.0.0"
         )
         return 0
 
@@ -424,16 +424,33 @@ def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
                     "(localhost:40342) — is azcmagent running? %s", exc
                 )
                 return 0
-            client.auth.oidc.login(identity_id=client_id, jwt=arc_jwt)
+            client.auth.oidc_auth.login(identity_id=client_id, jwt=arc_jwt)
             log.debug("Infisical: authenticated via Arc OIDC (manual JWT exchange)")
 
         else:
-            # azure — SDK calls Arc MSI endpoint (localhost:40342) internally.
-            # Requires Azure Arc enrolled and running.  Machine Identity type
-            # in Infisical UI must be "Azure Native Auth".
-            # If Arc is not running, login() will raise an exception → caught below.
-            client.auth.azure_auth.login(client_id=client_id)
-            log.debug("Infisical: authenticated via Azure Native Auth (Arc MSI)")
+            # azure — fetch Arc JWT from localhost:40342 and authenticate via OIDC.
+            # infisical-sdk v1.x has no azure_auth method; use oidc_auth with the
+            # Arc-issued JWT instead.  Machine Identity type in Infisical UI must
+            # be "OIDC" (configure audience/subject to match the Arc token).
+            import json as _json
+            import urllib.request as _urlrequest
+            _arc_url = (
+                "http://localhost:40342/identity/oauth2/token"
+                "?api-version=2020-06-01"
+                "&resource=https://management.azure.com/"
+            )
+            try:
+                _req = _urlrequest.Request(_arc_url, headers={"Metadata": "true"})
+                with _urlrequest.urlopen(_req, timeout=5) as _resp:
+                    _arc_jwt = _json.loads(_resp.read().decode())["access_token"]
+            except Exception as _exc:
+                log.error(
+                    "Infisical Azure: could not reach Azure Arc MSI endpoint "
+                    "(localhost:40342) — is azcmagent running? %s", _exc
+                )
+                return 0
+            client.auth.oidc_auth.login(identity_id=client_id, jwt=_arc_jwt)
+            log.debug("Infisical: authenticated via Azure Arc JWT + oidc_auth")
 
     except Exception as exc:
         log.error("Infisical: authentication failed: %s", exc)

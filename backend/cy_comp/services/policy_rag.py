@@ -59,15 +59,16 @@ def get_cymind_url() -> str:
 
 def get_cymind_api_key() -> str:
     """
-    Priority: vault env → explicit cymind_admin_key → M2M cymk_ key → chat pak_ key.
+    Priority: vault env → explicit cymind_admin_key → chat pak_ key (CyM_) → M2M cymk_ key.
+    Chat PAK key is preferred over admin key because /api/v1/chat requires a CyM_ token.
     """
     settings = _load_cymind_settings()
     ci = _cymind_integration(settings)
     return (
         os.environ.get("CYMIND_API_KEY")
         or settings.get("cymind_admin_key")
-        or ci.get("apiKey")
         or ci.get("chatApiKey")
+        or ci.get("apiKey")
         or ""
     )
 
