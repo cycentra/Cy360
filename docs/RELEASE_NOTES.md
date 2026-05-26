@@ -1,3 +1,11 @@
+## v1.2.47 -- 2026-05-26
+
+### Bug Fixes
+
+  - downgrade infisicalsdk requirement to >=1.0.0 (2.x does not exist on PyPI
+
+---
+
 ## v1.2.46 -- 2026-05-26
 
 ### Improvements
