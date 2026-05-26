@@ -12,10 +12,20 @@ Set SECRETS_BACKEND in /opt/cycentra/.env (or cysiemstack.env):
   SECRETS_BACKEND=hashicorp   → HashiCorp Vault
   SECRETS_BACKEND=infisical   → Infisical
 
-For Infisical, also set INFISICAL_AUTH_METHOD:
-  INFISICAL_AUTH_METHOD=azure      → Azure Native Auth via Arc MSI (default)
+For Infisical, also set INFISICAL_AUTH_METHOD — choose based on whether
+your server has Azure Arc enrolled:
+
+  INFISICAL_AUTH_METHOD=azure      → Azure Native Auth via Arc MSI
+                                     Requires Azure Arc agent running on server
+                                     Machine Identity type: "Azure Native Auth"
   INFISICAL_AUTH_METHOD=oidc       → Manual Arc JWT exchange (OIDC identity type)
-  INFISICAL_AUTH_METHOD=universal  → Client ID + Secret (dev/staging)
+                                     Requires Azure Arc agent running on server
+                                     Machine Identity type: "OIDC"
+  INFISICAL_AUTH_METHOD=universal  → Client ID + Secret
+                                     Works on ANY server — Arc not required
+                                     Machine Identity type: "Universal Auth"
+                                     Use this when Arc is not enrolled (on-prem,
+                                     non-Azure cloud, VMs without Arc)
 
 Leave unset (or omit VAULT_ADDR / AZURE_KEYVAULT_URL) to skip entirely —
 the app will rely on values already in .env or the process environment.
@@ -328,21 +338,28 @@ def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
     Fetches secrets from Infisical using one of three auth methods.
     Select via INFISICAL_AUTH_METHOD in .env:
 
-      azure     (default) — Azure Native Auth via Arc Managed Identity.
-                            SDK calls the local Arc MSI endpoint internally.
-                            Machine Identity must be configured as "Azure Auth"
-                            type in Infisical UI.
-                            Required: INFISICAL_CLIENT_ID (Machine Identity ID)
+      azure     — Azure Native Auth via Arc Managed Identity.
+                  SDK calls the local Arc MSI endpoint internally.
+                  REQUIRES: Azure Arc agent enrolled and running on this server.
+                  Machine Identity type in Infisical UI: "Azure Native Auth"
+                  Required env var: INFISICAL_CLIENT_ID (Machine Identity ID)
+                  Do NOT use on non-Arc servers — will silently fail at startup.
 
       oidc      — Manually fetches the Arc JWT from localhost:40342 and trades
-                  it for an Infisical session via OIDC login.  Equivalent to
-                  the JS pattern: fetch Arc token → client.auth.oidc.login().
-                  Machine Identity must be configured as "OIDC" type in Infisical UI.
-                  Required: INFISICAL_CLIENT_ID (Machine Identity ID)
+                  it for an Infisical session via OIDC login.
+                  REQUIRES: Azure Arc agent enrolled and running on this server.
+                  Machine Identity type in Infisical UI: "OIDC"
+                  Required env var: INFISICAL_CLIENT_ID (Machine Identity ID)
+                  Note: OIDC-type identities have no client secret — auth is
+                  performed via the Arc JWT, not a stored credential.
 
-      universal — Client ID + Secret (for dev machines and staging environments
-                  that are not Arc-enrolled).
-                  Required: INFISICAL_CLIENT_ID + INFISICAL_CLIENT_SECRET
+      universal — Client ID + Client Secret authentication.
+                  Works on ANY server — no Azure Arc required.
+                  Use this for on-prem servers, non-Azure VMs, or any host
+                  not enrolled in Azure Arc.  This is the correct choice for
+                  most CyCentra 360 deployments.
+                  Machine Identity type in Infisical UI: "Universal Auth"
+                  Required env vars: INFISICAL_CLIENT_ID + INFISICAL_CLIENT_SECRET
     """
     project_id = os.environ.get("INFISICAL_PROJECT_ID", "").strip()
     environment = os.environ.get("INFISICAL_ENVIRONMENT", "prod").strip()
@@ -375,7 +392,7 @@ def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
         client = InfisicalSDKClient(host=infisical_url)
 
         if auth_method == "universal":
-            # Developer machines and staging — client ID + secret
+            # Any server without Azure Arc — client ID + secret from Infisical Universal Auth identity
             if not client_secret:
                 log.error("Infisical universal auth: INFISICAL_CLIENT_SECRET is required")
                 return 0
@@ -411,8 +428,10 @@ def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
             log.debug("Infisical: authenticated via Arc OIDC (manual JWT exchange)")
 
         else:
-            # azure (default) — SDK calls Arc MSI endpoint internally.
-            # Machine Identity must be "Azure Auth" type in Infisical UI.
+            # azure — SDK calls Arc MSI endpoint (localhost:40342) internally.
+            # Requires Azure Arc enrolled and running.  Machine Identity type
+            # in Infisical UI must be "Azure Native Auth".
+            # If Arc is not running, login() will raise an exception → caught below.
             client.auth.azure_auth.login(client_id=client_id)
             log.debug("Infisical: authenticated via Azure Native Auth (Arc MSI)")
 
