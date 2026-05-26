@@ -1,3 +1,5 @@
+import os
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
@@ -96,6 +98,27 @@ class Settings(BaseSettings):
     # Set to the path of a CA certificate bundle to verify self-signed certs.
     # Leave empty to use the system default CA store.
     tls_ca_bundle: str = ""
+
+    @model_validator(mode='after')
+    def _bridge_cloud_misp_creds(self) -> 'Settings':
+        """Bridge CLOUD_MISP_URL / CLOUD_MISP_API_KEY (injected by ENGINE_KV_MAP
+        vault bootstrap) into the engine MISP settings.  This ensures MISP
+        enrichment works without the removed UI widget or a manual MISP_ENABLED
+        flag in cysiemstack.env."""
+        cloud_url = os.environ.get("CLOUD_MISP_URL", "").strip().rstrip("/")
+        cloud_key = os.environ.get("CLOUD_MISP_API_KEY", "").strip()
+        # Fill url from CLOUD_MISP_URL if the local setting is still the default
+        if cloud_url and self.misp_url in ("", "http://127.0.0.1:8200"):
+            self.misp_url = cloud_url
+        # Fill api key from CLOUD_MISP_API_KEY if not already set in cysiemstack.env
+        if cloud_key and not self.misp_api_key:
+            self.misp_api_key = cloud_key
+        # Auto-enable when credentials are now present
+        if self.misp_api_key and not self.misp_enabled:
+            self.misp_enabled = True
+            if self.misp_mode == "disabled":
+                self.misp_mode = "cloud"
+        return self
 
     model_config = SettingsConfigDict(
         env_file="/opt/cycentra/cysiemstack.env",

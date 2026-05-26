@@ -48,6 +48,28 @@ _CYCENTRA_ENV_FILE = Path("/opt/cycentra/.env")   # loaded by Flask; not by engi
 _CLOUD_IRIS_URL_DEFAULT = "https://cyiris.cycentra.com"
 
 
+def _get_iris_public_url(api_url: str) -> str:
+    """Return the browser-facing CyIRIS URL (not the internal API address).
+
+    The engine process loads cysiemstack.env, NOT /opt/cycentra/.env, so
+    CLOUD_IRIS_PUBLIC_URL and BASE_DOMAIN may be absent from os.environ.
+    We fall back to _read_cycentra_env() to read them from the master .env.
+    """
+    pub = os.environ.get("CLOUD_IRIS_PUBLIC_URL", "").strip().rstrip("/")
+    if pub:
+        return pub
+    base_domain = os.environ.get("BASE_DOMAIN", "").strip()
+    if not base_domain:
+        _dotenv = _read_cycentra_env()
+        base_domain = _dotenv.get("BASE_DOMAIN", "").strip()
+    if base_domain:
+        return f"https://cyiris.{base_domain}"
+    clean = (api_url or "").strip().rstrip("/")
+    if clean and "127.0.0.1" not in clean and "localhost" not in clean:
+        return clean
+    return _CLOUD_IRIS_URL_DEFAULT
+
+
 def _tls_verify():
     """Return verify parameter for httpx: CA bundle path or system default."""
     return settings.tls_ca_bundle if settings.tls_ca_bundle else True
@@ -226,7 +248,9 @@ async def create_iris_case(db: AsyncSession, incident: Incident) -> dict:
             data = resp.json()
             case = data if "case_id" in data else data.get("data", data)
             case_id  = case.get("case_id")
-            case_url = f"{cfg['url']}/case?cid={case_id}" if case_id else None
+            # Use the public browser URL (not the internal API address)
+            _pub = _get_iris_public_url(cfg["url"])
+            case_url = f"{_pub}/case?cid={case_id}" if case_id else None
 
             incident.iris_case_id     = case_id
             incident.iris_case_status = "open"

@@ -234,7 +234,7 @@ def siem_incident_escalate(incident_id):
       3. Create IRIS case via get_iris_config()
       4. PATCH incident in engine to persist iris_case_id/url/status
     """
-    from core.helpers import get_iris_config
+    from core.helpers import get_iris_config, get_iris_public_url
 
     # ── 1. Fetch incident from engine ─────────────────────────────────────────
     try:
@@ -334,7 +334,8 @@ def siem_incident_escalate(incident_id):
     data  = resp.json()
     case  = data if "case_id" in data else data.get("data", data)
     case_id  = case.get("case_id")
-    case_url = f"{cfg['url'].rstrip('/')}/case?cid={case_id}" if case_id else cfg["url"]
+    _public_iris = get_iris_public_url(cfg['url'])
+    case_url = f"{_public_iris}/case?cid={case_id}" if case_id else _public_iris
 
     # ── 5. Persist ticket info back to the engine ──────────────────────────────
     try:
@@ -441,7 +442,7 @@ def siem_ueba_escalate():
     cloud (CLOUD_IRIS_*), and the legacy IRIS_URL / IRIS_API_KEY env vars.
     Calls /api/v2/cases to match the engine iris_connector and ASM escalate routes.
     """
-    from core.helpers import get_iris_config
+    from core.helpers import get_iris_config, get_iris_public_url
     cfg = get_iris_config()
     if not cfg:
         return jsonify({"error": "CyIRIS not configured. Enable it in AI & Integration Settings."}), 503
@@ -514,7 +515,8 @@ def siem_ueba_escalate():
             data = resp.json()
             case = data if "case_id" in data else data.get("data", data)
             case_id  = case.get("case_id")
-            case_url = f"{cfg['url'].rstrip('/')}/case?cid={case_id}" if case_id else cfg["url"]
+            _public_iris_ueba = get_iris_public_url(cfg['url'])
+            case_url = f"{_public_iris_ueba}/case?cid={case_id}" if case_id else _public_iris_ueba
             return jsonify({"case_id": case_id, "case_url": case_url, "case_name": case_name})
         return jsonify({"error": f"IRIS returned HTTP {resp.status_code}", "detail": resp.text[:300]}), 502
     except _req.exceptions.ConnectionError:
@@ -534,10 +536,10 @@ def siem_ueba_integrations():
     IRIS_URL/IRIS_API_KEY configs — not just the old env-var path.
     """
     from core.config import WAZUH_URL
-    from core.helpers import get_iris_config
+    from core.helpers import get_iris_config, get_iris_public_url
     iris_cfg = get_iris_config()
     return jsonify({
-        "iris_url":      iris_cfg["url"] if iris_cfg else None,
+        "iris_url":      get_iris_public_url(iris_cfg["url"]) if iris_cfg else None,
         "wazuh_url":     WAZUH_URL or None,
         "iris_enabled":  bool(iris_cfg),
         "wazuh_enabled": bool(WAZUH_URL),
@@ -1832,7 +1834,7 @@ def siem_host_raise_ticket(agent_id):
         "remediation": "AI remediation steps (optional)"
       }
     """
-    from core.helpers import get_iris_config
+    from core.helpers import get_iris_config, get_iris_public_url
     import hashlib
 
     cfg = get_iris_config()
@@ -1948,7 +1950,8 @@ def siem_host_raise_ticket(agent_id):
             data    = resp.json()
             case    = data if "case_id" in data else data.get("data", data)
             case_id = case.get("case_id")
-            case_url = f"{cfg['url'].rstrip('/')}/case?cid={case_id}" if case_id else cfg["url"]
+            _public_iris_host = get_iris_public_url(cfg['url'])
+            case_url = f"{_public_iris_host}/case?cid={case_id}" if case_id else _public_iris_host
             return jsonify({"case_id": case_id, "case_url": case_url, "case_name": case_name})
         return jsonify({"error": f"IRIS returned HTTP {resp.status_code}", "detail": resp.text[:300]}), 502
     except _req.exceptions.ConnectionError:

@@ -231,6 +231,34 @@ async def _weekly_audit_scheduler():
         await asyncio.sleep(7 * 24 * 3600)   # every 7 days
 
 
+# ── Host posture refresh scheduler ───────────────────────────────────────────
+async def _host_refresh_scheduler():
+    """Populate / refresh host_posture_cache every hour from Wazuh + alert DB.
+
+    First run at 30 s after startup so the ingestor has time to settle.
+    The cache is what the Flask host-intelligence routes read from — without
+    this task running, the Host & Posture tab stays empty even when Wazuh
+    reports active agents.
+    """
+    import sys, os as _os
+    # host_service lives one directory above (cysiemstack/), not in engine/
+    _svc_path = _os.path.join(_os.path.dirname(__file__), "..")
+    if _svc_path not in sys.path:
+        sys.path.insert(0, _svc_path)
+    from host_service import refresh_all_hosts
+    from models import AsyncSessionLocal
+    await asyncio.sleep(30)   # wait for ingestor / DB to be ready
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                refreshed = await refresh_all_hosts(db)
+                await db.commit()
+                log.info("host_posture_refresh_done", host_count=refreshed)
+        except Exception as e:
+            log.error("host_refresh_scheduler_error", error=str(e))
+        await asyncio.sleep(3600)  # hourly
+
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -364,6 +392,8 @@ async def lifespan(app: FastAPI):
     log.info("feedback_adjustment_scheduler_started")
     asyncio.create_task(_weekly_audit_scheduler())
     log.info("weekly_audit_scheduler_started")
+    asyncio.create_task(_host_refresh_scheduler())
+    log.info("host_refresh_scheduler_started")
     yield
     if ingestor_task:
         ingestor_task.cancel()
@@ -1198,7 +1228,7 @@ async def analyse_incident(incident_id: str, db: AsyncSession = Depends(get_db))
         raise HTTPException(status_code=404, detail="Incident not found")
 
     from llm_enricher import enrich_incident as llm_enrich_incident
-    result = await llm_enrich_incident(db, inc)
+    result = await llm_enrich_incident(db, inc, on_demand=True)
     await db.commit()
 
     if not result:

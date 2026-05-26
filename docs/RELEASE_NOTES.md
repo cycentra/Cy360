@@ -1,3 +1,37 @@
+## v1.2.45 -- 2026-05-26
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.2.45 -- 2026-05-26
+
+### New Features
+
+  - SIEM engine now loads `/opt/cycentra/.env` as the first EnvironmentFile so all company-wide secrets (vault creds, CLOUD_MISP_*, CYMIND_*, GH_TOKEN, etc.) are available to the engine without duplication — operators only need to edit `.env`
+  - Host Intelligence host-list now refreshes automatically every hour (30 s startup delay) — no manual trigger needed
+  - AI Analysis available as on-demand per-incident call (`/incidents/{id}/analyse`) bypassing the `LLM_ENABLED` gate, so individual analysts can trigger enrichment even when background enrichment is off
+  - `LLM_ENABLED=true` by default — AI enrichment is active on fresh installs without extra config
+
+### Bug Fixes
+
+  - MISP threat-intelligence enrichment was silently disabled after the UI widget was removed; new `_bridge_cloud_misp_creds` model_validator in `config.py` auto-enables MISP at engine startup whenever `CLOUD_MISP_API_KEY` is present in the vault — all existing installations pick this up on next engine restart
+  - CyIRIS ticket links in portal and incident notifications now resolve to the correct public hostname (`https://cyiris.<domain>`) instead of the internal loopback URL
+  - Engine double-loads removed: `CLOUD_MISP_*`, `CYMIND_*`, and vault bootstrap vars no longer duplicated in `cysiemstack.env`
+
+### Improvements
+
+  - Platform Extensions → CyIRIS panel simplified: removed 3-mode selector; replaced with static status notification + FP threshold slider only
+  - MISP configuration widget removed from Platform Extensions UI — MISP is fully vault-managed; no UI action required
+  - `cysiemstack.env` slimmed to engine-only entries (DB, Redis, Wazuh, tuning params) — ~30% smaller
+  - `cysiemstack/.env.example` rewritten to match new slim format with inline inheritance notes
+  - Infisical Python SDK (`infisicalsdk>=2.0.0`) re-enabled in `requirements.txt`
+  - `get_iris_public_url()` helper centralises public CyIRIS URL resolution: `CLOUD_IRIS_PUBLIC_URL` env → `https://cyiris.<BASE_DOMAIN>` → fallback
+
+---
+
 ## v1.2.44 -- 2026-05-25
 
 ### Improvements

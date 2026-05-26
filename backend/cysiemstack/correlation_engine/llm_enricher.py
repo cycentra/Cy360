@@ -191,9 +191,14 @@ async def _store_to_cymind_memory(incident: Incident, summary: str, remediation:
         log.debug("cymind_memory_store_skipped", incident_id=getattr(incident, "id", "?"), reason=str(e))
 
 
-async def enrich_incident(db: AsyncSession, incident: Incident) -> dict:
-    """Generate LLM narrative for an incident. Returns dict or empty dict."""
-    if not settings.llm_enabled:
+async def enrich_incident(db: AsyncSession, incident: Incident, on_demand: bool = False) -> dict:
+    """Generate LLM narrative for an incident. Returns dict or empty dict.
+
+    on_demand=True bypasses the LLM_ENABLED flag — used when an analyst
+    explicitly triggers analysis from the portal (regardless of whether
+    automated enrichment is disabled in cysiemstack.env).
+    """
+    if not on_demand and not settings.llm_enabled:
         return {}
 
     result = await db.execute(select(Alert).where(Alert.incident_id == incident.id))

@@ -127,6 +127,31 @@ def get_misp_config() -> dict | None:
 _CLOUD_IRIS_URL_DEFAULT = "https://cyiris.cycentra.com"
 
 
+def get_iris_public_url(api_url: str = "") -> str:
+    """Return the browser-facing CyIRIS URL (NOT the internal API address).
+
+    Priority:
+      1. CLOUD_IRIS_PUBLIC_URL env var — explicit override
+      2. BASE_DOMAIN derivation → https://cyiris.<BASE_DOMAIN>
+      3. api_url itself — only when it is not a loopback/localhost address
+      4. Hardcoded default https://cyiris.cycentra.com
+
+    This separates the API endpoint (CLOUD_IRIS_URL=http://127.0.0.1:4433 used
+    to bypass the IAP nginx gate) from the human-readable deep-link stored in
+    incidents and opened by the "Open in CyIRIS" button.
+    """
+    pub = os.environ.get("CLOUD_IRIS_PUBLIC_URL", "").strip().rstrip("/")
+    if pub:
+        return pub
+    base_domain = os.environ.get("BASE_DOMAIN", "").strip()
+    if base_domain:
+        return f"https://cyiris.{base_domain}"
+    clean = (api_url or "").strip().rstrip("/")
+    if clean and "127.0.0.1" not in clean and "localhost" not in clean:
+        return clean
+    return _CLOUD_IRIS_URL_DEFAULT
+
+
 def get_iris_config() -> dict | None:
     """
     Single source of truth for CyIRIS (DFIR IRIS) connection configuration.
