@@ -514,7 +514,7 @@ def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
                     environment_slug=environment,
                     secret_path="/",
                 )
-                value = secret.secret_value
+                value = getattr(secret, "secretValue", None) or getattr(secret, "secret_value", None)
                 if value:
                     os.environ[env_key] = value
                     fetched += 1
