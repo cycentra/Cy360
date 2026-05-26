@@ -33,4 +33,4 @@ azure-keyvault-secrets>=4.7.0
 # HashiCorp Vault
 # hvac>=2.0.0
 # Infisical (developer secrets management — also supports Native Azure Auth for Arc)
-infisicalsdk>=2.0.0
+infisicalsdk>=1.0.0
