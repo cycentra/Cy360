@@ -338,20 +338,22 @@ def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
     Fetches secrets from Infisical using one of three auth methods.
     Select via INFISICAL_AUTH_METHOD in .env:
 
-      azure     — Azure Native Auth via Arc Managed Identity.
-                  SDK calls the local Arc MSI endpoint internally.
+      azure     — Fetches an Azure Arc JWT from localhost:40342 and authenticates
+                  via Infisical OIDC auth (infisical-sdk v1.x has no azure_auth).
                   REQUIRES: Azure Arc agent enrolled and running on this server.
-                  Machine Identity type in Infisical UI: "Azure Native Auth"
-                  Required env var: INFISICAL_CLIENT_ID (Machine Identity ID)
-                  Do NOT use on non-Arc servers — will silently fail at startup.
+                  Machine Identity type in Infisical UI: MUST be "OIDC" (not
+                  "Azure Native Auth" — that type requires SDK v2.x which is not
+                  yet available on PyPI).  Configure the OIDC identity with:
+                    Issuer URL: https://login.microsoftonline.com/<tenant>/v2.0
+                    Audience:   https://management.azure.com/
+                  Required env var: INFISICAL_CLIENT_ID (Infisical Machine Identity ID)
+                  If you previously created an "Azure Native Auth" identity, delete
+                  it and create a new one of type "OIDC" with the settings above.
 
-      oidc      — Manually fetches the Arc JWT from localhost:40342 and trades
-                  it for an Infisical session via OIDC login.
-                  REQUIRES: Azure Arc agent enrolled and running on this server.
+      oidc      — Alias for "azure" — same behaviour (Arc JWT → OIDC login).
+                  Use this explicitly to be clear about the identity type.
                   Machine Identity type in Infisical UI: "OIDC"
                   Required env var: INFISICAL_CLIENT_ID (Machine Identity ID)
-                  Note: OIDC-type identities have no client secret — auth is
-                  performed via the Arc JWT, not a stored credential.
 
       universal — Client ID + Client Secret authentication.
                   Works on ANY server — no Azure Arc required.

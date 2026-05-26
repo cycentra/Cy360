@@ -1397,7 +1397,17 @@ def _read_cymind_config() -> dict:
 
 
 def _write_cymind_config(cfg: dict) -> None:
-    """Merge cymind config into ai_settings.json and sync API key to cysiemstack.env."""
+    """Merge cymind config into ai_settings.json.
+
+    NOTE: We intentionally do NOT write CYMIND_API_KEY to cysiemstack.env.
+    The engine service loads /opt/cycentra/.env FIRST (shared company-wide
+    secrets, including vault-injected CYMIND_API_KEY with the correct CyM_ key)
+    and then loads cysiemstack.env.  Because the last EnvironmentFile wins for
+    duplicate keys, any CYMIND_API_KEY in cysiemstack.env would override the
+    correct key with the cymk_ M2M admin key, which is rejected by /api/v1/chat
+    (401 Unauthorized).  The engine reads AI credentials from ai_settings.json
+    at runtime via call_llm(), so cysiemstack.env does not need this key at all.
+    """
     existing = {}
     try:
         if AI_SETTINGS_FILE.exists():
@@ -1406,23 +1416,17 @@ def _write_cymind_config(cfg: dict) -> None:
         pass
     existing["cymind_integration"] = cfg
     AI_SETTINGS_FILE.write_text(json.dumps(existing, indent=2))
-    # Keep CYMIND_API_KEY in sync so the correlation engine can read it on restart
-    env_path = Path(_ENV_FILE_MAP["cysiemstack"])
-    if env_path.exists():
-        lines = env_path.read_text().splitlines()
-        result, found = [], False
-        for line in lines:
-            if re.match(r'^CYMIND_API_KEY\s*=', line) and not line.strip().startswith("#"):
-                result.append(f"CYMIND_API_KEY={cfg.get('apiKey', '')}")
-                found = True
-            else:
-                result.append(line)
-        if not found:
-            result.append(f"CYMIND_API_KEY={cfg.get('apiKey', '')}")
-        try:
-            env_path.write_text("\n".join(result) + "\n")
-        except Exception:
-            pass
+    # Remove CYMIND_API_KEY from cysiemstack.env if it was written by an older
+    # version of this function — the stale cymk_ key causes 401 on chat calls.
+    try:
+        env_path = Path(_ENV_FILE_MAP["cysiemstack"])
+        if env_path.exists():
+            lines = env_path.read_text().splitlines()
+            cleaned = [l for l in lines if not re.match(r'^CYMIND_API_KEY\s*=', l)]
+            if len(cleaned) != len(lines):
+                env_path.write_text("\n".join(cleaned) + "\n")
+    except Exception:
+        pass
 
 
 @system_bp.route("/api/system/cymind", methods=["OPTIONS"])
