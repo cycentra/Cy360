@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.2.48 -- 2026-05-26 18:22 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.2.49 -- 2026-05-26 18:28 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -23,14 +23,27 @@
 #   Let's Encrypt      → SSL certificates via certbot
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# ── TEMP: Azure Arc Service Principal (TESTING ONLY — remove before go-live) ──
-# Replace with env var injection before deploying to production:
-#   export ARC_SP_ID=... ARC_SP_SECRET=... bash cycentra-setup.sh
-export ARC_SP_ID="${ARC_SP_ID:-e61cedfb-0e04-4d0f-81a7-4b881240bb35}"
-export ARC_SP_SECRET="${ARC_SP_SECRET:-1Wr8Q~woFk1eXNL~YSbwcIsJPwzXhzIBNj~jMb24}"
-export ARC_SUBSCRIPTION_ID="${ARC_SUBSCRIPTION_ID:-968ad81f-3859-45b7-b9b3-c8bcd0361e32}"
+# ── Azure Arc Service Principal (pass as env vars — never hardcode) ────────────
+# Arc enrollment runs automatically if ALL of these are exported before calling
+# this script.  Arc is optional — if not set the enrollment step is skipped and
+# the server relies on .env values / Universal Auth for vault access.
+#
+# Usage:
+#   export ARC_SP_ID="<service-principal-app-id>"
+#   export ARC_SP_SECRET="<service-principal-secret>"
+#   export ARC_SUBSCRIPTION_ID="<subscription-id>"
+#   export ARC_RESOURCE_GROUP="<resource-group>"
+#   export ARC_TENANT_ID="<tenant-id>"
+#   export ARC_LOCATION="westeurope"
+#   sudo bash cycentra-setup.sh
+#
+# The SP only needs the "Azure Connected Machine Onboarding" role.
+# Rotate or revoke it after all servers are enrolled — runtime never uses it.
+export ARC_SP_ID="${ARC_SP_ID:-}"
+export ARC_SP_SECRET="${ARC_SP_SECRET:-}"
+export ARC_SUBSCRIPTION_ID="${ARC_SUBSCRIPTION_ID:-}"
 export ARC_RESOURCE_GROUP="${ARC_RESOURCE_GROUP:-cy-keyvault-group}"
-export ARC_TENANT_ID="${ARC_TENANT_ID:-00864d66-c8a8-443f-8d0a-3df93346e266}"
+export ARC_TENANT_ID="${ARC_TENANT_ID:-}"
 export ARC_LOCATION="${ARC_LOCATION:-westeurope}"
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1686,10 +1699,19 @@ SIEMEOF
     # Infisical immediately after the .env is written.  This makes vault the
     # source of truth from the very first install — no manual CSV export needed.
     #
+    # Auth method determines how the CLI authenticates:
+    #   universal  → uses INFISICAL_CLIENT_ID + INFISICAL_CLIENT_SECRET (scripted)
+    #   azure/oidc → uses Arc Managed Identity; vault push is skipped with
+    #                instructions because the CLI does not support non-interactive
+    #                Azure Native Auth for 'secrets set'.  Add secrets via the
+    #                Infisical UI or run the push separately after an interactive
+    #                'infisical login --native-azure' session.
+    #
     # Skipped silently if:
     #   - SECRETS_BACKEND != infisical
     #   - infisical CLI is not installed
-    #   - INFISICAL_PROJECT_ID / INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET not set
+    #   - INFISICAL_PROJECT_ID or INFISICAL_CLIENT_ID not set
+    #   - auth method is azure/oidc (runtime reads work; write bootstrap requires UI)
     #
     # Keys that are intentionally excluded from vault (app-managed at runtime)
     # are also excluded here: IRIS_API_KEY, CLOUD_IRIS_API_KEY,
@@ -1700,13 +1722,38 @@ SIEMEOF
         local project_id="${INFISICAL_PROJECT_ID:-}"
         local client_id="${INFISICAL_CLIENT_ID:-}"
         local client_secret="${INFISICAL_CLIENT_SECRET:-}"
+        local auth_method="${INFISICAL_AUTH_METHOD:-azure}"
         local infisical_url="${INFISICAL_URL:-}"
 
         [[ "${SECRETS_BACKEND:-}" != "infisical" ]] && return 0
-        command -v infisical &>/dev/null || { warn "infisical CLI not found — skipping vault push (install with: curl -1sLf 'https://dl.infisical.com/deb/infisical.list' | tee /etc/apt/sources.list.d/infisical.list && apt-get install -y infisical)"; return 0; }
-        [[ -z "$project_id" || -z "$client_id" || -z "$client_secret" ]] && { warn "INFISICAL_PROJECT_ID / INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET not set — skipping vault push"; return 0; }
+        command -v infisical &>/dev/null || { warn "infisical CLI not found — skipping vault push"; return 0; }
+        [[ -z "$project_id" || -z "$client_id" ]] && { warn "INFISICAL_PROJECT_ID / INFISICAL_CLIENT_ID not set — skipping vault push"; return 0; }
 
-        step_header "VAULT BOOTSTRAP (Infisical)"
+        # Azure Native Auth and OIDC: runtime reads work (Python SDK), but the
+        # CLI 'secrets set' command does not support non-interactive Arc auth.
+        # Print the list of keys so the operator can paste them into the Infisical UI.
+        if [[ "$auth_method" == "azure" || "$auth_method" == "oidc" ]]; then
+            warn "Vault bootstrap: auth_method=${auth_method} — CLI push requires Universal Auth."
+            warn "  Add the following secrets manually in the Infisical UI (Project → Secrets → ${env_tag}):"
+            local -a VAULT_KEYS_INFO=(MARKETPLACE_CATALOG_TOKEN SSO_CLIENT_ID SSO_CLIENT_SECRET
+                GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MICROSOFT_CLIENT_ID MICROSOFT_CLIENT_SECRET
+                GH_TOKEN MAXMIND_KEY CLOUD_MISP_URL CLOUD_MISP_API_KEY CYMIND_API_URL CYMIND_API_KEY)
+            for key in "${VAULT_KEYS_INFO[@]}"; do
+                local val
+                val=$(grep -m1 "^${key}=" "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
+                [[ -n "$val" ]] && info "  ${key} = ${val}"
+            done
+            info "  Once added, secrets are pulled automatically at every backend restart."
+            return 0
+        fi
+
+        # Universal Auth — fully scripted push
+        if [[ -z "$client_secret" ]]; then
+            warn "INFISICAL_CLIENT_SECRET not set — skipping vault push (required for universal auth)"
+            return 0
+        fi
+
+        step_header "VAULT BOOTSTRAP (Infisical — Universal Auth)"
 
         # Only company-wide secrets are pushed to the vault — values that are
         # identical across every CyCentra deployment (external API keys, company
