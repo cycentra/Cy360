@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.2.49 -- 2026-05-26 18:28 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.2.50 -- 2026-05-26 18:35 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -23,27 +23,14 @@
 #   Let's Encrypt      → SSL certificates via certbot
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# ── Azure Arc Service Principal (pass as env vars — never hardcode) ────────────
-# Arc enrollment runs automatically if ALL of these are exported before calling
-# this script.  Arc is optional — if not set the enrollment step is skipped and
-# the server relies on .env values / Universal Auth for vault access.
-#
-# Usage:
-#   export ARC_SP_ID="<service-principal-app-id>"
-#   export ARC_SP_SECRET="<service-principal-secret>"
-#   export ARC_SUBSCRIPTION_ID="<subscription-id>"
-#   export ARC_RESOURCE_GROUP="<resource-group>"
-#   export ARC_TENANT_ID="<tenant-id>"
-#   export ARC_LOCATION="westeurope"
-#   sudo bash cycentra-setup.sh
-#
-# The SP only needs the "Azure Connected Machine Onboarding" role.
-# Rotate or revoke it after all servers are enrolled — runtime never uses it.
-export ARC_SP_ID="${ARC_SP_ID:-}"
-export ARC_SP_SECRET="${ARC_SP_SECRET:-}"
-export ARC_SUBSCRIPTION_ID="${ARC_SUBSCRIPTION_ID:-}"
+# ── TEMP: Azure Arc Service Principal (TESTING ONLY — remove before go-live) ──
+# Replace with env var injection before deploying to production:
+#   export ARC_SP_ID=... ARC_SP_SECRET=... bash cycentra-setup.sh
+export ARC_SP_ID="${ARC_SP_ID:-e61cedfb-0e04-4d0f-81a7-4b881240bb35}"
+export ARC_SP_SECRET="${ARC_SP_SECRET:-1Wr8Q~woFk1eXNL~YSbwcIsJPwzXhzIBNj~jMb24}"
+export ARC_SUBSCRIPTION_ID="${ARC_SUBSCRIPTION_ID:-968ad81f-3859-45b7-b9b3-c8bcd0361e32}"
 export ARC_RESOURCE_GROUP="${ARC_RESOURCE_GROUP:-cy-keyvault-group}"
-export ARC_TENANT_ID="${ARC_TENANT_ID:-}"
+export ARC_TENANT_ID="${ARC_TENANT_ID:-00864d66-c8a8-443f-8d0a-3df93346e266}"
 export ARC_LOCATION="${ARC_LOCATION:-westeurope}"
 # ─────────────────────────────────────────────────────────────────────────────
 
