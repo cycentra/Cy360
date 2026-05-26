@@ -333,6 +333,69 @@ def _hashicorp_fetch(kv_map: dict[str, str], force: bool = False) -> int:
 
 # ── Infisical backend ──────────────────────────────────────────────────────────
 
+def _fetch_arc_jwt(resource: str = "https://management.azure.com/") -> str:
+    """
+    Fetch a managed-identity JWT from the Azure Arc HIMDS endpoint.
+
+    HIMDS uses a filesystem-based challenge-response to prove the caller
+    is a local process (not an SSRF):
+      1. GET /metadata/identity/oauth2/token → 401 + Www-Authenticate header
+         with realm=<path-to-key-file>
+      2. Read that key file — its content IS the Basic auth password (the key
+         file is already base64, so no further encoding is needed).
+      3. Re-send with Authorization: Basic <raw-key-content> → 200 + JWT.
+
+    Returns the access_token string, or "" on any failure.
+    """
+    import json as _json
+    import re as _re
+    import urllib.request as _urlrequest
+
+    _arc_url = (
+        "http://localhost:40342/metadata/identity/oauth2/token"
+        f"?api-version=2020-06-01&resource={resource}"
+    )
+    try:
+        # Step 1 — get challenge
+        _req0 = _urlrequest.Request(_arc_url, headers={"Metadata": "true"})
+        try:
+            _urlrequest.urlopen(_req0, timeout=5)
+            log.error("Infisical Arc: HIMDS returned 200 without challenge — unexpected")
+            return ""
+        except _urlrequest.HTTPError as _e0:
+            if _e0.code != 401:
+                log.error("Infisical Arc: HIMDS returned %s (expected 401 challenge)", _e0.code)
+                return ""
+            _auth_hdr = _e0.headers.get("Www-Authenticate", "")
+            _m = _re.search(r"realm=(\S+)", _auth_hdr)
+            if not _m:
+                log.error("Infisical Arc: no realm path in HIMDS Www-Authenticate header")
+                return ""
+            _key_path = _m.group(1)
+
+        # Step 2 — read challenge key (its content is the raw Basic auth value)
+        with open(_key_path) as _f:
+            _raw_key = _f.read().strip()
+
+        # Step 3 — authenticate
+        _req1 = _urlrequest.Request(
+            _arc_url,
+            headers={"Metadata": "true", "Authorization": f"Basic {_raw_key}"},
+        )
+        with _urlrequest.urlopen(_req1, timeout=10) as _resp:
+            _token = _json.loads(_resp.read().decode()).get("access_token", "")
+            if _token:
+                log.debug("Infisical Arc: HIMDS JWT obtained successfully")
+            return _token
+
+    except Exception as _exc:
+        log.error(
+            "Infisical Arc: could not fetch JWT from Azure Arc HIMDS "
+            "(localhost:40342) — is azcmagent/himdsd running? %s", _exc
+        )
+        return ""
+
+
 def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
     """
     Fetches secrets from Infisical using one of three auth methods.
@@ -344,8 +407,11 @@ def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
                   Machine Identity type in Infisical UI: MUST be "OIDC" (not
                   "Azure Native Auth" — that type requires SDK v2.x which is not
                   yet available on PyPI).  Configure the OIDC identity with:
-                    Issuer URL: https://login.microsoftonline.com/<tenant>/v2.0
-                    Audience:   https://management.azure.com/
+                    OIDC Discovery URL:  https://sts.windows.net/<tenant>/
+                    Bound Issuer:        https://sts.windows.net/<tenant>/
+                    Bound Subject:       <managed-identity Object ID from Azure Portal>
+                    Bound Audiences:     https://management.azure.com
+                  Note: Arc issues v1.0 tokens — issuer is STS URL, not login.microsoft
                   Required env var: INFISICAL_CLIENT_ID (Infisical Machine Identity ID)
                   If you previously created an "Azure Native Auth" identity, delete
                   it and create a new one of type "OIDC" with the settings above.
@@ -405,51 +471,21 @@ def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
             log.debug("Infisical: authenticated via Universal Auth")
 
         elif auth_method == "oidc":
-            # OIDC path — manually fetch Arc JWT from localhost:40342 and trade
-            # for an Infisical session.  Mirrors the JS SDK pattern:
-            #   fetch(arcIdentityUrl) → arcData.access_token → client.auth.oidc.login()
+            # OIDC path — fetch Arc JWT via HIMDS challenge-response then trade
+            # for an Infisical session.
             # Machine Identity must be "OIDC" type in Infisical UI.
-            import json
-            import urllib.request
-            arc_url = (
-                "http://localhost:40342/identity/oauth2/token"
-                "?api-version=2020-06-01"
-                "&resource=https://management.azure.com/"
-            )
-            try:
-                req = urllib.request.Request(arc_url, headers={"Metadata": "true"})
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    arc_jwt = json.loads(resp.read().decode())["access_token"]
-            except Exception as exc:
-                log.error(
-                    "Infisical OIDC: could not reach Azure Arc MSI endpoint "
-                    "(localhost:40342) — is azcmagent running? %s", exc
-                )
+            arc_jwt = _fetch_arc_jwt()
+            if not arc_jwt:
                 return 0
             client.auth.oidc_auth.login(identity_id=client_id, jwt=arc_jwt)
             log.debug("Infisical: authenticated via Arc OIDC (manual JWT exchange)")
 
         else:
-            # azure — fetch Arc JWT from localhost:40342 and authenticate via OIDC.
-            # infisical-sdk v1.x has no azure_auth method; use oidc_auth with the
-            # Arc-issued JWT instead.  Machine Identity type in Infisical UI must
-            # be "OIDC" (configure audience/subject to match the Arc token).
-            import json as _json
-            import urllib.request as _urlrequest
-            _arc_url = (
-                "http://localhost:40342/identity/oauth2/token"
-                "?api-version=2020-06-01"
-                "&resource=https://management.azure.com/"
-            )
-            try:
-                _req = _urlrequest.Request(_arc_url, headers={"Metadata": "true"})
-                with _urlrequest.urlopen(_req, timeout=5) as _resp:
-                    _arc_jwt = _json.loads(_resp.read().decode())["access_token"]
-            except Exception as _exc:
-                log.error(
-                    "Infisical Azure: could not reach Azure Arc MSI endpoint "
-                    "(localhost:40342) — is azcmagent running? %s", _exc
-                )
+            # azure — fetch Arc JWT via HIMDS challenge-response, then authenticate
+            # via oidc_auth (infisical-sdk v1.x has no azure_auth method).
+            # Machine Identity type in Infisical UI must be "OIDC".
+            _arc_jwt = _fetch_arc_jwt()
+            if not _arc_jwt:
                 return 0
             client.auth.oidc_auth.login(identity_id=client_id, jwt=_arc_jwt)
             log.debug("Infisical: authenticated via Azure Arc JWT + oidc_auth")
