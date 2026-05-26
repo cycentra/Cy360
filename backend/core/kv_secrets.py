@@ -99,7 +99,9 @@ Set SECRETS_BACKEND=infisical plus:
   INFISICAL_PROJECT_ID=<project-id>
   INFISICAL_ENVIRONMENT=prod   (dev | staging | prod)
 
-Secret naming:  env var FOO_BAR  →  Infisical secret name  FOO_BAR  (underscores kept)
+Secret naming:  both FOO_BAR and FOO-BAR are accepted in Infisical.
+  The lookup tries the hyphenated form first, then the underscore form,
+  so secrets uploaded via the CSV template (underscores) resolve automatically.
 
 Required package:
   infisical-sdk>=1.0.0
@@ -498,22 +500,31 @@ def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
     for env_key, secret_name in kv_map.items():
         if not force and os.environ.get(env_key):
             continue
-        try:
-            secret = client.secrets.get_secret_by_name(
-                secret_name=secret_name,
-                project_id=project_id,
-                environment_slug=environment,
-                secret_path="/",
-            )
-            value = secret.secret_value
-            if value:
-                os.environ[env_key] = value
-                fetched += 1
-                log.debug("Infisical → loaded %s", env_key)
-            else:
-                log.warning("Infisical: secret '%s' exists but is empty", secret_name)
-        except Exception as exc:
-            log.warning("Infisical: could not fetch '%s': %s", secret_name, exc)
+        # Infisical allows any naming convention.  Try the canonical name first
+        # (which uses hyphens to match Azure KV), then fall back to the underscore
+        # form so secrets uploaded via the CSV template (FOO_BAR) also resolve.
+        underscore_name = secret_name.replace("-", "_")
+        candidates = [secret_name] if secret_name == underscore_name else [secret_name, underscore_name]
+        loaded = False
+        for name in candidates:
+            try:
+                secret = client.secrets.get_secret_by_name(
+                    secret_name=name,
+                    project_id=project_id,
+                    environment_slug=environment,
+                    secret_path="/",
+                )
+                value = secret.secret_value
+                if value:
+                    os.environ[env_key] = value
+                    fetched += 1
+                    log.debug("Infisical → loaded %s (key=%s)", env_key, name)
+                    loaded = True
+                    break
+            except Exception:
+                continue
+        if not loaded:
+            log.debug("Infisical: secret not found for %s (tried: %s)", env_key, ", ".join(candidates))
 
     log.info("Infisical: %d/%d secret(s) loaded", fetched, len(kv_map))
     return fetched

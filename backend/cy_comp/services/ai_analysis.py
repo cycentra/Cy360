@@ -87,9 +87,10 @@ def _call_llm(prompt: str, system: str = _GRC_SYSTEM_PROMPT,
         if resp.ok:
             data = resp.json()
             text = (
-                data.get("message", {}).get("content")
-                or data.get("choices", [{}])[0].get("message", {}).get("content")
-                or data.get("response")
+                data.get("content")                                                  # CyMind v2
+                or data.get("message", {}).get("content")                            # CyMind v1
+                or data.get("choices", [{}])[0].get("message", {}).get("content")   # OpenAI-compat
+                or data.get("response")                                              # Ollama direct
                 or ""
             )
             return text.strip(), duration_ms
