@@ -1,3 +1,11 @@
+## v1.2.68 -- 2026-05-27
+
+### Bug Fixes
+
+  - Fix Infisical secrets not retrieved: package name typo + HIMDS check bugs
+
+---
+
 ## v1.2.68 -- 2026-05-28
 
 ### Bug Fixes
