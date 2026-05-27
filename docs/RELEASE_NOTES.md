@@ -1,3 +1,11 @@
+## v1.2.69 -- 2026-05-27
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
 ## v1.2.68 -- 2026-05-27
 
 ### Bug Fixes
