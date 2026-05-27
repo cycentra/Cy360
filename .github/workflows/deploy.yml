@@ -119,8 +119,13 @@ jobs:
           
           mkdir -p cycentra-release/portal
           cp -r portal/dist/ cycentra-release/portal/dist/
-          # Ship the compiled binary — not the raw .sh source
+          # Ship both the compiled binary and the plain .sh source.
+          # The .sh is used by setup.sh's self-update path: when a server runs
+          # --update from /opt/cycentra/cycentra-setup.sh the self-copy no-ops
+          # ($0 == dest), but the bundle-preference branch copies cycentra-setup.sh
+          # from $BUNDLE_DIR on the very first run — fixing stale installs.
           cp cycentra-setup-bin cycentra-release/cycentra-setup
+          cp cycentra-setup.sh  cycentra-release/cycentra-setup.sh
           chmod +x cycentra-release/cycentra-setup
           cp docs/RELEASE_NOTES.md cycentra-release/
           echo "${TAG}" > cycentra-release/VERSION

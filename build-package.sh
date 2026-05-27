@@ -78,6 +78,11 @@ PKG_DIR="$BUILD_DIR/package"
 mkdir -p "$PKG_DIR"
 
 cp "$BUILD_DIR/cycentra-setup"    "$PKG_DIR/cycentra-setup"
+# Ship the plain .sh source alongside the binary so that servers running
+# --update from /opt/cycentra/cycentra-setup.sh can self-upgrade (the binary's
+# self-copy skips when $0 == /opt/cycentra/cycentra-setup.sh; the bundle .sh
+# triggers the bundle-preference branch in the copy logic above).
+cp "$SETUP_SH"                    "$PKG_DIR/cycentra-setup.sh"
 # The runtime validator must be in the tarball so setup.sh can deploy it to
 # /opt/cycentra/license_validator.py (called daily by the license watchdog).
 # Without this file the watchdog gets Python exit code 2 ("can't open file"),

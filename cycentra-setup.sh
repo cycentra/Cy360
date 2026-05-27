@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.2.56 -- 2026-05-27 00:18 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.2.57 -- 2026-05-27 10:23 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1167,15 +1167,25 @@ else
     warn "RELEASE_NOTES.md not found in bundle — Settings tab release history may be outdated"
 fi
 
-# Copy this script to /opt/cycentra/ so the portal can invoke it for --update
+# Update /opt/cycentra/cycentra-setup.sh from the bundle (idempotent).
+# When invoked as `bash /opt/cycentra/cycentra-setup.sh --update` the self-copy
+# below is a no-op (_SELF == _SETUP_DEST).  Preferring the bundle copy fixes that:
+# on the first run the bundle's newer .sh is written to /opt/cycentra/; subsequent
+# runs see identical files and skip the copy.
 _SELF="$(realpath "$0")"
 _SETUP_DEST="/opt/cycentra/cycentra-setup.sh"
-if [[ "$_SELF" != "$_SETUP_DEST" ]]; then
+_BUNDLE_SETUP="$BUNDLE_DIR/cycentra-setup.sh"
+if [[ -f "$_BUNDLE_SETUP" ]] && \
+   ! cmp -s "$_BUNDLE_SETUP" "$_SETUP_DEST" 2>/dev/null; then
+    cp "$_BUNDLE_SETUP" "$_SETUP_DEST"
+    chmod 750 "$_SETUP_DEST"
+    success "Setup script updated from bundle → $_SETUP_DEST"
+elif [[ "$_SELF" != "$_SETUP_DEST" ]]; then
     cp "$_SELF" "$_SETUP_DEST"
     chmod 750  "$_SETUP_DEST"
     success "Setup script deployed to $_SETUP_DEST"
 else
-    success "Setup script already at $_SETUP_DEST — no copy needed"
+    success "Setup script already current at $_SETUP_DEST"
 fi
 
 # Deploy docker-maintenance.sh alongside setup script
