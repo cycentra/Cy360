@@ -455,12 +455,15 @@ case "${BACKEND:-azure}" in
         echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] INFISICAL_PROJECT_ID not set — skipping" >> "$LOG"
         exit 0
     fi
-    # Validate Arc MSI endpoint is reachable (confirms Arc agent is healthy)
-    if ! curl -sf --max-time 3 \
+    # Validate Arc MSI endpoint is reachable (confirms Arc agent is healthy).
+    # HIMDS always returns 401 first (challenge-response) — a 401 means healthy.
+    # Do NOT use -f flag; it treats 4xx as errors and always reports unreachable.
+    _himds_code=$(curl -s --max-time 3 -o /dev/null -w "%{http_code}" \
         -H "Metadata: true" \
-        "http://localhost:40342/identity/oauth2/token?api-version=2020-06-01&resource=https://management.azure.com/" \
-        > /dev/null 2>&1; then
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARN: Arc MSI endpoint unreachable — skipping reload" >> "$LOG"
+        "http://localhost:40342/metadata/identity/oauth2/token?api-version=2020-06-01&resource=https://management.azure.com/" \
+        2>/dev/null || echo "000")
+    if [[ "$_himds_code" != "401" ]]; then
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARN: Arc MSI endpoint unhealthy (HTTP ${_himds_code}) — skipping reload" >> "$LOG"
         exit 1
     fi
     ;;
