@@ -15,9 +15,12 @@ RBAC:
 
 import os
 import json
+import logging
 import time
 import subprocess
 from collections import defaultdict
+
+_logger = logging.getLogger(__name__)
 from datetime import datetime, timezone
 from functools import wraps
 
@@ -1193,13 +1196,339 @@ def _run_hunts_background():
 _host_refresh_in_flight = False
 
 
-def _run_host_refresh_background():
-    """Ask the correlation engine to run refresh_all_hosts immediately.
+def _refresh_host_cache_sync():
+    """Pure psycopg2 host posture refresh — works without the correlation engine.
 
-    Fires a POST to the engine's /hosts/refresh endpoint in a daemon thread
-    so the Flask response returns instantly.  Uses the same engine URL as
-    all other proxy calls — no asyncpg or separate DB connection needed.
+    Fetches agents from Wazuh (if credentials available) plus the alerts table,
+    computes the 5-component posture score for each agent, and upserts the
+    results directly into host_posture_cache via psycopg2.
     """
+    import psycopg2.extras
+    import base64 as _b64
+
+    # ── Ensure table + all required columns exist ─────────────────────────────
+    conn = _corr_conn()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS host_posture_cache (
+                        agent_id         TEXT PRIMARY KEY,
+                        agent_name       TEXT,
+                        agent_ip         TEXT,
+                        os_platform      TEXT,
+                        os_version       TEXT,
+                        wazuh_status     TEXT,
+                        last_keepalive   TIMESTAMPTZ,
+                        posture_score    NUMERIC(5,1),
+                        posture_grade    TEXT,
+                        sca_score        NUMERIC(5,1),
+                        sca_passed       INTEGER DEFAULT 0,
+                        sca_failed       INTEGER DEFAULT 0,
+                        sca_total        INTEGER DEFAULT 0,
+                        vuln_score       NUMERIC(5,1),
+                        vuln_critical    INTEGER DEFAULT 0,
+                        vuln_high        INTEGER DEFAULT 0,
+                        vuln_medium      INTEGER DEFAULT 0,
+                        vuln_low         INTEGER DEFAULT 0,
+                        siem_risk        NUMERIC(5,1) DEFAULT 0,
+                        fim_event_count  INTEGER DEFAULT 0,
+                        malware_count    INTEGER DEFAULT 0,
+                        incident_count   INTEGER DEFAULT 0,
+                        compliance_score NUMERIC(5,1),
+                        mitre_techniques TEXT[],
+                        score_breakdown  JSONB,
+                        top_findings     JSONB DEFAULT '[]'::jsonb,
+                        asset_tier       INTEGER DEFAULT 3,
+                        computed_at      TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """)
+                for _col_sql in [
+                    "ALTER TABLE host_posture_cache ADD COLUMN IF NOT EXISTS os_version TEXT",
+                    "ALTER TABLE host_posture_cache ADD COLUMN IF NOT EXISTS top_findings JSONB DEFAULT '[]'::jsonb",
+                    "ALTER TABLE host_posture_cache ADD COLUMN IF NOT EXISTS score_breakdown JSONB DEFAULT '{}'::jsonb",
+                    "ALTER TABLE host_posture_cache ADD COLUMN IF NOT EXISTS compliance_score NUMERIC(5,1)",
+                    "ALTER TABLE host_posture_cache ADD COLUMN IF NOT EXISTS mitre_techniques TEXT[]",
+                    "ALTER TABLE host_posture_cache ADD COLUMN IF NOT EXISTS asset_tier INTEGER DEFAULT 3",
+                ]:
+                    cur.execute(_col_sql)
+    finally:
+        conn.close()
+
+    # ── Wazuh token ───────────────────────────────────────────────────────────
+    token = None
+    if WAZUH_API_PASS:
+        try:
+            creds = _b64.b64encode(
+                f"{WAZUH_API_USER}:{WAZUH_API_PASS}".encode()
+            ).decode()
+            r = _req.get(
+                f"{WAZUH_API_URL}/security/user/authenticate",
+                headers={"Authorization": f"Basic {creds}"},
+                timeout=10, verify=False,
+            )
+            if r.status_code == 200:
+                token = r.json()["data"]["token"]
+        except Exception as exc:
+            _logger.debug("[host-refresh] Wazuh token error: %s", exc)
+
+    def _wazuh(path, params=None):
+        if not token:
+            return None
+        try:
+            r = _req.get(
+                f"{WAZUH_API_URL}{path}",
+                headers={"Authorization": f"Bearer {token}"},
+                params=params or {},
+                timeout=10, verify=False,
+            )
+            return r.json() if r.status_code == 200 else None
+        except Exception:
+            return None
+
+    # ── Build unified agent list ──────────────────────────────────────────────
+    wazuh_agents = {}
+    if token:
+        data = _wazuh("/agents", {
+            "status": "active,disconnected,never_connected",
+            "limit": 500,
+            "select": "id,name,ip,status,os.platform,os.version,lastKeepAlive,version",
+        })
+        if data:
+            for a in data.get("data", {}).get("affected_items", []):
+                wazuh_agents[a["id"]] = a
+
+    conn = _corr_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT DISTINCT agent_id, agent_name, agent_ip FROM alerts
+                WHERE timestamp > NOW() - INTERVAL '90 days'
+            """)
+            db_agents = cur.fetchall()
+    finally:
+        conn.close()
+
+    all_agents = {}
+    for a in db_agents:
+        all_agents[a["agent_id"]] = {
+            "id": a["agent_id"], "name": a["agent_name"] or a["agent_id"],
+            "ip": a["agent_ip"], "status": "unknown",
+            "os_platform": None, "os_version": None, "last_keepalive": None,
+        }
+    for aid, a in wazuh_agents.items():
+        all_agents[aid] = {
+            "id": aid, "name": a.get("name", aid), "ip": a.get("ip"),
+            "status": a.get("status", "unknown"),
+            "os_platform": (a.get("os") or {}).get("platform"),
+            "os_version":  (a.get("os") or {}).get("version"),
+            "last_keepalive": a.get("lastKeepAlive"),
+        }
+
+    if not all_agents:
+        _logger.warning("[host-refresh] no agents found (wazuh=%d, db=%d)",
+                        len(wazuh_agents), len(db_agents))
+        return 0
+
+    # ── Per-agent posture compute + upsert ────────────────────────────────────
+    refreshed = 0
+    for agent_id, info in all_agents.items():
+        try:
+            conn = _corr_conn()
+            try:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+
+                    # Component 1 — SCA pass rate (30%)
+                    sca_passed = sca_failed = sca_total = 0
+                    sca_score = None
+                    if token:
+                        sca_data = _wazuh(f"/sca/{agent_id}", {"limit": 50})
+                        if sca_data:
+                            for pol in sca_data.get("data", {}).get("affected_items", []):
+                                sca_passed += int(pol.get("pass",  0))
+                                sca_failed += int(pol.get("fail",  0))
+                                sca_total  += (int(pol.get("pass", 0))
+                                               + int(pol.get("fail",  0))
+                                               + int(pol.get("error", 0)))
+                    if sca_total > 0:
+                        sca_score = round(sca_passed / sca_total * 100, 1)
+                    else:
+                        cur.execute("""
+                            SELECT
+                              COUNT(*) FILTER (WHERE full_alert->'data'->'sca'->'check'->>'result' = 'passed') AS passed,
+                              COUNT(*) FILTER (WHERE full_alert->'data'->'sca'->'check'->>'result' = 'failed') AS failed
+                            FROM alerts
+                            WHERE agent_id = %s AND category = 'sca'
+                              AND timestamp > NOW() - INTERVAL '7 days'
+                        """, [agent_id])
+                        row = cur.fetchone()
+                        if row and (row["passed"] + row["failed"]) > 0:
+                            sca_passed, sca_failed = row["passed"], row["failed"]
+                            sca_total = sca_passed + sca_failed
+                            sca_score = round(sca_passed / sca_total * 100, 1)
+
+                    # Component 2 — Vulnerability severity (25%)
+                    vuln_critical = vuln_high = vuln_medium = vuln_low = 0
+                    vuln_score = None
+                    if token:
+                        vuln_data = _wazuh(f"/vulnerability/{agent_id}", {
+                            "limit": 500, "select": "severity", "status": "Active",
+                        })
+                        if vuln_data:
+                            for v in vuln_data.get("data", {}).get("affected_items", []):
+                                sev = v.get("severity", "")
+                                if sev == "Critical":   vuln_critical += 1
+                                elif sev == "High":     vuln_high     += 1
+                                elif sev == "Medium":   vuln_medium   += 1
+                                elif sev == "Low":      vuln_low      += 1
+                        raw = (100.0
+                               - min(60, vuln_critical * 12)
+                               - min(36, vuln_high     *  6)
+                               - min(20, vuln_medium   *  2))
+                        vuln_score = max(0.0, min(100.0, round(raw, 1)))
+
+                    # Component 3 — SIEM risk inverted (25%)
+                    cur.execute("""
+                        SELECT score FROM risk_scores
+                        WHERE entity_id = %s AND entity_type = 'host' LIMIT 1
+                    """, [agent_id])
+                    row = cur.fetchone()
+                    siem_risk_raw      = float(row["score"]) if row else 0.0
+                    siem_risk_inverted = max(0.0, min(100.0, round(100 - siem_risk_raw, 1)))
+
+                    # Component 4 — FIM + malware impact (10%)
+                    cur.execute("""
+                        SELECT
+                          COUNT(*) FILTER (WHERE category = 'fim')     AS fim_count,
+                          COUNT(*) FILTER (WHERE category = 'malware') AS malware_count,
+                          COALESCE(SUM(base_score)::float, 0)          AS total_score
+                        FROM alerts
+                        WHERE agent_id = %s
+                          AND category IN ('fim','malware')
+                          AND timestamp > NOW() - INTERVAL '30 days'
+                    """, [agent_id])
+                    row = cur.fetchone()
+                    fim_count      = int(row["fim_count"])     if row else 0
+                    malware_count  = int(row["malware_count"]) if row else 0
+                    fm_total       = float(row["total_score"]) if row else 0.0
+                    fim_malware_component = max(0.0, min(100.0, round(100 - min(100, fm_total), 1)))
+
+                    # Component 5 — Compliance gap (10%)
+                    compliance_score = (
+                        round(sca_passed / sca_total * 100, 1) if sca_total > 0 else 100.0
+                    )
+
+                    # Active incidents
+                    cur.execute("""
+                        SELECT COUNT(*) AS n FROM incidents
+                        WHERE %s = ANY(affected_agents)
+                          AND status NOT IN ('closed','false_positive')
+                    """, [agent_id])
+                    row = cur.fetchone()
+                    incident_count = int(row["n"]) if row else 0
+
+                    # MITRE techniques (last 30 days)
+                    cur.execute("""
+                        SELECT ARRAY_AGG(DISTINCT mitre_id) AS techniques
+                        FROM alerts
+                        WHERE agent_id = %s AND mitre_id IS NOT NULL
+                          AND timestamp > NOW() - INTERVAL '30 days'
+                    """, [agent_id])
+                    row = cur.fetchone()
+                    mitre_techniques = (row["techniques"] if row and row["techniques"] else [])
+
+                    # Composite score
+                    components = {
+                        "sca":         sca_score         if sca_score  is not None else 50.0,
+                        "vuln":        vuln_score        if vuln_score is not None else 50.0,
+                        "siem_risk":   siem_risk_inverted,
+                        "fim_malware": fim_malware_component,
+                        "compliance":  compliance_score,
+                    }
+                    composite = round(
+                        components["sca"]         * 0.30
+                        + components["vuln"]      * 0.25
+                        + components["siem_risk"] * 0.25
+                        + components["fim_malware"] * 0.10
+                        + components["compliance"]  * 0.10,
+                        1,
+                    )
+
+                    last_kp = None
+                    if info.get("last_keepalive"):
+                        try:
+                            last_kp = str(info["last_keepalive"]).replace("Z", "+00:00")
+                        except Exception:
+                            pass
+
+                    # Upsert
+                    cur.execute("""
+                        INSERT INTO host_posture_cache (
+                            agent_id, agent_name, agent_ip, os_platform, os_version,
+                            wazuh_status, last_keepalive,
+                            posture_score, posture_grade,
+                            sca_score, sca_passed, sca_failed, sca_total,
+                            vuln_score, vuln_critical, vuln_high, vuln_medium, vuln_low,
+                            siem_risk, fim_event_count, malware_count, incident_count,
+                            compliance_score, mitre_techniques, score_breakdown, computed_at
+                        ) VALUES (
+                            %s,%s,%s,%s,%s,
+                            %s,%s,
+                            %s,%s,
+                            %s,%s,%s,%s,
+                            %s,%s,%s,%s,%s,
+                            %s,%s,%s,%s,
+                            %s,%s,%s::jsonb,NOW()
+                        )
+                        ON CONFLICT (agent_id) DO UPDATE SET
+                            agent_name       = EXCLUDED.agent_name,
+                            agent_ip         = EXCLUDED.agent_ip,
+                            os_platform      = EXCLUDED.os_platform,
+                            os_version       = EXCLUDED.os_version,
+                            wazuh_status     = EXCLUDED.wazuh_status,
+                            last_keepalive   = EXCLUDED.last_keepalive,
+                            posture_score    = EXCLUDED.posture_score,
+                            posture_grade    = EXCLUDED.posture_grade,
+                            sca_score        = EXCLUDED.sca_score,
+                            sca_passed       = EXCLUDED.sca_passed,
+                            sca_failed       = EXCLUDED.sca_failed,
+                            sca_total        = EXCLUDED.sca_total,
+                            vuln_score       = EXCLUDED.vuln_score,
+                            vuln_critical    = EXCLUDED.vuln_critical,
+                            vuln_high        = EXCLUDED.vuln_high,
+                            vuln_medium      = EXCLUDED.vuln_medium,
+                            vuln_low         = EXCLUDED.vuln_low,
+                            siem_risk        = EXCLUDED.siem_risk,
+                            fim_event_count  = EXCLUDED.fim_event_count,
+                            malware_count    = EXCLUDED.malware_count,
+                            incident_count   = EXCLUDED.incident_count,
+                            compliance_score = EXCLUDED.compliance_score,
+                            mitre_techniques = EXCLUDED.mitre_techniques,
+                            score_breakdown  = EXCLUDED.score_breakdown,
+                            computed_at      = NOW()
+                    """, [
+                        agent_id, info["name"], info["ip"],
+                        info["os_platform"], info["os_version"],
+                        info["status"], last_kp,
+                        composite, _grade(composite),
+                        sca_score, sca_passed, sca_failed, sca_total,
+                        vuln_score, vuln_critical, vuln_high, vuln_medium, vuln_low,
+                        siem_risk_raw, fim_count, malware_count, incident_count,
+                        compliance_score, mitre_techniques, json.dumps(components),
+                    ])
+                conn.commit()
+            finally:
+                conn.close()
+            refreshed += 1
+        except Exception as exc:
+            _logger.warning("[host-refresh] posture failed for %s: %s", agent_id, exc)
+
+    _logger.info("[host-refresh] refreshed posture for %d hosts", refreshed)
+    return refreshed
+
+
+def _run_host_refresh_background():
+    """Run _refresh_host_cache_sync() in a daemon thread — no engine needed."""
     global _host_refresh_in_flight
     if _host_refresh_in_flight:
         return
@@ -1210,12 +1539,9 @@ def _run_host_refresh_background():
     def _worker():
         global _host_refresh_in_flight
         try:
-            _req.post(
-                f"{SIEM_ENGINE_URL}/hosts/refresh",
-                timeout=5,
-            )
-        except Exception:
-            pass  # engine may not be reachable; scheduler will still fire hourly
+            _refresh_host_cache_sync()
+        except Exception as exc:
+            _logger.error("[host-refresh] worker error: %s", exc)
         finally:
             _host_refresh_in_flight = False
 
