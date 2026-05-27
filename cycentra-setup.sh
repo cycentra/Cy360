@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.2.65 -- 2026-05-27 16:43 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.2.66 -- 2026-05-27 17:00 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -669,9 +669,24 @@ else
     info "Installing Nuclei from ProjectDiscovery releases..."
     apt-get install -y -qq unzip 2>/dev/null || true
 
-    _NUCLEI_URL=$(curl -fsSL https://api.github.com/repos/projectdiscovery/nuclei/releases/latest \
+    # Break into two steps so a 403/rate-limit from the GitHub API doesn't abort the
+    # whole script via set -euo pipefail (curl exits 22 on HTTP 4xx with -f flag).
+    _NUCLEI_API=$(curl -sSL --max-time 15 \
+        "https://api.github.com/repos/projectdiscovery/nuclei/releases/latest" \
+        2>/dev/null) || true
+    _NUCLEI_URL=$(printf '%s' "$_NUCLEI_API" \
         | python3 -c "import sys,json; assets=json.load(sys.stdin)['assets']; print(next(a['browser_download_url'] for a in assets if 'linux_amd64.zip' in a['name']))" \
-        2>/dev/null)
+        2>/dev/null) || true
+
+    # Fallback: resolve latest tag via HTTP redirect (no API quota needed)
+    if [[ -z "$_NUCLEI_URL" ]]; then
+        _NUCLEI_TAG=$(curl -sSL -o /dev/null -w '%{url_effective}' --max-time 10 \
+            "https://github.com/projectdiscovery/nuclei/releases/latest" 2>/dev/null \
+            | sed 's|.*/tag/||') || true
+        if [[ -n "$_NUCLEI_TAG" && "$_NUCLEI_TAG" =~ ^v[0-9] ]]; then
+            _NUCLEI_URL="https://github.com/projectdiscovery/nuclei/releases/download/${_NUCLEI_TAG}/nuclei_${_NUCLEI_TAG#v}_linux_amd64.zip"
+        fi
+    fi
 
     if [[ -z "$_NUCLEI_URL" ]]; then
         warn "Could not resolve Nuclei download URL — skipping. Install manually later."
