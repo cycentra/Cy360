@@ -65,10 +65,9 @@ function EngineOfflineBanner({ onRetry }) {
         <div style={{ background: "rgba(0,0,0,0.4)", borderRadius: 4, padding: "14px 18px",
           fontFamily: "monospace", fontSize: 12, color: "#00e5a0", marginBottom: 20 }}>
           <div style={{ color: "rgba(255,255,255,0.3)", marginBottom: 6 }}># On your server:</div>
-          <div>cd /opt/cycentra/cysiemstack</div>
-          <div>docker compose up -d</div>
+          <div>systemctl start cysiemstack-engine</div>
           <div style={{ marginTop: 8, color: "rgba(255,255,255,0.3)" }}># Watch startup logs:</div>
-          <div>docker compose logs -f correlation-engine</div>
+          <div>journalctl -u cysiemstack-engine -f</div>
         </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>

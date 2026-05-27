@@ -12,7 +12,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { HostDetailPanel } from "./hosts/HostDetailPanel.jsx";
 import { siemApi, siemFetch } from "../siem/siemApi";
-import { SiemEngineStatus } from "../siem/SiemEngineStatus";
 
 const API = "/api/siem";
 
@@ -655,8 +654,7 @@ export function HostIntelligencePage() {
   };
 
   return (
-    <SiemEngineStatus>
-      <div style={{ color: "#e8eaed", fontFamily: "monospace" }}>
+    <div style={{ color: "#e8eaed", fontFamily: "monospace" }}>
         {/* Header */}
         <div style={{ marginBottom: 18 }}>
           <div style={{ fontSize: 11, color: "#666", letterSpacing: "1.5px", marginBottom: 3 }}>
@@ -719,7 +717,6 @@ export function HostIntelligencePage() {
         {selectedHost && (
           <HostDetailPanel agentId={selectedHost} onClose={() => setSelected(null)} />
         )}
-      </div>
-    </SiemEngineStatus>
+    </div>
   );
 }

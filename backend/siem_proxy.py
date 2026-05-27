@@ -126,7 +126,24 @@ def _proxy(path, method=None, **kwargs):
 @siem_bp.route("/health")
 @require_siem_auth
 def siem_health():
-    return _proxy("/health")
+    """Health check — returns 200 if the correlation DB is reachable.
+    All Flask SIEM routes read directly from the DB; the FastAPI engine
+    is a background enrichment process and its absence does not block data.
+    """
+    try:
+        conn = _corr_conn()
+        conn.close()
+    except Exception as exc:
+        return jsonify({"error": "engine_unavailable",
+                        "message": f"Correlation DB unreachable: {exc}"}), 503
+    engine_ok = False
+    try:
+        r = _req.get(f"{SIEM_ENGINE_URL}/health", timeout=2)
+        engine_ok = r.status_code == 200
+    except Exception:
+        pass
+    return jsonify({"status": "ok", "db": "ok",
+                    "engine": "ok" if engine_ok else "offline"})
 
 
 @siem_bp.route("/stats")
