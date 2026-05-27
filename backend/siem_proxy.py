@@ -1189,6 +1189,50 @@ def _run_hunts_background():
     t.start()
 
 
+# Guard flag: prevents stampeding the host refresh when cache is found empty.
+_host_refresh_in_flight = False
+
+
+def _run_host_refresh_background():
+    """Populate host_posture_cache by running refresh_all_hosts in a background thread.
+
+    Called by the /hosts/refresh endpoint and auto-triggered on the first
+    /hosts request that returns 0 rows (avoids the 1-hour scheduler wait
+    on a freshly started or restarted correlation engine).
+    """
+    global _host_refresh_in_flight
+    if _host_refresh_in_flight:
+        return
+    _host_refresh_in_flight = True
+
+    import threading, asyncio
+
+    def _worker():
+        global _host_refresh_in_flight
+        try:
+            async def _run():
+                db_url = os.environ.get("DATABASE_URL",
+                    "postgresql+asyncpg://corruser:changeme@127.0.0.1:5433/correlation")
+                from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+                engine = create_async_engine(db_url, echo=False)
+                session_factory = async_sessionmaker(engine, expire_on_commit=False)
+                try:
+                    from cysiemstack.host_service import refresh_all_hosts
+                    async with session_factory() as session:
+                        n = await refresh_all_hosts(session)
+                        _logger.info("[host_refresh] populated %d hosts into cache", n)
+                except Exception as exc:
+                    _logger.warning("[host_refresh] background refresh failed: %s", exc)
+                finally:
+                    await engine.dispose()
+            asyncio.run(_run())
+        finally:
+            _host_refresh_in_flight = False
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+
 # ── Flask routes ──────────────────────────────────────────────────────────────
 
 @siem_bp.route("/hosts", methods=["GET"])
@@ -1202,7 +1246,12 @@ def siem_hosts_list():
     except ValueError:
         page, per_page = 1, 50
     try:
-        return jsonify(_sync_hosts_list(status_filter, sort_by, page, per_page))
+        result = _sync_hosts_list(status_filter, sort_by, page, per_page)
+        # Auto-seed: if the cache is completely empty (not just filtered empty),
+        # kick off a background refresh so the next page load shows data.
+        if result.get("total", 0) == 0 and status_filter == "all":
+            _run_host_refresh_background()
+        return jsonify(result)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -1211,9 +1260,10 @@ def siem_hosts_list():
 @require_siem_admin
 def siem_hosts_refresh():
     try:
+        _run_host_refresh_background()
         _run_hunts_background()
         return jsonify({"status": "refresh_queued",
-                        "message": "Posture refresh running in background"})
+                        "message": "Host posture refresh and threat hunts running in background"})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 

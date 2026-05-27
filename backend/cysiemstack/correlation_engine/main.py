@@ -373,6 +373,52 @@ async def lifespan(app: FastAPI):
             """))
             log.info("migration_5_host_name_backfill_complete")
 
+            # Migration 6: add os_version column to host_posture_cache if missing.
+            # This column was added to the SQLAlchemy model after initial deployment;
+            # create_all() never adds columns to existing tables, so refresh_all_hosts()
+            # silently fails for every agent if this column is absent — leaving the
+            # host_posture_cache permanently empty and the Host Intelligence tab blank.
+            await _db.execute(_text("""
+                ALTER TABLE IF EXISTS host_posture_cache
+                ADD COLUMN IF NOT EXISTS os_version TEXT
+            """))
+            log.info("migration_6_host_posture_cache_os_version_complete")
+
+            # Migration 7: add top_findings JSONB column to host_posture_cache if missing.
+            await _db.execute(_text("""
+                ALTER TABLE IF EXISTS host_posture_cache
+                ADD COLUMN IF NOT EXISTS top_findings JSONB DEFAULT '[]'::jsonb
+            """))
+            log.info("migration_7_host_posture_cache_top_findings_complete")
+
+            # Migration 8: add score_breakdown JSONB column to host_posture_cache if missing.
+            await _db.execute(_text("""
+                ALTER TABLE IF EXISTS host_posture_cache
+                ADD COLUMN IF NOT EXISTS score_breakdown JSONB DEFAULT '{}'::jsonb
+            """))
+            log.info("migration_8_host_posture_cache_score_breakdown_complete")
+
+            # Migration 9: add compliance_score column to host_posture_cache if missing.
+            await _db.execute(_text("""
+                ALTER TABLE IF EXISTS host_posture_cache
+                ADD COLUMN IF NOT EXISTS compliance_score NUMERIC(5,1)
+            """))
+            log.info("migration_9_host_posture_cache_compliance_score_complete")
+
+            # Migration 10: add mitre_techniques TEXT[] column if missing.
+            await _db.execute(_text("""
+                ALTER TABLE IF EXISTS host_posture_cache
+                ADD COLUMN IF NOT EXISTS mitre_techniques TEXT[]
+            """))
+            log.info("migration_10_host_posture_cache_mitre_techniques_complete")
+
+            # Migration 11: add asset_tier column if missing.
+            await _db.execute(_text("""
+                ALTER TABLE IF EXISTS host_posture_cache
+                ADD COLUMN IF NOT EXISTS asset_tier INTEGER DEFAULT 3
+            """))
+            log.info("migration_11_host_posture_cache_asset_tier_complete")
+
             await _db.commit()
             log.info("all_startup_migrations_complete")
     except Exception as _e:

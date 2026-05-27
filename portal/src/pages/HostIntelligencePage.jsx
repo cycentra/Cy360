@@ -242,7 +242,7 @@ function SummaryCharts({ hosts, posture, riskScores }) {
 }
 
 // ── HOST POSTURE TABLE (tab 1) ─────────────────────────────────────────────────
-function HostsTab({ hosts, loading, error, posture, onRefresh, refreshing,
+function HostsTab({ hosts, loading, error, posture, onRefresh, refreshing, seeding,
                     statusFilter, setStatusFilter, sortBy, setSortBy,
                     search, setSearch, page, setPage, total, onSelectHost }) {
   const PER_PAGE = 50;
@@ -322,7 +322,11 @@ function HostsTab({ hosts, loading, error, posture, onRefresh, refreshing,
           </div>
         ) : filtered.length === 0 ? (
           <div style={{ padding: "40px 20px", textAlign: "center", color: "#666", fontSize: 12 }}>
-            {search ? "No hosts match your search." : "No hosts found — ensure Wazuh agents are connected."}
+            {search ? "No hosts match your search." : seeding ? (
+              <span style={{ color: "#f5c518", fontFamily: "monospace" }}>
+                ⏳ Populating host posture cache — this runs automatically and takes up to 60 s on first load. Checking every 8 s…
+              </span>
+            ) : "No hosts found — posture cache is empty. Click ↻ Refresh Posture to populate it."}
           </div>
         ) : (
           filtered.map(host => {
@@ -570,6 +574,8 @@ export function HostIntelligencePage() {
   const [page, setPage]               = useState(1);
   const [total, setTotal]             = useState(0);
   const [refreshing, setRefreshing]   = useState(false);
+  // Seeding: true while waiting for the auto-triggered background refresh to populate data
+  const [seeding, setSeeding]         = useState(false);
   // Risk state
   const [riskScores, setRiskScores]   = useState([]);
   const [riskLoading, setRiskLoad]    = useState(true);
@@ -588,8 +594,16 @@ export function HostIntelligencePage() {
       setHosts(data.hosts || []);
       setTotal(data.total || 0);
       if (data.internal_posture) setPosture(data.internal_posture);
+      // If the cache came back empty the backend auto-triggered a refresh.
+      // Poll every 8 s until hosts appear (max 10 attempts = 80 s).
+      if ((data.hosts || []).length === 0 && statusFilter === "all") {
+        setSeeding(true);
+      } else {
+        setSeeding(false);
+      }
     } catch (e) {
       setHostsErr(e.message);
+      setSeeding(false);
     } finally {
       setHostsLoad(false);
     }
@@ -605,11 +619,36 @@ export function HostIntelligencePage() {
   useEffect(() => { loadHosts(); }, [loadHosts]);
   useEffect(() => { loadRisk(); }, [loadRisk]);
 
+  // Poll while seeding — recheck every 8 s until hosts appear.
+  useEffect(() => {
+    if (!seeding) return;
+    let attempts = 0;
+    const poll = setInterval(async () => {
+      attempts++;
+      if (attempts > 10) { clearInterval(poll); setSeeding(false); return; }
+      try {
+        const qs = new URLSearchParams({ status: "all", sort: sortBy, page: "1", per_page: "50" });
+        const res = await fetch(`${API}/hosts?${qs}`, { credentials: "include" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if ((data.hosts || []).length > 0) {
+          setHosts(data.hosts);
+          setTotal(data.total || 0);
+          if (data.internal_posture) setPosture(data.internal_posture);
+          setSeeding(false);
+          clearInterval(poll);
+        }
+      } catch {}
+    }, 8000);
+    return () => clearInterval(poll);
+  }, [seeding, sortBy]);
+
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
       await fetch(`${API}/hosts/refresh`, { method: "POST", credentials: "include" });
-      await new Promise(r => setTimeout(r, 2000));
+      // Wait for background refresh to complete before reloading
+      await new Promise(r => setTimeout(r, 5000));
       await loadHosts();
     } catch {}
     setRefreshing(false);
@@ -664,6 +703,7 @@ export function HostIntelligencePage() {
           <HostsTab
             hosts={hosts} loading={hostsLoading} error={hostsError}
             posture={posture} onRefresh={handleRefresh} refreshing={refreshing}
+            seeding={seeding}
             statusFilter={statusFilter} setStatusFilter={setStatus}
             sortBy={sortBy} setSortBy={setSort}
             search={search} setSearch={setSearch}
