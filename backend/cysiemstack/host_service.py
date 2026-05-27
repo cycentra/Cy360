@@ -306,7 +306,7 @@ def _fetch_wazuh_agents(token: Optional[str]) -> list[dict]:
     data = _wazuh_get("/agents", token, {
         "status":  "active,disconnected,never_connected",
         "limit":   500,
-        "select":  "id,name,ip,status,os,lastKeepAlive,version",
+        "select":  "id,name,ip,status,os.platform,os.version,lastKeepAlive,version",
     })
     if not data:
         return []

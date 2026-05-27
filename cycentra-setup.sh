@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.2.55 -- 2026-05-26 23:19 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.2.56 -- 2026-05-27 00:18 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1338,11 +1338,23 @@ else
         cat >> "$_env" << PATCHEOF
 
 # ── Cloud CyMISP (Cycentra-managed MISP at cymisp.cycentra.com) ────────────────
-CLOUD_MISP_URL=${CLOUD_MISP_URL:-}
+CLOUD_MISP_URL=${CLOUD_MISP_URL:-https://cymisp.cycentra.com}
 CLOUD_MISP_API_KEY=${CLOUD_MISP_API_KEY:-}
 AZURE_KEYVAULT_URL=${AZURE_KEYVAULT_URL:-}
 PATCHEOF
         info "Added CLOUD_MISP_* to .env"
+    fi
+
+    # Backfill CLOUD_MISP defaults if the value was written empty (pre-v1.2.56)
+    if grep -q "^CLOUD_MISP_URL=$" "$_env" 2>/dev/null; then
+        _fill_misp_url="${CLOUD_MISP_URL:-https://cymisp.cycentra.com}"
+        sed -i "s|^CLOUD_MISP_URL=$|CLOUD_MISP_URL=${_fill_misp_url}|" "$_env"
+        info "Backfilled CLOUD_MISP_URL → ${_fill_misp_url}"
+    fi
+    if grep -q "^CLOUD_MISP_API_KEY=$" "$_env" 2>/dev/null; then
+        _fill_misp_key="${CLOUD_MISP_API_KEY:-BPxY79PEX9Y39eooVpNVu0UpayhYaqCfe74ZOHJb}"
+        sed -i "s|^CLOUD_MISP_API_KEY=$|CLOUD_MISP_API_KEY=${_fill_misp_key}|" "$_env"
+        info "Backfilled CLOUD_MISP_API_KEY default"
     fi
 
     # Add CLOUD_IRIS_* if missing (introduced in v1.0.X)
@@ -1563,8 +1575,8 @@ GH_TOKEN=${GH_TOKEN:-}
 # When a customer selects "Cloud CyMISP" in System Settings > Integrations, the
 # backend uses these credentials automatically.  CLOUD_MISP_API_KEY must be set
 # to the vendor-issued API key for this installation.
-CLOUD_MISP_URL=${CLOUD_MISP_URL:-}
-CLOUD_MISP_API_KEY=${CLOUD_MISP_API_KEY:-}
+CLOUD_MISP_URL=${CLOUD_MISP_URL:-https://cymisp.cycentra.com}
+CLOUD_MISP_API_KEY=${CLOUD_MISP_API_KEY:-BPxY79PEX9Y39eooVpNVu0UpayhYaqCfe74ZOHJb}
 
 # ── Cloud CyIRIS (Cycentra-managed DFIR IRIS at cyiris.cycentra.com) ──────────
 # When a customer selects "Cloud CyIRIS" in System Settings > Integrations, the
@@ -1923,6 +1935,7 @@ remove_prefixes = [
     "opensearch_security.openid.",
     "opensearch.requestHeadersAllowlist",
     "# CyCentra 360",
+    "# ── CyCentra 360",
     "# Authentication gate:",
     "# Wazuh trusts",
 ]
@@ -1941,8 +1954,16 @@ oidc = (
     f'opensearch_security.openid.logout_url: "https://cyasm.{domain}/auth/logout"\n'
     "opensearch_security.openid.verify_hostnames: false\n"
 )
+# Insert OIDC block BEFORE the Custom Branding section so that
+# apply-custom-branding.sh (which deletes from "# Custom Branding" to EOF)
+# does not erase the OIDC settings on every branding update.
+if "# Custom Branding" in cleaned:
+    idx = cleaned.index("# Custom Branding")
+    result = cleaned[:idx].rstrip() + oidc + "\n" + cleaned[idx:]
+else:
+    result = cleaned + oidc
 with open(path, "w") as f:
-    f.write(cleaned + oidc)
+    f.write(result)
 print("Wazuh Dashboard OIDC settings applied")
 WAZUH_OIDC_PY
             success "CySIEM Dashboard: OIDC settings written"
