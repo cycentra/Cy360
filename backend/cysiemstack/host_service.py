@@ -360,6 +360,22 @@ async def refresh_all_hosts(session: AsyncSession) -> int:
             "last_keepalive": a.get("lastKeepAlive"),
         }
 
+    # Deduplicate by agent name: keep the Wazuh-registered id over DB-only stale entries
+    _seen_names: dict[str, str] = {}
+    _deduped: dict[str, dict] = {}
+    for _aid, _info in all_agents.items():
+        _nk = (_info["name"] or _aid).lower()
+        if _nk not in _seen_names:
+            _seen_names[_nk] = _aid
+            _deduped[_aid] = _info
+        else:
+            _prev = _seen_names[_nk]
+            if _aid in wazuh_agents and _prev not in wazuh_agents:
+                del _deduped[_prev]
+                _seen_names[_nk] = _aid
+                _deduped[_aid] = _info
+    all_agents = _deduped
+
     refreshed = 0
     for agent_id, agent_info in all_agents.items():
         try:
@@ -406,6 +422,21 @@ async def refresh_all_hosts(session: AsyncSession) -> int:
 
     await session.commit()
     log.info("[host_service] refreshed posture for %d hosts", refreshed)
+
+    # Evict cache rows whose agent_id was removed by name-based deduplication
+    surviving_ids = list(all_agents.keys())
+    if surviving_ids:
+        from cysiemstack.correlation_engine.models import HostPostureCache
+        from sqlalchemy import delete as _sa_delete
+        result = await session.execute(
+            _sa_delete(HostPostureCache).where(
+                ~HostPostureCache.agent_id.in_(surviving_ids)
+            )
+        )
+        if result.rowcount:
+            log.info("[host_service] evicted %d stale duplicate cache rows", result.rowcount)
+        await session.commit()
+
     return refreshed
 
 

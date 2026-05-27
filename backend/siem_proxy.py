@@ -1380,6 +1380,24 @@ def _refresh_host_cache_sync():
             "last_keepalive": a.get("lastKeepAlive"),
         }
 
+    # Deduplicate by agent name: a host re-enrolled in Wazuh keeps the same name
+    # but gets a new agent_id; the old id lingers in alerts for up to 90 days.
+    # Keep the Wazuh-registered id over the DB-only stale one.
+    _seen_names: dict = {}
+    _deduped: dict = {}
+    for _aid, _info in all_agents.items():
+        _nk = (_info["name"] or _aid).lower()
+        if _nk not in _seen_names:
+            _seen_names[_nk] = _aid
+            _deduped[_aid] = _info
+        else:
+            _prev = _seen_names[_nk]
+            if _aid in wazuh_agents and _prev not in wazuh_agents:
+                del _deduped[_prev]
+                _seen_names[_nk] = _aid
+                _deduped[_aid] = _info
+    all_agents = _deduped
+
     if not all_agents:
         _logger.warning("[host-refresh] no agents found (wazuh=%d, db=%d)",
                         len(wazuh_agents), len(db_agents))
@@ -1579,6 +1597,23 @@ def _refresh_host_cache_sync():
             _logger.warning("[host-refresh] posture failed for %s: %s", agent_id, exc)
 
     _logger.info("[host-refresh] refreshed posture for %d hosts", refreshed)
+
+    # Evict cache rows whose agent_id was removed by deduplication
+    _surviving = list(all_agents.keys())
+    if _surviving:
+        _evict_conn = _corr_conn()
+        try:
+            with _evict_conn:
+                with _evict_conn.cursor() as _cur:
+                    _cur.execute(
+                        "DELETE FROM host_posture_cache WHERE NOT (agent_id = ANY(%s))",
+                        [_surviving]
+                    )
+                    if _cur.rowcount:
+                        _logger.info("[host-refresh] evicted %d stale duplicate cache rows", _cur.rowcount)
+        finally:
+            _evict_conn.close()
+
     return refreshed
 
 
