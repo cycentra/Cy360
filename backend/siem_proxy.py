@@ -1613,6 +1613,148 @@ def siem_host_detail(agent_id):
         return jsonify({"error": str(exc)}), 500
 
 
+@siem_bp.route("/hosts/<agent_id>/inventory", methods=["GET"])
+@require_siem_auth
+def siem_host_inventory(agent_id):
+    """System inventory: agent identity, hardware, OS details, and installed packages."""
+    import base64 as _b64i
+    import psycopg2.extras
+
+    def _wz_get(token, path, params=None):
+        try:
+            r = _req.get(
+                f"{WAZUH_API_URL}{path}",
+                headers={"Authorization": f"Bearer {token}"},
+                params=params or {}, timeout=10, verify=False,
+            )
+            return r.json() if r.status_code == 200 else None
+        except Exception:
+            return None
+
+    result = {
+        "agent": None, "os": None, "hardware": None,
+        "packages": [], "packages_total": 0,
+    }
+
+    # Fallback: pull what we have from the posture cache
+    try:
+        conn = _corr_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT agent_id, agent_name, agent_ip, os_platform, os_version,
+                       wazuh_status, last_keepalive, computed_at
+                FROM host_posture_cache WHERE agent_id = %s
+            """, [agent_id])
+            row = cur.fetchone()
+        conn.close()
+        if row:
+            result["agent"] = {
+                "id": row["agent_id"], "name": row["agent_name"],
+                "ip": row["agent_ip"], "status": row["wazuh_status"],
+                "os_platform": row["os_platform"], "os_version": row["os_version"],
+                "last_keepalive": _iso(row["last_keepalive"]),
+                "date_add": None, "version": None, "hostname": None,
+            }
+    except Exception:
+        pass
+
+    if not WAZUH_API_PASS:
+        return jsonify(result)
+
+    try:
+        creds = _b64i.b64encode(f"{WAZUH_API_USER}:{WAZUH_API_PASS}".encode()).decode()
+        tok_r = _req.get(
+            f"{WAZUH_API_URL}/security/user/authenticate",
+            headers={"Authorization": f"Basic {creds}"},
+            timeout=8, verify=False,
+        )
+        tok_r.raise_for_status()
+        token = tok_r.json()["data"]["token"]
+    except Exception:
+        return jsonify(result)
+
+    # Agent identity — overrides cache values with live Wazuh data
+    agent_data = _wz_get(token, "/agents", {
+        "agents_list": agent_id,
+        "select": "id,name,ip,status,os.platform,os.version,dateAdd,lastKeepAlive,version",
+    })
+    if agent_data:
+        items = agent_data.get("data", {}).get("affected_items", [])
+        if items:
+            a = items[0]
+            result["agent"] = {
+                "id": a.get("id"), "name": a.get("name"),
+                "ip": a.get("ip"), "status": a.get("status"),
+                "os_platform": (a.get("os") or {}).get("platform"),
+                "os_version":  (a.get("os") or {}).get("version"),
+                "version": a.get("version"),
+                "date_add": a.get("dateAdd"),
+                "last_keepalive": a.get("lastKeepAlive"),
+                "hostname": None,
+            }
+
+    # OS details (hostname, kernel, architecture)
+    os_data = _wz_get(token, f"/syscollector/{agent_id}/os")
+    if os_data:
+        items = os_data.get("data", {}).get("affected_items", [])
+        if items:
+            o = items[0]
+            result["os"] = {
+                "hostname": o.get("hostname"),
+                "architecture": o.get("architecture"),
+                "kernel_release": o.get("release"),
+                "sysname": o.get("sysname"),
+                "os_name": (o.get("os") or {}).get("name"),
+                "os_codename": (o.get("os") or {}).get("codename"),
+                "os_major": (o.get("os") or {}).get("major"),
+                "os_minor": (o.get("os") or {}).get("minor"),
+                "scan_time": (o.get("scan") or {}).get("time"),
+            }
+            if result["agent"]:
+                result["agent"]["hostname"] = o.get("hostname")
+
+    # Hardware (CPU, RAM)
+    hw_data = _wz_get(token, f"/syscollector/{agent_id}/hardware")
+    if hw_data:
+        items = hw_data.get("data", {}).get("affected_items", [])
+        if items:
+            h = items[0]
+            result["hardware"] = {
+                "cpu_name":  (h.get("cpu") or {}).get("name"),
+                "cpu_cores": (h.get("cpu") or {}).get("cores"),
+                "cpu_mhz":   (h.get("cpu") or {}).get("mhz"),
+                "ram_total": (h.get("ram") or {}).get("total"),
+                "ram_free":  (h.get("ram") or {}).get("free"),
+                "ram_usage": (h.get("ram") or {}).get("usage"),
+            }
+
+    # Installed packages — top 100 by size (largest = most significant)
+    pkg_req_params = request.args.get("pkg_limit", "100")
+    try:
+        pkg_limit = min(500, max(5, int(pkg_req_params)))
+    except ValueError:
+        pkg_limit = 100
+    pkg_data = _wz_get(token, f"/syscollector/{agent_id}/packages", {
+        "limit": pkg_limit, "sort": "-size",
+    })
+    if pkg_data:
+        items = pkg_data.get("data", {}).get("affected_items", [])
+        result["packages"] = [{
+            "name":         p.get("name"),
+            "version":      p.get("version"),
+            "description":  p.get("description"),
+            "architecture": p.get("architecture"),
+            "size":         p.get("size"),
+            "section":      p.get("section"),
+            "vendor":       p.get("vendor"),
+            "format":       p.get("format"),
+            "install_time": p.get("install_time"),
+        } for p in items]
+        result["packages_total"] = pkg_data.get("data", {}).get("total_affected_items", 0)
+
+    return jsonify(result)
+
+
 @siem_bp.route("/hosts/<agent_id>/vulnerabilities", methods=["GET"])
 @require_siem_auth
 def siem_host_vulnerabilities(agent_id):
@@ -1644,6 +1786,12 @@ def siem_host_vulnerabilities(agent_id):
             headers={"Authorization": f"Bearer {token}"},
             params=params, timeout=10, verify=False,
         )
+        if vuln_resp.status_code == 404:
+            return jsonify({
+                "vulnerabilities": [], "total": 0,
+                "page": page, "per_page": per_page,
+                "note": "Vulnerability module not available for this agent. Enable Wazuh Vulnerability Detector and run a scan.",
+            })
         vuln_resp.raise_for_status()
         data = vuln_resp.json().get("data", {})
         return jsonify({

@@ -33,7 +33,7 @@ const STATUS_COLORS = {
   resolved:       "#00e5a0",
   false_positive: "#888",
 };
-const TABS = ["Overview", "SCA", "Vulnerabilities", "FIM", "Malware", "MITRE", "Compliance"];
+const TABS = ["Overview", "Inventory", "SCA", "Vulnerabilities", "FIM", "Malware", "MITRE", "Compliance"];
 
 // Derive a stable string key for an item — must match the tab-level statusMap key.
 function _deriveItemKey(itemType, item) {
@@ -602,6 +602,7 @@ function VulnerabilitiesTab({ agentId, hostName }) {
 
   const vulns = data.vulnerabilities || [];
   const total  = data.total || 0;
+  const vulnNote = data.note || null;
 
   return (
     <div>
@@ -627,7 +628,11 @@ function VulnerabilitiesTab({ agentId, hostName }) {
           <div>CVE</div><div>CVSS</div><div>PACKAGE</div><div>DESCRIPTION</div><div>STATUS</div>
         </div>
         {vulns.length === 0
-          ? <div style={{ padding: 20, color: "#888", textAlign: "center" }}>No active CVEs found.</div>
+          ? <div style={{ padding: 20, color: "#888", textAlign: "center" }}>
+              {vulnNote
+                ? <span style={{ color: "#f5c518", fontSize: 11, fontFamily: "monospace" }}>⚠ {vulnNote}</span>
+                : "No active CVEs found."}
+            </div>
           : vulns.map((v, i) => {
             const key = v.cve || String(i);
             const col = SEV_COLOR[v.severity] || "#888";
@@ -731,7 +736,11 @@ function AlertsTab({ agentId, hostName, category, label }) {
           <div>TIMESTAMP</div><div>LEVEL</div><div>DESCRIPTION</div><div>FILE / USER</div><div>STATUS</div>
         </div>
         {alerts.length === 0
-          ? <div style={{ padding: 20, color: "#888", textAlign: "center" }}>No {label} events in last 30 days.</div>
+          ? <div style={{ padding: 20, color: "#888", textAlign: "center" }}>
+              {category === "malware"
+                ? <span>No malware detections in last 30 days.<br/><span style={{ fontSize: 10, color: "#555" }}>Wazuh malware detection (VirusTotal integration or CDB lists) must be active to populate this tab.</span></span>
+                : `No ${label} events in last 30 days.`}
+            </div>
           : alerts.map((a, i) => {
             const key = a.id ? String(a.id) : `${category}-${i}`;
             const ts  = a.timestamp ? new Date(a.timestamp).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
@@ -784,6 +793,150 @@ function AlertsTab({ agentId, hostName, category, label }) {
             style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", color: "#e8eaed", padding: "4px 10px", borderRadius: 3, cursor: "pointer" }}>→</button>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Tab: System Inventory ─────────────────────────────────────────────────────
+
+function InventoryTab({ agentId }) {
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [pkgSearch, setPkgSearch] = useState("");
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${API}/hosts/${agentId}/inventory`, { credentials: "include" })
+      .then(r => r.json())
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [agentId]);
+
+  if (loading) return <div style={{ padding: 30, color: "#888", textAlign: "center" }}>Loading inventory…</div>;
+  if (!data)   return <div style={{ padding: 30, color: "#ff6b6b" }}>Failed to load inventory.</div>;
+
+  const agent = data.agent || {};
+  const os    = data.os    || {};
+  const hw    = data.hardware || {};
+  const allPkgs = data.packages || [];
+
+  const filtered = pkgSearch
+    ? allPkgs.filter(p => p.name?.toLowerCase().includes(pkgSearch.toLowerCase()) ||
+                          p.description?.toLowerCase().includes(pkgSearch.toLowerCase()))
+    : allPkgs;
+
+  const statusColor = agent.status === "active" ? "#00e5a0" : agent.status === "disconnected" ? "#ff8c00" : "#888";
+
+  const fmtDate = iso => {
+    if (!iso || iso.startsWith("9999")) return "—";
+    try { return new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }); }
+    catch { return iso; }
+  };
+
+  const fmtMB = kb => kb ? `${(kb / 1024).toFixed(0)} MB` : "—";
+
+  return (
+    <div>
+      {/* ── Identity ── */}
+      <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.8px", marginBottom: 10 }}>AGENT IDENTITY</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 20 }}>
+        {[
+          { label: "STATUS",       value: <span style={{ color: statusColor, fontWeight: 700 }}>{(agent.status || "unknown").toUpperCase()}</span> },
+          { label: "HOSTNAME",     value: os.hostname || agent.name || "—" },
+          { label: "IP ADDRESS",   value: agent.ip || "—" },
+          { label: "OS",           value: os.os_name ? `${os.os_name} ${os.os_major || ""}.${os.os_minor || ""}` : agent.os_version || "—" },
+          { label: "PLATFORM",     value: agent.os_platform || "—" },
+          { label: "ARCHITECTURE", value: os.architecture || "—" },
+          { label: "KERNEL",       value: os.kernel_release ? os.kernel_release.slice(0, 30) : "—" },
+          { label: "AGENT VERSION",value: agent.version || "—" },
+          { label: "REGISTERED",   value: fmtDate(agent.date_add) },
+          { label: "LAST KEEPALIVE", value: fmtDate(agent.last_keepalive), wide: true },
+        ].map(({ label, value, wide }) => (
+          <div key={label} style={{
+            background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
+            borderRadius: 5, padding: "10px 14px",
+            minWidth: wide ? 200 : 130, flex: wide ? "1 1 200px" : "0 0 130px",
+          }}>
+            <div style={{ fontSize: 9, color: "#555", letterSpacing: "0.8px", marginBottom: 4 }}>{label}</div>
+            <div style={{ fontSize: 12, color: "#e8eaed", fontFamily: "monospace", wordBreak: "break-all" }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Hardware ── */}
+      {hw.cpu_name && (
+        <>
+          <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.8px", marginBottom: 10 }}>HARDWARE</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 20 }}>
+            {[
+              { label: "CPU",       value: hw.cpu_name },
+              { label: "CORES",     value: hw.cpu_cores ?? "—" },
+              { label: "CPU SPEED", value: hw.cpu_mhz ? `${(hw.cpu_mhz / 1000).toFixed(1)} GHz` : "—" },
+              { label: "RAM TOTAL", value: fmtMB(hw.ram_total) },
+              { label: "RAM FREE",  value: fmtMB(hw.ram_free) },
+              { label: "RAM USAGE", value: hw.ram_usage != null ? `${hw.ram_usage}%` : "—",
+                color: hw.ram_usage > 85 ? "#ff3b3b" : hw.ram_usage > 70 ? "#ff8c00" : "#00e5a0" },
+            ].map(({ label, value, color }) => (
+              <div key={label} style={{
+                background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)",
+                borderRadius: 5, padding: "10px 14px", flex: label === "CPU" ? "1 1 200px" : "0 0 110px",
+              }}>
+                <div style={{ fontSize: 9, color: "#555", letterSpacing: "0.8px", marginBottom: 4 }}>{label}</div>
+                <div style={{ fontSize: 12, color: color || "#e8eaed", fontFamily: "monospace" }}>{value}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* ── Packages ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+        <div style={{ fontSize: 10, color: "#888", letterSpacing: "0.8px" }}>
+          INSTALLED PACKAGES{data.packages_total ? ` (${data.packages_total} total)` : ""}
+        </div>
+        <input
+          value={pkgSearch}
+          onChange={e => setPkgSearch(e.target.value)}
+          placeholder="filter packages…"
+          style={{
+            marginLeft: "auto", background: "rgba(255,255,255,0.05)",
+            border: "1px solid rgba(255,255,255,0.12)", borderRadius: 4,
+            color: "#e8eaed", padding: "4px 10px", fontSize: 11, fontFamily: "monospace",
+            outline: "none", width: 180,
+          }}
+        />
+      </div>
+
+      {filtered.length === 0
+        ? <div style={{ padding: 20, color: "#888", textAlign: "center" }}>
+            {allPkgs.length === 0 ? "Package inventory not available for this agent." : "No packages match filter."}
+          </div>
+        : (
+          <div style={{ background: "rgba(255,255,255,0.02)", borderRadius: 6, overflow: "hidden" }}>
+            <div style={{
+              display: "grid", gridTemplateColumns: "180px 120px 60px 1fr 90px",
+              padding: "6px 12px", fontSize: 10, color: "#888",
+              background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.06)",
+            }}>
+              <div>PACKAGE</div><div>VERSION</div><div>SIZE</div><div>DESCRIPTION</div><div>ARCH</div>
+            </div>
+            {filtered.map((p, i) => (
+              <div key={`${p.name}-${i}`} style={{
+                display: "grid", gridTemplateColumns: "180px 120px 60px 1fr 90px",
+                padding: "7px 12px", fontSize: 11, alignItems: "start",
+                borderBottom: "1px solid rgba(255,255,255,0.03)",
+                background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
+              }}>
+                <span style={{ color: "#4d9eff", fontFamily: "monospace" }}>{p.name || "—"}</span>
+                <span style={{ color: "#e8eaed", fontFamily: "monospace", fontSize: 10 }}>{p.version || "—"}</span>
+                <span style={{ color: "#888", fontSize: 10 }}>{p.size ? `${(p.size / 1024).toFixed(0)}k` : "—"}</span>
+                <span style={{ color: "#888", fontSize: 10 }}>{p.description || "—"}</span>
+                <span style={{ color: "#888", fontSize: 10 }}>{p.architecture || "—"}</span>
+              </div>
+            ))}
+          </div>
+        )
+      }
     </div>
   );
 }
@@ -1113,6 +1266,7 @@ export function HostDetailPanel({ agentId, onClose }) {
           {detail && !loading && (
             <>
               {activeTab === "Overview"        && <OverviewTab detail={detail} />}
+              {activeTab === "Inventory"       && <InventoryTab agentId={agentId} />}
               {activeTab === "SCA"             && <SCATab agentId={agentId} hostName={hostName} />}
               {activeTab === "Vulnerabilities" && <VulnerabilitiesTab agentId={agentId} hostName={hostName} />}
               {activeTab === "FIM"             && <AlertsTab agentId={agentId} hostName={hostName} category="fim"     label="FIM" />}
