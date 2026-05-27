@@ -3205,6 +3205,136 @@ function ServerStatusTab() {
   );
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Agent Installer
+// ════════════════════════════════════════════════════════════════════════════
+
+const AGENT_PACKAGES = [
+  { os: "Linux",   id: "linux-rpm-amd64",   label: "RPM amd64"           },
+  { os: "Linux",   id: "linux-rpm-aarch64", label: "RPM aarch64"         },
+  { os: "Linux",   id: "linux-deb-amd64",   label: "DEB amd64"           },
+  { os: "Linux",   id: "linux-deb-aarch64", label: "DEB aarch64"         },
+  { os: "Windows", id: "windows-msi",       label: "MSI 32-bit / 64-bit" },
+  { os: "MacOS",   id: "macos-intel",       label: "Intel"               },
+  { os: "MacOS",   id: "macos-arm64",       label: "Apple Silicon"       },
+];
+
+function getInstallCmd(pkg, manager) {
+  const m = (manager || "").trim() || "x.x.x.x";
+  const cmds = {
+    "linux-rpm-amd64":
+      `curl -o wazuh-agent-4.14.5-1.x86_64.rpm https://packages.wazuh.com/4.x/yum/wazuh-agent-4.14.5-1.x86_64.rpm && \\\nsudo WAZUH_MANAGER='${m}' rpm -ihv wazuh-agent-4.14.5-1.x86_64.rpm`,
+    "linux-rpm-aarch64":
+      `curl -o wazuh-agent-4.14.5-1.aarch64.rpm https://packages.wazuh.com/4.x/yum/wazuh-agent-4.14.5-1.aarch64.rpm && \\\nsudo WAZUH_MANAGER='${m}' rpm -ihv wazuh-agent-4.14.5-1.aarch64.rpm`,
+    "linux-deb-amd64":
+      `wget https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.14.5-1_amd64.deb && \\\nsudo WAZUH_MANAGER='${m}' dpkg -i ./wazuh-agent_4.14.5-1_amd64.deb`,
+    "linux-deb-aarch64":
+      `wget https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.14.5-1_arm64.deb && \\\nsudo WAZUH_MANAGER='${m}' dpkg -i ./wazuh-agent_4.14.5-1_arm64.deb`,
+    "windows-msi":
+      `Invoke-WebRequest -Uri https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.5-1.msi -OutFile $env:tmp\\wazuh-agent;\nmsiexec.exe /i $env:tmp\\wazuh-agent /q WAZUH_MANAGER='${m}'`,
+    "macos-intel":
+      `curl -so wazuh-agent.pkg https://packages.wazuh.com/4.x/macos/wazuh-agent-4.14.5-1.intel64.pkg && \\\necho "WAZUH_MANAGER='${m}'" > /tmp/wazuh_envs && \\\nsudo installer -pkg ./wazuh-agent.pkg -target /`,
+    "macos-arm64":
+      `curl -so wazuh-agent.pkg https://packages.wazuh.com/4.x/macos/wazuh-agent-4.14.5-1.arm64.pkg && \\\necho "WAZUH_MANAGER='${m}'" > /tmp/wazuh_envs && \\\nsudo installer -pkg ./wazuh-agent.pkg -target /`,
+  };
+  return cmds[pkg] || "";
+}
+
+function getStartCmd(pkg) {
+  if (pkg.startsWith("linux-")) return "sudo systemctl daemon-reload\nsudo systemctl enable wazuh-agent\nsudo systemctl start wazuh-agent";
+  if (pkg === "windows-msi")    return "NET START Wazuh";
+  return "sudo launchctl load /Library/LaunchDaemons/com.wazuh.agent.plist";
+}
+
+function CopyableCode({ code }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div style={{ position: "relative" }}>
+      <pre style={{ background: "rgba(0,0,0,0.45)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 5, padding: "14px 16px", fontFamily: "monospace", fontSize: 12, color: "rgba(255,255,255,0.75)", whiteSpace: "pre-wrap", margin: 0, lineHeight: 1.6 }}>
+        {code}
+      </pre>
+      <button
+        onClick={() => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+        style={{ position: "absolute", top: 8, right: 8, background: copied ? "rgba(0,229,160,0.15)" : "rgba(255,255,255,0.06)", border: `1px solid ${copied ? "rgba(0,229,160,0.4)" : "rgba(255,255,255,0.12)"}`, color: copied ? "#00e5a0" : "rgba(255,255,255,0.4)", borderRadius: 3, padding: "4px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", transition: "all 0.15s" }}>
+        {copied ? "✓ Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
+function AgentInstallerTab() {
+  const [pkg,      setPkg]      = useState("linux-rpm-amd64");
+  const [addrType, setAddrType] = useState("fqdn");
+  const [fqdn,     setFqdn]     = useState("");
+  const [publicIp, setPublicIp] = useState("");
+
+  const manager  = addrType === "fqdn" ? fqdn : publicIp;
+  const osGroups = [...new Set(AGENT_PACKAGES.map(p => p.os))];
+
+  return (
+    <div style={{ maxWidth: 720 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24 }}>
+        <span style={{ fontSize: 18 }}>📦</span>
+        <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
+          Deploy New Agent
+        </div>
+      </div>
+
+      {/* Step 1 — Select package */}
+      <div style={{ ...CARD, marginBottom: 16 }}>
+        <div style={{ ...LABEL, marginBottom: 14 }}>Step 1 — Select Package to Download and Install on Your System</div>
+        {osGroups.map(os => (
+          <div key={os} style={{ marginBottom: 14 }}>
+            <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", marginBottom: 8 }}>{os}</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {AGENT_PACKAGES.filter(p => p.os === os).map(p => (
+                <button key={p.id} onClick={() => setPkg(p.id)}
+                  style={{ background: pkg === p.id ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.03)", border: `1px solid ${pkg === p.id ? "rgba(0,229,160,0.45)" : "rgba(255,255,255,0.08)"}`, color: pkg === p.id ? "#00e5a0" : "rgba(255,255,255,0.5)", borderRadius: 4, padding: "7px 14px", fontFamily: "monospace", fontSize: 11, fontWeight: pkg === p.id ? 700 : 400, cursor: "pointer", letterSpacing: "0.5px" }}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Step 2 — Server address */}
+      <div style={{ ...CARD, marginBottom: 16 }}>
+        <div style={{ ...LABEL, marginBottom: 14 }}>Step 2 — Select Server Address</div>
+        <div style={{ display: "flex", gap: 20, marginBottom: 12 }}>
+          {[{ id: "fqdn", label: "Server FQDN" }, { id: "ip", label: "Public IP" }].map(opt => (
+            <label key={opt.id} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input type="radio" name="agentAddrType" value={opt.id} checked={addrType === opt.id} onChange={() => setAddrType(opt.id)}
+                style={{ accentColor: "#00e5a0", cursor: "pointer" }} />
+              <span style={{ color: addrType === opt.id ? "#00e5a0" : "rgba(255,255,255,0.5)", fontFamily: "monospace", fontSize: 12, fontWeight: addrType === opt.id ? 700 : 400 }}>
+                {opt.label}
+              </span>
+            </label>
+          ))}
+        </div>
+        <input
+          value={addrType === "fqdn" ? fqdn : publicIp}
+          onChange={e => addrType === "fqdn" ? setFqdn(e.target.value) : setPublicIp(e.target.value)}
+          placeholder={addrType === "fqdn" ? "e.g. cycentra.example.com" : "e.g. 203.0.113.45"}
+          style={{ ...INPUT }}
+        />
+      </div>
+
+      {/* Step 3 — Install command */}
+      <div style={{ ...CARD, marginBottom: 16 }}>
+        <div style={{ ...LABEL, marginBottom: 14 }}>Step 3 — Install Command</div>
+        <CopyableCode code={getInstallCmd(pkg, manager)} />
+      </div>
+
+      {/* Step 4 — Start agent */}
+      <div style={{ ...CARD }}>
+        <div style={{ ...LABEL, marginBottom: 14 }}>Step 4 — Start Agent</div>
+        <CopyableCode code={getStartCmd(pkg)} />
+      </div>
+    </div>
+  );
+}
+
 // ── Two-column Settings layout ────────────────────────────────────────────────
 
 const PLATFORM_TABS = [
@@ -3223,9 +3353,14 @@ const COMP_TABS = [
   { id: "comp-notifications",  label: "Notifications"       },
 ];
 
+const AGENT_INSTALLER_TABS = [
+  { id: "deploy", label: "Deploy New Agent" },
+];
+
 const MODULES = [
-  { id: "platform", label: "Platform Settings",    icon: "⚙️", color: "#00e5a0" },
-  { id: "comp",     label: "Security Compliance",  icon: "🛡️", color: "#4d9eff" },
+  { id: "platform",        label: "Platform Settings",   icon: "⚙️", color: "#00e5a0" },
+  { id: "comp",            label: "Security Compliance", icon: "🛡️", color: "#4d9eff" },
+  { id: "agent-installer", label: "Agent Installer",     icon: "📦", color: "#b06eff" },
 ];
 
 export function SystemSettingsPage() {
@@ -3233,7 +3368,7 @@ export function SystemSettingsPage() {
   const [tab, setTab]       = useState("updates");
   const [compTab, setCompTab] = useState("comp-siem");
 
-  const currentTabs = module === "platform" ? PLATFORM_TABS : COMP_TABS;
+  const currentTabs = module === "platform" ? PLATFORM_TABS : module === "comp" ? COMP_TABS : AGENT_INSTALLER_TABS;
 
   return (
     <div>
@@ -3258,7 +3393,7 @@ export function SystemSettingsPage() {
             <button key={m.id} onClick={() => {
               setModule(m.id);
               if (m.id === "platform") setTab("updates");
-              else setCompTab("comp-siem");
+              else if (m.id === "comp") setCompTab("comp-siem");
             }}
               style={{
                 width: "100%", padding: "12px 14px", borderRadius: 6, marginBottom: 6,
@@ -3280,10 +3415,10 @@ export function SystemSettingsPage() {
           {/* Tab bar */}
           <div style={{ display: "flex", gap: 4, borderBottom: "1px solid rgba(255,255,255,0.06)", marginBottom: 24 }}>
             {currentTabs.map(t => {
-              const active = module === "platform" ? tab === t.id : compTab === t.id;
+              const active = module === "platform" ? tab === t.id : module === "comp" ? compTab === t.id : true;
               return (
                 <button key={t.id}
-                  onClick={() => module === "platform" ? setTab(t.id) : setCompTab(t.id)}
+                  onClick={() => { if (module === "platform") setTab(t.id); else if (module === "comp") setCompTab(t.id); }}
                   style={{
                     background: "none", border: "none",
                     borderBottom: active ? "2px solid #00e5a0" : "2px solid transparent",
@@ -3326,6 +3461,9 @@ export function SystemSettingsPage() {
               {compTab === "comp-notifications"  && <CompNotificationsTab />}
             </>
           )}
+
+          {/* Agent Installer */}
+          {module === "agent-installer" && <AgentInstallerTab />}
         </div>
       </div>
     </div>
