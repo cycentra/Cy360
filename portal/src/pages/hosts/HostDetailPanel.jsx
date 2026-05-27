@@ -212,6 +212,21 @@ function EnrichmentPanel({
         )}
       </div>
 
+      {/* ── Detection Detail (malware / rootcheck full log) ── */}
+      {item?.full_log && (
+        <div style={{
+          background: "rgba(255,59,59,0.04)", border: "1px solid rgba(255,59,59,0.2)",
+          borderRadius: 5, padding: "10px 12px", marginBottom: 10,
+        }}>
+          <div style={{ fontSize: 9, color: "#ff6b6b", letterSpacing: "1px", marginBottom: 6, fontFamily: "monospace" }}>
+            DETECTION DETAIL
+          </div>
+          <div style={{ fontSize: 12, color: "#e8eaed", lineHeight: 1.6, fontFamily: "monospace", wordBreak: "break-word" }}>
+            {item.full_log}
+          </div>
+        </div>
+      )}
+
       {/* ── AI enrichment block ── */}
       <div style={{
         background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
@@ -738,7 +753,7 @@ function AlertsTab({ agentId, hostName, category, label }) {
         {alerts.length === 0
           ? <div style={{ padding: 20, color: "#888", textAlign: "center" }}>
               {category === "malware"
-                ? <span>No malware detections in last 30 days.<br/><span style={{ fontSize: 10, color: "#555" }}>Wazuh malware detection (VirusTotal integration or CDB lists) must be active to populate this tab.</span></span>
+                ? <span>No malware / rootcheck detections in last 30 days.</span>
                 : `No ${label} events in last 30 days.`}
             </div>
           : alerts.map((a, i) => {

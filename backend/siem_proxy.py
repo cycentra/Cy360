@@ -1071,28 +1071,64 @@ def _sync_host_alerts(agent_id, category, page, per_page):
     conn = _corr_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            params = [agent_id]
-            cat_clause = ""
-            if category:
-                cat_clause = "AND category = %s"
-                params.append(category)
             offset = (page - 1) * per_page
-            cur.execute(f"""
-                SELECT id, timestamp, rule_id, rule_desc, rule_level, category,
-                       mitre_id, mitre_tactic, base_score, src_ip, username,
-                       file_path, incident_id
-                FROM alerts
-                WHERE agent_id = %s {cat_clause}
-                  AND timestamp > NOW() - INTERVAL '30 days'
-                ORDER BY timestamp DESC LIMIT %s OFFSET %s
-            """, params + [per_page, offset])
+
+            # Malware alerts are stored as category='system' with rootcheck/virustotal
+            # rule groups — query by JSONB group membership instead of category label.
+            if category == "malware":
+                where_clause = """
+                    agent_id = %s
+                    AND timestamp > NOW() - INTERVAL '30 days'
+                    AND (
+                        category = 'malware'
+                        OR (category = 'system' AND (
+                            full_alert->'rule'->'groups' ? 'rootcheck'
+                            OR full_alert->'rule'->'groups' ? 'virustotal'
+                            OR full_alert->'rule'->'groups' ? 'malware'
+                        ))
+                    )
+                """
+                params = [agent_id]
+                fetch_sql = f"""
+                    SELECT id, timestamp, rule_id, rule_level, category,
+                           mitre_id, mitre_tactic, base_score, src_ip, username,
+                           file_path, incident_id,
+                           COALESCE(
+                               full_alert->'data'->>'title',
+                               full_alert->>'full_log',
+                               rule_desc
+                           ) AS rule_desc,
+                           full_alert->>'full_log' AS full_log,
+                           full_alert->'rule'->>'description' AS rule_description
+                    FROM alerts
+                    WHERE {where_clause}
+                    ORDER BY timestamp DESC LIMIT %s OFFSET %s
+                """
+                count_sql = f"SELECT COUNT(*) AS n FROM alerts WHERE {where_clause}"
+            else:
+                params = [agent_id]
+                cat_clause = ""
+                if category:
+                    cat_clause = "AND category = %s"
+                    params.append(category)
+                where_clause = f"agent_id = %s {cat_clause} AND timestamp > NOW() - INTERVAL '30 days'"
+                fetch_sql = f"""
+                    SELECT id, timestamp, rule_id, rule_desc, rule_level, category,
+                           mitre_id, mitre_tactic, base_score, src_ip, username,
+                           file_path, incident_id,
+                           NULL::text AS full_log,
+                           NULL::text AS rule_description
+                    FROM alerts
+                    WHERE {where_clause}
+                    ORDER BY timestamp DESC LIMIT %s OFFSET %s
+                """
+                count_sql = f"SELECT COUNT(*) AS n FROM alerts WHERE {where_clause}"
+
+            cur.execute(fetch_sql, params + [per_page, offset])
             rows = cur.fetchall()
-            cur.execute(f"""
-                SELECT COUNT(*) AS n FROM alerts
-                WHERE agent_id = %s {cat_clause}
-                  AND timestamp > NOW() - INTERVAL '30 days'
-            """, params)
+            cur.execute(count_sql, params)
             total = cur.fetchone()["n"]
+
             return {
                 "alerts": [{
                     "id": r["id"], "timestamp": _iso(r["timestamp"]),
@@ -1102,6 +1138,8 @@ def _sync_host_alerts(agent_id, category, page, per_page):
                     "base_score": _f(r["base_score"]), "src_ip": r["src_ip"],
                     "username": r["username"], "file_path": r["file_path"],
                     "incident_id": r["incident_id"],
+                    "full_log": r.get("full_log"),
+                    "rule_description": r.get("rule_description"),
                 } for r in rows],
                 "total": total, "page": page, "per_page": per_page,
             }
@@ -1758,7 +1796,13 @@ def siem_host_inventory(agent_id):
 @siem_bp.route("/hosts/<agent_id>/vulnerabilities", methods=["GET"])
 @require_siem_auth
 def siem_host_vulnerabilities(agent_id):
-    import base64 as _b64i
+    """Return CVE data for a host.
+
+    Primary source: correlation DB (full_alert JSONB), populated by cysiem-to-redis
+    from Wazuh vulnerability-detector events.  This works regardless of Wazuh API
+    version — the /vulnerability/{id} endpoint was removed in Wazuh 4.8+.
+    """
+    import psycopg2.extras
     try:
         page     = max(1, int(request.args.get("page",      1)))
         per_page = min(500, max(1, int(request.args.get("per_page", 100))))
@@ -1767,37 +1811,73 @@ def siem_host_vulnerabilities(agent_id):
     except ValueError:
         page, per_page, offset, severity = 1, 100, 0, ""
 
-    if not WAZUH_API_PASS:
-        return jsonify({"error": "Wazuh API credentials not configured"}), 503
     try:
-        creds = _b64i.b64encode(f"{WAZUH_API_USER}:{WAZUH_API_PASS}".encode()).decode()
-        token_resp = _req.get(
-            f"{WAZUH_API_URL}/security/user/authenticate",
-            headers={"Authorization": f"Basic {creds}"},
-            timeout=8, verify=False,
-        )
-        token_resp.raise_for_status()
-        token = token_resp.json()["data"]["token"]
-        params = {"limit": per_page, "offset": offset, "status": "Active"}
-        if severity:
-            params["severity"] = severity
-        vuln_resp = _req.get(
-            f"{WAZUH_API_URL}/vulnerability/{agent_id}",
-            headers={"Authorization": f"Bearer {token}"},
-            params=params, timeout=10, verify=False,
-        )
-        if vuln_resp.status_code == 404:
-            return jsonify({
-                "vulnerabilities": [], "total": 0,
-                "page": page, "per_page": per_page,
-                "note": "Vulnerability module not available for this agent. Enable Wazuh Vulnerability Detector and run a scan.",
-            })
-        vuln_resp.raise_for_status()
-        data = vuln_resp.json().get("data", {})
+        conn = _corr_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            sev_clause = "AND full_alert->'data'->'vulnerability'->>'severity' = %s" if severity else ""
+            params = [agent_id] + ([severity] if severity else [])
+
+            count_sql = f"""
+                SELECT COUNT(*) AS n FROM alerts
+                WHERE agent_id = %s
+                  AND category = 'vulnerability'
+                  AND full_alert->'data'->>'vulnerability' IS NOT NULL
+                  {sev_clause}
+            """
+            cur.execute(count_sql, params)
+            total = cur.fetchone()["n"]
+
+            fetch_sql = f"""
+                SELECT
+                    full_alert->'data'->'vulnerability'->>'cve'                       AS cve,
+                    full_alert->'data'->'vulnerability'->>'severity'                  AS severity,
+                    full_alert->'data'->'vulnerability'->'cvss'->'cvss3'->>'base_score' AS cvss,
+                    full_alert->'data'->'vulnerability'->'package'->>'name'           AS name,
+                    full_alert->'data'->'vulnerability'->'package'->>'version'        AS version,
+                    full_alert->'data'->'vulnerability'->'package'->>'architecture'   AS architecture,
+                    full_alert->'data'->'vulnerability'->>'title'                     AS title,
+                    full_alert->'data'->'vulnerability'->>'status'                    AS status,
+                    full_alert->'data'->'vulnerability'->>'reference'                 AS reference,
+                    full_alert->'data'->'vulnerability'->'scanner'->>'reference'      AS scanner_ref,
+                    full_alert->'data'->'vulnerability'->>'published'                 AS published,
+                    timestamp
+                FROM alerts
+                WHERE agent_id = %s
+                  AND category = 'vulnerability'
+                  AND full_alert->'data'->>'vulnerability' IS NOT NULL
+                  {sev_clause}
+                ORDER BY
+                    CASE full_alert->'data'->'vulnerability'->>'severity'
+                        WHEN 'Critical' THEN 1 WHEN 'High' THEN 2
+                        WHEN 'Medium'   THEN 3 WHEN 'Low'  THEN 4
+                        ELSE 5 END,
+                    timestamp DESC
+                LIMIT %s OFFSET %s
+            """
+            cur.execute(fetch_sql, params + [per_page, offset])
+            rows = cur.fetchall()
+        conn.close()
+
+        vulns = [{
+            "cve":          r["cve"],
+            "severity":     r["severity"],
+            "cvss":         float(r["cvss"]) if r["cvss"] else None,
+            "name":         r["name"],
+            "version":      r["version"],
+            "architecture": r["architecture"],
+            "title":        r["title"],
+            "condition":    r["title"],
+            "status":       r["status"],
+            "references":   r["reference"] or r["scanner_ref"],
+            "published":    str(r["published"]) if r["published"] else None,
+            "detected_at":  _iso(r["timestamp"]),
+        } for r in rows]
+
         return jsonify({
-            "vulnerabilities": data.get("affected_items", []),
-            "total":           data.get("total_affected_items", 0),
+            "vulnerabilities": vulns,
+            "total": total,
             "page": page, "per_page": per_page,
+            "source": "db",
         })
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
