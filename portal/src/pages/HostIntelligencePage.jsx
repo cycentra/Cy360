@@ -625,7 +625,7 @@ export function HostIntelligencePage() {
     let attempts = 0;
     const poll = setInterval(async () => {
       attempts++;
-      if (attempts > 10) { clearInterval(poll); setSeeding(false); return; }
+      if (attempts > 15) { clearInterval(poll); setSeeding(false); return; }
       try {
         const qs = new URLSearchParams({ status: "all", sort: sortBy, page: "1", per_page: "50" });
         const res = await fetch(`${API}/hosts?${qs}`, { credentials: "include" });

@@ -33,7 +33,7 @@ from typing import Optional
 import httpx
 import structlog
 import redis.asyncio as aioredis
-from fastapi import FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import BackgroundTasks, FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, delete
@@ -1579,6 +1579,37 @@ async def get_incident_distribution(db: AsyncSession = Depends(get_db)):
         "by_category": by_category,
         "total":       total,
     }
+
+
+@app.post("/hosts/refresh")
+async def trigger_host_refresh(background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
+    """Trigger an immediate host posture refresh outside the hourly scheduler.
+
+    Runs refresh_all_hosts as a FastAPI background task so the response
+    returns instantly.  Called by the Flask proxy's /api/siem/hosts/refresh
+    endpoint and also when the hosts list is found empty on page load.
+    """
+    import sys, os as _os
+    _engine_dir = _os.path.abspath(_os.path.dirname(__file__))
+    _svc_path   = _os.path.normpath(_os.path.join(_engine_dir, ".."))
+    _base_path  = _os.path.normpath(_os.path.join(_engine_dir, "..", ".."))
+    for _p in (_svc_path, _base_path):
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
+
+    async def _do_refresh():
+        try:
+            from host_service import refresh_all_hosts
+            from models import AsyncSessionLocal
+            async with AsyncSessionLocal() as session:
+                n = await refresh_all_hosts(session)
+                await session.commit()
+            log.info("host_refresh_triggered", host_count=n)
+        except Exception as exc:
+            log.error("host_refresh_trigger_failed", error=str(exc))
+
+    background_tasks.add_task(_do_refresh)
+    return {"status": "refresh_queued", "message": "Host posture refresh running in background"}
 
 
 # ── Security MCP bridge (mounted at /mcp) ─────────────────────────────────────

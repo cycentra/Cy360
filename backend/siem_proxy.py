@@ -1194,38 +1194,28 @@ _host_refresh_in_flight = False
 
 
 def _run_host_refresh_background():
-    """Populate host_posture_cache by running refresh_all_hosts in a background thread.
+    """Ask the correlation engine to run refresh_all_hosts immediately.
 
-    Called by the /hosts/refresh endpoint and auto-triggered on the first
-    /hosts request that returns 0 rows (avoids the 1-hour scheduler wait
-    on a freshly started or restarted correlation engine).
+    Fires a POST to the engine's /hosts/refresh endpoint in a daemon thread
+    so the Flask response returns instantly.  Uses the same engine URL as
+    all other proxy calls — no asyncpg or separate DB connection needed.
     """
     global _host_refresh_in_flight
     if _host_refresh_in_flight:
         return
     _host_refresh_in_flight = True
 
-    import threading, asyncio
+    import threading
 
     def _worker():
         global _host_refresh_in_flight
         try:
-            async def _run():
-                db_url = os.environ.get("DATABASE_URL",
-                    "postgresql+asyncpg://corruser:changeme@127.0.0.1:5433/correlation")
-                from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-                engine = create_async_engine(db_url, echo=False)
-                session_factory = async_sessionmaker(engine, expire_on_commit=False)
-                try:
-                    from cysiemstack.host_service import refresh_all_hosts
-                    async with session_factory() as session:
-                        n = await refresh_all_hosts(session)
-                        _logger.info("[host_refresh] populated %d hosts into cache", n)
-                except Exception as exc:
-                    _logger.warning("[host_refresh] background refresh failed: %s", exc)
-                finally:
-                    await engine.dispose()
-            asyncio.run(_run())
+            _req.post(
+                f"{SIEM_ENGINE_URL}/hosts/refresh",
+                timeout=5,
+            )
+        except Exception:
+            pass  # engine may not be reachable; scheduler will still fire hourly
         finally:
             _host_refresh_in_flight = False
 
