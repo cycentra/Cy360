@@ -1,3 +1,80 @@
+## v1.2.68 -- 2026-05-28
+
+### Bug Fixes
+
+  - Fix Infisical secrets backend never loading secrets at startup (requirements.txt typo: `infisicalsdk` → `infisical-sdk`)
+  - Fix `infisical-refresh.sh` daily timer always reporting Arc MSI unreachable (wrong HIMDS path `/identity/...` → `/metadata/identity/...`)
+  - Fix `infisical-refresh.sh` treating HIMDS healthy 401 challenge as failure (`curl -sf` → http_code check for 401)
+
+### Ops Notes — Infisical + Azure Arc OIDC Troubleshooting (2026-05-28)
+
+Full root cause and resolution for Infisical secrets not loading on CY360-DEV.
+
+**Root causes found (3 code bugs + 1 config mismatch):**
+
+1. **`requirements.txt` package name typo** — `infisicalsdk` is not a real PyPI package.
+   The correct name is `infisical-sdk` (with hyphen). Because pip couldn't install it,
+   `from infisical_sdk import InfisicalSDKClient` threw an `ImportError` at every startup,
+   and the `except ImportError` block silently returned 0 — no secrets were ever fetched.
+   The SDK happened to already be installed on CY360-DEV from a prior manual install,
+   masking the typo at runtime; future fresh installs would have failed completely.
+
+2. **Wrong HIMDS path in `infisical-refresh.sh`** — The daily secret-refresh systemd timer
+   script checked `/identity/oauth2/token` instead of `/metadata/identity/oauth2/token`.
+   Azure Arc HIMDS returns 404 on the wrong path, so the connectivity check always fired
+   "WARN: Arc MSI endpoint unreachable" and exited with code 1, skipping the backend reload.
+
+3. **`curl -sf` rejects HIMDS healthy response** — Even with the correct path, HIMDS
+   intentionally returns HTTP 401 first (challenge-response). The `-f` flag in `curl -sf`
+   treats any 4xx as a failure. The check was rewritten to capture the HTTP status code
+   and accept 401 as the "healthy" signal.
+
+4. **Bound Subject mismatch in Infisical OIDC identity** — The machine identity was
+   configured with Bound Subject `054ce2b3-5181-4843-b07b-377907694700` (an incorrect OID
+   from the Azure Portal App Registration page). The actual `sub` claim in the HIMDS JWT
+   for CY360-DEV is `9bca8989-879a-4566-826a-1acb578c5f0d`. Infisical returned
+   `403 OIDC subject not allowed` until the Bound Subject was corrected in the UI.
+
+**Diagnosis steps used:**
+
+```bash
+# 1. Test Infisical fetch directly with debug logging
+ssh -p 2026 root@77.42.75.20
+python3 -c "
+import logging, os; logging.basicConfig(level=logging.DEBUG, ...)
+# load .env, then:
+from core.kv_secrets import _infisical_fetch, FLASK_KV_MAP
+_infisical_fetch(FLASK_KV_MAP)
+"
+
+# 2. Decode live HIMDS JWT to read actual claims
+python3 << 'EOF'
+# (HIMDS challenge-response → base64 decode JWT payload → print iss/sub/oid/aud)
+EOF
+```
+
+**CRITICAL — Bound Subject is unique per server:**
+The `sub` claim in the HIMDS JWT is the Azure Arc Managed Identity Object ID for that
+specific machine. It is assigned by Azure at Arc enrollment time and is different for
+every server. For each new CyCentra 360 deployment using `INFISICAL_AUTH_METHOD=azure`:
+  - Get the server's OID: run the JWT decode snippet above and read the `sub` field
+  - Create a new OIDC machine identity in Infisical for that server with its specific
+    Bound Subject, OR
+  - Use `INFISICAL_AUTH_METHOD=universal` (client ID + secret) to avoid per-server
+    machine identities entirely — recommended for multi-server deployments
+
+Verified OIDC claims for CY360-DEV (2026-05-28):
+  - iss: `https://sts.windows.net/00864d66-c8a8-443f-8d0a-3df93346e266/`
+  - sub/oid: `9bca8989-879a-4566-826a-1acb578c5f0d`
+  - aud: `https://management.azure.com`
+  - appid (Arc MSI): `bd494fef-83ea-453a-abf1-59a66674f1eb`
+
+**Status after fix:** OIDC auth returns 200. Secrets present in Infisical load correctly.
+Missing secrets (SSO, Google/Microsoft OAuth keys, CyMind) return 404 — they need to be
+uploaded to Infisical (not an auth issue).
+
+---
+
 ## v1.2.67 -- 2026-05-27
 
 ### Improvements
