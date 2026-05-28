@@ -36,6 +36,6 @@ git-push.sh
 tools/cycentra_license_private.pem
 tools/cycentra_signing.pem
 tools/*.lic
-tools/*.json
-dist/
+	# Ignore docs folder
+	docs/
 tests/unit/__pycache__/
