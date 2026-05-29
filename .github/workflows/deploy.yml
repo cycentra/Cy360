@@ -151,7 +151,7 @@ jobs:
         if: steps.version.outputs.is_release == 'true'
         run: |
           OWNER="cycentra"
-          REPO="cycentra360"
+          REPO="Cy360"
           VER=${{ steps.version.outputs.ver }}
           
           # We use "cycentra" as the group path instead of "com/cycentra"
@@ -211,8 +211,8 @@ jobs:
             ASSET_URL=$(curl -sf \
               -H "Authorization: token $PAT" \
               -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/cycentra/cycentra360/releases/latest" \
-              | grep -o '"url": *"https://api.github.com/repos/cycentra/cycentra360/releases/assets/[0-9]*"' \
+              "https://api.github.com/repos/cycentra/Cy360/releases/latest" \
+              | grep -o '"url": *"https://api.github.com/repos/cycentra/Cy360/releases/assets/[0-9]*"' \
               | head -1 | grep -o 'https://[^"]*')
 
             curl -L \

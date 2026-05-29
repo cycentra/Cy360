@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.2.74 -- 2026-05-29 19:12 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.2.75 -- 2026-05-29 19:21 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1070,7 +1070,7 @@ step_header "DOWNLOAD RELEASE BUNDLE"
 
 GH_TOKEN="${GH_TOKEN:-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}"
 GH_ORG="cycentra"
-GH_REPO="cycentra360"
+GH_REPO="Cy360"
 
 # ── Detect local bundle (running from inside an already-extracted tarball) ────
 # When the server runs:  tar -xzf bundle.tar.gz && sudo bash cycentra-setup.sh
