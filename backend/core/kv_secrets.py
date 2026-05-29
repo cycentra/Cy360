@@ -104,7 +104,7 @@ Secret naming:  both FOO_BAR and FOO-BAR are accepted in Infisical.
   so secrets uploaded via the CSV template (underscores) resolve automatically.
 
 Required package:
-  infisical-sdk>=1.0.0
+  infisical-python>=2.0.0
 
 Infisical Machine Identity setup (run once in Infisical UI):
   1. Create a Machine Identity in your Infisical project
@@ -404,7 +404,7 @@ def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
     Select via INFISICAL_AUTH_METHOD in .env:
 
       azure     — Fetches an Azure Arc JWT from localhost:40342 and authenticates
-                  via Infisical OIDC auth (infisical-sdk v1.x has no azure_auth).
+                  via Infisical OIDC REST endpoint (infisical-python v2 has no native oidc_auth method).
                   REQUIRES: Azure Arc agent enrolled and running on this server.
                   Machine Identity type in Infisical UI: MUST be "OIDC" (not
                   "Azure Native Auth" — that type requires SDK v2.x which is not
@@ -438,10 +438,13 @@ def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
         return 0
 
     try:
-        from infisical_sdk import InfisicalSDKClient
+        from infisical_client import (
+            InfisicalClient, ClientSettings, AuthenticationOptions,
+            UniversalAuthMethod, GetSecretOptions,
+        )
     except ImportError:
         log.warning(
-            "infisical-sdk not installed — run: pip install infisical-sdk>=1.0.0"
+            "infisical-python not installed — run: pip install infisical-python>=2.0.0"
         )
         return 0
 
@@ -459,38 +462,47 @@ def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
     infisical_url = os.environ.get("INFISICAL_URL", "https://app.infisical.com").rstrip("/")
 
     try:
-        client = InfisicalSDKClient(host=infisical_url)
-
         if auth_method == "universal":
             # Any server without Azure Arc — client ID + secret from Infisical Universal Auth identity
             if not client_secret:
                 log.error("Infisical universal auth: INFISICAL_CLIENT_SECRET is required")
                 return 0
-            client.auth.universal_auth.login(
-                client_id=client_id,
-                client_secret=client_secret,
+            auth = AuthenticationOptions(
+                universal_auth=UniversalAuthMethod(
+                    client_id=client_id,
+                    client_secret=client_secret,
+                )
             )
             log.debug("Infisical: authenticated via Universal Auth")
 
-        elif auth_method == "oidc":
-            # OIDC path — fetch Arc JWT via HIMDS challenge-response then trade
-            # for an Infisical session.
-            # Machine Identity must be "OIDC" type in Infisical UI.
+        elif auth_method in ("oidc", "azure"):
+            # Fetch Arc JWT via HIMDS challenge-response, then exchange for an
+            # Infisical access token via the OIDC REST endpoint.
+            # Machine Identity type in Infisical UI must be "OIDC".
             arc_jwt = _fetch_arc_jwt()
             if not arc_jwt:
                 return 0
-            client.auth.oidc_auth.login(identity_id=client_id, jwt=arc_jwt)
-            log.debug("Infisical: authenticated via Arc OIDC (manual JWT exchange)")
+            import requests as _req
+            resp = _req.post(
+                f"{infisical_url}/api/v1/auth/oidc-auth/login",
+                json={"identityId": client_id, "jwt": arc_jwt},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            access_token = resp.json().get("accessToken", "")
+            if not access_token:
+                log.error("Infisical OIDC: no accessToken in login response")
+                return 0
+            auth = AuthenticationOptions(access_token=access_token)
+            log.debug("Infisical: authenticated via Arc OIDC (JWT exchange)")
 
         else:
-            # azure — fetch Arc JWT via HIMDS challenge-response, then authenticate
-            # via oidc_auth (infisical-sdk v1.x has no azure_auth method).
-            # Machine Identity type in Infisical UI must be "OIDC".
-            _arc_jwt = _fetch_arc_jwt()
-            if not _arc_jwt:
-                return 0
-            client.auth.oidc_auth.login(identity_id=client_id, jwt=_arc_jwt)
-            log.debug("Infisical: authenticated via Azure Arc JWT + oidc_auth")
+            log.error("Infisical: unknown INFISICAL_AUTH_METHOD=%s", auth_method)
+            return 0
+
+        client = InfisicalClient(
+            settings=ClientSettings(site_url=infisical_url, auth=auth)
+        )
 
     except Exception as exc:
         log.error("Infisical: authentication failed: %s", exc)
@@ -508,13 +520,13 @@ def _infisical_fetch(kv_map: dict[str, str], force: bool = False) -> int:
         loaded = False
         for name in candidates:
             try:
-                secret = client.secrets.get_secret_by_name(
+                secret = client.getSecret(GetSecretOptions(
                     secret_name=name,
                     project_id=project_id,
-                    environment_slug=environment,
-                    secret_path="/",
-                )
-                value = getattr(secret, "secretValue", None) or getattr(secret, "secret_value", None)
+                    environment=environment,
+                    path="/",
+                ))
+                value = getattr(secret, "secret_value", None)
                 if value:
                     os.environ[env_key] = value
                     fetched += 1
