@@ -688,7 +688,7 @@ def _run_setup_in_background(flags: list[str], label: str) -> None:
     the HTTP request) so changes to .env after service start are always picked up.
 
     For private repos the GitHub API 2-step approach is required:
-      1. GET /repos/cycentra/cycentra360/releases/latest  → find asset URL
+      1. GET /repos/cycentra/Cy360/releases/latest  → find asset URL
       2. GET <asset_api_url>  Accept: application/octet-stream  → binary download
     The direct browser download URL (github.com/releases/latest/download/…) returns
     404 for private repos when accessed via Bearer token.
@@ -719,7 +719,7 @@ def _run_setup_in_background(flags: list[str], label: str) -> None:
             _update_log.append(f"[{label}] Fetching latest release metadata…")
             try:
                 rel_resp = http_requests.get(
-                    "https://api.github.com/repos/cycentra/cycentra360/releases/latest",
+                    "https://api.github.com/repos/cycentra/Cy360/releases/latest",
                     headers=api_headers,
                     timeout=30,
                 )
@@ -866,7 +866,7 @@ def latest_version_options():
 def system_latest_version():
     """Query the latest published release tag from GitHub Releases API.
 
-    Uses GET /repos/cycentra/cycentra360/releases/latest — fast, no bundle download.
+    Uses GET /repos/cycentra/Cy360/releases/latest — fast, no bundle download.
     Returns {current, latest, up_to_date} for the UI to act on.
     GH_TOKEN is read from the server environment (/opt/cycentra/.env).
     """
@@ -885,7 +885,7 @@ def system_latest_version():
     latest = None
     try:
         resp = http_requests.get(
-            "https://api.github.com/repos/cycentra/cycentra360/releases/latest",
+            "https://api.github.com/repos/cycentra/Cy360/releases/latest",
             headers={
                 "Authorization": f"Bearer {gh_token}",
                 "Accept": "application/vnd.github+json",

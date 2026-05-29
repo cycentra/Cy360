@@ -73,7 +73,7 @@ tar -czf cycentra-release.tar.gz cycentra-release/
 ASSET_URL=$(curl -sfL \
   -H "Authorization: Bearer ${GH_TOKEN}" \
   -H "Accept: application/vnd.github+json" \
-  "https://api.github.com/repos/cycentra/cycentra360/releases/latest" \
+  "https://api.github.com/repos/cycentra/Cy360/releases/latest" \
   | jq -r '.assets[] | select(.name == "cycentra-setup.sh") | .url')
 
 # Step 2: download with octet-stream accept header
