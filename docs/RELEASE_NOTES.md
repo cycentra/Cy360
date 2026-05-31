@@ -2,6 +2,14 @@
 
 ### Bug Fixes
 
+  - Fix AI enrichment blocked by CyMind security pipeline (v1.0.5
+
+---
+
+## v1.0.5 -- 2026-05-31
+
+### Bug Fixes
+
   - **AI enrichment restored across all modules** — CyMind's prompt injection security check (SEC-24) was false-positiving on raw SIEM incident data sent as the user message (IP addresses, attack commands, rule descriptions, and base64-decoded payloads from Wazuh alerts triggered injection patterns). Fixed by moving all enrichment context into the system prompt in both the correlation engine (`ai_router._cymind`) and the GRC compliance engine (`ai_analysis._call_llm`). The user message is now a short, benign instruction. This pattern matches how CyMind's own RAG pipeline separates external data from user instructions.
   - **GRC AI analysis now uses correct M2M flags** — `ai_analysis._call_llm` previously sent the system prompt as a `messages[role=system]` entry (OpenAI style) and did not disable RAG/MCP/integrations/operational context. Now uses the top-level `system` field and sets `use_rag/use_mcp/use_integrations/use_operational` to `False` for clean M2M calls.
   - **CyMind chat key validator fixed** — `cymind_post()` was rejecting valid `CyM_` prefixed keys (current CyMind format) with an error saying only `pak_` is accepted. Both prefixes are now accepted; `cymk_` (M2M admin key) is still rejected.
