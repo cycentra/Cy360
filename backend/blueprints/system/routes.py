@@ -1643,10 +1643,84 @@ def cymind_enable():
     except Exception as _e:
         current_app.logger.warning("cymind_enable: failed to auto-configure AI provider: %s", _e)
 
+    # ── Step 6: Trigger CyMind self-update using the admin JWT ────────────────
+    # We already hold the admin JWT from Step 2, so we piggyback on it to pull
+    # the latest CyMind image.  This ensures the API key scope fix (v1.0.115+)
+    # is deployed automatically — no manual SSH to the CyMind server required.
+    # The update runs in the background inside CyMind; we verify the chat key
+    # works after a short wait so the portal reports the correct final state.
+    update_msg   = ""
+    update_needed = False
+    try:
+        upd_r = http_requests.post(
+            f"{cymind_url}/api/v1/system/update",
+            headers={"Authorization": f"Bearer {cymind_jwt}"},
+            timeout=15,
+        )
+        if upd_r.ok:
+            update_msg    = "CyMind self-update triggered — pulling latest image in background."
+            update_needed = True
+            current_app.logger.info("cymind_enable: update triggered: %s", upd_r.json())
+        else:
+            update_msg = f"CyMind update trigger returned {upd_r.status_code} — update manually if needed."
+            current_app.logger.warning("cymind_enable: update trigger failed: %s", upd_r.text[:200])
+    except Exception as _ue:
+        update_msg = f"CyMind update trigger failed ({_ue}) — update manually if needed."
+        current_app.logger.warning("cymind_enable: update trigger exception: %s", _ue)
+
+    # If the update was triggered, wait for CyMind to come back up (max 3 min).
+    # We poll /health every 5 s; once healthy we verify the chat key actually works.
+    chat_verified = False
+    if update_needed:
+        import time as _time
+        _time.sleep(10)  # give docker pull a head-start before polling
+        for _ in range(34):          # 34 × 5 s = ~3 min total
+            try:
+                _h = http_requests.get(f"{cymind_url}/api/v1/health", timeout=5)
+                if _h.ok:
+                    # Health OK — test the chat key
+                    _probe = http_requests.post(
+                        f"{cymind_url}/api/v1/chat",
+                        headers={"Authorization": f"Bearer {chat_key}",
+                                 "Content-Type": "application/json"},
+                        json={
+                            "messages":         [{"role": "user", "content": "ping"}],
+                            "system":           "Reply: pong",
+                            "use_rag":          False,
+                            "use_external":     False,
+                            "use_mcp":          False,
+                            "use_integrations": False,
+                            "use_operational":  False,
+                        },
+                        timeout=10,
+                    )
+                    if _probe.ok:
+                        chat_verified = True
+                        update_msg   += " Chat key verified — enrichment is now active."
+                        break
+                    elif _probe.status_code == 403:
+                        # Still old version; keep waiting for the restart
+                        pass
+                    else:
+                        # Unexpected status — stop waiting
+                        update_msg += f" Chat probe returned {_probe.status_code} after update."
+                        break
+            except Exception:
+                pass  # CyMind is restarting — keep polling
+            _time.sleep(5)
+
+        if not chat_verified:
+            update_msg += (
+                " CyMind is still restarting or the update is taking longer than expected. "
+                "Wait 2–3 minutes and click 'Test Connection' to confirm."
+            )
+
     return jsonify({
-        "ok": True,
-        "message": "Integration enabled. CyMind is connected and the portal service account is provisioned.",
-        "nginxStatus": nginx_msg,
+        "ok":           True,
+        "message":      "Integration enabled. CyMind is connected and the portal service account is provisioned.",
+        "nginxStatus":  nginx_msg,
+        "updateStatus": update_msg,
+        "chatVerified": chat_verified,
     })
 
 
