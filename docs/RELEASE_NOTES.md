@@ -1,3 +1,11 @@
+## v1.0.7 -- 2026-05-31
+
+### Bug Fixes
+
+  - **CyMind enable flow now auto-updates CyMind** — After provisioning the portal service account, the enable flow uses the admin JWT (already obtained during login) to call CyMind's `POST /api/v1/system/update`. CyMind pulls the latest image in the background and restarts. The flow then polls until CyMind is healthy and verifies the chat key actually responds on `/api/v1/chat`, reporting the real outcome in the portal instead of silently assuming success.
+
+---
+
 ## v1.0.6 -- 2026-05-31
 
 ### Improvements
