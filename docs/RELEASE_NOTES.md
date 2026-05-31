@@ -1,3 +1,11 @@
+## v1.0.8 -- 2026-05-31
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
 ## v1.0.7 -- 2026-05-31
 
 ### Bug Fixes
@@ -51,9 +59,15 @@
 
 ## v1.0.2 -- 2026-05-29
 
-### Improvements
+### Bug Fixes
 
-  - Stability and performance improvements.
+**`backend/requirements.txt` + `core/kv_secrets.py` — CI build broken: `infisical-sdk` does not exist on PyPI**
+- Root cause: `requirements.txt` listed `infisical-sdk>=1.0.0` as a hard dependency, but no package under that name has ever been published to PyPI (`pip install infisical-sdk` returns "No matching distribution found"). The code in `core/kv_secrets.py` imported `from infisical_sdk import InfisicalSDKClient` using the fluent auth API (`client.auth.universal_auth.login`, `client.auth.oidc_auth.login`, `client.secrets.get_secret_by_name`) which belongs to a package that was never released. Every CI wheel-build job failed at the `pip install -r requirements.txt` step with exit code 1.
+- Fix: Replaced `infisical-sdk>=1.0.0` with `infisical-python>=2.0.0` — the correct PyPI package (published by Infisical, provides the `infisical_client` module). Rewrote `_infisical_fetch` in `core/kv_secrets.py` to use the v2 API:
+  - `core/kv_secrets.py`: import changed to `from infisical_client import InfisicalClient, ClientSettings, AuthenticationOptions, UniversalAuthMethod, GetSecretOptions`
+  - Universal auth: credentials now passed via `ClientSettings(auth=AuthenticationOptions(universal_auth=UniversalAuthMethod(...)))` at client construction instead of a post-init `.login()` call
+  - OIDC/Azure Arc auth: Arc JWT (from HIMDS challenge-response, unchanged) is now exchanged for an Infisical access token via `POST {url}/api/v1/auth/oidc-auth/login` REST call; the returned `accessToken` is passed as `AuthenticationOptions(access_token=...)` — `infisical-python` v2 has no native `oidc_auth` method
+  - Secret fetch: `client.secrets.get_secret_by_name(environment_slug=..., secret_path=...)` replaced with `client.getSecret(GetSecretOptions(environment=..., path=...))`
 
 ---
 
