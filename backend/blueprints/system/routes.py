@@ -1466,8 +1466,8 @@ def cymind_post():
     Body (all optional):
       cymindUrl   — base URL of CyMind instance (e.g. https://cymind.corp.example.com)
       generateKey — true → generate and store a new cymk_... M2M API key
-      chatApiKey  — pak_... API key generated in CyMind for the portal service account;
-                    must be created in CyMind (Users → service account with analyst role →
+      chatApiKey  — CyM_... (or legacy pak_...) API key for the portal service account;
+                    generated in CyMind (Users → service account with analyst role →
                     API Keys → Generate) and pasted here.  Pass "" to clear.
       clearChatKey — true → remove the stored chat API key
       enabled     — bool, enable/disable the integration
@@ -1496,8 +1496,11 @@ def cymind_post():
         cfg["apiKey"] = "cymk_" + _secrets.token_hex(24)
     if "chatApiKey" in data:
         raw = str(data["chatApiKey"]).strip()
-        if raw and not raw.startswith("pak_"):
-            return jsonify({"error": "Chat API key must start with 'pak_' — generate it in CyMind's API Keys section."}), 400
+        # CyMind generates keys with CyM_ prefix (PAK chat keys).
+        # Older deployments may use pak_ prefix. Both are valid chat keys.
+        # cymk_ prefix is the M2M admin key — it returns 401 on /api/v1/chat.
+        if raw and not (raw.startswith("CyM_") or raw.startswith("pak_")):
+            return jsonify({"error": "Chat API key must start with 'CyM_' or 'pak_' — generate it in CyMind's API Keys section."}), 400
         cfg["chatApiKey"] = raw  # empty string = clear
     if data.get("clearChatKey"):
         cfg["chatApiKey"] = ""
@@ -1692,11 +1695,58 @@ def cymind_test():
         ms = int((time.monotonic() - t0) * 1000)
         results["mcp_engine"] = {"ok": False, "msg": f"Engine unreachable: {e}", "ms": ms}
 
-    # ── 3. Chat API key presence ───────────────────────────────────────────────
-    results["chat_key"] = {
-        "ok":  bool(cfg.get("chatApiKey")),
-        "msg": "Chat API key set" if cfg.get("chatApiKey") else "Chat API key not set — create an analyst user in CyMind, generate an API key there, and paste it in System Settings → CyMind.",
-    }
+    # ── 3. Chat API key — test the actual /api/v1/chat endpoint ─────────────────
+    # Previously this only checked key presence (bool).  That gave a false green
+    # even when CyMind's security pipeline was rejecting enrichment requests with
+    # 400/429.  Now we send a minimal benign chat request so the test reflects
+    # the real enrichment code path.
+    chat_key = cfg.get("chatApiKey", "")
+    if not chat_key:
+        results["chat_key"] = {
+            "ok":  False,
+            "msg": "Chat API key not set — use the Enable Integration flow or paste a CyM_... key.",
+        }
+    elif cymind_url and results.get("cymind", {}).get("ok"):
+        t0 = time.monotonic()
+        try:
+            probe_resp = http_requests.post(
+                f"{cymind_url}/api/v1/chat",
+                headers={"Authorization": f"Bearer {chat_key}", "Content-Type": "application/json"},
+                json={
+                    "messages":         [{"role": "user", "content": "ping"}],
+                    "system":           "Reply with one word: pong",
+                    "use_rag":          False,
+                    "use_external":     False,
+                    "use_mcp":          False,
+                    "use_integrations": False,
+                    "use_operational":  False,
+                    "temperature":      0.0,
+                },
+                timeout=20,
+            )
+            ms = int((time.monotonic() - t0) * 1000)
+            if probe_resp.ok:
+                results["chat_key"] = {"ok": True, "msg": f"Chat endpoint responding ({ms} ms)"}
+            elif probe_resp.status_code == 401:
+                results["chat_key"] = {"ok": False, "msg": "Chat key rejected (401) — key may be expired or wrong type (must be CyM_... not cymk_...)"}
+            elif probe_resp.status_code == 400:
+                try:
+                    detail = probe_resp.json().get("detail", probe_resp.text[:120])
+                except Exception:
+                    detail = probe_resp.text[:120]
+                results["chat_key"] = {"ok": False, "msg": f"Chat endpoint returned 400 — CyMind security policy blocking: {detail}"}
+            elif probe_resp.status_code == 429:
+                results["chat_key"] = {"ok": False, "msg": "Chat rate limit exceeded (429) — service account may be throttled by CyMind behavior monitor"}
+            else:
+                results["chat_key"] = {"ok": False, "msg": f"Chat endpoint returned HTTP {probe_resp.status_code} ({ms} ms)"}
+        except Exception as e:
+            ms = int((time.monotonic() - t0) * 1000)
+            results["chat_key"] = {"ok": False, "msg": f"Chat probe failed: {e}"}
+    else:
+        results["chat_key"] = {
+            "ok":  bool(chat_key),
+            "msg": "Chat API key set (CyMind unreachable — chat endpoint not probed)",
+        }
 
     overall = all(v["ok"] for v in results.values())
     return jsonify({"ok": overall, "results": results})

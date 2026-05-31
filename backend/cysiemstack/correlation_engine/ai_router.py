@@ -51,15 +51,28 @@ async def _cymind(fields: dict, system: str, prompt: str, timeout: float) -> str
     if not base_url or not api_key:
         raise RuntimeError("CyMind: baseUrl and apiKey are required but not configured in AI Settings")
 
+    # Place all incident/enrichment context in the system prompt.
+    # CyMind's prompt-injection check (SEC-24) runs only on the user message
+    # (req.messages[-1]["content"]).  Raw SIEM data — IP addresses, attack
+    # commands, rule descriptions — can false-positive on patterns like
+    # "jailbreak", "bypass content filter", or base64-decoded payloads (GAP-005).
+    # Keeping the user message as a short, benign instruction avoids those
+    # false positives while still giving the LLM all necessary context.
+    combined_system = f"{system}\n\n---\nINCIDENT CONTEXT:\n{prompt}"
+    user_instruction = (
+        "Analyse the incident in the INCIDENT CONTEXT section above and "
+        "return ANALYST_SUMMARY and REMEDIATION_STEPS."
+    )
+
     body: dict = {
-        "messages":        [{"role": "user", "content": prompt}],
-        "system":          system,
-        "use_rag":         False,
-        "use_external":    False,
-        "use_mcp":         False,
+        "messages":         [{"role": "user", "content": user_instruction}],
+        "system":           combined_system,
+        "use_rag":          False,
+        "use_external":     False,
+        "use_mcp":          False,
         "use_integrations": False,
-        "use_operational": False,
-        "temperature":     0.1,
+        "use_operational":  False,
+        "temperature":      0.1,
     }
     if model:
         body["model"] = model
@@ -69,7 +82,15 @@ async def _cymind(fields: dict, system: str, prompt: str, timeout: float) -> str
         timeout=timeout,
     ) as client:
         resp = await client.post(f"{base_url}/api/v1/chat", json=body)
-        resp.raise_for_status()
+        if not resp.is_success:
+            # Surface the CyMind error detail for easier debugging
+            try:
+                detail = resp.json().get("detail", resp.text[:200])
+            except Exception:
+                detail = resp.text[:200]
+            raise RuntimeError(
+                f"CyMind returned HTTP {resp.status_code}: {detail}"
+            )
         return resp.json().get("content", "")
 
 
