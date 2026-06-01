@@ -20,81 +20,85 @@ import {
 import { PLATFORM_MODULES } from '../../registry/platformModules.js';
 
 // ── ASM Posture Widget ─────────────────────────────────────────────────────────
-function ASMPostureWidget({ score, grade, scanType, domain, lastScan }) {
+function ASMPostureWidget({ score, grade, scanType, domain, lastScan, onViewScan }) {
   const gradeColor = {
     "A+": "#00e5a0", A: "#00e5a0", B: "#4d9eff",
     C: "#f5c518", D: "#ff8c00", F: "#ff3b3b",
   }[grade] || "#00e5a0";
   const scanTypeColor = { deep: "#b06eff", standard: "#00e5a0", passive: "#4d9eff" };
   const stColor = scanTypeColor[scanType] || "#00e5a0";
-  const tierLabel = scanType ? scanType.toUpperCase() : null;
-
-  // Gauge: 0-100 mapped to 180° arc (half-circle)
-  const radius = 52, cx = 70, cy = 70;
-  const arcLen = Math.PI * radius;
-  const filled = score != null ? (score / 100) * arcLen : 0;
+  const pct = Math.min(100, Math.max(0, score ?? 0));
 
   return (
     <div style={{
-      background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
-      borderTop: `2px solid ${gradeColor}`, borderRadius: 6, padding: "18px 24px",
-      display: "flex", alignItems: "center", gap: 28, flexWrap: "wrap",
-      marginBottom: 14,
+      background: `${gradeColor}09`,
+      border: `1px solid ${gradeColor}30`,
+      borderTop: `2px solid ${gradeColor}`,
+      borderRadius: 6,
+      padding: "16px 22px",
+      marginBottom: 18,
+      display: "flex",
+      alignItems: "center",
+      gap: 22,
     }}>
-      {/* Half-circle gauge */}
-      <div style={{ flexShrink: 0, position: "relative" }}>
-        <svg width="140" height="80" style={{ overflow: "visible" }}>
-          {/* Track */}
-          <path d={`M ${cx - radius} ${cy} A ${radius} ${radius} 0 0 1 ${cx + radius} ${cy}`}
-            fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="10" strokeLinecap="round"/>
-          {/* Fill */}
-          <path d={`M ${cx - radius} ${cy} A ${radius} ${radius} 0 0 1 ${cx + radius} ${cy}`}
-            fill="none" stroke={gradeColor} strokeWidth="10" strokeLinecap="round"
-            strokeDasharray={`${filled} ${arcLen}`}
-            style={{ transition: "stroke-dasharray 1.2s ease", filter: `drop-shadow(0 0 6px ${gradeColor}60)` }}/>
-          {/* Score label */}
-          <text x={cx} y={cy - 6} textAnchor="middle" fill="white" fontSize="28" fontWeight="800" fontFamily="'Space Mono',monospace">
-            {score != null ? score : "—"}
-          </text>
-          <text x={cx} y={cy + 10} textAnchor="middle" fill="rgba(255,255,255,0.3)" fontSize="9" fontFamily="monospace" letterSpacing="1">
-            POSTURE SCORE
-          </text>
-          {/* Grade pill */}
-          <rect x={cx - 16} y={cy + 18} width="32" height="18" rx="3" fill={`${gradeColor}20`} stroke={`${gradeColor}50`} strokeWidth="1"/>
-          <text x={cx} y={cy + 31} textAnchor="middle" fill={gradeColor} fontSize="11" fontWeight="700" fontFamily="'Space Mono',monospace">
-            {grade || "—"}
-          </text>
-        </svg>
+      {/* Score */}
+      <div style={{ textAlign: "center", flexShrink: 0, minWidth: 76 }}>
+        <div style={{ color: gradeColor, fontSize: 44, fontWeight: 800, fontFamily: "'Space Mono',monospace", lineHeight: 1 }}>
+          {score != null ? score : "—"}
+        </div>
+        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace", textTransform: "uppercase", letterSpacing: "1px", marginTop: 3 }}>
+          / 100
+        </div>
       </div>
 
-      {/* Labels */}
-      <div style={{ flex: 1, minWidth: 160 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
-          <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace" }}>
+      {/* Bar + labels */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 7 }}>
+          <span style={{ color: "rgba(255,255,255,0.75)", fontSize: 13, fontWeight: 700, fontFamily: "monospace" }}>
             Overall ASM Security Posture
           </span>
-          {tierLabel && (
-            <span style={{ background: `${stColor}15`, color: stColor, border: `1px solid ${stColor}40`, fontSize: 9, fontFamily: "monospace", fontWeight: 700, padding: "1px 6px", borderRadius: 2, letterSpacing: "1px" }}>
-              {tierLabel}
-            </span>
-          )}
+          <span style={{
+            background: `${gradeColor}18`, color: gradeColor, border: `1px solid ${gradeColor}40`,
+            borderRadius: 3, padding: "1px 7px", fontSize: 10,
+            fontFamily: "monospace", fontWeight: 700, letterSpacing: "0.5px",
+          }}>
+            {grade || "—"}
+          </span>
         </div>
-        <div style={{ color: gradeColor, fontSize: 32, fontWeight: 800, fontFamily: "'Space Mono',monospace", lineHeight: 1, marginBottom: 4 }}>
-          Grade {grade || "—"}
+        <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 3, height: 7, marginBottom: 8, overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${pct}%`, background: gradeColor, borderRadius: 3, transition: "width 0.8s ease" }} />
         </div>
-        {domain && <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace", marginBottom: 2 }}>{domain}</div>}
-        {lastScan && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>Last scan: {lastScan}</div>}
+        <div style={{ color: "rgba(255,255,255,0.32)", fontSize: 10, fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {domain || ""}{domain && lastScan ? " · " : ""}{lastScan ? `Last scan: ${lastScan}` : ""}{!domain && !lastScan ? "External attack surface · ASM score" : ""}
+        </div>
+        {/* Signal chips */}
+        {(scanType || (score != null && score < 60)) && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 7 }}>
+            {scanType && (
+              <span style={{ background: `${stColor}15`, color: stColor, border: `1px solid ${stColor}40`, borderRadius: 3, padding: "1px 7px", fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>
+                {scanType.toUpperCase()}
+              </span>
+            )}
+            {score != null && score < 60 && (
+              <span style={{ background: "rgba(255,59,59,0.1)", border: "1px solid rgba(255,59,59,0.35)", color: "#ff3b3b", borderRadius: 3, padding: "1px 7px", fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>
+                ⚠ BELOW THRESHOLD
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Score band guide */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
-        {[["A+", "≥ 90", "#00e5a0"], ["A", "≥ 80", "#00e5a0"], ["B", "≥ 70", "#4d9eff"], ["C", "≥ 55", "#f5c518"], ["D", "≥ 35", "#ff8c00"], ["F", "< 35", "#ff3b3b"]].map(([g, range, c]) => (
-          <div key={g} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ color: grade === g ? c : "rgba(255,255,255,0.15)", fontSize: 10, fontFamily: "monospace", fontWeight: grade === g ? 700 : 400, width: 16 }}>{g}</span>
-            <span style={{ color: grade === g ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.12)", fontSize: 9, fontFamily: "monospace" }}>{range}</span>
-          </div>
-        ))}
-      </div>
+      {/* CTA */}
+      {onViewScan && (
+        <button onClick={onViewScan} style={{
+          background: `${gradeColor}10`, border: `1px solid ${gradeColor}35`, color: gradeColor,
+          borderRadius: 4, padding: "8px 14px", fontSize: 10, fontFamily: "monospace",
+          fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+          letterSpacing: "0.5px",
+        }}>
+          Full Scan Details ↗
+        </button>
+      )}
     </div>
   );
 }
@@ -429,6 +433,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
         scanType={scanType}
         domain={data?.meta?.domain || data?.meta?.org}
         lastScan={data?.meta?.last_scan ? new Date(data.meta.last_scan).toLocaleString() : null}
+        onViewScan={() => setActiveTab("scan")}
       />
 
       {/* ROW 1 */}

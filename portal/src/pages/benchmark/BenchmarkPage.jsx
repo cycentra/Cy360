@@ -707,10 +707,54 @@ function CohortSelector({ config, allIndustries, onSave }) {
 }
 
 // ── 6. CSPI Trend Chart ───────────────────────────────────────────────────────
+// ── Benchmark trend aggregation helpers ──────────────────────────────────────
+
+function _isoWeekMonday(dateStr) {
+  const d = new Date(dateStr + "T00:00:00Z");
+  const day = d.getUTCDay(); // 0=Sun
+  const diff = (day + 6) % 7; // days since Monday
+  const mon = new Date(d.getTime() - diff * 86400000);
+  return mon.toISOString().slice(0, 10);
+}
+
+function _aggregateTrend(data, groupBy) {
+  if (groupBy === "day" || !data || data.length === 0) return data;
+  const groups = {};
+  data.forEach(({ date, score }) => {
+    if (score === null || score === undefined) return;
+    const key = groupBy === "week" ? _isoWeekMonday(date) : date.slice(0, 7);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(score);
+  });
+  return Object.entries(groups)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, scores]) => ({
+      date:  key,
+      score: +(scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1),
+    }));
+}
+
+function _xLabel(dateStr, groupBy) {
+  if (groupBy === "month") {
+    const d = new Date(dateStr + "-01T00:00:00Z");
+    return d.toLocaleString("en", { month: "short" });
+  }
+  if (groupBy === "week") {
+    const d = new Date(dateStr + "T00:00:00Z");
+    return d.toLocaleString("en", { month: "short", day: "numeric" });
+  }
+  // day — show "Mon D" on first of month
+  const d = new Date(dateStr + "T00:00:00Z");
+  return d.toLocaleString("en", { month: "short" });
+}
+
+// ── BenchmarkTrendChart ───────────────────────────────────────────────────────
+
 function BenchmarkTrendChart({ data }) {
   const svgRef       = useRef(null);
   const containerRef = useRef(null);
-  const [tooltip, setTooltip] = useState(null);
+  const [tooltip,  setTooltip]  = useState(null);
+  const [groupBy,  setGroupBy]  = useState("day");
 
   const CHART_W = 800;
   const CHART_H = 180;
@@ -721,56 +765,57 @@ function BenchmarkTrendChart({ data }) {
   const IW      = CHART_W - PAD_L - PAD_R;
   const IH      = CHART_H - PAD_T - PAD_B;
 
-  if (!data || data.length === 0) {
-    return (
-      <div style={{
-        background: C.surface, border: `1px solid ${C.border}`,
-        borderRadius: 10, padding: "20px 24px",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        height: 120,
-      }}>
-        <span style={{ color: C.muted, fontSize: 12, fontFamily: "monospace" }}>
-          Loading trend data…
-        </span>
-      </div>
-    );
-  }
+  const GROUP_TABS = [
+    { key: "day",   label: "Days"   },
+    { key: "week",  label: "Weeks"  },
+    { key: "month", label: "Months" },
+  ];
 
-  const toX = (i) => PAD_L + (data.length > 1 ? i / (data.length - 1) : 0) * IW;
+  const plotData = _aggregateTrend(data, groupBy);
+  const hasData  = plotData && plotData.length > 0;
+
+  const toX = (i) => PAD_L + (plotData.length > 1 ? i / (plotData.length - 1) : 0) * IW;
   const toY = (s) => PAD_T + IH - ((s ?? 0) / 100) * IH;
 
-  const pts      = data.map((d, i) => `${toX(i).toFixed(1)},${toY(d.score ?? 0).toFixed(1)}`);
-  const linePath = `M ${pts.join(" L ")}`;
-  const areaPath = `${linePath} L ${toX(data.length - 1).toFixed(1)},${(PAD_T + IH).toFixed(1)} L ${PAD_L.toFixed(1)},${(PAD_T + IH).toFixed(1)} Z`;
+  // Build SVG paths only when there is data
+  let linePath = "";
+  let areaPath = "";
+  if (hasData) {
+    const pts = plotData.map((d, i) => `${toX(i).toFixed(1)},${toY(d.score ?? 0).toFixed(1)}`);
+    linePath = `M ${pts.join(" L ")}`;
+    areaPath = `${linePath} L ${toX(plotData.length - 1).toFixed(1)},${(PAD_T + IH).toFixed(1)} L ${PAD_L.toFixed(1)},${(PAD_T + IH).toFixed(1)} Z`;
+  }
 
-  // First-occurrence month labels for the X-axis
-  const monthLabels = [];
-  let lastMonth = null;
-  data.forEach((d, i) => {
-    const m = d.date ? d.date.slice(0, 7) : null;
-    if (m && m !== lastMonth) {
-      lastMonth = m;
-      const dt = new Date(d.date + "T00:00:00Z");
-      monthLabels.push({ i, label: dt.toLocaleString("en", { month: "short" }) });
-    }
-  });
+  // X-axis labels: first occurrence per month (day), every entry (week/month)
+  const xLabels = [];
+  if (hasData) {
+    let lastKey = null;
+    plotData.forEach((d, i) => {
+      const key = groupBy === "day" ? d.date.slice(0, 7) : d.date;
+      if (key !== lastKey) {
+        lastKey = key;
+        xLabels.push({ i, label: _xLabel(d.date, groupBy) });
+      }
+    });
+  }
 
-  // Delta vs ~30 days ago
-  const latestScore = data[data.length - 1]?.score ?? null;
-  const idx30       = data.length >= 31 ? data.length - 31 : 0;
-  const score30     = data[idx30]?.score ?? null;
-  const delta       = latestScore != null && score30 != null
-    ? +(latestScore - score30).toFixed(1)
+  // Delta badge: vs previous period
+  const latestScore = hasData ? plotData[plotData.length - 1]?.score ?? null : null;
+  const prevIdx     = hasData && plotData.length >= 2 ? Math.max(0, plotData.length - Math.ceil(plotData.length / 2)) : -1;
+  const prevScore   = prevIdx >= 0 ? plotData[prevIdx]?.score ?? null : null;
+  const delta       = latestScore != null && prevScore != null && prevIdx !== plotData.length - 1
+    ? +(latestScore - prevScore).toFixed(1)
     : null;
+  const deltaLabel  = groupBy === "month" ? "vs prev period" : groupBy === "week" ? "vs prev weeks" : "vs earlier";
 
   const handleMouseMove = (e) => {
-    if (!svgRef.current || !containerRef.current || !data.length) return;
+    if (!svgRef.current || !containerRef.current || !hasData) return;
     const svgRect = svgRef.current.getBoundingClientRect();
     const ctnRect = containerRef.current.getBoundingClientRect();
     const svgX    = ((e.clientX - svgRect.left) / svgRect.width) * CHART_W;
     const frac    = Math.max(0, Math.min(1, (svgX - PAD_L) / IW));
-    const idx     = Math.round(frac * (data.length - 1));
-    const point   = data[idx];
+    const idx     = Math.round(frac * (plotData.length - 1));
+    const point   = plotData[idx];
     if (point) {
       setTooltip({
         x:     e.clientX - ctnRect.left,
@@ -789,27 +834,50 @@ function BenchmarkTrendChart({ data }) {
       {/* Header row */}
       <div style={{
         display: "flex", justifyContent: "space-between",
-        alignItems: "center", marginBottom: 10,
+        alignItems: "center", marginBottom: 12,
       }}>
         <div style={{
           color: C.muted, fontSize: 10, fontFamily: "monospace", letterSpacing: "1.8px",
         }}>
-          CSPI SCORE — 90-DAY TREND
+          CSPI SCORE — TREND
         </div>
-        {delta !== null && (
-          <span style={{
-            background: delta >= 0 ? "rgba(0,229,160,0.10)" : "rgba(255,59,59,0.10)",
-            color:      delta >= 0 ? C.accent               : C.red,
-            border: `1px solid ${delta >= 0 ? "rgba(0,229,160,0.30)" : "rgba(255,59,59,0.30)"}`,
-            fontSize: 11, fontFamily: "monospace", fontWeight: 700,
-            padding: "2px 8px", borderRadius: 3,
-          }}>
-            {delta >= 0 ? "+" : ""}{delta} vs 30d ago
-          </span>
-        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {/* Group-by tabs */}
+          <div style={{ display: "flex", gap: 2 }}>
+            {GROUP_TABS.map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setGroupBy(key)}
+                style={{
+                  background:  groupBy === key ? `${C.accent}18` : "transparent",
+                  color:       groupBy === key ? C.accent : C.dim,
+                  border:      `1px solid ${groupBy === key ? `${C.accent}50` : C.border}`,
+                  fontSize:    10, fontFamily: "monospace", fontWeight: 700,
+                  padding:     "3px 10px", borderRadius: 3,
+                  cursor:      "pointer", letterSpacing: "0.8px",
+                  transition:  "all 0.15s",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {/* Delta badge */}
+          {delta !== null && (
+            <span style={{
+              background: delta >= 0 ? "rgba(0,229,160,0.10)" : "rgba(255,59,59,0.10)",
+              color:      delta >= 0 ? C.accent               : C.red,
+              border: `1px solid ${delta >= 0 ? "rgba(0,229,160,0.30)" : "rgba(255,59,59,0.30)"}`,
+              fontSize: 11, fontFamily: "monospace", fontWeight: 700,
+              padding: "2px 8px", borderRadius: 3,
+            }}>
+              {delta >= 0 ? "+" : ""}{delta} {deltaLabel}
+            </span>
+          )}
+        </div>
       </div>
 
-      {/* SVG chart */}
+      {/* SVG chart — always rendered; empty state overlaid when no data */}
       <div
         ref={containerRef}
         style={{ position: "relative" }}
@@ -848,31 +916,52 @@ function BenchmarkTrendChart({ data }) {
             );
           })}
 
-          {/* Gradient area fill */}
-          <path d={areaPath} fill="url(#cspiTrendGrad)"/>
+          {hasData && (
+            <>
+              {/* Gradient area fill */}
+              <path d={areaPath} fill="url(#cspiTrendGrad)"/>
 
-          {/* Accent line */}
-          <path
-            d={linePath}
-            fill="none"
-            stroke={C.accent}
-            strokeWidth="2"
-            strokeLinejoin="round"
-            strokeLinecap="round"
-          />
+              {/* Accent line */}
+              <path
+                d={linePath}
+                fill="none"
+                stroke={C.accent}
+                strokeWidth="2"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
 
-          {/* X-axis month labels */}
-          {monthLabels.map(({ i, label }) => (
-            <text
-              key={i}
-              x={toX(i)}
-              y={PAD_T + IH + 20}
-              textAnchor="middle"
-              style={{ fontSize: 11, fill: C.muted, fontFamily: "monospace" }}
-            >
-              {label}
-            </text>
-          ))}
+              {/* X-axis labels */}
+              {xLabels.map(({ i, label }) => (
+                <text
+                  key={i}
+                  x={toX(i)}
+                  y={PAD_T + IH + 20}
+                  textAnchor="middle"
+                  style={{ fontSize: 11, fill: C.muted, fontFamily: "monospace" }}
+                >
+                  {label}
+                </text>
+              ))}
+            </>
+          )}
+
+          {/* No-data: flat 0 line */}
+          {!hasData && (
+            <>
+              <line
+                x1={PAD_L} y1={toY(0)} x2={CHART_W - PAD_R} y2={toY(0)}
+                stroke={C.border2} strokeWidth="1.5" strokeDasharray="4 4"
+              />
+              <text
+                x={CHART_W / 2} y={PAD_T + IH / 2}
+                textAnchor="middle" dominantBaseline="middle"
+                style={{ fontSize: 12, fill: C.dim, fontFamily: "monospace" }}
+              >
+                No benchmark data recorded yet — score will appear after the first run
+              </text>
+            </>
+          )}
         </svg>
 
         {/* Hover tooltip */}

@@ -1135,6 +1135,130 @@ function IncidentTrendLine({ incidents }) {
 }
 
 // ── Main page ──────────────────────────────────────────────────────────────────
+// ── Severity Trend Panel (collapsible, 30-day by severity) ──────────────────────────────
+function SeverityTrendPanel({ incidents }) {
+  const [open, setOpen] = useState(false);
+
+  const DAYS = 30;
+  const W = 700, H = 150, PAD = { t: 16, r: 16, b: 32, l: 40 };
+  const SEV_COLORS = { critical: "#ff3b3b", high: "#ff8c00", medium: "#f5c518", low: "#00e5a0" };
+  const SEV_WIDTHS = { critical: 2.5, high: 2.5, medium: 1.5, low: 1.5 };
+  const SEV_KEYS   = ["critical", "high", "medium", "low"];
+
+  const now = Date.now();
+  const buckets = Array.from({ length: DAYS }, (_, i) => {
+    const d = new Date(now - (DAYS - 1 - i) * 864e5);
+    return { day: d.toISOString().slice(0, 10), critical: 0, high: 0, medium: 0, low: 0 };
+  });
+  const dayMap = Object.fromEntries(buckets.map((b, i) => [b.day, i]));
+  incidents.forEach(inc => {
+    const day = (inc.first_seen || "").slice(0, 10);
+    if (dayMap[day] != null) {
+      const sev = (inc.severity || "low").toLowerCase();
+      if (buckets[dayMap[day]][sev] != null) buckets[dayMap[day]][sev]++;
+    }
+  });
+
+  const maxCount = Math.max(...buckets.flatMap(b => SEV_KEYS.map(k => b[k])), 1);
+  const xScale   = i => PAD.l + (i / (DAYS - 1)) * (W - PAD.l - PAD.r);
+  const yScale   = v => PAD.t + (1 - v / maxCount) * (H - PAD.t - PAD.b);
+
+  const critHighSums = buckets.map(b => b.critical + b.high);
+  const spikeDays = buckets.map((b, i) => {
+    if (i < 7) return false;
+    const window7 = critHighSums.slice(i - 7, i);
+    const avg = window7.reduce((a, c) => a + c, 0) / window7.length;
+    const ch = b.critical + b.high;
+    return avg > 0 && ch >= avg * 1.5 && ch >= 2;
+  });
+
+  const labelIdx = [0, Math.floor(DAYS / 2), DAYS - 1];
+  const now7 = new Date(now - 7 * 864e5).toISOString().slice(0, 10);
+  const recentSpike = buckets.find((b, i) => spikeDays[i] && b.day >= now7);
+  const sevTotals = Object.fromEntries(SEV_KEYS.map(k => [k, buckets.reduce((s, b) => s + b[k], 0)]));
+  const polyline = (sevKey) => buckets.map((b, i) => `${xScale(i)},${yScale(b[sevKey])}`).join(" ");
+
+  return (
+    <div style={{
+      background: "rgba(255,255,255,0.025)",
+      border: "1px solid rgba(255,255,255,0.07)",
+      borderTop: "2px solid #ff3b3b",
+      borderRadius: 5,
+      padding: "14px 20px",
+      marginBottom: 16,
+    }}>
+      {/* Header row — always visible */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace" }}>
+          SEVERITY TREND — 30 DAYS
+        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {SEV_KEYS.map(k => (
+            <span key={k} style={{ background: `${SEV_COLORS[k]}15`, color: SEV_COLORS[k], border: `1px solid ${SEV_COLORS[k]}40`, borderRadius: 3, padding: "1px 8px", fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>
+              {k.charAt(0).toUpperCase() + k.slice(1)}: {sevTotals[k]}
+            </span>
+          ))}
+          <button
+            onClick={() => setOpen(v => !v)}
+            style={{ background: "none", border: "1px solid rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.5)", padding: "3px 10px", borderRadius: 3, cursor: "pointer", fontSize: 10, fontFamily: "monospace" }}>
+            {open ? "▲ Hide" : "▼ Show"}
+          </button>
+        </div>
+      </div>
+      {/* Expandable body */}
+      {open && (
+        <div style={{ marginTop: 14 }}>
+          <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ overflow: "visible", display: "block" }}>
+            {[0, 0.25, 0.5, 0.75, 1].map(r => {
+              const y = PAD.t + (1 - r) * (H - PAD.t - PAD.b);
+              return <line key={r} x1={PAD.l} x2={W - PAD.r} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeWidth="1"/>;
+            })}
+            {[0, maxCount].map((v, i) => {
+              const y = yScale(v);
+              return <text key={i} x={PAD.l - 4} y={y + 4} textAnchor="end" fill="rgba(255,255,255,0.25)" fontSize="9" fontFamily="monospace">{v}</text>;
+            })}
+            {buckets.map((b, i) => spikeDays[i] && (
+              <line key={`spike-${i}`} x1={xScale(i)} x2={xScale(i)} y1={PAD.t} y2={H - PAD.b}
+                stroke="rgba(255,59,59,0.4)" strokeWidth="1" strokeDasharray="3 3"/>
+            ))}
+            {SEV_KEYS.map(k => (
+              <polyline key={k} points={polyline(k)} fill="none" stroke={SEV_COLORS[k]}
+                strokeWidth={SEV_WIDTHS[k]} strokeLinejoin="round" strokeLinecap="round" opacity="0.9"/>
+            ))}
+            {buckets.map((b, i) => spikeDays[i] && b.critical > 0 && (
+              <circle key={`dot-${i}`} cx={xScale(i)} cy={yScale(b.critical)} r="3" fill="#ff3b3b"/>
+            ))}
+            {labelIdx.map(i => (
+              <text key={i} x={xScale(i)} y={H - 4} textAnchor="middle" fill="rgba(255,255,255,0.2)" fontSize="8" fontFamily="monospace">
+                {buckets[i].day.slice(5)}
+              </text>
+            ))}
+            <line x1={PAD.l} x2={W - PAD.r} y1={H - PAD.b} y2={H - PAD.b} stroke="rgba(255,255,255,0.07)" strokeWidth="1"/>
+          </svg>
+          {/* Legend */}
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8, alignItems: "center" }}>
+            {SEV_KEYS.map(k => (
+              <span key={k} style={{ color: SEV_COLORS[k], fontSize: 9, fontFamily: "monospace" }}>
+                ■ {k.charAt(0).toUpperCase() + k.slice(1)} {sevTotals[k]}
+              </span>
+            ))}
+          </div>
+          {/* Spike alert banner */}
+          {recentSpike && (
+            <div style={{
+              background: "rgba(255,59,59,0.08)", border: "1px solid rgba(255,59,59,0.25)",
+              color: "#ff3b3b", fontSize: 11, fontFamily: "monospace", padding: "8px 12px",
+              borderRadius: 3, marginTop: 8,
+            }}>
+              ⚠ Critical/High spike detected on {recentSpike.day} — {recentSpike.critical + recentSpike.high} incidents in 24h
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SiemIncidentsPage() {
   const [incidents, setIncidents]   = useState([]);
   const [total, setTotal]           = useState(0);
@@ -1584,8 +1708,10 @@ export function SiemIncidentsPage() {
             No incidents match the current filters.
           </div>
         ) : (
-          <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
-            borderRadius: 4, overflow: "hidden" }}>
+          <>
+            <SeverityTrendPanel incidents={incidents} />
+            <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+              borderRadius: 4, overflow: "hidden" }}>
             {/* Table header */}
             {(() => {
               const COL_KEY = { "ID": "id", "SEVERITY": "severity", "HOST ID": "source",
@@ -1801,6 +1927,7 @@ export function SiemIncidentsPage() {
               </div>
             )}
           </div>
+          </>
         )}
 
         {/* Incident drawer */}

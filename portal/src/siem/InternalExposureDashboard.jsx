@@ -355,69 +355,111 @@ function CategoryHistogram({ incidents }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Widget: 30-day Incident Trend (mini SVG line chart)
+// Widget: 30-day Incident Trend by Severity (4-line chart with spike detection)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function IncidentTrendChart({ incidents }) {
-  const DAYS  = 30;
+function IncidentTrendChartSeverity({ incidents }) {
+  const DAYS = 30;
   const W = 380, H = 120, PAD = { t: 14, r: 12, b: 28, l: 36 };
 
-  // Build day buckets
-  const now   = Date.now();
+  const SEV_COLORS = { critical: "#ff3b3b", high: "#ff8c00", medium: "#f5c518", low: "#00e5a0" };
+  const SEV_WIDTHS = { critical: 2.5, high: 2.5, medium: 1.5, low: 1.5 };
+  const SEV_KEYS   = ["critical", "high", "medium", "low"];
+
+  const now = Date.now();
   const buckets = Array.from({ length: DAYS }, (_, i) => {
     const d = new Date(now - (DAYS - 1 - i) * 864e5);
-    return { day: d.toISOString().slice(0, 10), count: 0 };
+    return { day: d.toISOString().slice(0, 10), critical: 0, high: 0, medium: 0, low: 0 };
   });
   const dayMap = Object.fromEntries(buckets.map((b, i) => [b.day, i]));
   incidents.forEach(inc => {
     const day = (inc.first_seen || "").slice(0, 10);
-    if (dayMap[day] != null) buckets[dayMap[day]].count++;
+    if (dayMap[day] != null) {
+      const sev = (inc.severity || "low").toLowerCase();
+      if (buckets[dayMap[day]][sev] != null) buckets[dayMap[day]][sev]++;
+    }
   });
 
-  const maxCount = Math.max(...buckets.map(b => b.count), 1);
+  const maxCount = Math.max(...buckets.flatMap(b => SEV_KEYS.map(k => b[k])), 1);
   const xScale   = i => PAD.l + (i / (DAYS - 1)) * (W - PAD.l - PAD.r);
   const yScale   = v => PAD.t + (1 - v / maxCount) * (H - PAD.t - PAD.b);
 
-  const points = buckets.map((b, i) => [xScale(i), yScale(b.count)]);
-  const fillPts = [
-    `${PAD.l},${H - PAD.b}`,
-    ...points.map(([x, y]) => `${x},${y}`),
-    `${W - PAD.r},${H - PAD.b}`,
-  ].join(" ");
-  const linePts = points.map(([x, y]) => `${x},${y}`).join(" ");
+  // Spike detection: (critical + high) >= 150% of 7-day rolling avg AND abs >= 2
+  const critHighSums = buckets.map(b => b.critical + b.high);
+  const spikeDays = buckets.map((b, i) => {
+    if (i < 7) return false;
+    const window7 = critHighSums.slice(i - 7, i);
+    const avg = window7.reduce((a, c) => a + c, 0) / window7.length;
+    const ch = b.critical + b.high;
+    return avg > 0 && ch >= avg * 1.5 && ch >= 2;
+  });
 
-  // Axis labels: first, mid, last day
   const labelIdx = [0, Math.floor(DAYS / 2), DAYS - 1];
+  const now7 = new Date(now - 7 * 864e5).toISOString().slice(0, 10);
+  const recentSpike = buckets.find((b, i) => spikeDays[i] && b.day >= now7);
+
+  const sevTotals = Object.fromEntries(SEV_KEYS.map(k => [k, buckets.reduce((s, b) => s + b[k], 0)]));
+  const grandTotal = SEV_KEYS.reduce((s, k) => s + sevTotals[k], 0);
+  const polyline = (sevKey) => buckets.map((b, i) => `${xScale(i)},${yScale(b[sevKey])}`).join(" ");
 
   return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ overflow: "visible", display: "block" }}>
-      {/* Grid lines */}
-      {[0, 0.25, 0.5, 0.75, 1].map(r => {
-        const y = PAD.t + (1 - r) * (H - PAD.t - PAD.b);
-        return <line key={r} x1={PAD.l} x2={W - PAD.r} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeWidth="1"/>;
-      })}
-      {/* Y-axis labels */}
-      {[0, Math.round(maxCount / 2), maxCount].map((v, i) => {
-        const y = PAD.t + (1 - v / maxCount) * (H - PAD.t - PAD.b);
-        return <text key={i} x={PAD.l - 4} y={y + 4} textAnchor="end" fill="rgba(255,255,255,0.25)" fontSize="8" fontFamily="monospace">{v}</text>;
-      })}
-      {/* Fill area */}
-      <polygon points={fillPts} fill="rgba(0,229,160,0.07)"/>
-      {/* Line */}
-      <polyline points={linePts} fill="none" stroke="#00e5a0" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
-      {/* Dots for non-zero days */}
-      {points.map(([x, y], i) => buckets[i].count > 0 && (
-        <circle key={i} cx={x} cy={y} r="2.5" fill="#00e5a0" opacity="0.8"/>
-      ))}
-      {/* X-axis date labels */}
-      {labelIdx.map(i => (
-        <text key={i} x={xScale(i)} y={H - 4} textAnchor="middle" fill="rgba(255,255,255,0.2)" fontSize="7" fontFamily="monospace">
-          {buckets[i].day.slice(5)}
-        </text>
-      ))}
-      {/* X-axis line */}
-      <line x1={PAD.l} x2={W - PAD.r} y1={H - PAD.b} y2={H - PAD.b} stroke="rgba(255,255,255,0.07)" strokeWidth="1"/>
-    </svg>
+    <div>
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ overflow: "visible", display: "block" }}>
+        {/* Grid lines */}
+        {[0, 0.25, 0.5, 0.75, 1].map(r => {
+          const y = PAD.t + (1 - r) * (H - PAD.t - PAD.b);
+          return <line key={r} x1={PAD.l} x2={W - PAD.r} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeWidth="1"/>;
+        })}
+        {/* Y-axis labels */}
+        {[0, maxCount].map((v, i) => {
+          const y = yScale(v);
+          return <text key={i} x={PAD.l - 4} y={y + 4} textAnchor="end" fill="rgba(255,255,255,0.25)" fontSize="8" fontFamily="monospace">{v}</text>;
+        })}
+        {/* Spike vertical lines */}
+        {buckets.map((b, i) => spikeDays[i] && (
+          <line key={`spike-${i}`} x1={xScale(i)} x2={xScale(i)} y1={PAD.t} y2={H - PAD.b}
+            stroke="rgba(255,59,59,0.4)" strokeWidth="1" strokeDasharray="3 3"/>
+        ))}
+        {/* Series lines — 4 severities */}
+        {SEV_KEYS.map(k => (
+          <polyline key={k} points={polyline(k)} fill="none" stroke={SEV_COLORS[k]}
+            strokeWidth={SEV_WIDTHS[k]} strokeLinejoin="round" strokeLinecap="round" opacity="0.9"/>
+        ))}
+        {/* Spike dots on critical line */}
+        {buckets.map((b, i) => spikeDays[i] && b.critical > 0 && (
+          <circle key={`dot-${i}`} cx={xScale(i)} cy={yScale(b.critical)} r="3" fill="#ff3b3b"/>
+        ))}
+        {/* X-axis date labels */}
+        {labelIdx.map(i => (
+          <text key={i} x={xScale(i)} y={H - 4} textAnchor="middle" fill="rgba(255,255,255,0.2)" fontSize="7" fontFamily="monospace">
+            {buckets[i].day.slice(5)}
+          </text>
+        ))}
+        {/* X-axis line */}
+        <line x1={PAD.l} x2={W - PAD.r} y1={H - PAD.b} y2={H - PAD.b} stroke="rgba(255,255,255,0.07)" strokeWidth="1"/>
+      </svg>
+      {/* Legend */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8, alignItems: "center" }}>
+        {SEV_KEYS.map(k => (
+          <span key={k} style={{ color: SEV_COLORS[k], fontSize: 9, fontFamily: "monospace" }}>
+            ■ {k.charAt(0).toUpperCase() + k.slice(1)} {sevTotals[k]}
+          </span>
+        ))}
+        <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", marginLeft: "auto" }}>
+          {grandTotal} total
+        </span>
+      </div>
+      {/* Spike alert banner */}
+      {recentSpike && (
+        <div style={{
+          background: "rgba(255,59,59,0.08)", border: "1px solid rgba(255,59,59,0.25)",
+          color: "#ff3b3b", fontSize: 11, fontFamily: "monospace", padding: "8px 12px",
+          borderRadius: 3, marginTop: 8,
+        }}>
+          ⚠ Critical/High spike detected on {recentSpike.day} — {recentSpike.critical + recentSpike.high} incidents in 24h
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -480,10 +522,28 @@ const ANOMALY_META = {
   new_agent_access:        { label: "New Host Access",      color: "#4d9eff" },
 };
 
-function UebaAnomalyChart({ uebaUsers }) {
+function _resolveAnomalies(u) {
+  // The list API returns active_anomalies as an integer count and anomaly_types
+  // as an optional string[]. The detail API returns an anomalies[] array of objects.
+  // Always return an array of objects with an anomaly_type field.
+  if (Array.isArray(u.anomalies) && u.anomalies.length > 0) return u.anomalies;
+  if (Array.isArray(u.ueba_anomalies) && u.ueba_anomalies.length > 0) return u.ueba_anomalies;
+  // anomaly_types is string[] from the list endpoint
+  if (Array.isArray(u.anomaly_types) && u.anomaly_types.length > 0)
+    return u.anomaly_types.map(t => ({ anomaly_type: t }));
+  // anomaly_type_counts is { type: count } from some response shapes
+  if (u.anomaly_type_counts && typeof u.anomaly_type_counts === "object") {
+    return Object.entries(u.anomaly_type_counts).flatMap(([t, c]) =>
+      Array.from({ length: c }, () => ({ anomaly_type: t }))
+    );
+  }
+  return [];
+}
+
+function UebaAnomalyChart({ uebaUsers, totalUebaAlerts = 0 }) {
   const tally = {};
   uebaUsers.forEach(u => {
-    (u.anomalies || []).forEach(a => {
+    _resolveAnomalies(u).forEach(a => {
       const t = a.anomaly_type || a.type || "unknown";
       tally[t] = (tally[t] || 0) + 1;
     });
@@ -491,9 +551,16 @@ function UebaAnomalyChart({ uebaUsers }) {
 
   const sorted = Object.entries(tally).sort((a, b) => b[1] - a[1]).slice(0, 8);
   const maxVal = sorted.length ? sorted[0][1] : 1;
-  const withAnomaly = uebaUsers.filter(u => (u.anomalies || []).length > 0).length;
+  const withAnomaly = uebaUsers.filter(u => _resolveAnomalies(u).length > 0 || (u.active_anomalies > 0)).length;
 
   if (!sorted.length) {
+    if (totalUebaAlerts > 0) {
+      return (
+        <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace", padding: "6px 0" }}>
+          {totalUebaAlerts} UEBA alerts recorded — anomaly breakdown unavailable (entity detail not yet indexed)
+        </div>
+      );
+    }
     return (
       <div style={{ color: "rgba(0,229,160,0.5)", fontSize: 12, fontFamily: "monospace", padding: "6px 0" }}>
         ✓ No active anomalies
@@ -536,29 +603,39 @@ function UebaAnomalyChart({ uebaUsers }) {
 function AiDispositionWidget({ incidents }) {
   const total = incidents.length;
 
-  // Auto-closed by AI = false_positive incidents that have a false_positive_reason
+  // Unified lifecycle state mapping
   const aiClosed = incidents.filter(i =>
-    (i.status === "false_positive" || i.status === "closed") && i.fp_probability != null && i.fp_probability >= 0.7
+    i.status === "false_positive" && i.fp_probability != null && i.fp_probability >= 0.7
   );
+  const manuallyResolved = incidents.filter(i => i.status === "resolved");
   const manuallyClosed = incidents.filter(i =>
-    (i.status === "resolved" || i.status === "closed" || i.status === "false_positive") && !aiClosed.includes(i)
+    i.status === "closed" && !(i.fp_probability != null && i.fp_probability >= 0.7)
+  );
+  const falsePositiveManual = incidents.filter(i =>
+    i.status === "false_positive" && !(i.fp_probability != null && i.fp_probability >= 0.7)
+  );
+  const stillOpen = incidents.filter(i =>
+    i.status === "open" || i.status === "investigating" || i.status === "in_review" || i.status === "held"
   );
   const ticketsRaised  = incidents.filter(i => i.iris_case_id);
-  const stillOpen      = incidents.filter(i => i.status === "open" || i.status === "investigating");
 
-  const aiCount    = aiClosed.length;
-  const manCount   = manuallyClosed.length;
-  const ticketCount = ticketsRaised.length;
-  const totalClosed = aiCount + manCount;
-  const aiPct  = totalClosed > 0 ? Math.round((aiCount / totalClosed) * 100)  : 0;
-  const manPct = totalClosed > 0 ? Math.round((manCount / totalClosed) * 100) : 0;
+  const aiCount          = aiClosed.length;
+  const manResolvedCount = manuallyResolved.length;
+  const manClosedCount   = manuallyClosed.length;
+  const fpManualCount    = falsePositiveManual.length;
+  const ticketCount      = ticketsRaised.length;
+  const totalClosed      = aiCount + manResolvedCount + manClosedCount + fpManualCount;
+  const manualTotalCount = manResolvedCount + manClosedCount + fpManualCount;
+  const aiPct     = totalClosed > 0 ? Math.round((aiCount / totalClosed) * 100) : 0;
+  const manualPct = totalClosed > 0 ? Math.round((manualTotalCount / totalClosed) * 100) : 0;
   const ticketPct = total > 0 ? Math.round((ticketCount / total) * 100) : 0;
 
   const rows = [
-    { label: "AI Auto-Closed",         value: aiCount,    color: "#00e5a0", pct: aiPct,     sub: "FP probability ≥ 70%"       },
-    { label: "Manually Closed",        value: manCount,   color: "#4d9eff", pct: manPct,    sub: "Analyst-resolved"            },
-    { label: "Tickets Raised (IRIS)",  value: ticketCount, color: "#b06eff", pct: ticketPct, sub: "% of all incidents"         },
-    { label: "Still Open / Active",    value: stillOpen.length, color: "#ff8c00", pct: total > 0 ? Math.round((stillOpen.length / total) * 100) : 0, sub: "Requires attention" },
+    { label: "AI Auto-Closed (FP)",     value: aiCount,         color: "#00e5a0", pct: aiPct,                                                                              sub: "AI confidence ≥ 70%"        },
+    { label: "Manually Resolved",       value: manResolvedCount, color: "#4d9eff", pct: totalClosed > 0 ? Math.round((manResolvedCount / totalClosed) * 100) : 0,         sub: "Analyst confirmed resolved" },
+    { label: "Manually Closed",         value: manClosedCount,  color: "#888",    pct: totalClosed > 0 ? Math.round((manClosedCount / totalClosed) * 100) : 0,           sub: "Analyst closed"             },
+    { label: "False Positive (Manual)", value: fpManualCount,   color: "#888",    pct: totalClosed > 0 ? Math.round((fpManualCount / totalClosed) * 100) : 0,            sub: "Analyst marked FP"          },
+    { label: "Still Open / Active",     value: stillOpen.length, color: "#ff8c00", pct: total > 0 ? Math.round((stillOpen.length / total) * 100) : 0,                    sub: "Requires attention"         },
   ];
 
   return (
@@ -581,11 +658,11 @@ function AiDispositionWidget({ incidents }) {
           <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", marginBottom: 5 }}>CLOSURE BREAKDOWN</div>
           <div style={{ height: 14, borderRadius: 3, overflow: "hidden", display: "flex", gap: 1 }}>
             <div style={{ width: `${aiPct}%`, background: "#00e5a0", transition: "width 0.7s ease" }} title={`AI: ${aiCount}`}/>
-            <div style={{ flex: 1, background: "#4d9eff", opacity: 0.6 }} title={`Manual: ${manCount}`}/>
+            <div style={{ flex: 1, background: "#4d9eff", opacity: 0.6 }} title={`Manual: ${manualTotalCount}`}/>
           </div>
           <div style={{ display: "flex", gap: 12, marginTop: 4 }}>
             <span style={{ color: "#00e5a0", fontSize: 9, fontFamily: "monospace" }}>■ AI {aiPct}%</span>
-            <span style={{ color: "#4d9eff", fontSize: 9, fontFamily: "monospace" }}>■ Manual {manPct}%</span>
+            <span style={{ color: "#4d9eff", fontSize: 9, fontFamily: "monospace" }}>■ Manual {manualPct}%</span>
           </div>
         </div>
       )}
@@ -920,12 +997,12 @@ export function InternalExposureDashboard({ setActiveTab }) {
       {/* ── Row 2: Trend + Risk Histogram + Entity Type Donut ── */}
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
 
-        <Panel title="30-Day Incident Trend" accent="#00e5a0">
+        <Panel title="30-Day Incident Trend by Severity" accent="#00e5a0">
           {loading  ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
           : offline ? <OfflineMsg />
           : (
             <>
-              <IncidentTrendChart incidents={incidents} />
+              <IncidentTrendChartSeverity incidents={incidents} />
               <div style={{ marginTop: 8, color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>
                 Each point = incident first seen on that day
               </div>
@@ -965,7 +1042,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
           onViewAll={() => setActiveTab?.("siem-ueba")}>
           {loading  ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
           : offline ? <OfflineMsg />
-          : <UebaAnomalyChart uebaUsers={uebaUsers} />}
+          : <UebaAnomalyChart uebaUsers={uebaUsers} totalUebaAlerts={stats?.ueba_alerts || stats?.total_ueba_alerts || 0} />}
         </Panel>
 
       </div>

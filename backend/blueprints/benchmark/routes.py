@@ -252,25 +252,7 @@ def _append_history_snapshot(score: float) -> None:
         log.warning("[benchmark] history append error: %s", exc)
 
 
-def _seed_history(days: int = 90) -> list:
-    """
-    Return deterministic synthetic CSPI history for days with no real data.
 
-    Uses an MD5 hash of the ISO date string to generate reproducible noise
-    in the range [-5, +5], over a baseline that gently trends from 45 (oldest)
-    to 65 (most recent) to mimic realistic posture improvement.
-    """
-    import hashlib
-    today  = datetime.now(timezone.utc).date()
-    result = []
-    for i in range(days - 1, -1, -1):
-        d        = today - timedelta(days=i)
-        date_str = d.isoformat()
-        h        = int(hashlib.md5(date_str.encode(), usedforsecurity=False).hexdigest()[:4], 16)
-        noise    = (h % 11) - 5                                         # deterministic -5 … +5
-        trend    = 45.0 + 20.0 * (days - 1 - i) / max(days - 1, 1)    # 45 → 65 over N days
-        result.append({"date": date_str, "score": round(min(100, max(0, trend + noise)), 1)})
-    return result
 
 
 # ── ASM scan file finder ───────────────────────────────────────────────────────
@@ -1606,12 +1588,11 @@ def get_history():
     """
     GET /api/benchmark/history?days=90
 
-    Returns CSPI score snapshots for the last N days (default 90, max 365).
-    Response: { "history": [{"date": "YYYY-MM-DD", "score": float}, ...], "seeded": bool }
+    Returns real CSPI score snapshots for the last N days (default 90, max 365).
+    Response: { "history": [{"date": "YYYY-MM-DD", "score": float}, ...] }
 
-    When no real data exists the endpoint returns deterministic synthetic seed
-    data so the chart always has something to render.  If fewer than 7 real
-    entries fall within the requested window, seed data fills the gaps.
+    Returns an empty list when no real data has been recorded yet — no synthetic
+    seed data is injected.  The frontend renders a "no data" state in that case.
     """
     try:
         days = int(request.args.get("days", 90))
@@ -1622,19 +1603,9 @@ def get_history():
     entries = _load_history()
 
     if not entries:
-        return jsonify({"history": _seed_history(days), "seeded": True}), 200
+        return jsonify({"history": []}), 200
 
     cutoff   = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
     filtered = [e for e in entries if e.get("date", "") >= cutoff]
 
-    # Fewer than 7 real entries — supplement with seed data for a meaningful chart
-    if len(filtered) < 7:
-        seed       = _seed_history(days)
-        real_dates = {e["date"] for e in filtered}
-        merged     = sorted(
-            [e for e in seed if e["date"] not in real_dates] + filtered,
-            key=lambda e: e.get("date", ""),
-        )
-        return jsonify({"history": merged, "seeded": True}), 200
-
-    return jsonify({"history": filtered, "seeded": False}), 200
+    return jsonify({"history": filtered}), 200
