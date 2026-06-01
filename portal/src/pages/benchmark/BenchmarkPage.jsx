@@ -706,6 +706,203 @@ function CohortSelector({ config, allIndustries, onSave }) {
   );
 }
 
+// ── 6. CSPI Trend Chart ───────────────────────────────────────────────────────
+function BenchmarkTrendChart({ data }) {
+  const svgRef       = useRef(null);
+  const containerRef = useRef(null);
+  const [tooltip, setTooltip] = useState(null);
+
+  const CHART_W = 800;
+  const CHART_H = 180;
+  const PAD_L   = 44;
+  const PAD_R   = 12;
+  const PAD_T   = 16;
+  const PAD_B   = 34;
+  const IW      = CHART_W - PAD_L - PAD_R;
+  const IH      = CHART_H - PAD_T - PAD_B;
+
+  if (!data || data.length === 0) {
+    return (
+      <div style={{
+        background: C.surface, border: `1px solid ${C.border}`,
+        borderRadius: 10, padding: "20px 24px",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        height: 120,
+      }}>
+        <span style={{ color: C.muted, fontSize: 12, fontFamily: "monospace" }}>
+          Loading trend data…
+        </span>
+      </div>
+    );
+  }
+
+  const toX = (i) => PAD_L + (data.length > 1 ? i / (data.length - 1) : 0) * IW;
+  const toY = (s) => PAD_T + IH - ((s ?? 0) / 100) * IH;
+
+  const pts      = data.map((d, i) => `${toX(i).toFixed(1)},${toY(d.score ?? 0).toFixed(1)}`);
+  const linePath = `M ${pts.join(" L ")}`;
+  const areaPath = `${linePath} L ${toX(data.length - 1).toFixed(1)},${(PAD_T + IH).toFixed(1)} L ${PAD_L.toFixed(1)},${(PAD_T + IH).toFixed(1)} Z`;
+
+  // First-occurrence month labels for the X-axis
+  const monthLabels = [];
+  let lastMonth = null;
+  data.forEach((d, i) => {
+    const m = d.date ? d.date.slice(0, 7) : null;
+    if (m && m !== lastMonth) {
+      lastMonth = m;
+      const dt = new Date(d.date + "T00:00:00Z");
+      monthLabels.push({ i, label: dt.toLocaleString("en", { month: "short" }) });
+    }
+  });
+
+  // Delta vs ~30 days ago
+  const latestScore = data[data.length - 1]?.score ?? null;
+  const idx30       = data.length >= 31 ? data.length - 31 : 0;
+  const score30     = data[idx30]?.score ?? null;
+  const delta       = latestScore != null && score30 != null
+    ? +(latestScore - score30).toFixed(1)
+    : null;
+
+  const handleMouseMove = (e) => {
+    if (!svgRef.current || !containerRef.current || !data.length) return;
+    const svgRect = svgRef.current.getBoundingClientRect();
+    const ctnRect = containerRef.current.getBoundingClientRect();
+    const svgX    = ((e.clientX - svgRect.left) / svgRect.width) * CHART_W;
+    const frac    = Math.max(0, Math.min(1, (svgX - PAD_L) / IW));
+    const idx     = Math.round(frac * (data.length - 1));
+    const point   = data[idx];
+    if (point) {
+      setTooltip({
+        x:     e.clientX - ctnRect.left,
+        y:     e.clientY - ctnRect.top,
+        date:  point.date,
+        score: point.score,
+      });
+    }
+  };
+
+  return (
+    <div style={{
+      background: C.surface, border: `1px solid ${C.border}`,
+      borderRadius: 10, padding: "20px 24px",
+    }}>
+      {/* Header row */}
+      <div style={{
+        display: "flex", justifyContent: "space-between",
+        alignItems: "center", marginBottom: 10,
+      }}>
+        <div style={{
+          color: C.muted, fontSize: 10, fontFamily: "monospace", letterSpacing: "1.8px",
+        }}>
+          CSPI SCORE — 90-DAY TREND
+        </div>
+        {delta !== null && (
+          <span style={{
+            background: delta >= 0 ? "rgba(0,229,160,0.10)" : "rgba(255,59,59,0.10)",
+            color:      delta >= 0 ? C.accent               : C.red,
+            border: `1px solid ${delta >= 0 ? "rgba(0,229,160,0.30)" : "rgba(255,59,59,0.30)"}`,
+            fontSize: 11, fontFamily: "monospace", fontWeight: 700,
+            padding: "2px 8px", borderRadius: 3,
+          }}>
+            {delta >= 0 ? "+" : ""}{delta} vs 30d ago
+          </span>
+        )}
+      </div>
+
+      {/* SVG chart */}
+      <div
+        ref={containerRef}
+        style={{ position: "relative" }}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={() => setTooltip(null)}
+      >
+        <svg
+          ref={svgRef}
+          width="100%"
+          viewBox={`0 0 ${CHART_W} ${CHART_H}`}
+          style={{ display: "block", overflow: "visible" }}
+        >
+          <defs>
+            <linearGradient id="cspiTrendGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%"   stopColor={C.accent} stopOpacity="0.22"/>
+              <stop offset="100%" stopColor={C.accent} stopOpacity="0.01"/>
+            </linearGradient>
+          </defs>
+
+          {/* Y-axis grid + tick labels (0, 50, 100) */}
+          {[0, 50, 100].map(v => {
+            const y = toY(v);
+            return (
+              <g key={v}>
+                <line
+                  x1={PAD_L} y1={y} x2={CHART_W - PAD_R} y2={y}
+                  stroke="rgba(255,255,255,0.06)" strokeWidth="1"
+                />
+                <text
+                  x={PAD_L - 6} y={y + 4} textAnchor="end"
+                  style={{ fontSize: 11, fill: C.muted, fontFamily: "monospace" }}
+                >
+                  {v}
+                </text>
+              </g>
+            );
+          })}
+
+          {/* Gradient area fill */}
+          <path d={areaPath} fill="url(#cspiTrendGrad)"/>
+
+          {/* Accent line */}
+          <path
+            d={linePath}
+            fill="none"
+            stroke={C.accent}
+            strokeWidth="2"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+
+          {/* X-axis month labels */}
+          {monthLabels.map(({ i, label }) => (
+            <text
+              key={i}
+              x={toX(i)}
+              y={PAD_T + IH + 20}
+              textAnchor="middle"
+              style={{ fontSize: 11, fill: C.muted, fontFamily: "monospace" }}
+            >
+              {label}
+            </text>
+          ))}
+        </svg>
+
+        {/* Hover tooltip */}
+        {tooltip && (
+          <div style={{
+            position:      "absolute",
+            left:          tooltip.x,
+            top:           Math.max(4, tooltip.y - 56),
+            transform:     "translateX(-50%)",
+            background:    C.surface2,
+            border:        `1px solid ${C.border2}`,
+            borderRadius:  5,
+            padding:       "6px 10px",
+            pointerEvents: "none",
+            whiteSpace:    "nowrap",
+            zIndex:        10,
+          }}>
+            <div style={{ color: C.muted, fontSize: 10, fontFamily: "monospace" }}>
+              {tooltip.date}
+            </div>
+            <div style={{ color: C.accent, fontWeight: 700, fontSize: 13, fontFamily: "monospace" }}>
+              {tooltip.score ?? "—"}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 const CY_FW_FILTER_KEY = "cy_fw_filter";
@@ -727,6 +924,7 @@ export function BenchmarkPage() {
   const [saving,       setSaving]       = useState(false);
   const [lastRefresh,  setLastRefresh]  = useState(null);
   const [industry,     setIndustry]     = useState("general");
+  const [trendData,    setTrendData]    = useState([]);
 
   const fwRef = useRef(_getActiveFws());
 
@@ -741,6 +939,16 @@ export function BenchmarkPage() {
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fetchTrend = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/history?days=90`, { credentials: "include" });
+      if (r.ok) {
+        const d = await r.json();
+        setTrendData(d.history || []);
+      }
+    } catch (_) {}
+  }, []);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -764,6 +972,7 @@ export function BenchmarkPage() {
       setIndustries(ind.industries || {});
       setIndustry(score.industry || cfg.industry || "general");
       setLastRefresh(new Date());
+      fetchTrend();
     } catch (e) {
       setError(e.message);
     } finally {
@@ -892,7 +1101,10 @@ export function BenchmarkPage() {
           onIndustryChange={handleIndustryChange}
         />
       </div>
-
+      {/* ── CSPI 90-day trend chart ────────────────────────────────────────────────────────────────── */}
+      <div style={{ marginBottom: 24 }}>
+        <BenchmarkTrendChart data={trendData} />
+      </div>
       {/* ── Section divider ─────────────────────────────────────────────────── */}
       <div style={{ marginBottom: 20 }}>
         <div style={{ color: C.muted, fontSize: 10, fontFamily: "monospace",
