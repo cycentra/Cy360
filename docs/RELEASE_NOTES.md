@@ -1,3 +1,11 @@
+## v1.0.11 -- 2026-06-01
+
+### New Features
+
+  - comp): correct enrich_alerts_pass OR logic; add hourly compliance sync job
+
+---
+
 ## v1.0.10 -- 2026-06-01
 
 ### Improvements
