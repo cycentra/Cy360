@@ -375,6 +375,12 @@ def init_scheduler(app) -> None:
     except Exception as _bench_exc:
         log.warning("scheduler: benchmark job registration failed: %s", _bench_exc)
 
+    try:
+        from cy_comp.services.siem_bridge import register_compliance_scheduler
+        register_compliance_scheduler(_scheduler)
+    except Exception as _comp_exc:
+        log.warning("scheduler: compliance enrichment job registration failed: %s", _comp_exc)
+
     _scheduler.start()
     log.info("scheduler: started with %d jobs", len(_scheduler.get_jobs()))
 

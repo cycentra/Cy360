@@ -20,7 +20,7 @@ from cy_comp.models import db
 
 log = logging.getLogger("cycentra.cy_comp.auto_findings")
 
-COMPLIANCE_MIN_LEVEL = 5  # same as siem_bridge
+COMPLIANCE_MIN_LEVEL = 5  # auto_findings threshold (siem_bridge uses 7 via enrichment.py)
 
 # ── Remediation guidance ──────────────────────────────────────────────────────
 # Maps MITRE ATT&CK technique ID → remediation actions + relevant frameworks

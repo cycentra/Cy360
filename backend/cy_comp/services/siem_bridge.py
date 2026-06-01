@@ -120,9 +120,13 @@ def enrich_alerts_pass(batch_size: int = BATCH_SIZE) -> dict:
                     frameworks = list(controls.keys()) if controls else []
 
                     # An alert is compliance-relevant if it meets the level threshold
-                    # OR it has a known MITRE technique mapped to a framework
-                    is_relevant = (rule_level >= COMPLIANCE_MIN_LEVEL and bool(frameworks)) \
-                                  or rule_level >= HIGH_LEVEL  # high severity always relevant
+                    # OR it has a known MITRE technique mapped to a framework.
+                    # Fix: use OR logic to match the stated design intent.
+                    # Previous (buggy) AND logic excluded MITRE-mapped alerts with
+                    # rule_level < COMPLIANCE_MIN_LEVEL, leaving them as
+                    # is_compliance_relevant=FALSE while compliance_frameworks was
+                    # still populated — causing alerts=0 / breach_incidents=2 split.
+                    is_relevant = bool(frameworks) or rule_level >= COMPLIANCE_MIN_LEVEL
 
                     confidence  = _compute_confidence(rule_level, controls) if is_relevant else 0.0
 
@@ -282,3 +286,44 @@ def get_bridge():
         def sync(self):
             return sync()
     return _Shim()
+
+
+# ── APScheduler integration ───────────────────────────────────────────────────
+
+def _compliance_sync_job() -> None:
+    """Scheduled job wrapper — runs incremental enrichment, logs summary."""
+    try:
+        result = sync()
+        log.info(
+            "compliance_sync_job: alerts_enriched=%d relevant=%d incidents_updated=%d",
+            result["alerts"]["enriched"],
+            result["alerts"]["relevant"],
+            result["incidents"]["updated"],
+        )
+    except Exception as exc:
+        log.error("compliance_sync_job failed: %s", exc)
+
+
+def register_compliance_scheduler(scheduler) -> None:
+    """
+    Register an hourly incremental compliance enrichment job into the platform
+    APScheduler instance.  Called unconditionally from init_scheduler() —
+    no env-var gate needed because the job is lightweight and idempotent
+    (it only processes IS NULL rows, so it is a no-op once everything is caught up).
+
+    Usage in blueprints/scheduler/routes.py init_scheduler():
+        from cy_comp.services.siem_bridge import register_compliance_scheduler
+        register_compliance_scheduler(_scheduler)
+    """
+    try:
+        from apscheduler.triggers.interval import IntervalTrigger
+        scheduler.add_job(
+            _compliance_sync_job,
+            trigger=IntervalTrigger(hours=1),
+            id="compliance_enrichment_sync",
+            replace_existing=True,
+            misfire_grace_time=300,
+        )
+        log.info("[compliance] Hourly enrichment sync job registered")
+    except Exception as exc:
+        log.warning("[compliance] Could not register enrichment sync job: %s", exc)
