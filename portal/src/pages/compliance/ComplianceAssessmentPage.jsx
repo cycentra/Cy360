@@ -20,13 +20,14 @@ const C = {
 };
 
 const FW_META = {
-  nis2:     { label: "NIS2 Directive",      color: "#6378ff", region: "EU" },
-  dora:     { label: "DORA",                color: "#ffd166", region: "EU" },
-  iso27001: { label: "ISO 27001:2022",      color: "#00e5c0", region: "INTL" },
-  soc2:     { label: "SOC 2",               color: "#ff6b6b", region: "US" },
-  nist_csf: { label: "NIST CSF 2.0",        color: "#38bdf8", region: "US" },
-  pci_dss:  { label: "PCI DSS v4.0",        color: "#f97316", region: "PCI" },
-  gdpr:     { label: "GDPR",                color: "#8b5cf6", region: "EU" },
+  nis2:      { label: "NIS2 Directive",      color: "#6378ff", region: "EU" },
+  dora:      { label: "DORA",                color: "#ffd166", region: "EU" },
+  iso27001:  { label: "ISO 27001:2022",      color: "#00e5c0", region: "INTL" },
+  soc2:      { label: "SOC 2",               color: "#ff6b6b", region: "US" },
+  nist_csf:  { label: "NIST CSF 2.0",        color: "#38bdf8", region: "US" },
+  pci_dss:   { label: "PCI DSS v4.0",        color: "#f97316", region: "PCI" },
+  gdpr:      { label: "GDPR",                color: "#8b5cf6", region: "EU" },
+  eu_ai_act: { label: "EU AI Act",           color: "#06b6d4", region: "EU" },
 };
 
 function _getEnabledFws() {

@@ -1432,22 +1432,228 @@ GDPR = [
 ]
 
 # ── Master registry ───────────────────────────────────────────────────────────
+# ── EU AI Act (Regulation (EU) 2024/1689) ────────────────────────────────────
+# 30 questions across 9 sections covering all key obligations for providers and
+# deployers of high-risk AI systems, GPAI models, and general governance.
+EU_AI_ACT = [
+
+    # ── Section 1: Governance & Classification (Arts. 1-6, 8) ─────────────────
+    {
+        "qid": "euaia-gov-01", "section": "Governance — AI Inventory & Classification",
+        "question": "Has the organisation produced and maintained a comprehensive inventory of all AI systems in use, with each system classified by risk category (prohibited, high-risk, limited-risk, minimal-risk) per EU AI Act Annexes I and III?",
+        "guidance": "Art. 6 / Annex III. Evidence: AI system register with risk classification per Annex III, classification methodology, review cycle.",
+        "control_ref": "EU AI Act Art.6 / Annex III", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 1,
+    },
+    {
+        "qid": "euaia-gov-02", "section": "Governance — Prohibited Practices",
+        "question": "Has the organisation assessed all AI systems against the list of prohibited AI practices (Art. 5) and confirmed that none are deployed — including social scoring by public authorities, real-time biometric identification in public spaces without derogation, and subliminal manipulation?",
+        "guidance": "Art. 5. Evidence: prohibited-practices assessment report, legal sign-off, documented exclusions with rationale.",
+        "control_ref": "EU AI Act Art.5", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 2,
+    },
+    {
+        "qid": "euaia-gov-03", "section": "Governance — Roles & Accountability",
+        "question": "Have formal roles been assigned for AI governance, including a designated AI compliance officer or equivalent, and are provider vs. deployer obligations clearly delineated for each AI system in scope?",
+        "guidance": "Art. 16, 26. Evidence: RACI matrix for AI governance, role descriptions, appointment documentation.",
+        "control_ref": "EU AI Act Art.16 / Art.26", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 3,
+    },
+    {
+        "qid": "euaia-gov-04", "section": "Governance — Executive Oversight",
+        "question": "Is there a board-level or executive oversight mechanism for AI governance, with regular reporting on AI risk posture, compliance status, and serious incidents?",
+        "guidance": "Art. 9 (risk management system). Evidence: board/AI governance committee charter, meeting minutes, periodic AI risk reporting.",
+        "control_ref": "EU AI Act Art.9", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 4,
+    },
+
+    # ── Section 2: Risk Management System (Art. 9) ──────────────────────────
+    {
+        "qid": "euaia-risk-01", "section": "Risk Management — Lifecycle Integration",
+        "question": "Is a documented AI risk management system in place that covers the entire lifecycle of each high-risk AI system (design, development, deployment, decommissioning) and is continuously updated?",
+        "guidance": "Art. 9(1). Evidence: AI risk management framework document with lifecycle coverage evidence.",
+        "control_ref": "EU AI Act Art.9(1)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 5,
+    },
+    {
+        "qid": "euaia-risk-02", "section": "Risk Management — Residual Risk & Testing",
+        "question": "Are residual risks for each high-risk AI system evaluated against an acceptable risk threshold, and is testing performed in realistic operational conditions before deployment and throughout the system's lifetime?",
+        "guidance": "Art. 9(2)(d) / Art. 9(7). Evidence: residual risk assessment reports, pre-deployment test records, acceptable risk criteria.",
+        "control_ref": "EU AI Act Art.9(2)(d) / Art.9(7)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 6,
+    },
+    {
+        "qid": "euaia-risk-03", "section": "Risk Management — Bias & Discrimination",
+        "question": "Has a bias risk assessment been conducted for each high-risk AI system, identifying potential discriminatory outcomes against protected groups (sex, race, religion, disability, etc.), with documented mitigation measures?",
+        "guidance": "Art. 9(7) / Art. 10(2)(f). Evidence: bias assessment reports, protected-attribute analysis, mitigation implementation evidence.",
+        "control_ref": "EU AI Act Art.9(7) / Art.10(2)(f)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 7,
+    },
+
+    # ── Section 3: Data Governance (Art. 10) ────────────────────────────────
+    {
+        "qid": "euaia-data-01", "section": "Data Governance — Training Data Quality",
+        "question": "Are training, validation, and testing datasets for high-risk AI systems subject to documented data governance practices, including relevance, representativeness, freedom from errors, and completeness criteria?",
+        "guidance": "Art. 10(2). Evidence: data governance policy for AI, dataset documentation with quality metrics.",
+        "control_ref": "EU AI Act Art.10(2)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 8,
+    },
+    {
+        "qid": "euaia-data-02", "section": "Data Governance — Special Categories",
+        "question": "Where high-risk AI training datasets include special categories of personal data (health, biometric, racial/ethnic origin), are appropriate safeguards applied and processing justified under GDPR Art. 9 or equivalent national law?",
+        "guidance": "Art. 10(5). Evidence: DPIA, data processing records, GDPR Art. 9 legal basis, data minimisation evidence.",
+        "control_ref": "EU AI Act Art.10(5)", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 9,
+    },
+    {
+        "qid": "euaia-data-03", "section": "Data Governance — Lineage & Provenance",
+        "question": "Is data lineage documented for AI training datasets, covering origin, collection method, processing steps, and any third-party sources with applicable licences?",
+        "guidance": "Art. 10(2)(b) / Art. 53(1)(c). Evidence: data lineage records, provenance documentation, third-party data agreements.",
+        "control_ref": "EU AI Act Art.10(2)(b)", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 10,
+    },
+
+    # ── Section 4: Technical Documentation & Record-Keeping (Arts. 11-12) ────
+    {
+        "qid": "euaia-doc-01", "section": "Technical Documentation — Completeness (Annex IV)",
+        "question": "Is technical documentation prepared and maintained for each high-risk AI system covering all Annex IV elements: general description, intended purpose, design logic, training data, validation results, performance metrics, known limitations, and cybersecurity measures?",
+        "guidance": "Art. 11 / Annex IV. Evidence: technical documentation per Annex IV checklist, version control records.",
+        "control_ref": "EU AI Act Art.11 / Annex IV", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 11,
+    },
+    {
+        "qid": "euaia-doc-02", "section": "Technical Documentation — Automated Logging",
+        "question": "Are automated logging capabilities enabled for all high-risk AI systems, capturing sufficient system activity to identify risks and assess conformity throughout the system's operational lifetime?",
+        "guidance": "Art. 12(1). Evidence: logging configuration documentation, log retention policy, sample log outputs.",
+        "control_ref": "EU AI Act Art.12(1)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 12,
+    },
+    {
+        "qid": "euaia-doc-03", "section": "Technical Documentation — Log Retention & Integrity",
+        "question": "Are AI system log records retained for a minimum of 6 months (or longer per sector regulation), protected against tampering, and accessible to competent authorities on request?",
+        "guidance": "Art. 12(2). Evidence: log retention policy, immutability controls, access procedures for market surveillance authorities.",
+        "control_ref": "EU AI Act Art.12(2)", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 13,
+    },
+
+    # ── Section 5: Transparency & Human Oversight (Arts. 13-14, 50) ──────────
+    {
+        "qid": "euaia-trans-01", "section": "Transparency — Instructions for Use",
+        "question": "Are instructions for use provided to deployers of each high-risk AI system covering: intended purpose, performance characteristics, known limitations, human oversight measures, maintenance requirements, and expected system lifetime?",
+        "guidance": "Art. 13(1) / Art. 13(3). Evidence: instructions-for-use document, deployer onboarding and acknowledgement records.",
+        "control_ref": "EU AI Act Art.13(1) / Art.13(3)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 14,
+    },
+    {
+        "qid": "euaia-trans-02", "section": "Transparency — AI Interaction & Synthetic Content Disclosure",
+        "question": "Where AI systems interact with natural persons (chatbots, virtual assistants) or generate synthetic content (deepfakes, AI-generated text/images), are disclosure mechanisms in place informing users they are interacting with an AI or that content is AI-generated?",
+        "guidance": "Art. 50. Evidence: chatbot disclosure UI, watermarking/metadata for synthetic content, user-facing disclosure records.",
+        "control_ref": "EU AI Act Art.50", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 15,
+    },
+    {
+        "qid": "euaia-oversight-01", "section": "Human Oversight — Design & Capability",
+        "question": "Are human oversight measures built into each high-risk AI system, enabling designated natural persons to understand capabilities and limitations, monitor operation in real time, intervene or override outputs, and stop the system safely?",
+        "guidance": "Art. 14(1)–(3). Evidence: oversight interface documentation, override mechanism test records, stop/pause capability.",
+        "control_ref": "EU AI Act Art.14(1)–(3)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 16,
+    },
+    {
+        "qid": "euaia-oversight-02", "section": "Human Oversight — Competence & Automation Bias",
+        "question": "Are human overseers of high-risk AI systems assigned with appropriate authority, given adequate training on system capabilities and limitations, and supported with tools to minimise automation bias in decision-making?",
+        "guidance": "Art. 14(4). Evidence: oversight training programme, competence assessments, training completion records, automation-bias guidance.",
+        "control_ref": "EU AI Act Art.14(4)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 17,
+    },
+
+    # ── Section 6: Accuracy, Robustness & Cybersecurity (Art. 15) ─────────────
+    {
+        "qid": "euaia-sec-01", "section": "Accuracy, Robustness & Cybersecurity — Performance Benchmarking",
+        "question": "Are accuracy, robustness, and cybersecurity metrics defined for each high-risk AI system, benchmarked against declared performance in technical documentation, and monitored continuously throughout the operational lifecycle?",
+        "guidance": "Art. 15(1). Evidence: performance benchmarks, continuous monitoring dashboards, model drift detection alerts.",
+        "control_ref": "EU AI Act Art.15(1)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 18,
+    },
+    {
+        "qid": "euaia-sec-02", "section": "Accuracy, Robustness & Cybersecurity — Adversarial Resilience",
+        "question": "Have AI-specific adversarial threats been assessed for each high-risk AI system — including data poisoning, model inversion, model evasion, and prompt injection — with technical controls implemented to maintain robustness under attack?",
+        "guidance": "Art. 15(3)/(4). Evidence: adversarial testing reports, AI red-team exercise records, model robustness metrics.",
+        "control_ref": "EU AI Act Art.15(3)/(4)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 19,
+    },
+    {
+        "qid": "euaia-sec-03", "section": "Accuracy, Robustness & Cybersecurity — Secure SDLC",
+        "question": "Are cybersecurity controls applied to AI system infrastructure and model artefacts throughout the development and deployment lifecycle, including access control, encryption, vulnerability management, and secure SDLC practices?",
+        "guidance": "Art. 15(5). Evidence: AI security architecture, secure SDLC artefacts, penetration test reports for AI systems.",
+        "control_ref": "EU AI Act Art.15(5)", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 20,
+    },
+
+    # ── Section 7: Provider & Deployer Obligations (Arts. 16-27, 43, 47, 49) ─
+    {
+        "qid": "euaia-qms-01", "section": "Provider Obligations — Quality Management System",
+        "question": "Is a quality management system (QMS) in place covering AI system development, verification, validation, deployment, and post-market monitoring, with documented procedures and records retained for at least 10 years after last market placement?",
+        "guidance": "Art. 17. Evidence: QMS documentation, 10-year retention policy, version-controlled procedures.",
+        "control_ref": "EU AI Act Art.17", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 21,
+    },
+    {
+        "qid": "euaia-qms-02", "section": "Provider Obligations — Conformity Assessment",
+        "question": "Has a conformity assessment been completed for each high-risk AI system before market placement, using the appropriate procedure (internal assessment per Annex VI, or third-party notified body per Annex VII where mandated)?",
+        "guidance": "Art. 43. Evidence: conformity assessment report, notified body certificate (where required), Annex VI/VII checklist.",
+        "control_ref": "EU AI Act Art.43", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 22,
+    },
+    {
+        "qid": "euaia-qms-03", "section": "Provider Obligations — EU Declaration of Conformity & Registration",
+        "question": "Has an EU declaration of conformity been issued and CE marking affixed for each high-risk AI system placed on the EU market, and has the system been registered in the EU AI database (Art. 71) where required?",
+        "guidance": "Art. 47 / Art. 49 / Art. 71. Evidence: EU DoC documents, CE marking records, EU database registration confirmation.",
+        "control_ref": "EU AI Act Art.47 / Art.49 / Art.71", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 23,
+    },
+    {
+        "qid": "euaia-depl-01", "section": "Deployer Obligations — Fundamental Rights Impact Assessment",
+        "question": "Where the organisation deploys high-risk AI systems listed in Annex III as a public body or regulated private entity, has a Fundamental Rights Impact Assessment (FRIA) been conducted and documented prior to deployment?",
+        "guidance": "Art. 27. Evidence: FRIA report, stakeholder consultation records, identified risks and mitigation measures.",
+        "control_ref": "EU AI Act Art.27", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 24,
+    },
+
+    # ── Section 8: General-Purpose AI (GPAI) Models (Arts. 51-55) ─────────────
+    {
+        "qid": "euaia-gpai-01", "section": "GPAI Models — Transparency & Copyright",
+        "question": "If the organisation provides a general-purpose AI (GPAI) model, has it prepared and maintained technical documentation, a copyright compliance policy (Art. 53(1)(c)), and published sufficient information to enable downstream providers to meet their obligations?",
+        "guidance": "Art. 53(1). Evidence: GPAI technical documentation, copyright policy, model card or equivalent transparency publication.",
+        "control_ref": "EU AI Act Art.53(1)", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 25,
+    },
+    {
+        "qid": "euaia-gpai-02", "section": "GPAI Models — Systemic Risk Assessment",
+        "question": "If the organisation provides a GPAI model at or above the systemic risk threshold (>10²⁵ FLOPs or Commission-designated), have systemic risk assessments, adversarial testing (red-teaming), incident reporting procedures, and enhanced cybersecurity measures been implemented per Art. 55?",
+        "guidance": "Art. 51 / Art. 55. Evidence: systemic risk assessment report, red-team test results, GPAI incident log, cybersecurity measures for the model.",
+        "control_ref": "EU AI Act Art.51 / Art.55", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 26,
+    },
+
+    # ── Section 9: Post-Market Monitoring & Incident Reporting (Arts. 72-75) ──
+    {
+        "qid": "euaia-pmm-01", "section": "Post-Market Monitoring — Plan & Execution",
+        "question": "Is a post-market monitoring plan in place for all high-risk AI systems that proactively collects and reviews data on system performance, adverse events, and near-misses throughout the system's operational lifetime?",
+        "guidance": "Art. 72. Evidence: post-market monitoring plan, data collection procedures, review cycle documentation.",
+        "control_ref": "EU AI Act Art.72", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 27,
+    },
+    {
+        "qid": "euaia-pmm-02", "section": "Post-Market Monitoring — Serious Incident Reporting",
+        "question": "Is there a documented procedure for reporting serious incidents (as defined in Art. 3(49)) involving high-risk AI systems to the relevant national market surveillance authority within required timeframes, with a tested escalation path?",
+        "guidance": "Art. 73. Evidence: serious incident reporting procedure, incident classification criteria, authority contact list, drill/exercise records.",
+        "control_ref": "EU AI Act Art.73", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 28,
+    },
+    {
+        "qid": "euaia-pmm-03", "section": "Post-Market Monitoring — Corrective Actions",
+        "question": "When non-conformities, serious incidents, or performance degradations are identified in high-risk AI systems, are corrective actions implemented without undue delay, documented, and reported to competent authorities where required?",
+        "guidance": "Art. 20 / Art. 21. Evidence: corrective action register, root cause analysis reports, regulatory notification records.",
+        "control_ref": "EU AI Act Art.20 / Art.21", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 29,
+    },
+    {
+        "qid": "euaia-pmm-04", "section": "Post-Market Monitoring — Complaints & Whistleblower Mechanism",
+        "question": "Is there an accessible mechanism for staff, deployers, and affected persons to report concerns about AI system performance, ethical issues, or potential non-conformities, with whistleblower protections in place per Art. 85?",
+        "guidance": "Art. 85 / Art. 86. Evidence: complaint/reporting mechanism documentation, whistleblower policy, accessibility evidence for affected persons.",
+        "control_ref": "EU AI Act Art.85 / Art.86", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 30,
+    },
+]
+
 ALL_QUESTIONNAIRES: dict[str, list[dict]] = {
-    "nis2":     NIS2,
-    "dora":     DORA,
-    "iso27001": ISO27001,
-    "soc2":     SOC2,
-    "nist_csf": NIST_CSF,
-    "pci_dss":  PCI_DSS,
-    "gdpr":     GDPR,
+    "nis2":       NIS2,
+    "dora":       DORA,
+    "iso27001":   ISO27001,
+    "soc2":       SOC2,
+    "nist_csf":   NIST_CSF,
+    "pci_dss":    PCI_DSS,
+    "gdpr":       GDPR,
+    "eu_ai_act":  EU_AI_ACT,
 }
 
 FRAMEWORK_META: dict[str, dict] = {
-    "nis2":     {"label": "NIS2 Directive",   "color": "#6378ff", "total": len(NIS2)},
-    "dora":     {"label": "DORA",             "color": "#ffd166", "total": len(DORA)},
-    "iso27001": {"label": "ISO 27001:2022",   "color": "#00e5c0", "total": len(ISO27001)},
-    "soc2":     {"label": "SOC 2",            "color": "#ff6b6b", "total": len(SOC2)},
-    "nist_csf": {"label": "NIST CSF 2.0",    "color": "#38bdf8", "total": len(NIST_CSF)},
-    "pci_dss":  {"label": "PCI DSS v4.0",    "color": "#f97316", "total": len(PCI_DSS)},
-    "gdpr":     {"label": "GDPR",            "color": "#8b5cf6", "total": len(GDPR)},
+    "nis2":      {"label": "NIS2 Directive",      "color": "#6378ff", "total": len(NIS2)},
+    "dora":      {"label": "DORA",                "color": "#ffd166", "total": len(DORA)},
+    "iso27001":  {"label": "ISO 27001:2022",      "color": "#00e5c0", "total": len(ISO27001)},
+    "soc2":      {"label": "SOC 2",               "color": "#ff6b6b", "total": len(SOC2)},
+    "nist_csf":  {"label": "NIST CSF 2.0",        "color": "#38bdf8", "total": len(NIST_CSF)},
+    "pci_dss":   {"label": "PCI DSS v4.0",        "color": "#f97316", "total": len(PCI_DSS)},
+    "gdpr":      {"label": "GDPR",                "color": "#8b5cf6", "total": len(GDPR)},
+    "eu_ai_act": {"label": "EU AI Act",            "color": "#06b6d4", "total": len(EU_AI_ACT)},
 }

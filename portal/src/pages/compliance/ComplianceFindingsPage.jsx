@@ -24,10 +24,12 @@ const VERDICT_LABELS = { breach: "BREACH", warning: "WARNING", compliant: "COMPL
 const FW_COLORS = {
   nis2: "#6378ff", iso27001: "#00e5c0", dora: "#ffd166",
   soc2: "#ff6b6b", nist_csf: "#38bdf8", pci_dss: "#f97316", gdpr: "#8b5cf6",
+  eu_ai_act: "#06b6d4",
 };
 const FW_LABELS = {
   nis2: "NIS2", dora: "DORA", iso27001: "ISO 27001",
   soc2: "SOC 2", nist_csf: "NIST CSF", pci_dss: "PCI DSS", gdpr: "GDPR",
+  eu_ai_act: "EU AI Act",
 };
 
 function _getEnabledFws() {
@@ -38,7 +40,7 @@ function _getEnabledFws() {
   return null;
 }
 
-const ALL_FRAMEWORKS = ["", "nis2", "dora", "iso27001", "soc2", "nist_csf", "pci_dss", "gdpr"];
+const ALL_FRAMEWORKS = ["", "nis2", "dora", "iso27001", "soc2", "nist_csf", "pci_dss", "gdpr", "eu_ai_act"];
 const FRAMEWORKS = ALL_FRAMEWORKS;
 const SEVERITIES = ["", "critical", "high", "medium", "low"];
 const STATUSES   = ["", "open", "in_progress", "resolved", "accepted"];
@@ -183,6 +185,7 @@ function FindingsTab() {
     : FRAMEWORKS;
   const [aiMap, setAiMap]         = useState({});
   const [aiLoading, setAiLoading] = useState({});
+  const [aiHidden, setAiHidden]   = useState({});
   const [remOpen, setRemOpen]     = useState(null);
   const [genning, setGenning]     = useState(false);
   const [genMsg, setGenMsg]       = useState(null);
@@ -512,16 +515,28 @@ function FindingsTab() {
                           cursor: "pointer", whiteSpace: "nowrap" }}>
                         {isRemOpen ? "Hide Fix" : "Show Fix"}
                       </button>
-                      <button
-                        onClick={() => handleAnalyze(f)}
-                        disabled={aiLoading[f.id]}
-                        style={{ background: `${C.purple}08`, border: `1px solid ${C.purple}25`,
-                          color: C.purple, padding: "3px 8px", borderRadius: 3,
-                          fontFamily: "monospace", fontSize: 9, fontWeight: 700,
-                          cursor: "pointer", opacity: aiLoading[f.id] ? 0.6 : 1,
-                          whiteSpace: "nowrap" }}>
-                        {aiLoading[f.id] ? "AI..." : "AI Analyze"}
-                      </button>
+                      {(aiMap[f.id] || f.ai_analysis) && !aiLoading[f.id] ? (
+                        <button
+                          onClick={() => setAiHidden(m => ({ ...m, [f.id]: !m[f.id] }))}
+                          style={{ background: aiHidden[f.id] ? `${C.purple}15` : `${C.purple}08`,
+                            border: `1px solid ${C.purple}${aiHidden[f.id] ? "50" : "25"}`,
+                            color: C.purple, padding: "3px 8px", borderRadius: 3,
+                            fontFamily: "monospace", fontSize: 9, fontWeight: 700,
+                            cursor: "pointer", whiteSpace: "nowrap" }}>
+                          {aiHidden[f.id] ? "Show AI" : "Hide AI"}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleAnalyze(f)}
+                          disabled={aiLoading[f.id]}
+                          style={{ background: `${C.purple}08`, border: `1px solid ${C.purple}25`,
+                            color: C.purple, padding: "3px 8px", borderRadius: 3,
+                            fontFamily: "monospace", fontSize: 9, fontWeight: 700,
+                            cursor: "pointer", opacity: aiLoading[f.id] ? 0.6 : 1,
+                            whiteSpace: "nowrap" }}>
+                          {aiLoading[f.id] ? "AI..." : "AI Analyze"}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>,
@@ -533,15 +548,23 @@ function FindingsTab() {
                   onClose={() => setRemOpen(null)} />);
               }
 
-              // AI analysis row
-              if (aiMap[f.id] || f.ai_analysis) {
+              // AI analysis row — hidden when user toggled off
+              if ((aiMap[f.id] || f.ai_analysis) && !aiHidden[f.id]) {
                 rows.push(
                   <tr key={`${f.id}-ai`} style={{ background: "rgba(176,110,255,0.04)",
                     borderBottom: `1px solid rgba(255,255,255,0.03)` }}>
                     <td colSpan={8} style={{ padding: "10px 20px" }}>
-                      <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
-                        letterSpacing: "1px", textTransform: "uppercase", marginBottom: 6 }}>
-                        AI Analysis
+                      <div style={{ display: "flex", justifyContent: "space-between",
+                        alignItems: "center", marginBottom: 6 }}>
+                        <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+                          letterSpacing: "1px", textTransform: "uppercase" }}>
+                          AI Analysis
+                        </div>
+                        <button onClick={() => setAiHidden(m => ({ ...m, [f.id]: true }))}
+                          style={{ background: "none", border: "none", color: C.muted,
+                            cursor: "pointer", fontSize: 12, padding: "0 2px",
+                            lineHeight: 1, opacity: 0.6 }}
+                          title="Hide AI analysis">✕</button>
                       </div>
                       <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11,
                         fontFamily: "monospace", lineHeight: 1.6,

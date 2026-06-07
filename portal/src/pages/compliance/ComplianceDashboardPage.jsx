@@ -25,13 +25,14 @@ const CARD = {
 };
 
 const FW_META = {
-  nis2:     { label: "NIS2",      color: "#6378ff" },
-  dora:     { label: "DORA",      color: "#ffd166" },
-  iso27001: { label: "ISO 27001", color: "#00e5c0" },
-  soc2:     { label: "SOC 2",     color: "#ff6b6b" },
-  nist_csf: { label: "NIST CSF",  color: "#38bdf8" },
-  pci_dss:  { label: "PCI DSS",   color: "#f97316" },
-  gdpr:     { label: "GDPR",      color: "#8b5cf6" },
+  nis2:      { label: "NIS2",      color: "#6378ff" },
+  dora:      { label: "DORA",      color: "#ffd166" },
+  iso27001:  { label: "ISO 27001", color: "#00e5c0" },
+  soc2:      { label: "SOC 2",     color: "#ff6b6b" },
+  nist_csf:  { label: "NIST CSF",  color: "#38bdf8" },
+  pci_dss:   { label: "PCI DSS",   color: "#f97316" },
+  gdpr:      { label: "GDPR",      color: "#8b5cf6" },
+  eu_ai_act: { label: "EU AI Act", color: "#06b6d4" },
 };
 
 // Shared localStorage key — other compliance pages read this to inherit the global filter

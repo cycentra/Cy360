@@ -1,3 +1,25 @@
+## v1.0.13 -- 2026-06-07
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.13 -- 2026-06-07
+
+### New Features
+
+  - **EU AI Act Compliance Framework** — Added EU AI Act (Regulation (EU) 2024/1689) as the 8th compliance framework across the entire GRC stack. Includes 30 structured questionnaire questions across 9 sections (Governance & Classification, Risk Management, Data Governance, Technical Documentation, Transparency, Human Oversight, Accuracy/Robustness/Cybersecurity, Provider/Deployer Obligations, Post-Market Monitoring & Incident Reporting). Framework is fully integrated into GRC Posture dashboard, Assessments controls list, Findings & Alerts filters and auto-generate pipeline, and Risk Register framework tags. MITRE ATT&CK enrichment (12 technique mappings) and REMEDIATION_GUIDANCE entries include EU AI Act article references (Art.9, Art.14, Art.15, Art.73). Questionnaire seeds automatically on backend restart via `seed_templates(force=True)`.
+
+  - **AI Analysis Hide/Toggle in Compliance Findings** — In Security Compliance › Findings & Alerts › Findings, once AI analysis is run or was previously stored for a finding, the "AI Analyze" button now transforms into a "Hide AI / Show AI" toggle. A dismiss (✕) button also appears in the AI analysis panel header for instant collapse. State is per-finding and client-side — no re-fetch required on re-show.
+
+### Bug Fixes
+
+  - Fixed stale `"avg"` framework key in `auto_findings.py` REMEDIATION_GUIDANCE entries — replaced with correct `"gdpr"` identifier and proper GDPR article references.
+
+---
+
 ## v1.0.12 -- 2026-06-01
 
 ### Improvements

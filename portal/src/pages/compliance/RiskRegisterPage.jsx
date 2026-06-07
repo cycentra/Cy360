@@ -38,7 +38,7 @@ const CATEGORIES = ["IT", "Operational", "Financial", "Legal", "Reputational"];
 const TREATMENTS = ["mitigate", "avoid", "transfer", "accept"];
 const STATUSES   = ["open", "mitigated", "accepted", "closed"];
 const APPETITES  = ["low", "medium", "high"];
-const FRAMEWORKS = ["NIS2", "DORA", "ISO27001", "SOC2", "NIST_CSF", "PCI_DSS", "GDPR"];
+const FRAMEWORKS = ["NIS2", "DORA", "ISO27001", "SOC2", "NIST_CSF", "PCI_DSS", "GDPR", "EU_AI_ACT"];
 
 function _getEnabledFws() {
   try {

@@ -36,8 +36,9 @@ REMEDIATION_GUIDANCE: dict[str, dict] = {
             "Alert on >5 failed logins within 60 seconds per account.",
             "Review and rotate any accounts that received successful auth after multiple failures.",
         ],
-        "frameworks": ["nis2", "iso27001", "soc2", "nist_csf", "pci_dss"],
-        "controls":   {"nis2": ["Art.21(2)(i)"], "iso27001": ["A.8.5"], "pci_dss": ["Req 8.3"]},
+        "frameworks": ["nis2", "iso27001", "soc2", "nist_csf", "pci_dss", "eu_ai_act"],
+        "controls":   {"nis2": ["Art.21(2)(i)"], "iso27001": ["A.8.5"], "pci_dss": ["Req 8.3"],
+                       "eu_ai_act": ["Art.15(5)"]},
     },
     "T1110.001": {
         "title":   "Password Guessing",
@@ -46,8 +47,8 @@ REMEDIATION_GUIDANCE: dict[str, dict] = {
             "Block common password lists using HIBP or equivalent.",
             "Enable adaptive MFA triggered by failed-login velocity.",
         ],
-        "frameworks": ["nis2", "iso27001", "pci_dss"],
-        "controls":   {"iso27001": ["A.8.5"], "pci_dss": ["Req 8.3.6"]},
+        "frameworks": ["nis2", "iso27001", "pci_dss", "eu_ai_act"],
+        "controls":   {"iso27001": ["A.8.5"], "pci_dss": ["Req 8.3.6"], "eu_ai_act": ["Art.15(5)"]},
     },
     "T1078": {
         "title":   "Valid Accounts",
@@ -57,8 +58,9 @@ REMEDIATION_GUIDANCE: dict[str, dict] = {
             "Deploy PAM (Privileged Access Management) solution for all admin credentials.",
             "Alert on logins outside normal hours or from unusual geolocation.",
         ],
-        "frameworks": ["nis2", "dora", "iso27001", "soc2", "pci_dss"],
-        "controls":   {"nis2": ["Art.21(2)(i)"], "iso27001": ["A.5.15", "A.5.18"], "pci_dss": ["Req 7"]},
+        "frameworks": ["nis2", "dora", "iso27001", "soc2", "pci_dss", "eu_ai_act"],
+        "controls":   {"nis2": ["Art.21(2)(i)"], "iso27001": ["A.5.15", "A.5.18"],
+                       "pci_dss": ["Req 7"], "eu_ai_act": ["Art.14", "Art.15(5)"]},
     },
     # Lateral Movement
     "T1021": {
@@ -69,8 +71,9 @@ REMEDIATION_GUIDANCE: dict[str, dict] = {
             "Log all remote-session commands; store logs in tamper-evident SIEM.",
             "Segment network so lateral movement requires explicit firewall rules.",
         ],
-        "frameworks": ["nis2", "iso27001", "soc2", "nist_csf"],
-        "controls":   {"nis2": ["Art.21(2)(e)"], "iso27001": ["A.8.20"], "soc2": ["CC6.6"]},
+        "frameworks": ["nis2", "iso27001", "soc2", "nist_csf", "eu_ai_act"],
+        "controls":   {"nis2": ["Art.21(2)(e)"], "iso27001": ["A.8.20"], "soc2": ["CC6.6"],
+                       "eu_ai_act": ["Art.15(5)"]},
     },
     # Privilege Escalation
     "T1068": {
@@ -81,8 +84,9 @@ REMEDIATION_GUIDANCE: dict[str, dict] = {
             "Run vulnerability scans weekly on all internal systems.",
             "Restrict compiler/interpreter access on production systems.",
         ],
-        "frameworks": ["nis2", "dora", "iso27001", "pci_dss"],
-        "controls":   {"nis2": ["Art.21(2)(e)"], "iso27001": ["A.8.8"], "pci_dss": ["Req 6.3"]},
+        "frameworks": ["nis2", "dora", "iso27001", "pci_dss", "eu_ai_act"],
+        "controls":   {"nis2": ["Art.21(2)(e)"], "iso27001": ["A.8.8"], "pci_dss": ["Req 6.3"],
+                       "eu_ai_act": ["Art.15(3)", "Art.15(5)"]},
     },
     # Defense Evasion
     "T1562": {
@@ -92,8 +96,9 @@ REMEDIATION_GUIDANCE: dict[str, dict] = {
             "Protect agent/AV processes with tamper protection; require admin + MFA to disable.",
             "Correlate defense-evasion events with lateral movement to detect kill chains.",
         ],
-        "frameworks": ["nis2", "soc2", "nist_csf"],
-        "controls":   {"nis2": ["Art.21(2)(b)"], "soc2": ["CC7.2"]},
+        "frameworks": ["nis2", "soc2", "nist_csf", "eu_ai_act"],
+        "controls":   {"nis2": ["Art.21(2)(b)"], "soc2": ["CC7.2"],
+                       "eu_ai_act": ["Art.15(1)", "Art.9"]},
     },
     # Exfiltration
     "T1048": {
@@ -104,8 +109,9 @@ REMEDIATION_GUIDANCE: dict[str, dict] = {
             "Alert on large outbound transfers (>100 MB) to unknown destinations.",
             "Monitor and restrict USB / removable storage on sensitive workstations.",
         ],
-        "frameworks": ["nis2", "dora", "iso27001", "pci_dss", "avg"],
-        "controls":   {"nis2": ["Art.21(2)(f)"], "iso27001": ["A.8.24"], "pci_dss": ["Req 12.3"]},
+        "frameworks": ["nis2", "dora", "iso27001", "pci_dss", "gdpr", "eu_ai_act"],
+        "controls":   {"nis2": ["Art.21(2)(f)"], "iso27001": ["A.8.24"], "pci_dss": ["Req 12.3"],
+                       "eu_ai_act": ["Art.73", "Art.15(5)"]},
     },
     # Command & Control
     "T1071": {
@@ -116,8 +122,9 @@ REMEDIATION_GUIDANCE: dict[str, dict] = {
             "Inspect TLS traffic at egress proxy for certificate anomalies.",
             "Sandbox all email attachments and URLs before delivery.",
         ],
-        "frameworks": ["nis2", "iso27001", "nist_csf"],
-        "controls":   {"nis2": ["Art.21(2)(e)"], "iso27001": ["A.8.22"]},
+        "frameworks": ["nis2", "iso27001", "nist_csf", "eu_ai_act"],
+        "controls":   {"nis2": ["Art.21(2)(e)"], "iso27001": ["A.8.22"],
+                       "eu_ai_act": ["Art.15(5)", "Art.73"]},
     },
     # Initial Access
     "T1566": {
@@ -128,8 +135,9 @@ REMEDIATION_GUIDANCE: dict[str, dict] = {
             "Enable safe-links and safe-attachments in email security gateway.",
             "Report phishing metrics to management monthly.",
         ],
-        "frameworks": ["nis2", "iso27001", "soc2", "nist_csf"],
-        "controls":   {"nis2": ["Art.21(2)(g)"], "iso27001": ["A.6.3"], "soc2": ["CC9.2"]},
+        "frameworks": ["nis2", "iso27001", "soc2", "nist_csf", "eu_ai_act"],
+        "controls":   {"nis2": ["Art.21(2)(g)"], "iso27001": ["A.6.3"], "soc2": ["CC9.2"],
+                       "eu_ai_act": ["Art.14", "Art.15(5)"]},
     },
     # Impact
     "T1486": {
@@ -140,8 +148,9 @@ REMEDIATION_GUIDANCE: dict[str, dict] = {
             "Deploy honeypot files to detect mass encryption early.",
             "Develop and test ransomware-specific IR playbook at least annually.",
         ],
-        "frameworks": ["nis2", "dora", "iso27001", "soc2"],
-        "controls":   {"nis2": ["Art.21(2)(c)"], "dora": ["Art.12"], "iso27001": ["A.8.13"]},
+        "frameworks": ["nis2", "dora", "iso27001", "soc2", "eu_ai_act"],
+        "controls":   {"nis2": ["Art.21(2)(c)"], "dora": ["Art.12"], "iso27001": ["A.8.13"],
+                       "eu_ai_act": ["Art.73", "Art.15(1)", "Art.9"]},
     },
     # Discovery
     "T1046": {
@@ -151,8 +160,9 @@ REMEDIATION_GUIDANCE: dict[str, dict] = {
             "Alert on internal port scans from non-scanner IPs.",
             "Maintain an up-to-date asset inventory; flag unrecognised hosts automatically.",
         ],
-        "frameworks": ["nis2", "iso27001", "nist_csf"],
-        "controls":   {"nis2": ["Art.21(2)(a)"], "iso27001": ["A.8.8"]},
+        "frameworks": ["nis2", "iso27001", "nist_csf", "eu_ai_act"],
+        "controls":   {"nis2": ["Art.21(2)(a)"], "iso27001": ["A.8.8"],
+                       "eu_ai_act": ["Art.15(5)"]},
     },
     # Persistence
     "T1053": {
@@ -162,8 +172,8 @@ REMEDIATION_GUIDANCE: dict[str, dict] = {
             "Alert on creation of new scheduled tasks outside maintenance windows.",
             "Restrict who can create scheduled tasks using group policy / sudo rules.",
         ],
-        "frameworks": ["iso27001", "soc2", "nist_csf"],
-        "controls":   {"iso27001": ["A.8.5"], "soc2": ["CC6.3"]},
+        "frameworks": ["iso27001", "soc2", "nist_csf", "eu_ai_act"],
+        "controls":   {"iso27001": ["A.8.5"], "soc2": ["CC6.3"], "eu_ai_act": ["Art.15(5)"]},
     },
     # Collection
     "T1005": {
@@ -173,8 +183,9 @@ REMEDIATION_GUIDANCE: dict[str, dict] = {
             "Deploy file-integrity monitoring on directories containing sensitive data.",
             "Alert on mass file access or unusual copy-to-external operations.",
         ],
-        "frameworks": ["iso27001", "pci_dss", "avg"],
-        "controls":   {"iso27001": ["A.5.12", "A.5.13"], "avg": ["Art.25", "Art.32"]},
+        "frameworks": ["iso27001", "pci_dss", "gdpr", "eu_ai_act"],
+        "controls":   {"iso27001": ["A.5.12", "A.5.13"], "gdpr": ["Art.25", "Art.32"],
+                       "eu_ai_act": ["Art.10", "Art.15(5)"]},
     },
 }
 
