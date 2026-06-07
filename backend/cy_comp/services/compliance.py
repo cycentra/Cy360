@@ -107,8 +107,15 @@ def _compute_score_for_framework(cur, framework: str) -> dict:
         passing  = q_pass
         failing  = q_fail
         critical_gaps = q_fail + a_crit + a_high
+    elif q_total > 0:
+        # Templates seeded but ZERO responses — identical to score_framework() which
+        # returns earned=0/total_weight=0%. 100% fallback only for q_total==0 (no templates).
+        score         = 0.0   # alert_penalty already floors at 0
+        passing       = 0
+        failing       = 0
+        critical_gaps = a_crit + a_high
     else:
-        # No responses yet — use alert penalty against fixed baseline (100 % clean start)
+        # No templates seeded at all — framework not configured; clean-start baseline.
         score         = max(0.0, round(100.0 - alert_penalty, 1))
         passing       = 0
         failing       = 0
@@ -224,10 +231,19 @@ def get_latest_scores(frameworks: Optional[list] = None) -> list[dict]:
                 penalty = alert_penalties.get(fw, 0)
                 q_ans   = q_answered_map.get(fw, 0)
 
-                if row and (row[2] or 0) > 0:
+                cached_score = float(row[1] or 0) if row else None
+                cache_valid  = (
+                    row and (row[2] or 0) > 0
+                    # Invalidate if cache shows >0% but live q_answered==0 with templates present.
+                    # This catches the "100% fallback was cached before the unanswered-=0% fix"
+                    # condition that affects any framework seeded after its first score run.
+                    and not (q_ans == 0 and cached_score is not None and cached_score > 0)
+                )
+
+                if cache_valid:
                     rows.append({
                         "framework":      row[0],
-                        "score":          float(row[1] or 0),
+                        "score":          cached_score,
                         "total_controls": int(row[2] or 0),
                         "passing":        int(row[3] or 0),
                         "failing":        int(row[4] or 0),
@@ -237,7 +253,7 @@ def get_latest_scores(frameworks: Optional[list] = None) -> list[dict]:
                         "computed_at":    row[6].isoformat() if row[6] else None,
                     })
                 else:
-                    # Stale cache (total_controls=0): recompute and persist
+                    # Miss or stale (total_controls=0, or cached score invalid for unanswered state)
                     fresh = _compute_score_for_framework(cur, fw)
                     fresh["alert_penalty"] = penalty
                     fresh["q_answered"]    = q_ans
