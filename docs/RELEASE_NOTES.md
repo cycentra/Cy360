@@ -1,3 +1,11 @@
+## v1.0.16 -- 2026-06-08
+
+### New Features
+
+  - comp): questionnaire reset at individual question, framework, and global level
+
+---
+
 ## v1.0.15 -- 2026-06-08
 
 ### New Features
