@@ -20,6 +20,7 @@ import logging
 import os
 import uuid
 from pathlib import Path
+from typing import Optional
 
 import requests
 
@@ -559,6 +560,199 @@ def query_for_question(question_text: str, top_k: int = 5) -> list[str]:
     except Exception as exc:
         log.debug("query_for_question: CyMind unavailable: %s", exc)
         return []
+
+
+# ── Multi-framework document upload ──────────────────────────────────────────
+
+_ALL_FRAMEWORK_KEYS = [
+    "iso27001", "nis2", "dora", "soc2", "nist_csf", "pci_dss", "gdpr", "eu_ai_act",
+]
+
+_FRAMEWORK_LABELS = {
+    "iso27001":  "ISO 27001",
+    "nis2":      "NIS2",
+    "dora":      "DORA",
+    "soc2":      "SOC 2",
+    "nist_csf":  "NIST CSF 2.0",
+    "pci_dss":   "PCI DSS",
+    "gdpr":      "GDPR",
+    "eu_ai_act": "EU AI Act",
+}
+
+# Keyword heuristics for fast local detection (no LLM call required for obvious cases)
+_FRAMEWORK_KEYWORDS: dict[str, list[str]] = {
+    "iso27001":  ["iso 27001", "iso27001", "isms", "annex a", "27001"],
+    "nis2":      ["nis2", "nis 2", "network and information security directive", "art.21", "art.23"],
+    "dora":      ["dora", "digital operational resilience", "ictrmf", "art.5", "tlpt"],
+    "soc2":      ["soc 2", "soc2", "trust service criteria", "tsc", "aicpa"],
+    "nist_csf":  ["nist csf", "nist cybersecurity framework", "identify protect detect respond recover",
+                  "pr.aa", "de.cm", "rs.ma"],
+    "pci_dss":   ["pci dss", "pci-dss", "cardholder data", "cde", "payment card", "req 1", "req 12"],
+    "gdpr":      ["gdpr", "general data protection regulation", "data subject", "dpa", "ropa",
+                  "data protection", "personal data"],
+    "eu_ai_act": ["eu ai act", "ai act", "high-risk ai", "gpai", "conformity assessment", "annex iii"],
+}
+
+
+def detect_frameworks_from_document(filename: str, cymind_doc_id: Optional[str] = None) -> list[str]:
+    """
+    Detect which compliance frameworks a policy document is likely to address.
+
+    Strategy:
+      1. Keyword scan on filename (fast, no network call).
+      2. If CyMind is available and cymind_doc_id is set, ask the LLM via /api/v1/chat.
+      3. Fall back to keyword result if LLM unavailable.
+
+    Returns list of framework keys from _ALL_FRAMEWORK_KEYS.
+    """
+    # Step 1: keyword scan on filename
+    name_lower = filename.lower()
+    keyword_hits: set[str] = set()
+    for fw, keywords in _FRAMEWORK_KEYWORDS.items():
+        if any(kw in name_lower for kw in keywords):
+            keyword_hits.add(fw)
+
+    # Generic policy document names → assume all security frameworks
+    generic_triggers = ["information security policy", "isms policy", "security policy",
+                        "cybersecurity policy", "data protection policy", "privacy policy"]
+    is_generic = any(t in name_lower for t in generic_triggers)
+
+    # Step 2: attempt LLM detection if CyMind is available
+    if cymind_doc_id:
+        try:
+            labels = ", ".join(
+                f"{k} ({_FRAMEWORK_LABELS[k]})" for k in _ALL_FRAMEWORK_KEYS
+            )
+            prompt = (
+                f"A compliance policy document named '{filename}' has been uploaded. "
+                f"Based only on the filename, which of these compliance frameworks does it most likely address? "
+                f"Available frameworks: {labels}. "
+                f"Return ONLY a JSON array of framework keys from the list, e.g. [\"iso27001\", \"gdpr\"]. "
+                f"If uncertain, return an empty array []."
+            )
+            url = get_cymind_url()
+            key = get_cymind_api_key()
+            if key:
+                resp = requests.post(
+                    f"{url}/api/v1/chat",
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json={"message": prompt, "stream": False},
+                    timeout=15,
+                )
+                if resp.ok:
+                    content = resp.json().get("content", "") or ""
+                    import re, json as _json
+                    match = re.search(r'\[.*?\]', content, re.DOTALL)
+                    if match:
+                        detected = _json.loads(match.group())
+                        valid = [fw for fw in detected if fw in _ALL_FRAMEWORK_KEYS]
+                        if valid:
+                            log.info("detect_frameworks: LLM detected %s for '%s'", valid, filename)
+                            return valid
+        except Exception as exc:
+            log.debug("detect_frameworks: LLM call failed (%s), using keyword fallback", exc)
+
+    # Step 3: return keyword hits or all frameworks for generic policy docs
+    if keyword_hits:
+        return sorted(keyword_hits)
+    if is_generic:
+        return list(_ALL_FRAMEWORK_KEYS)
+    # Default: no specific framework detected — map to all security frameworks except EU AI Act
+    return ["iso27001", "nis2", "dora", "soc2", "nist_csf", "pci_dss"]
+
+
+def upload_document_multi_framework(
+    file_storage,
+    metadata: dict,
+    uploaded_by: str,
+) -> dict:
+    """
+    Upload a policy document to the shared org-policies collection once,
+    then auto-detect which compliance frameworks it covers and persist them
+    in cy_comp_policy_docs.mapped_frameworks[].
+
+    metadata may contain: framework (hint), tag
+
+    Returns the doc record enriched with detected_frameworks.
+    """
+    doc_id    = str(uuid.uuid4())
+    filename  = file_storage.filename or "document"
+    tag       = metadata.get("tag") or None
+    fw_hint   = metadata.get("framework") or None
+    file_size = None
+
+    # All org-policy documents go into the shared collection
+    collection_id = "policy-orgpolicies"
+
+    cymind_doc_id = None
+    try:
+        file_bytes = file_storage.read()
+        file_size  = len(file_bytes)
+        file_storage.seek(0)
+        files = {
+            "file": (filename, file_bytes, file_storage.content_type or "application/octet-stream")
+        }
+        resp = requests.post(
+            _rag_url(f"collections/{collection_id}/upload"),
+            headers=_auth_header(),
+            files=files,
+            params={"chunk_size": 512, "overlap": 64},
+            timeout=60,
+        )
+        if resp.ok:
+            rd = resp.json()
+            cymind_doc_id = rd.get("doc_id") or rd.get("id")
+            log.info("upload_document_multi: CyMind accepted %s → doc_id=%s", filename, cymind_doc_id)
+        else:
+            log.warning("upload_document_multi: CyMind %s %s", resp.status_code, resp.text[:300])
+    except Exception as exc:
+        log.error("upload_document_multi: CyMind upload failed: %s", exc)
+
+    # Detect frameworks
+    detected_frameworks = detect_frameworks_from_document(filename, cymind_doc_id)
+    # If caller provided a framework hint, ensure it is included
+    if fw_hint and fw_hint in _ALL_FRAMEWORK_KEYS and fw_hint not in detected_frameworks:
+        detected_frameworks = [fw_hint] + detected_frameworks
+
+    # Primary framework for legacy 'framework' column = hint or first detected
+    primary_fw = fw_hint or (detected_frameworks[0] if detected_frameworks else "general")
+
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO cy_comp_policy_docs
+                    (id, name, file_type, collection_id, cymind_doc_id,
+                     framework, mapped_frameworks, indexed,
+                     uploaded_by, doc_type, tag, file_size, created_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'policy',%s,%s,NOW(),NOW());
+                """,
+                (
+                    doc_id, filename,
+                    filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin",
+                    collection_id, cymind_doc_id,
+                    primary_fw, detected_frameworks,
+                    bool(cymind_doc_id),
+                    uploaded_by, tag, file_size,
+                )
+            )
+    except Exception as exc:
+        log.error("upload_document_multi DB persist: %s", exc)
+
+    return {
+        "id":                 doc_id,
+        "name":               filename,
+        "collection_id":      collection_id,
+        "cymind_doc_id":      cymind_doc_id,
+        "framework":          primary_fw,
+        "detected_frameworks": detected_frameworks,
+        "tag":                tag,
+        "file_size":          file_size,
+        "indexed":            bool(cymind_doc_id),
+        "uploaded_by":        uploaded_by,
+        "doc_type":           "policy",
+    }
 
 
 def query_for_compliance(description: str, top_k: int = 3) -> dict:

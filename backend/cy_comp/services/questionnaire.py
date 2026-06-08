@@ -346,6 +346,305 @@ def score_framework(framework: str) -> dict:
     }
 
 
+# ── Cross-framework correlation ───────────────────────────────────────────────
+
+def get_correlated_questions(question_id: str) -> list[dict]:
+    """
+    Return all questions correlated with question_id across other frameworks.
+    Each entry: {question_id, framework, section, question, cluster_id,
+                 cluster_theme, similarity_type, confidence}
+    """
+    rows = []
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT c.question_id_b, c.framework_b, c.cluster_id, c.cluster_theme,
+                       c.similarity_type, c.confidence,
+                       t.section, t.question, t.control_ref
+                FROM cy_comp_question_correlations c
+                LEFT JOIN cy_comp_questionnaire_templates t
+                       ON t.question_id = c.question_id_b
+                WHERE c.question_id_a = %s
+                ORDER BY c.framework_b, c.question_id_b;
+                """,
+                (question_id,)
+            )
+            for r in cur.fetchall():
+                rows.append({
+                    "question_id":    r[0],
+                    "framework":      r[1],
+                    "cluster_id":     r[2],
+                    "cluster_theme":  r[3],
+                    "similarity_type": r[4],
+                    "confidence":     float(r[5]),
+                    "section":        r[6],
+                    "question":       r[7],
+                    "control_ref":    r[8],
+                })
+    except Exception as exc:
+        log.error("get_correlated_questions(%s): %s", question_id, exc)
+    return rows
+
+
+def propagate_response(
+    source_question_id: str,
+    source_framework: str,
+    response: str,
+    target_question_ids: list[str],
+    responded_by: Optional[str] = None,
+) -> dict:
+    """
+    Write source response to each target question (in their respective frameworks).
+    Marks each saved row with propagated_from=source_question_id,
+    propagation_accepted=True.
+    Returns {propagated, skipped, errors}.
+    """
+    propagated = 0
+    skipped    = 0
+    errors     = 0
+
+    if not target_question_ids:
+        return {"propagated": 0, "skipped": 0, "errors": 0}
+
+    # Build qid → framework map from correlations
+    qid_to_fw: dict[str, str] = {}
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT question_id_b, framework_b
+                FROM cy_comp_question_correlations
+                WHERE question_id_a = %s;
+                """,
+                (source_question_id,)
+            )
+            for r in cur.fetchall():
+                qid_to_fw[r[0]] = r[1]
+    except Exception as exc:
+        log.error("propagate_response: lookup failed: %s", exc)
+        return {"propagated": 0, "skipped": 0, "errors": 1}
+
+    for qid in target_question_ids:
+        fw = qid_to_fw.get(qid)
+        if not fw:
+            log.warning("propagate_response: no correlation found for qid=%s", qid)
+            skipped += 1
+            continue
+        try:
+            # Derive auto-score for target question type
+            question_type = "yes_no"
+            with db() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT question_type FROM cy_comp_questionnaire_templates WHERE question_id = %s;",
+                    (qid,)
+                )
+                row = cur.fetchone()
+                if row:
+                    question_type = row[0]
+
+            score = _auto_score(response, question_type)
+
+            with db() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    INSERT INTO cy_comp_questionnaire_responses
+                        (framework, question_id, response, score,
+                         notes, responded_by, propagated_from, propagation_accepted)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)
+                    ON CONFLICT (framework, question_id) DO UPDATE SET
+                        response             = EXCLUDED.response,
+                        score                = EXCLUDED.score,
+                        notes                = EXCLUDED.notes,
+                        responded_by         = EXCLUDED.responded_by,
+                        propagated_from      = EXCLUDED.propagated_from,
+                        propagation_accepted = TRUE,
+                        responded_at         = NOW();
+                    """,
+                    (
+                        fw, qid, response, score,
+                        f"[Propagated from {source_framework}:{source_question_id}]",
+                        responded_by or "propagation_engine",
+                        source_question_id,
+                    )
+                )
+            propagated += 1
+        except Exception as exc:
+            log.error("propagate_response: save failed qid=%s: %s", qid, exc)
+            errors += 1
+
+    log.info(
+        "propagate_response: source=%s → propagated=%d skipped=%d errors=%d",
+        source_question_id, propagated, skipped, errors,
+    )
+    return {"propagated": propagated, "skipped": skipped, "errors": errors}
+
+
+def reject_propagation(source_question_id: str, target_question_id: str) -> bool:
+    """
+    Mark (framework, target_question_id) as user-rejected propagation.
+    Writes a placeholder row with propagation_accepted=FALSE and empty response
+    so the suggestion is suppressed on subsequent loads.
+    Does NOT overwrite an existing real answer.
+    """
+    # Find the target framework
+    target_fw = None
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT framework_b FROM cy_comp_question_correlations "
+                "WHERE question_id_a = %s AND question_id_b = %s LIMIT 1;",
+                (source_question_id, target_question_id)
+            )
+            row = cur.fetchone()
+            if row:
+                target_fw = row[0]
+    except Exception as exc:
+        log.error("reject_propagation: lookup %s: %s", target_question_id, exc)
+        return False
+
+    if not target_fw:
+        return False
+
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            # Only insert rejection marker if there is no existing real answer
+            cur.execute(
+                """
+                INSERT INTO cy_comp_questionnaire_responses
+                    (framework, question_id, response, score,
+                     propagated_from, propagation_accepted)
+                VALUES (%s, %s, '', NULL, %s, FALSE)
+                ON CONFLICT (framework, question_id) DO UPDATE SET
+                    propagation_accepted = FALSE
+                WHERE cy_comp_questionnaire_responses.propagated_from IS NOT NULL
+                   OR cy_comp_questionnaire_responses.response = '';
+                """,
+                (target_fw, target_question_id, source_question_id)
+            )
+        return True
+    except Exception as exc:
+        log.error("reject_propagation: save %s: %s", target_question_id, exc)
+        return False
+
+
+def get_propagation_suggestions(framework: str) -> list[dict]:
+    """
+    For every answered question in `framework`, find correlated questions in OTHER
+    frameworks that are still unanswered (or rejected).
+    Returns a list grouped by cluster:
+    [
+      {
+        cluster_id, cluster_theme,
+        answered: {question_id, framework, response, score, section, question},
+        suggestions: [{question_id, framework, section, question, control_ref}]
+      },
+      ...
+    ]
+    Only returns clusters where at least one unanswered correlated question exists.
+    """
+    suggestions: list[dict] = []
+
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+
+            # All answered questions in this framework
+            cur.execute(
+                """
+                SELECT r.question_id, r.response, r.score,
+                       t.section, t.question
+                FROM cy_comp_questionnaire_responses r
+                JOIN cy_comp_questionnaire_templates t
+                     ON t.question_id = r.question_id AND t.framework = r.framework
+                WHERE r.framework = %s
+                  AND r.response IS NOT NULL AND r.response != ''
+                  AND (r.propagated_from IS NULL OR r.propagation_accepted = TRUE);
+                """,
+                (framework,)
+            )
+            answered_rows = cur.fetchall()
+
+            for (src_qid, src_resp, src_score, src_section, src_question) in answered_rows:
+                # Find correlated questions in other frameworks
+                cur.execute(
+                    """
+                    SELECT c.question_id_b, c.framework_b, c.cluster_id, c.cluster_theme,
+                           t.section, t.question, t.control_ref
+                    FROM cy_comp_question_correlations c
+                    LEFT JOIN cy_comp_questionnaire_templates t
+                           ON t.question_id = c.question_id_b
+                    WHERE c.question_id_a = %s
+                      AND c.framework_b != %s
+                    ORDER BY c.framework_b, c.question_id_b;
+                    """,
+                    (src_qid, framework)
+                )
+                correlated = cur.fetchall()
+                if not correlated:
+                    continue
+
+                # Filter to only unanswered / not-rejected targets
+                unanswered = []
+                for (tgt_qid, tgt_fw, clu_id, clu_theme,
+                     tgt_section, tgt_question, tgt_ref) in correlated:
+                    cur.execute(
+                        """
+                        SELECT response, propagation_accepted
+                        FROM cy_comp_questionnaire_responses
+                        WHERE framework = %s AND question_id = %s
+                        LIMIT 1;
+                        """,
+                        (tgt_fw, tgt_qid)
+                    )
+                    existing = cur.fetchone()
+                    # Skip if already answered with a real answer (not a propagation marker)
+                    if existing:
+                        existing_resp, existing_pa = existing
+                        if existing_resp and existing_resp != "" and existing_pa is not False:
+                            continue
+                        if existing_pa is False:
+                            continue  # user explicitly rejected this suggestion
+                    unanswered.append({
+                        "question_id": tgt_qid,
+                        "framework":   tgt_fw,
+                        "cluster_id":  clu_id,
+                        "cluster_theme": clu_theme,
+                        "section":     tgt_section,
+                        "question":    tgt_question,
+                        "control_ref": tgt_ref,
+                    })
+
+                if unanswered:
+                    # All unanswered targets share the same cluster (first one wins for display)
+                    clu_id    = unanswered[0]["cluster_id"]
+                    clu_theme = unanswered[0]["cluster_theme"]
+                    suggestions.append({
+                        "cluster_id":    clu_id,
+                        "cluster_theme": clu_theme,
+                        "answered": {
+                            "question_id": src_qid,
+                            "framework":   framework,
+                            "response":    src_resp,
+                            "score":       src_score,
+                            "section":     src_section,
+                            "question":    src_question,
+                        },
+                        "suggestions": unanswered,
+                    })
+
+    except Exception as exc:
+        log.error("get_propagation_suggestions(%s): %s", framework, exc)
+
+    return suggestions
+
+
 def get_completion(framework: str) -> dict:
     """Lightweight progress check — fraction answered / total."""
     try:

@@ -198,24 +198,41 @@ function GuidancePanel() {
   );
 }
 
+const FW_CHIP_COLORS = {
+  iso27001: "#00e5c0", nis2: "#6378ff", dora: "#ffd166", soc2: "#ff6b6b",
+  nist_csf: "#38bdf8", pci_dss: "#f97316", gdpr: "#8b5cf6", eu_ai_act: "#06b6d4",
+};
+const FW_CHIP_LABELS = {
+  iso27001: "ISO 27001", nis2: "NIS2", dora: "DORA", soc2: "SOC 2",
+  nist_csf: "NIST CSF", pci_dss: "PCI DSS", gdpr: "GDPR", eu_ai_act: "EU AI Act",
+};
+
 function DropZone({ onUploaded }) {
-  const [dragging, setDragging] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [msg, setMsg]           = useState(null);
-  const [tag, setTag]           = useState("security");
+  const [dragging, setDragging]       = useState(false);
+  const [uploading, setUploading]     = useState(false);
+  const [msg, setMsg]                 = useState(null);
+  const [tag, setTag]                 = useState("security");
+  const [detectedFws, setDetectedFws] = useState(null);
   const ref = useRef(null);
 
   const uploadFile = (file) => {
     if (!file) return;
-    setUploading(true); setMsg(null);
+    setUploading(true); setMsg(null); setDetectedFws(null);
     const fd = new FormData();
     fd.append("file", file);
     fd.append("tag", tag);
-    fetch(`${API_BASE}/api/comp/policy-docs/collections/${ORG_COLLECTION}/documents`, {
+    // Use the multi-framework upload endpoint so the platform auto-detects
+    // which compliance frameworks this document covers
+    fetch(`${API_BASE}/api/comp/policy-docs/upload-multi`, {
       method: "POST", credentials: "include", body: fd,
     })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(() => { setMsg({ ok: true, text: "Document uploaded and queued for indexing" }); onUploaded(); })
+      .then(doc => {
+        const fws = doc.detected_frameworks || [];
+        setDetectedFws(fws);
+        setMsg({ ok: true, text: "Document uploaded and indexed" });
+        onUploaded();
+      })
       .catch(e => setMsg({ ok: false, text: `Upload failed (${e})` }))
       .finally(() => setUploading(false));
   };
@@ -263,8 +280,46 @@ function DropZone({ onUploaded }) {
         </div>
       </div>
       {msg && (
-        <div style={{ color: msg.ok ? C.accent : C.red, fontSize: 10,
-          fontFamily: "monospace", marginTop: 8 }}>{msg.text}</div>
+        <div style={{ marginTop: 10 }}>
+          <div style={{ color: msg.ok ? C.accent : C.red, fontSize: 10,
+            fontFamily: "monospace" }}>{msg.text}</div>
+          {msg.ok && detectedFws && detectedFws.length > 0 && (
+            <div style={{ marginTop: 10, padding: "12px 16px", borderRadius: 6,
+              background: "rgba(0,229,160,0.05)",
+              border: "1px solid rgba(0,229,160,0.2)" }}>
+              <div style={{ color: C.accent, fontSize: 9, fontFamily: "monospace",
+                fontWeight: 700, marginBottom: 6 }}>
+                Framework coverage detected — document mapped automatically:
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {detectedFws.map(fw => {
+                  const color = FW_CHIP_COLORS[fw] || C.blue;
+                  return (
+                    <span key={fw} style={{
+                      background: `${color}15`, color,
+                      border: `1px solid ${color}35`,
+                      fontSize: 9, fontFamily: "monospace", fontWeight: 700,
+                      padding: "3px 10px", borderRadius: 12,
+                    }}>
+                      {FW_CHIP_LABELS[fw] || fw}
+                    </span>
+                  );
+                })}
+              </div>
+              <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+                marginTop: 8, lineHeight: 1.6 }}>
+                This document will be used automatically when running Policy Analysis
+                for any of the frameworks above. You will not need to re-upload it per framework.
+              </div>
+            </div>
+          )}
+          {msg.ok && detectedFws && detectedFws.length === 0 && (
+            <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace", marginTop: 6 }}>
+              No specific framework detected from filename — document stored in org-policies
+              and will be searched for all framework analyses.
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

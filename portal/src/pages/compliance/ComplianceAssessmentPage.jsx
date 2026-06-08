@@ -372,12 +372,13 @@ function QuestionRow({ q, response, onSave, saving }) {
 }
 
 function QuestionnaireView({ framework, color }) {
-  const [data, setData]       = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving]   = useState({});
-  const [section, setSection] = useState(null);
-  const [genMsg, setGenMsg]   = useState(null);
-  const [genning, setGenning] = useState(false);
+  const [data, setData]         = useState(null);
+  const [loading, setLoading]   = useState(true);
+  const [saving, setSaving]     = useState({});
+  const [section, setSection]   = useState(null);
+  const [genMsg, setGenMsg]     = useState(null);
+  const [genning, setGenning]   = useState(false);
+  const [panelKey, setPanelKey] = useState(0); // increments after each save to refresh suggestions
 
   const load = useCallback(() => {
     setLoading(true);
@@ -397,7 +398,7 @@ function QuestionnaireView({ framework, color }) {
       body: JSON.stringify({ response, notes }),
     })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(() => load())
+      .then(() => { load(); setPanelKey(k => k + 1); })
       .catch(e => console.error("save failed", e))
       .finally(() => setSaving(s => ({ ...s, [question_id]: false })));
   };
@@ -469,6 +470,13 @@ function QuestionnaireView({ framework, color }) {
         </div>
       </div>
 
+      {/* Cross-framework propagation suggestions */}
+      <PropagationPanel
+        key={panelKey}
+        framework={framework}
+        onApplied={() => { load(); setPanelKey(k => k + 1); }}
+      />
+
       <div style={{ display: "flex", gap: 20 }}>
         {/* Section tabs */}
         <div style={{ width: 180, flexShrink: 0 }}>
@@ -512,6 +520,282 @@ function QuestionnaireView({ framework, color }) {
             <QuestionRow key={q.question_id} q={q} response={responses[q.question_id]}
               onSave={handleSave} saving={Boolean(saving[q.question_id])} />
           ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Cross-Framework Propagation Panel ─────────────────────────────────────────
+
+const FW_COLORS = {
+  nis2:      "#6378ff", dora:     "#ffd166", iso27001: "#00e5c0",
+  soc2:      "#ff6b6b", nist_csf: "#38bdf8", pci_dss:  "#f97316",
+  gdpr:      "#8b5cf6", eu_ai_act: "#06b6d4",
+};
+const FW_LABELS = {
+  nis2: "NIS2", dora: "DORA", iso27001: "ISO 27001", soc2: "SOC 2",
+  nist_csf: "NIST CSF", pci_dss: "PCI DSS", gdpr: "GDPR", eu_ai_act: "EU AI Act",
+};
+
+function PropagationPanel({ framework, onApplied }) {
+  const [items, setItems]     = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [applying, setApplying] = useState(false);
+  // reviewMode: null | { item } — shows individual confirmation for each suggestion
+  const [reviewMode, setReviewMode] = useState(null);
+  const [reviewIdx, setReviewIdx]   = useState(0);
+  const [dismissed, setDismissed]   = useState(new Set());
+
+  const load = () => {
+    setLoading(true);
+    fetch(`${API_BASE}/api/comp/questionnaire/${framework}/correlations`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { setItems(d.suggestions || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  };
+
+  useEffect(() => { load(); }, [framework]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Expose refresh to parent after save
+  PropagationPanel._refresh = load;
+
+  const visible = items.filter(item => !dismissed.has(item.answered.question_id));
+  if (loading || visible.length === 0) return null;
+
+  // Collect all unique framework→question pairs across all visible items
+  const allTargets = visible.flatMap(item =>
+    item.suggestions.map(s => ({
+      source_question_id: item.answered.question_id,
+      source_framework:   framework,
+      response:           item.answered.response,
+      target_qid:         s.question_id,
+      target_fw:          s.framework,
+      cluster_theme:      item.cluster_theme,
+    }))
+  );
+
+  const applyAll = () => {
+    setApplying(true);
+    // Group by source question to batch propagation calls
+    const bySource = visible.reduce((acc, item) => {
+      if (!acc[item.answered.question_id]) acc[item.answered.question_id] = item;
+      return acc;
+    }, {});
+
+    const calls = Object.values(bySource).map(item =>
+      fetch(`${API_BASE}/api/comp/questionnaire/propagate`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source_question_id: item.answered.question_id,
+          source_framework:   framework,
+          response:           item.answered.response,
+          accepted_targets:   item.suggestions.map(s => s.question_id),
+        }),
+      }).then(r => r.ok ? r.json() : Promise.reject(r.status))
+    );
+
+    Promise.all(calls)
+      .then(() => { setItems([]); onApplied?.(); })
+      .catch(e => console.error("propagation failed", e))
+      .finally(() => setApplying(false));
+  };
+
+  const skipAll = () => {
+    setDismissed(new Set(visible.map(item => item.answered.question_id)));
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  // Flatten all individual suggestions for the "Review individually" flow
+  const allSuggestions = visible.flatMap(item =>
+    item.suggestions.map(s => ({ ...s, answered: item.answered, cluster_theme: item.cluster_theme }))
+  );
+
+  if (reviewMode) {
+    const total = allSuggestions.length;
+    const cur   = allSuggestions[reviewIdx];
+    if (!cur) { setReviewMode(null); return null; }
+    const fwColor = FW_COLORS[cur.framework] || C.blue;
+    const fwLabel = FW_LABELS[cur.framework] || cur.framework;
+
+    const applyOne = () => {
+      fetch(`${API_BASE}/api/comp/questionnaire/propagate`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source_question_id: cur.answered.question_id,
+          source_framework:   framework,
+          response:           cur.answered.response,
+          accepted_targets:   [cur.question_id],
+        }),
+      })
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(() => {
+          if (reviewIdx + 1 >= total) { setReviewMode(null); onApplied?.(); }
+          else setReviewIdx(i => i + 1);
+        })
+        .catch(e => console.error("propagation failed", e));
+    };
+
+    const rejectOne = () => {
+      fetch(`${API_BASE}/api/comp/questionnaire/reject-propagation`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source_question_id: cur.answered.question_id,
+          target_question_id: cur.question_id,
+        }),
+      }).catch(() => {});
+      if (reviewIdx + 1 >= total) { setReviewMode(null); }
+      else setReviewIdx(i => i + 1);
+    };
+
+    return (
+      <div style={{ margin: "0 0 20px 0", padding: "16px 20px", borderRadius: 8,
+        background: `${fwColor}08`, border: `1px solid ${fwColor}30` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <span style={{ fontSize: 14 }}>🔗</span>
+          <span style={{ color: fwColor, fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>
+            Review individually — {reviewIdx + 1} of {total}
+          </span>
+          <button onClick={() => setReviewMode(null)}
+            style={{ marginLeft: "auto", background: "none", border: "none",
+              color: C.muted, cursor: "pointer", fontSize: 14 }}>✕</button>
+        </div>
+
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+            marginBottom: 4 }}>Your answer to:</div>
+          <div style={{ color: C.text, fontSize: 11, lineHeight: 1.4 }}>
+            {cur.answered.question}
+          </div>
+          <div style={{ marginTop: 6, display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ color: C.muted, fontSize: 9, fontFamily: "monospace" }}>Response:</span>
+            <span style={{ color: cur.answered.score >= 2 ? C.accent
+              : cur.answered.score === 1 ? C.orange : C.red,
+              fontFamily: "monospace", fontSize: 10, fontWeight: 700 }}>
+              {cur.answered.response?.toUpperCase()}
+            </span>
+          </div>
+        </div>
+
+        <div style={{ padding: "10px 14px", borderRadius: 6,
+          background: "rgba(255,255,255,0.02)", border: `1px solid rgba(255,255,255,0.06)`,
+          marginBottom: 14 }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+            <span style={{ background: `${fwColor}15`, color: fwColor,
+              border: `1px solid ${fwColor}30`, fontSize: 8, fontFamily: "monospace",
+              fontWeight: 700, padding: "2px 7px", borderRadius: 10 }}>
+              {fwLabel}
+            </span>
+            {cur.control_ref && (
+              <span style={{ color: C.blue, fontSize: 8, fontFamily: "monospace",
+                background: `${C.blue}12`, padding: "1px 5px", borderRadius: 3 }}>
+                {cur.control_ref}
+              </span>
+            )}
+            <span style={{ color: C.muted, fontSize: 8, fontFamily: "monospace" }}>
+              {cur.cluster_theme}
+            </span>
+          </div>
+          <div style={{ color: C.text, fontSize: 11, lineHeight: 1.5 }}>{cur.question}</div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={applyOne}
+            style={{ background: `${C.accent}15`, border: `1px solid ${C.accent}40`,
+              color: C.accent, padding: "7px 20px", borderRadius: 4,
+              fontFamily: "monospace", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+            Apply same answer
+          </button>
+          <button onClick={rejectOne}
+            style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`,
+              color: C.muted, padding: "7px 14px", borderRadius: 4,
+              fontFamily: "monospace", fontSize: 10, cursor: "pointer" }}>
+            Answer separately
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Default view: summary banner ──────────────────────────────────────────
+  const uniqueFws = [...new Set(allTargets.map(t => t.target_fw))];
+
+  return (
+    <div style={{ margin: "0 0 20px 0", padding: "16px 20px", borderRadius: 8,
+      background: "rgba(99,120,255,0.07)", border: "1px solid rgba(99,120,255,0.25)" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+        <span style={{ fontSize: 16, flexShrink: 0 }}>🔗</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ color: "#6378ff", fontSize: 11, fontWeight: 700,
+            fontFamily: "monospace", marginBottom: 4 }}>
+            Your answers apply to {allTargets.length} question{allTargets.length !== 1 ? "s" : ""} in other frameworks
+          </div>
+          <div style={{ color: C.muted, fontSize: 10, fontFamily: "monospace",
+            lineHeight: 1.6, marginBottom: 10 }}>
+            We detected similar controls across:&nbsp;
+            {uniqueFws.map(fw => (
+              <span key={fw} style={{ background: `${FW_COLORS[fw] || C.blue}15`,
+                color: FW_COLORS[fw] || C.blue,
+                border: `1px solid ${FW_COLORS[fw] || C.blue}30`,
+                fontSize: 9, fontFamily: "monospace", fontWeight: 700,
+                padding: "1px 7px", borderRadius: 10, marginRight: 4 }}>
+                {FW_LABELS[fw] || fw}
+              </span>
+            ))}
+            <br />
+            Apply the same answers to avoid re-entering identical information.
+          </div>
+          {/* Per-cluster preview */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
+            {visible.map(item => (
+              <div key={item.answered.question_id}
+                style={{ display: "flex", gap: 8, alignItems: "flex-start",
+                  padding: "6px 10px", borderRadius: 5,
+                  background: "rgba(255,255,255,0.02)" }}>
+                <span style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+                  flexShrink: 0, marginTop: 1 }}>
+                  {item.cluster_theme}
+                </span>
+                <span style={{ color: C.muted, fontSize: 9, fontFamily: "monospace" }}>→</span>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                  {item.suggestions.map(s => (
+                    <span key={s.question_id}
+                      style={{ background: `${FW_COLORS[s.framework] || C.blue}12`,
+                        color: FW_COLORS[s.framework] || C.blue,
+                        border: `1px solid ${FW_COLORS[s.framework] || C.blue}25`,
+                        fontSize: 8, fontFamily: "monospace",
+                        padding: "1px 6px", borderRadius: 3 }}>
+                      {FW_LABELS[s.framework] || s.framework}: {s.question_id}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={applyAll} disabled={applying}
+              style={{ background: `${C.accent}15`, border: `1px solid ${C.accent}40`,
+                color: C.accent, padding: "7px 20px", borderRadius: 4,
+                fontFamily: "monospace", fontSize: 10, fontWeight: 700,
+                cursor: "pointer", opacity: applying ? 0.6 : 1 }}>
+              {applying ? "Applying…" : `Apply to all ${allTargets.length}`}
+            </button>
+            <button onClick={() => { setReviewMode(true); setReviewIdx(0); }}
+              style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`,
+                color: C.text, padding: "7px 14px", borderRadius: 4,
+                fontFamily: "monospace", fontSize: 10, cursor: "pointer" }}>
+              Review individually
+            </button>
+            <button onClick={skipAll}
+              style={{ background: "none", border: "none", color: C.muted,
+                padding: "7px 10px", fontFamily: "monospace", fontSize: 10, cursor: "pointer" }}>
+              Skip
+            </button>
+          </div>
         </div>
       </div>
     </div>

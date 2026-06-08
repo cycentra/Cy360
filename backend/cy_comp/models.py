@@ -332,6 +332,26 @@ _DDL_STATEMENTS = [
     );
     CREATE INDEX IF NOT EXISTS idx_cy_comp_soa_framework ON cy_comp_soa_entries (framework);
     """,
+
+    # 16. Cross-Framework Question Correlations
+    #     Static pairs seeded from cy_comp/data/question_correlations.py.
+    #     Stored bidirectionally (A→B and B→A) for O(1) lookup by question_id_a.
+    """
+    CREATE TABLE IF NOT EXISTS cy_comp_question_correlations (
+        id              TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+        cluster_id      TEXT        NOT NULL,
+        cluster_theme   TEXT        NOT NULL,
+        framework_a     TEXT        NOT NULL,
+        question_id_a   TEXT        NOT NULL,
+        framework_b     TEXT        NOT NULL,
+        question_id_b   TEXT        NOT NULL,
+        similarity_type TEXT        NOT NULL DEFAULT 'equivalent',
+        confidence      NUMERIC(4,2) NOT NULL DEFAULT 1.0,
+        UNIQUE (question_id_a, question_id_b)
+    );
+    CREATE INDEX IF NOT EXISTS idx_cy_comp_qcorr_cluster ON cy_comp_question_correlations (cluster_id);
+    CREATE INDEX IF NOT EXISTS idx_cy_comp_qcorr_qid_a  ON cy_comp_question_correlations (question_id_a);
+    """,
 ]
 
 # Column migrations for future schema evolution (idempotent ALTER TABLE)
@@ -372,13 +392,23 @@ _MIGRATE_COLUMNS: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_cy_comp_findings_auto ON cy_comp_findings(auto_generated, framework);",
     "CREATE INDEX IF NOT EXISTS idx_alerts_is_compliance ON alerts(is_compliance_relevant, timestamp DESC) WHERE is_compliance_relevant = TRUE;",
     "CREATE INDEX IF NOT EXISTS idx_incidents_compliance ON incidents(compliance_breach, last_seen DESC) WHERE compliance_breach = TRUE;",
+
+    # ── Cross-framework answer propagation columns ─────────────────────────────
+    # propagated_from: question_id that was the source for this auto-filled answer
+    # propagation_accepted: NULL=manual entry, TRUE=user accepted propagation, FALSE=user rejected
+    "ALTER TABLE cy_comp_questionnaire_responses ADD COLUMN IF NOT EXISTS propagated_from TEXT;",
+    "ALTER TABLE cy_comp_questionnaire_responses ADD COLUMN IF NOT EXISTS propagation_accepted BOOLEAN DEFAULT NULL;",
+
+    # ── Multi-framework document mapping ──────────────────────────────────────
+    # mapped_frameworks: detected framework keys the document covers (replaces single 'framework' text)
+    "ALTER TABLE cy_comp_policy_docs ADD COLUMN IF NOT EXISTS mapped_frameworks TEXT[] DEFAULT '{}';",
 ]
 
 
 def ensure_tables() -> None:
     """
-    Create all 12 cy_comp_* tables if they do not exist.
-    Also runs idempotent column migrations.
+    Create all 16 cy_comp_* tables if they do not exist.
+    Also runs idempotent column migrations and seeds cross-framework correlations.
     Called once at Flask app startup via create_app().
     """
     global _tables_ready
@@ -399,7 +429,17 @@ def ensure_tables() -> None:
                     cur.execute(mig)
                 except Exception as m_exc:
                     log.debug("cy_comp migration skipped (%s): %s", mig[:60], m_exc)
+
+            # Seed cross-framework question correlations (idempotent)
+            try:
+                from cy_comp.data.question_correlations import seed_correlations
+                result = seed_correlations(conn)
+                if result["inserted"]:
+                    log.info("cy_comp: seeded %d correlation pairs", result["inserted"])
+            except Exception as seed_exc:
+                log.warning("cy_comp: correlation seed failed (non-fatal): %s", seed_exc)
+
         _tables_ready = True
-        log.info("cy_comp: all 15 tables ensured (CYCENTRA_DB_URL=%s)", CYCENTRA_DB_URL)
+        log.info("cy_comp: all 16 tables ensured (CYCENTRA_DB_URL=%s)", CYCENTRA_DB_URL)
     except Exception as exc:
         log.error("cy_comp: table init failed — GRC module unavailable: %s", exc)

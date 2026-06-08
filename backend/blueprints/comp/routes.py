@@ -927,6 +927,36 @@ def reindex_collection(collection_id):
 
 # ── Policy Analysis (RAG → Questionnaire auto-scoring) ───────────────────────
 
+@comp_bp.route("/policy-docs/upload-multi", methods=["POST"])
+@require_analyst
+def upload_document_multi():
+    """
+    Upload a policy document to the shared org-policies collection.
+    Automatically detects which compliance frameworks the document covers and
+    stores them in mapped_frameworks[].
+
+    Multipart form:
+      file      — document file (required)
+      framework — optional hint for the primary framework
+      tag       — optional label
+
+    Response: {id, name, collection_id, framework, detected_frameworks[], indexed, ...}
+    """
+    from cy_comp.services.policy_rag import upload_document_multi_framework as _upload_multi
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    metadata = {
+        "framework": request.form.get("framework") or None,
+        "tag":       request.form.get("tag") or None,
+    }
+    try:
+        doc = _upload_multi(request.files["file"], metadata, uploaded_by=_email())
+        return jsonify(doc), 201
+    except Exception as exc:
+        log.error("upload_document_multi: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
 @comp_bp.route("/policy-docs/analyze-framework", methods=["POST"])
 @require_analyst
 def analyze_policy_framework():
@@ -1304,6 +1334,139 @@ def generate_questionnaire_findings(framework):
     except Exception as exc:
         log.error("generate_questionnaire_findings: %s", exc)
         return jsonify({"error": str(exc)}), 500
+
+
+# ── Cross-Framework Correlations & Propagation ────────────────────────────────
+
+@comp_bp.route("/questionnaire/<framework>/correlations", methods=["GET"])
+@require_viewer
+def get_framework_correlations(framework):
+    """
+    Return all propagation suggestions for a framework.
+    Finds every answered question in `framework` and identifies correlated
+    questions in other frameworks that are still unanswered.
+
+    Response: {framework, suggestions: [{cluster_id, cluster_theme, answered, suggestions:[]}]}
+    """
+    from cy_comp.services.questionnaire import get_propagation_suggestions
+    try:
+        result = get_propagation_suggestions(framework)
+        return jsonify({"framework": framework, "suggestions": result})
+    except Exception as exc:
+        log.error("get_framework_correlations(%s): %s", framework, exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/questionnaire/propagate", methods=["POST"])
+@require_analyst
+def propagate_response():
+    """
+    Apply a source answer to selected correlated questions in other frameworks.
+
+    Body: {
+      source_question_id: str,
+      source_framework:   str,
+      response:           str,
+      accepted_targets:   [question_id, ...]   — subset of correlated qids to propagate to
+    }
+    Response: {propagated, skipped, errors}
+    """
+    from cy_comp.services.questionnaire import propagate_response as _propagate
+    data = request.get_json() or {}
+    src_qid = data.get("source_question_id", "").strip()
+    src_fw  = data.get("source_framework", "").strip()
+    resp    = data.get("response", "").strip()
+    targets = data.get("accepted_targets", [])
+
+    if not src_qid or not src_fw or not resp:
+        return jsonify({"error": "source_question_id, source_framework, and response are required"}), 400
+    if not isinstance(targets, list) or not targets:
+        return jsonify({"error": "accepted_targets must be a non-empty list"}), 400
+
+    try:
+        result = _propagate(
+            source_question_id=src_qid,
+            source_framework=src_fw,
+            response=resp,
+            target_question_ids=targets,
+            responded_by=_email(),
+        )
+        return jsonify({"status": "ok", "result": result})
+    except Exception as exc:
+        log.error("propagate_response: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/questionnaire/reject-propagation", methods=["POST"])
+@require_analyst
+def reject_propagation():
+    """
+    Mark a specific correlated question as user-rejected, suppressing the suggestion.
+
+    Body: {source_question_id: str, target_question_id: str}
+    """
+    from cy_comp.services.questionnaire import reject_propagation as _reject
+    data = request.get_json() or {}
+    src = data.get("source_question_id", "").strip()
+    tgt = data.get("target_question_id", "").strip()
+    if not src or not tgt:
+        return jsonify({"error": "source_question_id and target_question_id are required"}), 400
+    ok = _reject(src, tgt)
+    if not ok:
+        return jsonify({"error": "Correlation not found or already resolved"}), 404
+    return jsonify({"status": "rejected", "source": src, "target": tgt})
+
+
+@comp_bp.route("/question-correlations", methods=["GET"])
+@require_viewer
+def list_question_correlations():
+    """
+    Read-only view of the correlation table.
+    Query params: cluster_id=  or  question_id=  (optional filters)
+
+    Response: {correlations: [...], total: N}
+    """
+    from cy_comp.models import db as _db
+    cluster_id  = request.args.get("cluster_id")
+    question_id = request.args.get("question_id")
+    rows = []
+    try:
+        with _db() as conn:
+            cur = conn.cursor()
+            where, params = [], []
+            if cluster_id:
+                where.append("cluster_id = %s")
+                params.append(cluster_id)
+            if question_id:
+                where.append("(question_id_a = %s OR question_id_b = %s)")
+                params.extend([question_id, question_id])
+            clause = ("WHERE " + " AND ".join(where)) if where else ""
+            cur.execute(
+                f"""
+                SELECT id, cluster_id, cluster_theme, framework_a, question_id_a,
+                       framework_b, question_id_b, similarity_type, confidence
+                FROM cy_comp_question_correlations {clause}
+                ORDER BY cluster_id, framework_a, question_id_a
+                LIMIT 1000;
+                """,
+                params
+            )
+            for r in cur.fetchall():
+                rows.append({
+                    "id":              r[0],
+                    "cluster_id":      r[1],
+                    "cluster_theme":   r[2],
+                    "framework_a":     r[3],
+                    "question_id_a":   r[4],
+                    "framework_b":     r[5],
+                    "question_id_b":   r[6],
+                    "similarity_type": r[7],
+                    "confidence":      float(r[8]),
+                })
+    except Exception as exc:
+        log.error("list_question_correlations: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"correlations": rows, "total": len(rows)})
 
 
 # ── Auto Findings ─────────────────────────────────────────────────────────────
