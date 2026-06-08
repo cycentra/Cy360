@@ -224,7 +224,7 @@ function ControlsList({ framework }) {
 
 // ── Questionnaire ──────────────────────────────────────────────────────────────
 
-function QuestionRow({ q, response, onSave, saving }) {
+function QuestionRow({ q, response, onSave, onReset, saving, resetting }) {
   const [val, setVal]     = useState(response?.response || "");
   const [notes, setNotes] = useState(response?.notes || "");
   const [open, setOpen]   = useState(false);
@@ -234,6 +234,7 @@ function QuestionRow({ q, response, onSave, saving }) {
 
   const sc    = response?.score ?? null;
   const statusColor = sc === null ? C.muted : sc >= 2 ? C.accent : sc === 1 ? C.orange : C.red;
+  const isPropagated = Boolean(response?.propagated_from);
 
   const submit = () => {
     if (!val) return;
@@ -266,12 +267,34 @@ function QuestionRow({ q, response, onSave, saving }) {
                     {response.response}
                   </span>
                 )}
+                {isPropagated && (
+                  <span style={{ color: "#6378ff", fontSize: 8, fontFamily: "monospace",
+                    background: "rgba(99,120,255,0.1)", padding: "1px 5px", borderRadius: 3,
+                    border: "1px solid rgba(99,120,255,0.25)" }} title="Answer propagated from another framework">
+                    propagated
+                  </span>
+                )}
                 {q.weight === 3 && (
                   <span style={{ color: C.red, fontSize: 8, fontFamily: "monospace",
                     fontWeight: 700 }}>Critical weight</span>
                 )}
               </div>
             </div>
+            {/* Per-question reset — only shown when an answer exists */}
+            {response && (
+              <button
+                onClick={e => { e.stopPropagation(); onReset(q.question_id); }}
+                disabled={resetting}
+                title="Clear this answer"
+                style={{ background: "none", border: "none", color: "rgba(255,255,255,0.2)",
+                  cursor: "pointer", fontSize: 12, padding: "2px 4px", lineHeight: 1,
+                  flexShrink: 0, marginTop: 1,
+                  transition: "color 0.15s" }}
+                onMouseEnter={e => (e.currentTarget.style.color = C.red)}
+                onMouseLeave={e => (e.currentTarget.style.color = "rgba(255,255,255,0.2)")}>
+                {resetting ? "…" : "✕"}
+              </button>
+            )}
             <span style={{ color: C.muted, fontSize: 10, marginTop: 2 }}>{open ? "▲" : "▼"}</span>
           </div>
 
@@ -372,13 +395,18 @@ function QuestionRow({ q, response, onSave, saving }) {
 }
 
 function QuestionnaireView({ framework, color }) {
-  const [data, setData]         = useState(null);
-  const [loading, setLoading]   = useState(true);
-  const [saving, setSaving]     = useState({});
-  const [section, setSection]   = useState(null);
-  const [genMsg, setGenMsg]     = useState(null);
-  const [genning, setGenning]   = useState(false);
-  const [panelKey, setPanelKey] = useState(0); // increments after each save to refresh suggestions
+  const [data, setData]             = useState(null);
+  const [loading, setLoading]       = useState(true);
+  const [saving, setSaving]         = useState({});
+  const [resetting, setResetting]   = useState({});   // per-question reset state
+  const [section, setSection]       = useState(null);
+  const [genMsg, setGenMsg]         = useState(null);
+  const [genning, setGenning]       = useState(false);
+  const [panelKey, setPanelKey]     = useState(0);
+  // Framework-level reset
+  const [fwResetting, setFwResetting] = useState(false);
+  const [fwResetMsg, setFwResetMsg]   = useState(null);
+  const [fwConfirm, setFwConfirm]     = useState(false);  // show confirm step
 
   const load = useCallback(() => {
     setLoading(true);
@@ -401,6 +429,29 @@ function QuestionnaireView({ framework, color }) {
       .then(() => { load(); setPanelKey(k => k + 1); })
       .catch(e => console.error("save failed", e))
       .finally(() => setSaving(s => ({ ...s, [question_id]: false })));
+  };
+
+  const handleReset = (question_id) => {
+    setResetting(s => ({ ...s, [question_id]: true }));
+    fetch(`${API_BASE}/api/comp/questionnaire/${framework}/respond/${question_id}`, {
+      method: "DELETE", credentials: "include",
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(() => { load(); setPanelKey(k => k + 1); })
+      .catch(e => console.error("reset failed", e))
+      .finally(() => setResetting(s => ({ ...s, [question_id]: false })));
+  };
+
+  const handleFrameworkReset = () => {
+    if (!fwConfirm) { setFwConfirm(true); return; }
+    setFwResetting(true); setFwResetMsg(null); setFwConfirm(false);
+    fetch(`${API_BASE}/api/comp/questionnaire/${framework}/responses`, {
+      method: "DELETE", credentials: "include",
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { setFwResetMsg(`${d.deleted} answers cleared`); load(); setPanelKey(k => k + 1); })
+      .catch(e => setFwResetMsg(`Failed (${e})`))
+      .finally(() => setFwResetting(false));
   };
 
   const handleGenFindings = () => {
@@ -457,7 +508,8 @@ function QuestionnaireView({ framework, color }) {
             </div>
           ))}
         </div>
-        <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", gap: 6,
+          alignItems: "flex-end" }}>
           <button onClick={handleGenFindings} disabled={genning}
             style={{ background: `${C.orange}10`, border: `1px solid ${C.orange}40`,
               color: C.orange, padding: "5px 12px", borderRadius: 4, fontFamily: "monospace",
@@ -467,6 +519,39 @@ function QuestionnaireView({ framework, color }) {
           </button>
           {genMsg && <span style={{ color: genMsg.includes("fail") ? C.red : C.orange,
             fontSize: 9, fontFamily: "monospace" }}>{genMsg}</span>}
+
+          {/* Framework-level reset */}
+          {fwConfirm ? (
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ color: C.red, fontSize: 9, fontFamily: "monospace" }}>
+                Clear all answers?
+              </span>
+              <button onClick={handleFrameworkReset} disabled={fwResetting}
+                style={{ background: `${C.red}15`, border: `1px solid ${C.red}50`,
+                  color: C.red, padding: "4px 10px", borderRadius: 4,
+                  fontFamily: "monospace", fontSize: 9, fontWeight: 700, cursor: "pointer" }}>
+                Confirm
+              </button>
+              <button onClick={() => setFwConfirm(false)}
+                style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`,
+                  color: C.muted, padding: "4px 8px", borderRadius: 4,
+                  fontFamily: "monospace", fontSize: 9, cursor: "pointer" }}>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button onClick={handleFrameworkReset} disabled={fwResetting}
+              style={{ background: "rgba(255,59,59,0.07)", border: `1px solid rgba(255,59,59,0.2)`,
+                color: "rgba(255,100,100,0.75)", padding: "5px 12px", borderRadius: 4,
+                fontFamily: "monospace", fontSize: 9, cursor: "pointer",
+                opacity: fwResetting ? 0.6 : 1, whiteSpace: "nowrap" }}>
+              {fwResetting ? "Resetting…" : "↺ Reset Framework"}
+            </button>
+          )}
+          {fwResetMsg && (
+            <span style={{ color: fwResetMsg.includes("fail") ? C.red : C.muted,
+              fontSize: 9, fontFamily: "monospace" }}>{fwResetMsg}</span>
+          )}
         </div>
       </div>
 
@@ -518,7 +603,8 @@ function QuestionnaireView({ framework, color }) {
           </div>
           {visible.map(q => (
             <QuestionRow key={q.question_id} q={q} response={responses[q.question_id]}
-              onSave={handleSave} saving={Boolean(saving[q.question_id])} />
+              onSave={handleSave} saving={Boolean(saving[q.question_id])}
+              onReset={handleReset} resetting={Boolean(resetting[q.question_id])} />
           ))}
         </div>
       </div>
@@ -1157,17 +1243,25 @@ export function ComplianceAssessmentPage() {
   const ALL_FW     = enabledFws
     ? ALL_FW_ORDERED.filter(fw => enabledFws.includes(fw))
     : ALL_FW_ORDERED;
-  const [activeTab, setActiveTab] = useState("questionnaire"); // "questionnaire" | "controls"
-  const [hub, setHub]             = useState(null);
-  const [seeding, setSeeding]     = useState(false);
-  const [seedMsg, setSeedMsg]     = useState(null);
+  const [activeTab, setActiveTab]     = useState("questionnaire");
+  const [hub, setHub]                 = useState(null);
+  const [seeding, setSeeding]         = useState(false);
+  const [seedMsg, setSeedMsg]         = useState(null);
+  // Global reset state
+  const [globalConfirm, setGlobalConfirm] = useState(false);
+  const [globalResetting, setGlobalResetting] = useState(false);
+  const [globalResetMsg, setGlobalResetMsg]   = useState(null);
+  // key to remount QuestionnaireView after a global or framework reset
+  const [viewKey, setViewKey] = useState(0);
 
-  useEffect(() => {
+  const loadHub = () => {
     fetch(`${API_BASE}/api/comp/questionnaire/hub`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setHub(d.frameworks || []); })
       .catch(() => {});
-  }, []);
+  };
+
+  useEffect(() => { loadHub(); }, []);
 
   const handleSeed = () => {
     setSeeding(true); setSeedMsg(null);
@@ -1180,6 +1274,22 @@ export function ComplianceAssessmentPage() {
       .then(d => setSeedMsg(`${d.result?.inserted || 0} questions seeded`))
       .catch(e => setSeedMsg(`Seed failed (${e})`))
       .finally(() => setSeeding(false));
+  };
+
+  const handleGlobalReset = () => {
+    if (!globalConfirm) { setGlobalConfirm(true); return; }
+    setGlobalResetting(true); setGlobalResetMsg(null); setGlobalConfirm(false);
+    fetch(`${API_BASE}/api/comp/questionnaire/responses`, {
+      method: "DELETE", credentials: "include",
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => {
+        setGlobalResetMsg(`${d.deleted} answers cleared across all frameworks`);
+        loadHub();
+        setViewKey(k => k + 1);
+      })
+      .catch(e => setGlobalResetMsg(`Failed (${e})`))
+      .finally(() => setGlobalResetting(false));
   };
 
   const meta   = FW_META[activeFw] || { label: activeFw.toUpperCase(), color: C.blue };
@@ -1231,7 +1341,7 @@ export function ComplianceAssessmentPage() {
           })}
         </div>
 
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 6 }}>
           <button onClick={handleSeed} disabled={seeding}
             style={{ width: "100%", background: "rgba(255,255,255,0.04)",
               border: `1px solid ${C.border}`, color: C.muted, padding: "7px 10px",
@@ -1241,8 +1351,57 @@ export function ComplianceAssessmentPage() {
           </button>
           {seedMsg && (
             <div style={{ color: seedMsg.includes("fail") ? C.red : C.accent,
-              fontSize: 9, fontFamily: "monospace", marginTop: 6 }}>{seedMsg}</div>
+              fontSize: 9, fontFamily: "monospace" }}>{seedMsg}</div>
           )}
+
+          {/* ── Global reset ────────────────────────────────────────────── */}
+          <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 8, marginTop: 4 }}>
+            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 7, fontFamily: "monospace",
+              textTransform: "uppercase", letterSpacing: "1px", marginBottom: 6 }}>
+              Danger zone
+            </div>
+            {globalConfirm ? (
+              <div style={{ background: "rgba(255,59,59,0.06)",
+                border: `1px solid rgba(255,59,59,0.25)`,
+                borderRadius: 5, padding: "10px 10px" }}>
+                <div style={{ color: C.red, fontSize: 9, fontFamily: "monospace",
+                  marginBottom: 8, lineHeight: 1.5 }}>
+                  This will clear ALL answers across every framework. This cannot be undone.
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={handleGlobalReset} disabled={globalResetting}
+                    style={{ flex: 1, background: `${C.red}20`,
+                      border: `1px solid ${C.red}50`, color: C.red,
+                      padding: "5px 0", borderRadius: 4, fontFamily: "monospace",
+                      fontSize: 9, fontWeight: 700, cursor: "pointer" }}>
+                    {globalResetting ? "…" : "Confirm"}
+                  </button>
+                  <button onClick={() => setGlobalConfirm(false)}
+                    style={{ flex: 1, background: "rgba(255,255,255,0.04)",
+                      border: `1px solid ${C.border}`, color: C.muted,
+                      padding: "5px 0", borderRadius: 4, fontFamily: "monospace",
+                      fontSize: 9, cursor: "pointer" }}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button onClick={handleGlobalReset} disabled={globalResetting}
+                style={{ width: "100%", background: "rgba(255,59,59,0.06)",
+                  border: `1px solid rgba(255,59,59,0.2)`,
+                  color: "rgba(255,100,100,0.65)", padding: "7px 10px", borderRadius: 4,
+                  fontFamily: "monospace", fontSize: 9, cursor: "pointer",
+                  opacity: globalResetting ? 0.6 : 1 }}>
+                ✕ Reset All Answers
+              </button>
+            )}
+            {globalResetMsg && (
+              <div style={{ color: globalResetMsg.includes("fail") ? C.red : C.muted,
+                fontSize: 9, fontFamily: "monospace", marginTop: 6 }}>
+                {globalResetMsg}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1284,7 +1443,7 @@ export function ComplianceAssessmentPage() {
 
         {/* Content */}
         {activeTab === "questionnaire" ? (
-          <QuestionnaireView key={activeFw} framework={activeFw} color={meta.color} />
+          <QuestionnaireView key={`${activeFw}-${viewKey}`} framework={activeFw} color={meta.color} />
         ) : activeTab === "soa" && activeFw === "iso27001" ? (
           <SoAView key="soa" />
         ) : (

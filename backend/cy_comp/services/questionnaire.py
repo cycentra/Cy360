@@ -346,6 +346,55 @@ def score_framework(framework: str) -> dict:
     }
 
 
+# ── Reset / Delete responses ──────────────────────────────────────────────────
+
+def delete_response(framework: str, question_id: str) -> bool:
+    """Delete a single saved answer. Returns True if a row was deleted."""
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM cy_comp_questionnaire_responses "
+                "WHERE framework = %s AND question_id = %s;",
+                (framework, question_id)
+            )
+            return cur.rowcount > 0
+    except Exception as exc:
+        log.error("delete_response(%s, %s): %s", framework, question_id, exc)
+        return False
+
+
+def delete_framework_responses(framework: str) -> int:
+    """Delete all saved answers for one framework. Returns row count deleted."""
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM cy_comp_questionnaire_responses WHERE framework = %s;",
+                (framework,)
+            )
+            deleted = cur.rowcount
+        log.info("delete_framework_responses(%s): deleted %d rows", framework, deleted)
+        return deleted
+    except Exception as exc:
+        log.error("delete_framework_responses(%s): %s", framework, exc)
+        raise
+
+
+def delete_all_responses() -> int:
+    """Delete ALL saved answers across every framework. Returns row count deleted."""
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM cy_comp_questionnaire_responses;")
+            deleted = cur.rowcount
+        log.info("delete_all_responses: deleted %d rows", deleted)
+        return deleted
+    except Exception as exc:
+        log.error("delete_all_responses: %s", exc)
+        raise
+
+
 # ── Cross-framework correlation ───────────────────────────────────────────────
 
 def get_correlated_questions(question_id: str) -> list[dict]:

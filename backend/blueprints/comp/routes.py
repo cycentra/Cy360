@@ -1323,6 +1323,49 @@ def get_questionnaire_score(framework):
     return jsonify(score_framework(framework))
 
 
+@comp_bp.route("/questionnaire/<framework>/respond/<question_id>", methods=["DELETE"])
+@require_analyst
+def reset_single_response(framework, question_id):
+    """Delete a single saved answer, returning the question to unanswered state."""
+    from cy_comp.services.questionnaire import delete_response
+    deleted = delete_response(framework, question_id)
+    if not deleted:
+        return jsonify({"error": "Response not found"}), 404
+    return jsonify({"status": "reset", "framework": framework, "question_id": question_id})
+
+
+@comp_bp.route("/questionnaire/<framework>/responses", methods=["DELETE"])
+@require_analyst
+def reset_framework_responses(framework):
+    """
+    Delete all saved answers for a single framework.
+    Returns {deleted: N}.
+    """
+    from cy_comp.services.questionnaire import delete_framework_responses
+    try:
+        deleted = delete_framework_responses(framework)
+        return jsonify({"status": "reset", "framework": framework, "deleted": deleted})
+    except Exception as exc:
+        log.error("reset_framework_responses(%s): %s", framework, exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/questionnaire/responses", methods=["DELETE"])
+@require_admin
+def reset_all_responses():
+    """
+    Delete ALL saved questionnaire answers across every framework.
+    Admin-only. Returns {deleted: N}.
+    """
+    from cy_comp.services.questionnaire import delete_all_responses
+    try:
+        deleted = delete_all_responses()
+        return jsonify({"status": "reset_all", "deleted": deleted})
+    except Exception as exc:
+        log.error("reset_all_responses: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
 @comp_bp.route("/questionnaire/<framework>/generate-findings", methods=["POST"])
 @require_analyst
 def generate_questionnaire_findings(framework):

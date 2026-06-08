@@ -1,8 +1,14 @@
 ## v1.0.15 -- 2026-06-08
 
-### Improvements
+### New Features
 
-  - Stability and performance improvements.
+  - **Cross-Framework Questionnaire Correlation Engine** — Introduced a static cross-framework control correlation map spanning all 8 compliance frameworks (ISO 27001, NIS2, DORA, SOC 2, NIST CSF 2.0, PCI DSS v4.0, GDPR, EU AI Act). 23 control clusters covering Governance, Risk Assessment, IAM, MFA, Incident Response, BCP/Backup, Training, Encryption, Vulnerability Management, Supply Chain, Logging, Pen Testing, Asset Inventory, Physical Security, SDLC, Threat Intelligence, Privacy, and Regulatory Notification are mapped across 694 bidirectional correlation pairs. The new `cy_comp_question_correlations` table is seeded automatically on startup via `ensure_tables()`.
+
+  - **Answer Propagation — Apply Once, Satisfy Many** — After answering any questionnaire question, the platform detects correlated questions in other frameworks and surfaces a `PropagationPanel` in the Assessments UI. Users can apply the same answer to all matching questions with a single click ("Apply to all N"), step through each suggestion individually ("Review individually"), or dismiss. Propagated answers are tracked via `propagated_from` and `propagation_accepted` columns and are visually badged in the questionnaire. New API endpoints: `GET /api/comp/questionnaire/<fw>/correlations`, `POST /api/comp/questionnaire/propagate`, `POST /api/comp/questionnaire/reject-propagation`, `GET /api/comp/question-correlations`.
+
+  - **Multi-Framework Policy Document Upload** — Uploading a policy document now auto-detects which compliance frameworks it covers using keyword heuristics + CyMind LLM classification. The document is stored once in the shared `org-policies` RAG collection and its `mapped_frameworks[]` array is populated automatically — no re-uploading per framework. The upload UI shows framework coverage chips immediately after upload (e.g., `[ISO 27001] [NIS2] [SOC 2]`) with an explanation that policy analysis jobs for all detected frameworks will use the document automatically. New endpoint: `POST /api/comp/policy-docs/upload-multi`.
+
+  - **GRC Cross-Framework Inventory Document** — Added `docs/GRC_CROSS_FRAMEWORK_CORRELATION.md` containing the full questionnaire inventory for all 8 frameworks, the complete cross-framework similarity map, a gap analysis of what was missing, and the full implementation design used to build this feature.
 
 ---
 
