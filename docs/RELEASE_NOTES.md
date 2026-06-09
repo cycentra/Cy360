@@ -1,3 +1,11 @@
+## v1.0.25 -- 2026-06-09
+
+### Bug Fixes
+
+  - **Active Incidents — case state lost after page refresh (root cause fixed)**: The SIEM correlation engine's SQLAlchemy async ORM session can hold stale `None` values for `case_opened_at` when its asyncpg connection pool contains connections whose transaction snapshot predates the psycopg2 case-open write. This causes `GET /incidents` to return `case_opened_at=null` even though the DB has the value correctly set. Fixed by post-processing `GET /incidents` and `GET /incidents/<id>` responses in the SIEM proxy: after forwarding the engine response, `case_opened_at`, `case_type`, `case_mttd_seconds`, `case_mtta_seconds`, and `case_restricted` are overwritten with values read directly via psycopg2 — which always reflects the latest committed DB state, bypassing the engine's session cache entirely.
+
+---
+
 ## v1.0.24 -- 2026-06-09
 
 ### Bug Fixes
