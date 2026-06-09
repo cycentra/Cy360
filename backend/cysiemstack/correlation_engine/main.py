@@ -397,6 +397,89 @@ async def lifespan(app: FastAPI):
             """))
             log.info("migration_11_host_posture_cache_asset_tier_complete")
 
+            # Migration 12: CyCases columns + tables (005_cycases.sql equivalent).
+            # Idempotent — safe to run on any existing installation.
+            await _db.execute(_text("""
+                ALTER TABLE incidents DROP COLUMN IF EXISTS iris_case_id;
+                ALTER TABLE incidents DROP COLUMN IF EXISTS iris_case_status;
+                ALTER TABLE incidents DROP COLUMN IF EXISTS iris_case_url;
+            """))
+            await _db.execute(_text("""
+                ALTER TABLE incidents ADD COLUMN IF NOT EXISTS case_opened_at    TIMESTAMPTZ;
+                ALTER TABLE incidents ADD COLUMN IF NOT EXISTS case_ack_at       TIMESTAMPTZ;
+                ALTER TABLE incidents ADD COLUMN IF NOT EXISTS case_type         TEXT NOT NULL DEFAULT 'generic';
+                ALTER TABLE incidents ADD COLUMN IF NOT EXISTS case_restricted   BOOLEAN NOT NULL DEFAULT FALSE;
+                ALTER TABLE incidents ADD COLUMN IF NOT EXISTS case_mttd_seconds BIGINT;
+                ALTER TABLE incidents ADD COLUMN IF NOT EXISTS case_mtta_seconds BIGINT;
+            """))
+            await _db.execute(_text("""
+                CREATE TABLE IF NOT EXISTS case_comments (
+                    id            BIGSERIAL    PRIMARY KEY,
+                    incident_id   TEXT         NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                    author_email  TEXT         NOT NULL,
+                    body          TEXT         NOT NULL,
+                    created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                    parent_id     BIGINT       REFERENCES case_comments(id),
+                    is_system     BOOLEAN      NOT NULL DEFAULT FALSE
+                );
+                CREATE INDEX IF NOT EXISTS ix_case_comments_incident
+                    ON case_comments(incident_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS case_evidence (
+                    id              BIGSERIAL   PRIMARY KEY,
+                    incident_id     TEXT        NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                    uploaded_by     TEXT        NOT NULL,
+                    uploaded_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    filename        TEXT        NOT NULL,
+                    mime_type       TEXT,
+                    file_size_bytes BIGINT,
+                    sha256          TEXT        NOT NULL,
+                    storage_path    TEXT        NOT NULL,
+                    description     TEXT,
+                    is_deleted      BOOLEAN     NOT NULL DEFAULT FALSE,
+                    deleted_by      TEXT,
+                    deleted_at      TIMESTAMPTZ
+                );
+                CREATE INDEX IF NOT EXISTS ix_case_evidence_incident
+                    ON case_evidence(incident_id);
+                CREATE TABLE IF NOT EXISTS case_iocs (
+                    id            BIGSERIAL   PRIMARY KEY,
+                    incident_id   TEXT        NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                    ioc_value     TEXT        NOT NULL,
+                    ioc_type      TEXT        NOT NULL
+                        CHECK (ioc_type IN ('ip','domain','hash_md5','hash_sha256','url','email')),
+                    added_by      TEXT        NOT NULL,
+                    added_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    context_note  TEXT,
+                    is_removed    BOOLEAN     NOT NULL DEFAULT FALSE,
+                    removed_by    TEXT,
+                    removed_at    TIMESTAMPTZ,
+                    UNIQUE (incident_id, ioc_value, ioc_type)
+                );
+                CREATE INDEX IF NOT EXISTS ix_case_iocs_incident ON case_iocs(incident_id);
+                CREATE INDEX IF NOT EXISTS ix_case_iocs_value    ON case_iocs(ioc_value);
+                CREATE TABLE IF NOT EXISTS case_checklist_state (
+                    id            BIGSERIAL   PRIMARY KEY,
+                    incident_id   TEXT        NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                    template_key  TEXT        NOT NULL,
+                    step_index    INTEGER     NOT NULL,
+                    checked       BOOLEAN     NOT NULL DEFAULT FALSE,
+                    checked_by    TEXT,
+                    checked_at    TIMESTAMPTZ,
+                    note          TEXT,
+                    UNIQUE (incident_id, template_key, step_index)
+                );
+                CREATE TABLE IF NOT EXISTS case_access_restrictions (
+                    id             BIGSERIAL   PRIMARY KEY,
+                    incident_id    TEXT        NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+                    set_by         TEXT        NOT NULL,
+                    set_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    allowed_emails TEXT[]      NOT NULL,
+                    reason         TEXT,
+                    UNIQUE (incident_id)
+                );
+            """))
+            log.info("migration_12_cycases_tables_complete")
+
             await _db.commit()
             log.info("all_startup_migrations_complete")
     except Exception as _e:
