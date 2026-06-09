@@ -155,7 +155,17 @@ def siem_stats():
 @siem_bp.route("/incidents")
 @require_siem_auth
 def siem_incidents():
-    return _proxy("/incidents")
+    resp = _proxy("/incidents")
+    if resp.status_code != 200:
+        return resp
+    try:
+        data = resp.get_json(force=True) or {}
+        incs = data.get("incidents")
+        if isinstance(incs, list):
+            _inject_case_fields(incs)
+        return jsonify(data)
+    except Exception:
+        return resp
 
 
 @siem_bp.route("/incidents", methods=["DELETE"])
@@ -182,7 +192,16 @@ def siem_incidents_batch_close_options():
 @siem_bp.route("/incidents/<incident_id>", methods=["GET"])
 @require_siem_auth
 def siem_incident_detail(incident_id):
-    return _proxy(f"/incidents/{incident_id}")
+    resp = _proxy(f"/incidents/{incident_id}")
+    if resp.status_code != 200:
+        return resp
+    try:
+        data = resp.get_json(force=True) or {}
+        if data.get("id"):
+            _inject_case_fields([data])
+        return jsonify(data)
+    except Exception:
+        return resp
 
 
 @siem_bp.route("/incidents/<incident_id>", methods=["PATCH"])
@@ -591,6 +610,47 @@ def _corr_conn():
 
 def _iso(val):
     return val.isoformat() if val and hasattr(val, "isoformat") else None
+
+
+def _inject_case_fields(incidents: list) -> None:
+    """Overwrite case_opened_at (and related case columns) in a list of incident
+    dicts with values read directly from psycopg2 — the authoritative source.
+
+    The SIEM engine's SQLAlchemy async ORM session can serve stale None values
+    for case_opened_at when its in-process connection pool holds an asyncpg
+    connection whose transaction snapshot predates the psycopg2 case-open write.
+    Bypassing the engine session entirely for these small, case-specific fields
+    eliminates that staleness without requiring an engine restart.
+    """
+    if not incidents:
+        return
+    ids = [inc.get("id") for inc in incidents if inc.get("id")]
+    if not ids:
+        return
+    try:
+        import psycopg2.extras as _pge
+        conn = _corr_conn()
+        conn.cursor_factory = _pge.RealDictCursor
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, case_opened_at, case_type, case_mttd_seconds, "
+            "case_mtta_seconds, case_restricted "
+            "FROM incidents WHERE id = ANY(%s)",
+            [ids],
+        )
+        case_map = {row["id"]: row for row in cur.fetchall()}
+        conn.close()
+        for inc in incidents:
+            row = case_map.get(inc.get("id"))
+            if row is None:
+                continue
+            inc["case_opened_at"]    = _iso(row["case_opened_at"])
+            inc["case_type"]         = row["case_type"]
+            inc["case_mttd_seconds"] = row["case_mttd_seconds"]
+            inc["case_mtta_seconds"] = row["case_mtta_seconds"]
+            inc["case_restricted"]   = row["case_restricted"]
+    except Exception:
+        pass  # best-effort: SIEM engine response is still valid without overrides
 
 
 def _f(val):
