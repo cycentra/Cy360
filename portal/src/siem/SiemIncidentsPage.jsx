@@ -225,10 +225,11 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
       const data = await res.json().catch(() => ({}));
       setRaising(false);
       if (!res.ok) { setRaiseErr(data.error || `HTTP ${res.status}`); return; }
-      const updated = {
-        ...inc,
-        case_opened_at: data.case_opened_at || new Date().toISOString(),
-      };
+      // Re-fetch the full incident so case_opened_at reflects DB truth
+      const freshRes = await siemFetch(siemApi.getIncident(inc.id)).catch(() => null);
+      const updated = freshRes
+        ? { ...inc, ...freshRes }
+        : { ...inc, case_opened_at: data.case_opened_at || new Date().toISOString() };
       setInc(updated);
       onPatched?.(updated);
     } catch {
@@ -526,17 +527,18 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
                   Case opened for this incident and assigned to an analyst for investigation.
                 </div>
               </div>
-              <a href={`/cases/${inc.id}`}
+              <button
+                onClick={() => onOpenCase ? onOpenCase(inc.id) : null}
                 style={{
                   background: "rgba(77,158,255,0.1)",
                   border: "1px solid rgba(77,158,255,0.3)",
                   color: "#4d9eff",
                   padding: "6px 12px", borderRadius: 4, fontSize: 11,
-                  fontFamily: "monospace", textDecoration: "none", whiteSpace: "nowrap", flexShrink: 0,
-                  fontWeight: 700,
+                  fontFamily: "monospace", cursor: onOpenCase ? "pointer" : "default",
+                  fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0,
                 }}>
                 View Case →
-              </a>
+              </button>
             </div>
           </>
         ) : (
@@ -1262,7 +1264,7 @@ function SeverityTrendPanel({ incidents }) {
   );
 }
 
-export function SiemIncidentsPage() {
+export function SiemIncidentsPage({ onOpenCase } = {}) {
   const [incidents, setIncidents]   = useState([]);
   const [total, setTotal]           = useState(0);
   const [loading, setLoading]       = useState(true);
@@ -1839,7 +1841,7 @@ export function SiemIncidentsPage() {
                         fontSize: 9, fontFamily: "monospace", padding: "1px 5px",
                         borderRadius: 2, fontWeight: 700, cursor: "pointer",
                       }}
-                      onClick={e => { e.stopPropagation(); window.location.href = `/cases/${inc.id}`; }}
+                      onClick={e => { e.stopPropagation(); onOpenCase?.(inc.id); }}
                     >
                       🗂️ CASE
                     </span>

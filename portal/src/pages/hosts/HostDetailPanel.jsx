@@ -101,7 +101,6 @@ function EnrichmentPanel({
   const [loading, setLoading]     = useState(false);
   const [result, setResult]       = useState(cachedResult || null);
   const [error, setError]         = useState(null);
-  const [ticketStatus, setTicket] = useState(null);
   const [localStatus, setStatus]  = useState(initialStatus || null);
 
   function handleSetStatus(s) {
@@ -138,21 +137,6 @@ function EnrichmentPanel({
       .catch(e => { setError(e.message); setLoading(false); });
   }
 
-  function raiseTicket() {
-    setTicket("loading");
-    // Open a CyCases investigation if this item is linked to an incident
-    const incId = item?.incident_id || null;
-    if (!incId) { setTicket({ error: "No incident linked to this item" }); return; }
-    fetch(`/api/cases`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ incident_id: incId }),
-    })
-      .then(r => r.json())
-      .then(d => setTicket(d.error ? "error" : d))
-      .catch(() => setTicket("error"));
-  }
 
   const remLines = (result?.remediation || "")
     .split("\n")
@@ -333,37 +317,12 @@ function EnrichmentPanel({
         )}
       </div>
 
-      {/* ── Open Case ── */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <button
-          onClick={raiseTicket}
-          disabled={ticketStatus === "loading" || (ticketStatus && ticketStatus !== "error")}
-          style={{
-            padding: "6px 14px", borderRadius: 4, cursor: "pointer",
-            fontSize: 11, fontFamily: "monospace",
-            background: ticketStatus?.id
-              ? "rgba(176,110,255,0.15)" : "rgba(77,158,255,0.08)",
-            border: ticketStatus?.id
-              ? "1px solid rgba(176,110,255,0.4)" : "1px solid rgba(77,158,255,0.25)",
-            color: ticketStatus?.id ? "#b06eff" : "#4d9eff",
-          }}>
-          {ticketStatus === "loading"  ? "Opening case…"
-            : ticketStatus === "error" ? "⚠ Failed — Retry"
-            : ticketStatus?.id         ? "✓ Case Open"
-            : "🗬️ Open Case"}
-        </button>
-        {ticketStatus?.id && (
-          <a href={`/cases/${item?.incident_id}`}
-            style={{ fontSize: 10, color: "#b06eff", textDecoration: "underline" }}>
-            View Case →
-          </a>
-        )}
-        {ticketStatus === "error" && (
-          <button onClick={raiseTicket}
-            style={{ background: "none", border: "none", color: "#4d9eff", cursor: "pointer", fontSize: 10 }}>
-            Retry
-          </button>
-        )}
+      {/* ── Case note ── */}
+      <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace",
+        paddingTop: 4, lineHeight: 1.6 }}>
+        🗂️ Cases are opened from{" "}
+        <span style={{ color: "#4d9eff" }}>Active Incidents</span>{" "}
+        when a SIEM alert correlates with this host finding.
       </div>
     </div>
   );

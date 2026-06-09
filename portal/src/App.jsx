@@ -349,7 +349,7 @@ export default function App() {
             {activeTab==="dashboard"      && <DashboardPage assets={assets} data={data} stats={stats} installedModules={installedModules} setActiveTab={setActiveTab} setSelectedAsset={setSelectedAsset} setShowImport={setShowImport}/>}
             {activeTab==="assets"         && <AssetsPage assets={assets} setSelectedAsset={setSelectedAsset} setShowImport={setShowImport}/>}
             {activeTab==="vulns"          && <VulnerabilityPage assets={assets} scanHistory={scanHistory} selectedScanId={selectedScanId} onScanSelect={handleScanSelect}/>}
-            {activeTab==="siem-incidents"   && <SiemIncidentsPage/>}
+            {activeTab==="siem-incidents"   && <SiemIncidentsPage onOpenCase={id => { setCasesIncidentId(id); setActiveTab("cases-detail"); }} />}
             {activeTab==="cases"            && <CasesListPage onOpenCase={id => { setCasesIncidentId(id); setActiveTab("cases-detail"); }} />}
             {activeTab==="cases-detail"     && <CaseDetailPage incidentId={casesIncidentId} onBack={() => setActiveTab("cases")} />}
             {activeTab==="siem-risk"        && <HostIntelligencePage/>}
