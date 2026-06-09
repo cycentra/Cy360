@@ -1,3 +1,11 @@
+## v1.0.27 -- 2026-06-09
+
+### New Features
+
+  - checklist): use item.index instead of item.id; add Save Note button; fix fetchChecklist response parsing
+
+---
+
 ## v1.0.26 -- 2026-06-09
 
 ### New Features
