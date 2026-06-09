@@ -75,15 +75,6 @@ export const siemApi = {
   /** Full UEBA profile for a user: baseline + anomaly history */
   getUebaUser: (username) => _get(`/ueba/${encodeURIComponent(username)}`),
 
-  /** Escalate a UEBA anomaly to IRIS as a new case (analyst+ role) */
-  escalateToIris: (body) => _post("/ueba/escalate", body),
-
-  /** Manually escalate a SIEM incident to CyIRIS (analyst+ role).
-   *  Creates a case regardless of FP confidence score.
-   *  If the incident already has a ticket, returns existing ticket info.
-   */
-  escalateIncident: (id) => _post(`/incidents/${id}/escalate`, {}),
-
   /** Fetch the full chronological audit trail for an incident. */
   getAuditLog: (id) => _get(`/incidents/${id}/audit`),
 

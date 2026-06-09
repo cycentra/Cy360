@@ -7,7 +7,6 @@ Routes:
   POST /api/scan/trigger        start a scan
   GET  /api/scan/status         poll progress
   GET  /api/scans/latest        fetch latest scan result JSON
-  POST /api/asm/escalate        create CyIRIS case from an ASM finding
 """
 
 import glob
@@ -497,16 +496,13 @@ def download_pdf_report():
     )
 
 
-# ── ASM → CyIRIS escalation ───────────────────────────────────────────────────
-#
-# Severity → IRIS severity ID mapping (matches IRIS built-in severity table)
 _ASM_SEV_MAP = {
     "critical": 1,
     "high":     2,
     "medium":   3,
     "low":      4,
 }
-# Severity → confidence-score proxy (used only for display context in the ticket)
+# Severity → confidence-score proxy
 _ASM_CONFIDENCE = {
     "critical": 95.0,
     "high":     80.0,
@@ -514,95 +510,6 @@ _ASM_CONFIDENCE = {
     "low":      30.0,
 }
 
-
-@asm_bp.route("/api/asm/escalate", methods=["POST"])
-def asm_escalate_to_iris():
-    """Create a CyIRIS (DFIR IRIS) case from an ASM finding.
-
-    Requires analyst or admin role.  Config is read live from ai_settings.json
-    so no restart is needed after enabling CyIRIS in System Settings.
-    """
-    if not session.get("user_email"):
-        return jsonify({"error": "Authentication required"}), 401
-
-    from blueprints.rbac.manager import get_user_role
-    role = get_user_role(session["user_email"])
-    if role not in ("admin", "analyst"):
-        return jsonify({"error": "Analyst or admin role required"}), 403
-
-    from core.helpers import get_iris_config
-    import requests as _r
-
-    cfg = get_iris_config()
-    if not cfg:
-        return jsonify({
-            "error": "CyIRIS is not configured. Enable it in System Settings \u2192 Integrations \u2192 CyIRIS."
-        }), 503
-
-    body = request.get_json(silent=True) or {}
-    vulnerability = body.get("vulnerability", "ASM Finding").strip()
-    severity_raw  = str(body.get("severity", "medium")).lower()
-    severity      = severity_raw if severity_raw in _ASM_SEV_MAP else "medium"
-    description   = body.get("description", "")
-    recommendation = body.get("recommendation", "")
-    asset         = body.get("asset", "")
-    module        = body.get("module", "")
-    risk_score    = body.get("risk_score", None)
-    cve           = body.get("cve", "")
-    domain        = body.get("domain", asset or "unknown")
-    analyst_email = session.get("user_email", "unknown")
-    confidence    = _ASM_CONFIDENCE.get(severity, 55.0)
-
-    case_name = f"[ASM] {vulnerability} \u2014 {asset or domain}"
-    case_body = (
-        f"## ASM Finding: {vulnerability}\n\n"
-        f"**Asset:** `{asset or domain}`  \n"
-        f"**Severity:** {severity.upper()}  \n"
-        f"**Module:** {module or 'N/A'}  \n"
-        f"**Confidence Score:** {confidence:.0f}  \n"
-    )
-    if risk_score is not None:
-        case_body += f"**Risk Score:** {risk_score}  \n"
-    if cve:
-        case_body += f"**CVE:** {cve}  \n"
-    if description:
-        case_body += f"\n### Description\n{description}\n"
-    if recommendation:
-        case_body += f"\n### Recommended Remediation\n{recommendation}\n"
-    case_body += f"\n---\n*Escalated manually by `{analyst_email}` via CyCentra360 ASM*"
-
-    payload = {
-        "case_name":        case_name,
-        "case_description": case_body,
-        "case_customer":    cfg["customerId"],
-        "case_severity_id": _ASM_SEV_MAP[severity],
-        "case_soc_id":      _asm_id(asset or domain, module),
-    }
-    try:
-        resp = _r.post(
-            f"{cfg['url'].rstrip('/')}/api/v2/cases",
-            headers={
-                "Authorization": f"Bearer {cfg['apiKey']}",
-                "Content-Type":  "application/json",
-                "Accept":        "application/json",
-            },
-            json=payload,
-            timeout=10,
-            verify=False,  # IRIS commonly uses self-signed cert on-premise
-        )
-        if resp.status_code in (200, 201):
-            data = resp.json()
-            case = data if "case_id" in data else data.get("data", data)
-            case_id  = case.get("case_id")
-            case_url = f"{cfg['url'].rstrip('/')}/case?cid={case_id}" if case_id else cfg["url"]
-            return jsonify({"case_id": case_id, "case_url": case_url, "case_name": case_name})
-        return jsonify({"error": f"IRIS returned HTTP {resp.status_code}", "detail": resp.text[:300]}), 502
-    except _r.exceptions.ConnectionError:
-        return jsonify({"error": "Cannot reach CyIRIS. Check URL in System Settings."}), 503
-    except _r.exceptions.Timeout:
-        return jsonify({"error": "CyIRIS request timed out."}), 504
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 # ── ASM finding / asset status management ─────────────────────────────────────

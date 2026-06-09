@@ -44,7 +44,6 @@ const BTN   = (color="#00e5a0") => ({ background: `rgba(${color === "#00e5a0" ? 
 const ENV_TARGETS = [
   { id: "global",      label: "Global (.env)",        desc: "Core platform config: domain, OAuth, ports" },
   { id: "cysiemstack", label: "CySIEM Stack",          desc: "Wazuh, Redis, PostgreSQL, MISP settings" },
-  { id: "cyiris",      label: "CyIRIS",                desc: "Incident response platform config" },
   { id: "cysoar",      label: "CySOAR",                desc: "SOAR / Node-RED automation settings" },
 ];
 
@@ -552,12 +551,11 @@ function EnvConfigTab() {
 // TAB 5 — User Management (admin only)
 // ════════════════════════════════════════════════════════════════════════════
 
-const VALID_ROLES = ["admin", "analyst", "viewer", "cyiris", "cysoar"];
+const VALID_ROLES = ["admin", "analyst", "viewer", "cysoar"];
 const ROLE_APPS_MAP = {
-  admin:   ["cy360", "cysiem", "cyiris", "cysoar", "cyasm"],
-  analyst: ["cy360", "cysiem", "cyiris", "cysoar", "cyasm"],
+  admin:   ["cy360", "cysiem", "cysoar", "cyasm"],
+  analyst: ["cy360", "cysiem", "cysoar", "cyasm"],
   viewer:  ["cy360", "cysiem"],
-  cyiris:  ["cyiris"],
   cysoar:  ["cysoar"],
 };
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -1054,293 +1052,6 @@ const TABS = [
   { id: "backup",    label: "Backup & Restore" },
 ];
 
-// ════════════════════════════════════════════════════════════════════════════
-// TAB 3 — Integrations (CyIRIS)
-// ════════════════════════════════════════════════════════════════════════════
-
-// NOTE: CyMISP is configured server-side via vault secrets (CLOUD_MISP_URL +
-// CLOUD_MISP_API_KEY). There is no UI for MISP — it activates automatically
-// when those secrets are present in the Infisical / KV vault.
-
-// ════════════════════════════════════════════════════════════════════════════
-// TAB 3b — CyIRIS (DFIR IRIS Integration)
-// ════════════════════════════════════════════════════════════════════════════
-
-function CyIrisTab() {
-  const [iris,             setIris]             = useState({});
-  const [loading,          setLoading]          = useState(true);
-  const [saving,           setSaving]           = useState(false);
-  const [saved,            setSaved]            = useState(false);
-  const [platformStatus,   setPlatformStatus]   = useState(null);
-  const [irisPassword,     setIrisPassword]     = useState("");
-  const [installLog,       setInstallLog]       = useState([]);
-  const [installStage,     setInstallStage]     = useState(null);
-  const [installProgress,  setInstallProgress]  = useState(0);
-  const [confirmUninstall, setConfirmUninstall] = useState(false);
-  const irisPollRef = useRef(null);
-
-  useEffect(() => {
-    fetch(`${API_BASE}/api/ai/settings`, { credentials: "include" })
-      .then(r => r.json())
-      .then(d => {
-        const raw = d.iris || {};
-        if (raw.fpThreshold === undefined) raw.fpThreshold = 90;
-        setIris(raw);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    const fetchStatus = () => {
-      fetch(`${API_BASE}/api/platform/status`, { credentials: "include" })
-        .then(r => r.ok ? r.json() : null)
-        .then(d => { if (d) setPlatformStatus(d.cyiris?.status || "not_installed"); })
-        .catch(() => {});
-    };
-    fetchStatus();
-    const t = setInterval(fetchStatus, 5000);
-    return () => clearInterval(t);
-  }, []);
-
-  const isInstalled            = platformStatus === "running";
-  const isCurrentlyInstalling  = platformStatus === "installing" || installStage === "installing";
-
-  const handleInstall = async () => {
-    if (!irisPassword.trim()) return;
-    setInstallStage("installing");
-    setInstallLog(["Preparing CyIRIS installation…"]);
-    setInstallProgress(5);
-    try {
-      const res = await fetch(`${API_BASE}/api/platform/install`, {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ module: "cyiris", config: { IRIS_ADM_PASSWORD: irisPassword } }),
-      });
-      if (!res.ok) {
-        const e = await res.json();
-        setInstallLog(prev => [...prev, `ERROR: ${e.error || "Install failed"}`]);
-        setInstallStage("error");
-        return;
-      }
-      irisPollRef.current = setInterval(async () => {
-        try {
-          const lr = await fetch(`${API_BASE}/api/platform/logs/cyiris`, { credentials: "include" });
-          if (lr.ok) {
-            const l = await lr.json();
-            if (l.lines?.length) {
-              setInstallLog(l.lines);
-              const last = l.lines[l.lines.length - 1].toLowerCase();
-              if      (last.includes("pulling"))         setInstallProgress(p => Math.max(p, 15));
-              else if (last.includes("starting"))        setInstallProgress(p => Math.max(p, 35));
-              else if (last.includes("waiting"))         setInstallProgress(p => Math.max(p, 55));
-              else if (last.includes("api key"))         setInstallProgress(p => Math.max(p, 85));
-              else if (last.includes("done — status"))   setInstallProgress(100);
-            }
-          }
-          const sr = await fetch(`${API_BASE}/api/platform/status`, { credentials: "include" });
-          if (!sr.ok) return;
-          const all = await sr.json();
-          const s = all.cyiris;
-          if (!s) return;
-          if (s.status === "running") {
-            clearInterval(irisPollRef.current);
-            setInstallStage("done");
-            setInstallProgress(100);
-            setPlatformStatus("running");
-          } else if (s.status === "failed") {
-            clearInterval(irisPollRef.current);
-            setInstallStage("error");
-          }
-        } catch {}
-      }, 5000);
-    } catch (e) {
-      setInstallLog(prev => [...prev, `Network error: ${e.message}`]);
-      setInstallStage("error");
-    }
-  };
-
-  const handleUninstall = async () => {
-    setConfirmUninstall(false);
-    await fetch(`${API_BASE}/api/platform/uninstall`, {
-      method: "POST", credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ module: "cyiris" }),
-    });
-    setPlatformStatus("not_installed");
-    setInstallStage(null);
-    setInstallLog([]);
-    setInstallProgress(0);
-  };
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await fetch(`${API_BASE}/api/ai/settings`, {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ iris }),
-      });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
-    } finally { setSaving(false); }
-  };
-
-  if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
-
-  return (
-    <div style={{ maxWidth: 640 }}>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-        <span style={{ fontSize: 18 }}>🎫</span>
-        <div style={{ color: "rgba(176,110,255,0.9)", fontSize: 10, letterSpacing: "1.5px",
-          textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
-          CyIRIS — DFIR IRIS Incident Response
-        </div>
-      </div>
-      <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, marginBottom: 20, lineHeight: 1.6 }}>
-        When installed, <strong style={{ color: "rgba(255,255,255,0.5)" }}>CySIEM Correlation Engine</strong> will
-        automatically raise tickets in DFIR IRIS for incidents requiring analyst investigation.
-        The API key is captured automatically during install.
-      </div>
-
-      {/* Install / Uninstall widget */}
-      <div style={{ background: "rgba(176,110,255,0.04)", border: "1px solid rgba(176,110,255,0.15)",
-        borderRadius: 6, padding: "18px 20px", marginBottom: 24 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-          marginBottom: (isCurrentlyInstalling || installStage === "error") ? 16 : 0 }}>
-          <div>
-            {isCurrentlyInstalling
-              ? <span style={{ color: "#f5c518", fontSize: 11, fontFamily: "monospace" }}>⏳ Installing CyIRIS…</span>
-              : isInstalled
-              ? <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>✓ CyIRIS — Running</span>
-              : <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>○ CyIRIS — Not installed</span>}
-          </div>
-          {!isInstalled && !isCurrentlyInstalling && installStage !== "installing" && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <input type="password" value={irisPassword}
-                onChange={e => setIrisPassword(e.target.value)}
-                placeholder="Admin password for CyIRIS"
-                style={{ ...INPUT, width: 220, marginBottom: 0 }} />
-              <button onClick={handleInstall} disabled={!irisPassword.trim()}
-                style={{ background: "rgba(176,110,255,0.18)", color: "#b06eff",
-                  border: "1px solid rgba(176,110,255,0.45)", borderRadius: 4,
-                  padding: "6px 16px", fontFamily: "monospace", fontSize: 11, fontWeight: 700,
-                  cursor: "pointer", opacity: !irisPassword.trim() ? 0.4 : 1, whiteSpace: "nowrap" }}>
-                Install CyIRIS
-              </button>
-            </div>
-          )}
-          {isInstalled && !confirmUninstall && (
-            <button onClick={() => setConfirmUninstall(true)}
-              style={{ background: "rgba(255,59,59,0.1)", color: "#ff4444",
-                border: "1px solid rgba(255,59,59,0.3)", borderRadius: 4,
-                padding: "6px 16px", fontFamily: "monospace", fontSize: 11, cursor: "pointer" }}>
-              Uninstall CyIRIS
-            </button>
-          )}
-          {isInstalled && confirmUninstall && (
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={handleUninstall}
-                style={{ background: "#ff3b3b", color: "#fff", border: "none", borderRadius: 4,
-                  padding: "6px 14px", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-                Confirm Remove
-              </button>
-              <button onClick={() => setConfirmUninstall(false)}
-                style={{ background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.6)",
-                  border: "1px solid rgba(255,255,255,0.12)", borderRadius: 4,
-                  padding: "6px 14px", fontFamily: "monospace", fontSize: 11, cursor: "pointer" }}>
-                Cancel
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Install progress */}
-        {installStage === "installing" && (
-          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-              <span style={{ color: "#f5c518", fontFamily: "monospace", fontSize: 11 }}>Installing CyIRIS — 4–6 min</span>
-              <span style={{ color: "#f5c518", fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{installProgress}%</span>
-            </div>
-            <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 2, height: 4, marginBottom: 12 }}>
-              <div style={{ height: "100%", width: `${installProgress}%`, background: "#b06eff", borderRadius: 2, transition: "width 0.4s ease" }} />
-            </div>
-            <div style={{ background: "#0d0d0d", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 4,
-              padding: "10px 12px", maxHeight: 160, overflowY: "auto", fontFamily: "monospace",
-              fontSize: 10, color: "rgba(255,255,255,0.55)", lineHeight: 1.6 }}>
-              {installLog.map((l, i) => <div key={i}>{l}</div>)}
-            </div>
-          </div>
-        )}
-
-        {/* Done */}
-        {installStage === "done" && (
-          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 12 }}>
-            <div style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace" }}>
-              ✓ CyIRIS installed — API key captured automatically. Incidents will now escalate to DFIR IRIS.
-            </div>
-          </div>
-        )}
-
-        {/* Error */}
-        {installStage === "error" && (
-          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 12 }}>
-            <div style={{ color: "#ff4444", fontSize: 11, fontFamily: "monospace", marginBottom: 8 }}>
-              ✗ Installation failed. Check logs above.
-            </div>
-            <div style={{ background: "#0d0d0d", border: "1px solid rgba(255,0,0,0.15)", borderRadius: 4,
-              padding: "10px 12px", maxHeight: 120, overflowY: "auto",
-              fontFamily: "monospace", fontSize: 10, color: "rgba(255,150,150,0.8)" }}>
-              {installLog.map((l, i) => <div key={i}>{l}</div>)}
-            </div>
-            <button onClick={() => { setInstallStage(null); setInstallLog([]); setInstallProgress(0); }}
-              style={{ marginTop: 8, background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.5)",
-                border: "1px solid rgba(255,255,255,0.12)", borderRadius: 4,
-                padding: "5px 14px", fontFamily: "monospace", fontSize: 11, cursor: "pointer" }}>
-              Retry
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* False-positive threshold slider — always visible */}
-      <div style={{ marginTop: 24, background: "rgba(255,255,255,0.02)",
-        border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "18px 20px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <div style={LABEL}>FALSE POSITIVE AUTO-CLOSE THRESHOLD</div>
-          <span style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 14, fontWeight: 700 }}>
-            {iris.fpThreshold ?? 90}%
-          </span>
-        </div>
-        <input type="range" min={50} max={99} step={1}
-          value={iris.fpThreshold ?? 90}
-          onChange={e => setIris(prev => ({ ...prev, fpThreshold: parseInt(e.target.value) }))}
-          style={{ width: "100%", accentColor: "#00e5a0", cursor: "pointer", marginBottom: 8 }}
-        />
-        <div style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>50% (more tickets)</span>
-          <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>99% (fewer tickets)</span>
-        </div>
-        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, marginTop: 8, lineHeight: 1.5 }}>
-          Incidents where the AI confidence score is{" "}
-          <strong style={{ color: "#00e5a0" }}>≥ {iris.fpThreshold ?? 90}%</strong>{" "}
-          false positive are <strong style={{ color: "#ff8c00" }}>auto-closed</strong> without raising a ticket.
-          All others are escalated to CyIRIS for analyst review.
-        </div>
-      </div>
-
-      {/* Save */}
-      <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 20 }}>
-        <button onClick={handleSave} disabled={saving}
-          style={{ ...BTN(), opacity: saving ? 0.5 : 1 }}>
-          {saving ? "Saving…" : "Save CyIRIS Configuration"}
-        </button>
-        {saved && <span style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace" }}>✓ Saved — correlation engine updated</span>}
-      </div>
-    </div>
-  );
-}
 
 // ════════════════════════════════════════════════════════════════════════════
 // TAB 5 — MCP Configuration
@@ -2415,7 +2126,7 @@ const BACKUP_INCLUDES = [
   { file: "/opt/cycentra/*.env",            desc: "CySIEM stack, per-component env files" },
   { file: "/opt/cycentra/*.lic",            desc: "License file(s)" },
   { file: "/opt/cycentra/modules/**/*.json", desc: "Per-module config files" },
-  { file: "/opt/cycentra/modules/**/.env",  desc: "Per-module env (CyIRIS, CySOAR, CyMISP, …)" },
+  { file: "/opt/cycentra/modules/**/.env",  desc: "Per-module env (CySOAR, CyMISP, …)" },
   { file: "database_dump.sql",              desc: "PostgreSQL dump — only if DATABASE_URL is set" },
 ];
 
@@ -2575,21 +2286,12 @@ function BackupTab() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// TAB 3 wrapper — Integrations (MISP + CyIRIS + CyMind)
+// TAB 3 wrapper — Integrations (CyMind)
 // ════════════════════════════════════════════════════════════════════════════
 
 function IntegrationsTab() {
   return (
     <div>
-      {/* CyIRIS Section */}
-      <div style={{ marginBottom: 40 }}>
-        <CyIrisTab />
-      </div>
-
-      {/* Divider */}
-      <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", marginBottom: 40 }} />
-
-      {/* CyMind Section */}
       <CyMindIntegrationTab />
     </div>
   );

@@ -1,7 +1,6 @@
 /**
  * src/registry/platformModules.js
  *
- * CyIRIS  — only asks for password (username is always 'administrator')
  * CyMISP  — only asks for admin email + passphrase (redis auto-generated)
  * CySOAR  — no config fields (all auto-generated)
  */
@@ -23,27 +22,6 @@ export const PLATFORM_MODULES = {
     docsUrl: "https://documentation.wazuh.com",
     embeddedPath: null,
     modulePath: `/cysiem/`,
-  },
-
-  cyiris: {
-    id: "cyiris", tier: "addon",
-    name: "CyIRIS",
-    fullName: "CyIRIS — Incident Response & Case Management",
-    description: "DFIR IRIS-powered incident response platform. Track cases, IOCs, timelines and collaborate on security incidents.",
-    icon: "🎫", color: "#b06eff",
-    ram_gb: 3, disk_gb: 20, install_time: "4–6 minutes",
-    port: 4433, healthPath: "/api/v2/ping",
-    ssoProtocol: "OIDC",
-    features: ["Case management","IOC tracking","Evidence chain","Timeline analysis","OIDC SSO"],
-    docsUrl: "https://cycentra.org/docs/cyiris",
-    embeddedPath: null,
-    modulePath: `/cyiris/`,
-    // Username is always 'administrator' — only ask for password
-    configFields: [
-      { key: "IRIS_ADM_PASSWORD", label: "Admin Password", type: "password",
-        help: "Password for the 'administrator' account. Username is always: administrator" },
-    ],
-    defaultConfig: { IRIS_ADM_PASSWORD: "" },
   },
 
   cysoar: {

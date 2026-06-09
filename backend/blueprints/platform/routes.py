@@ -5,13 +5,10 @@ Platform module install / uninstall / status API.
 Written as a faithful port of the original monolithic app.py install logic.
 
 Key design decisions (matching original app.py exactly):
-  - CyIRIS: env built from master .env, then UI input overwrites via update().
-             DB table is "user" (lowercase) — DFIR-IRIS schema.
   - CyMISP: nginx block built as a plain string (no helper abstraction).
              compose template includes cymisp_data volume + misp-config.php mount.
   - CySOAR: nginx injected as location /cysoar/ inside cysoc server block.
-  - Uninstall: only CyMISP and CySOAR have dynamic nginx. CyIRIS nginx is
-               now also dynamic (added on install, removed on uninstall).
+  - Uninstall: only CyMISP and CySOAR have dynamic nginx.
 """
 
 import os
@@ -29,8 +26,6 @@ from core.helpers import run, add_cors_headers
 from blueprints.platform.compose import (
     COMPOSE_TEMPLATES, VALID_MODULES,
     _CYSOAR_IMAGE     as CYSOAR_IMAGE,
-    _CYIRIS_IMAGE_APP as CYIRIS_IMAGE_APP,
-    _CYIRIS_IMAGE_DB  as CYIRIS_IMAGE_DB,
 )
 from blueprints.platform.state import load_state, save_state
 from blueprints.platform.docker_utils import docker_containers_running
@@ -132,7 +127,6 @@ def platform_uninstall():
 
         # 2. Force-remove known orphaned containers
         for c in {
-            "cyiris": ["cyiris-cyiris-1", "cyiris-cyiris-db-1", "cyiris", "cyiris-db"],
             "cysoar": ["cysoar"],
             "cymisp": ["cymisp", "cymisp-db", "cymisp-redis"],
         }.get(module_id, []):
@@ -145,9 +139,7 @@ def platform_uninstall():
                 run(f"docker volume rm -f {vol.strip()} 2>/dev/null || true", timeout=10)
 
         # 4. Remove nginx config
-        if module_id == "cyiris":
-            _nginx_remove_server_block(f"cyiris.{base_domain}")
-        elif module_id == "cysoar":
+        if module_id == "cysoar":
             _nginx_remove_cysoar_location()
         elif module_id == "cymisp":
             _nginx_remove_server_block(f"cymisp.{base_domain}")
@@ -196,7 +188,6 @@ _update_lock = threading.Lock()
 def _module_setup_script(module_id: str) -> str | None:
     """Return the path to the module's setup script on this server, if present."""
     candidates = {
-        "cyiris": "/opt/cyiris/cyiris-setup.sh",
         "cysoar": "/opt/cysoar/cysoar-setup.sh",
     }
     path = candidates.get(module_id)
@@ -242,7 +233,7 @@ def platform_update_module(module_id):
     if get_user_role(session["user_email"]) not in ("admin", "analyst"):
         return jsonify({"error": "Analyst or admin role required"}), 403
 
-    if module_id not in {"cyiris", "cysoar"}:
+    if module_id not in {"cysoar"}:
         return jsonify({"error": f"Module '{module_id}' does not support self-update via this endpoint"}), 400
 
     with _update_lock:
@@ -266,7 +257,7 @@ def platform_update_module(module_id):
 
 @platform_bp.route("/api/platform/update-log/<module_id>")
 def platform_update_log(module_id):
-    if module_id not in {"cyiris", "cysoar"}:
+    if module_id not in {"cysoar"}:
         return jsonify({"error": "Unknown module"}), 400
     log_file = MODULES_DIR / module_id / "update.log"
     if not log_file.exists():
@@ -283,11 +274,9 @@ def platform_update_log(module_id):
 # ── Module version check ──────────────────────────────────────────────────────
 
 _CONTAINER_MAP = {
-    "cyiris": ["cyiris-cyiris-1", "cyiris"],
     "cysoar": ["cysoar"],
 }
 _GITHUB_REPO_MAP = {
-    "cyiris": "cycentra/CyIRIS",
     "cysoar": "cycentra/CySOAR",
 }
 
@@ -355,7 +344,7 @@ def _get_latest_version(module_id: str) -> str | None:
 def platform_module_version(module_id):
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
-    if module_id not in {"cyiris", "cysoar"}:
+    if module_id not in {"cysoar"}:
         return jsonify({"error": "Unknown module"}), 400
 
     running = _get_running_version(module_id)
@@ -381,8 +370,6 @@ def platform_module_version(module_id):
 def debug_images():
     return jsonify({
         "CYSOAR_IMAGE":    CYSOAR_IMAGE,
-        "CYIRIS_IMAGE_APP": CYIRIS_IMAGE_APP,
-        "CYIRIS_IMAGE_DB":  CYIRIS_IMAGE_DB,
         "SIEM_ENGINE_URL":  os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100"),
         "env_file_loaded":  os.path.exists("/opt/cycentra/.env") or os.path.exists(".env"),
     })
@@ -495,80 +482,6 @@ def _nginx_inject_cysoar(base_domain: str, log_fn):
     log_fn("cysoar: WARNING — could not find injection point — add location /cysoar/ manually")
 
 
-def _nginx_add_cyiris(base_domain: str, log_fn):
-    """Add the cyiris.DOMAIN server block with IAP oauth2-proxy auth_request gate."""
-    if not NGINX_CONF.exists():
-        log_fn("cyiris: nginx config not found")
-        return
-    existing = NGINX_CONF.read_text()
-    if f"cyiris.{base_domain}" in existing:
-        log_fn(f"cyiris: nginx block already present")
-        return
-
-    # Obtain a dedicated LE cert for cyiris.DOMAIN (webroot — nginx must be up)
-    cyiris_cert = f"/etc/letsencrypt/live/cyiris.{base_domain}/fullchain.pem"
-    import os as _os
-    if not _os.path.exists(cyiris_cert):
-        rc_cb, _, _ = run(
-            f"certbot certonly --nginx --non-interactive --agree-tos"
-            f" -d cyiris.{base_domain} 2>/dev/null || true",
-            timeout=120,
-        )
-        log_fn(f"cyiris: certbot {'succeeded' if _os.path.exists(cyiris_cert) else 'failed — cert may be missing'}")
-
-    block = (
-        "\nserver {\n"
-        "    listen 80; server_name cyiris." + base_domain + ";\n"
-        "    return 301 https://$host$request_uri;\n"
-        "}\n"
-        "server {\n"
-        "    listen 443 ssl http2; server_name cyiris." + base_domain + ";\n"
-        "    ssl_certificate     /etc/letsencrypt/live/cyiris." + base_domain + "/fullchain.pem;\n"
-        "    ssl_certificate_key /etc/letsencrypt/live/cyiris." + base_domain + "/privkey.pem;\n"
-        "    include             /etc/letsencrypt/options-ssl-nginx.conf;\n"
-        "    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;\n"
-        "    add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;\n"
-        "    add_header X-Frame-Options \"\" always;\n"
-        "    add_header Content-Security-Policy \"frame-ancestors 'self' https://cy360." + base_domain + "\" always;\n"
-        "    # IAP gate — oauth2-proxy validates the wildcard ." + base_domain + " session cookie\n"
-        "    auth_request        /oauth2/auth;\n"
-        "    error_page 401    = @error401;\n"
-        "    auth_request_set    $proxy_email $upstream_http_x_auth_request_email;\n"
-        "    location @error401 {\n"
-        "        return 302 https://cy360." + base_domain + "/oauth2/sign_in?rd=https://$host$request_uri;\n"
-        "    }\n"
-        "    location = /oauth2/auth {\n"
-        "        internal;\n"
-        "        proxy_pass              http://127.0.0.1:4180;\n"
-        "        proxy_pass_request_body off;\n"
-        "        proxy_set_header        Content-Length \"\";\n"
-        "        proxy_set_header        X-Original-URI $request_uri;\n"
-        "        proxy_set_header        X-Scheme $scheme;\n"
-        "    }\n"
-        "    location = /logout {\n"
-        "        return 302 https://cy360." + base_domain + "/oauth2/sign_out?rd=https://cy360." + base_domain + "/;\n"
-        "    }\n"
-        "    if ($request_method = OPTIONS) { return 204; }\n"
-        "    location / {\n"
-        "        proxy_pass http://127.0.0.1:4433;\n"
-        "        proxy_http_version 1.1;\n"
-        "        proxy_set_header Host $host;\n"
-        "        proxy_set_header X-Real-IP $remote_addr;\n"
-        "        proxy_set_header X-Forwarded-Proto https;\n"
-        "        proxy_set_header X-Email $proxy_email;\n"
-        "        proxy_read_timeout 300;\n"
-        "        proxy_buffer_size 128k;\n"
-        "        proxy_buffers 4 256k;\n"
-        "        proxy_cookie_flags ~ samesite=none secure;\n"
-        "    }\n"
-        "}\n"
-    )
-    NGINX_CONF.write_text(existing + block)
-    rc, _, err = run("nginx -t && systemctl reload nginx", timeout=15)
-    log_fn(f"cyiris: nginx block added for cyiris.{base_domain}" if rc == 0
-           else f"cyiris: WARNING — nginx reload failed: {err}")
-
-
 def _nginx_add_cymisp(base_domain: str, log_fn):
     """
     Add the cymisp.DOMAIN server block — exact string from original app.py.
@@ -619,7 +532,7 @@ def _expand_ssl(module_id: str, base_domain: str, log_fn):
     """Expand the Let's Encrypt cert to cover a new module subdomain."""
     existing = NGINX_CONF.read_text() if NGINX_CONF.exists() else ""
     domains  = [f"cy360.{base_domain}", f"cyasm.{base_domain}", f"cysiem.{base_domain}"]
-    for mod in ("cyiris", "cymisp"):
+    for mod in ("cymisp",):
         if f"{mod}.{base_domain}" in existing:
             domains.append(f"{mod}.{base_domain}")
     new_sub = f"{module_id}.{base_domain}"
@@ -674,52 +587,10 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
         log("Written docker-compose.yml")
 
         env_path   = module_dir / ".env"
-        cyiris_env = {}   # always defined; populated below if module_id == "cyiris"
 
         # ── Per-module .env preparation ───────────────────────────────────────
 
-        if module_id == "cyiris":
-            # 1. Resolve password — Script 1 style
-            _ui_password     = (env_vars.get("IRIS_ADM_PASSWORD") or "").strip()
-            _master_password = (os.environ.get("IRIS_ADM_PASSWORD") or "").strip()
-            _final_password  = _ui_password or _master_password
-
-            if not _final_password:
-                log("ERROR: IRIS_ADM_PASSWORD missing — aborting")
-                raise ValueError("IRIS_ADM_PASSWORD is required")
-
-            # 2. Build module .env
-            cyiris_env = {
-                "POSTGRES_PASSWORD":   os.environ.get("POSTGRES_PASSWORD") or os.environ.get("IRIS_DB_PASS", ""),
-                "IRIS_SECRET_KEY":     os.environ.get("IRIS_SECRET_KEY") or os.environ.get("IRIS_SECRET", ""),
-                "CYIRIS_OIDC_SECRET":  os.environ.get("CYIRIS_OIDC_SECRET", ""),
-                "CYCENTRA_PORTAL_URL": os.environ.get("CYCENTRA_PORTAL_URL") or os.environ.get("FRONTEND_URL", ""),
-                "IRIS_ADM_EMAIL":      os.environ.get("IRIS_ADM_EMAIL", "admin@cycentra.com"),
-                "IRIS_ADM_PASSWORD":   _final_password,
-                "BASE_DOMAIN":         base_domain,
-            }
-            env_vars.pop("IRIS_ADM_PASSWORD", None)
-            cyiris_env.update(env_vars)
-            env_path.write_text("\n".join(f"{k}={v}" for k, v in cyiris_env.items()))
-
-            # 3. Write pgcrypto init script
-            init_dir = module_dir / "db-init"
-            init_dir.mkdir(parents=True, exist_ok=True)
-            (init_dir / "01-pgcrypto.sql").write_text("CREATE EXTENSION IF NOT EXISTS pgcrypto;\n")
-
-            # 4. Patch Compose file (CRITICAL: This is what Script 1 added)
-            compose_text = compose_path.read_text()
-            compose_text = compose_text.replace(
-                "- cyiris_db_init:/docker-entrypoint-initdb.d",
-                f"- {init_dir}:/docker-entrypoint-initdb.d"
-            ).replace(
-                'IRIS_ADM_PASSWORD: "${IRIS_ADM_PASSWORD}"',
-                f'IRIS_ADM_PASSWORD: "{_final_password}"'
-            )
-            compose_path.write_text(compose_text)
-            log(f"CyIRIS setup complete: hardcoded password into docker-compose.yml")
-
-        elif module_id == "cysoar":
+        if module_id == "cysoar":
             # Pre-install cleanup — stale volumes cause httpStatic issues
             log("CySOAR pre-install cleanup — removing stale containers and volumes")
             run("docker compose down -v", cwd=str(module_dir), timeout=60)
@@ -897,101 +768,6 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
             # Add nginx + expand SSL (done regardless of misp_live — nginx needed for access)
             _nginx_add_cymisp(base_domain, log)
             _expand_ssl("cymisp", base_domain, log)
-
-        # Add nginx block + expand SSL
-        if module_id == "cyiris":
-            log("CyIRIS: Setup complete via environment injection. Finalizing Nginx...")
-            _nginx_add_cyiris(base_domain, log)
-            _expand_ssl("cyiris", base_domain, log)
-
-            # Capture the admin API key from the IRIS DB and write it to
-            # CLOUD_IRIS_API_KEY in the master .env so iris_test() and
-            # iris_connector.py can use it without manual configuration.
-            # IRIS auto-generates the key via secrets.token_urlsafe(64) in
-            # post_init.py — it is never logged, so we query the DB directly.
-            log("CyIRIS: waiting for DB to be ready...")
-            _iris_key_captured = False
-            for _attempt in range(24):   # up to 2 min
-                time.sleep(5)
-                rc_k, key_out, _ = run(
-                    "docker exec cyiris-cyiris-db-1 psql -U iris -d iris_db -t "
-                    "-c \"SELECT api_key FROM \\\"user\\\" WHERE name='administrator' LIMIT 1;\"",
-                    timeout=10,
-                )
-                _key = (key_out or "").strip()
-                if rc_k == 0 and _key:
-                    _master_env = Path("/opt/cycentra/.env")
-                    if _master_env.exists():
-                        _env_text = _master_env.read_text()
-                        # Update or append CLOUD_IRIS_API_KEY
-                        if re.search(r"^CLOUD_IRIS_API_KEY=", _env_text, flags=re.MULTILINE):
-                            _env_text = re.sub(
-                                r"^CLOUD_IRIS_API_KEY=.*$", f"CLOUD_IRIS_API_KEY={_key}",
-                                _env_text, flags=re.MULTILINE,
-                            )
-                        else:
-                            _env_text = _env_text.rstrip("\n") + f"\nCLOUD_IRIS_API_KEY={_key}\n"
-                        # Ensure CLOUD_IRIS_URL points to the local CyIRIS install.
-                        # Remove ALL existing entries first (handles duplicates from
-                        # prior installs) then append exactly one correct line.
-                        _iris_url_default = "http://127.0.0.1:4433"
-                        _env_text = re.sub(
-                            r"^CLOUD_IRIS_URL=.*\n?", "",
-                            _env_text, flags=re.MULTILINE,
-                        )
-                        _env_text = _env_text.rstrip("\n") + f"\nCLOUD_IRIS_URL={_iris_url_default}\n"
-                        os.environ["CLOUD_IRIS_URL"] = _iris_url_default
-                        log(f"CyIRIS: CLOUD_IRIS_URL set to {_iris_url_default} in master .env")
-                        _master_env.write_text(_env_text)
-                        os.environ["CLOUD_IRIS_API_KEY"] = _key
-                        log(f"CyIRIS: CLOUD_IRIS_API_KEY captured and written to master .env")
-
-                        # Activate mode=cloud in ai_settings.json so get_iris_config()
-                        # returns a valid config without requiring a manual UI save.
-                        _ai_file = Path("/opt/cycentra/ai_settings.json")
-                        try:
-                            _ai = json.loads(_ai_file.read_text()) if _ai_file.exists() else {}
-                            _ai.setdefault("iris", {})["mode"] = "cloud"
-                            _ai_file.parent.mkdir(parents=True, exist_ok=True)
-                            _ai_file.write_text(json.dumps(_ai, indent=2))
-                            log("CyIRIS: ai_settings.json → iris.mode=cloud activated")
-                        except Exception as _ae:
-                            log(f"CyIRIS: WARNING — ai_settings.json update failed: {_ae}")
-
-                        # Sync integration settings into cysiemstack.env so the
-                        # correlation engine activates without a manual restart.
-                        _siem_path = Path("/opt/cycentra/cysiemstack.env")
-                        if _siem_path.exists():
-                            try:
-                                _iris_updates = {
-                                    "IRIS_MODE":        "cloud",
-                                    "IRIS_ENABLED":     "true",
-                                    "IRIS_URL":         _iris_url_default,
-                                    "IRIS_API_KEY":     _key,
-                                    "IRIS_CUSTOMER_ID": "1",
-                                }
-                                _siem_lines = _siem_path.read_text().splitlines()
-                                _siem_result, _siem_seen = [], set()
-                                for _sl in _siem_lines:
-                                    _sk = _sl.split("=", 1)[0].strip()
-                                    if _sk in _iris_updates:
-                                        _siem_result.append(f"{_sk}={_iris_updates[_sk]}")
-                                        _siem_seen.add(_sk)
-                                    else:
-                                        _siem_result.append(_sl)
-                                for _sk, _sv in _iris_updates.items():
-                                    if _sk not in _siem_seen:
-                                        _siem_result.append(f"{_sk}={_sv}")
-                                _siem_path.write_text("\n".join(_siem_result) + "\n")
-                                log("CyIRIS: cysiemstack.env → IRIS_MODE=cloud, IRIS_ENABLED=true")
-                            except Exception as _se:
-                                log(f"CyIRIS: WARNING — cysiemstack.env update failed: {_se}")
-
-                        _iris_key_captured = True
-                    break
-                log(f"CyIRIS: DB not ready yet ({_attempt + 1}/24)")
-            if not _iris_key_captured:
-                log("CyIRIS: WARNING — could not capture admin API key from DB; set CLOUD_IRIS_API_KEY manually")
 
         # ── CySOAR: inject /cysoar/ location into portal server ───────────────
 

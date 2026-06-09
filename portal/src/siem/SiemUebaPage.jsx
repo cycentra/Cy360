@@ -207,9 +207,6 @@ function AnomalyBadge({ active, total }) {
  */
 function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
   const [expanded,     setExpanded]     = useState(false);
-  const [escalating,   setEscalating]   = useState(false);
-  const [escalated,    setEscalated]    = useState(null);  // { case_id, case_url }
-  const [escalateErr,  setEscalateErr]  = useState(null);
   // Status lifecycle (inline in expanded panel)
   const [txTarget,       setTxTarget]       = useState(null);
   const [txComment,      setTxComment]      = useState("");
@@ -227,11 +224,6 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
   // Confidence score + automated status suggestion
   const confidence = computeUebaConfidence(a);
   const autoSug    = computeUebaAutoStatus(a, curStat);
-
-  // Already has a ticket (auto-raised by engine OR raised this session)
-  const hasTicket  = a.iris_case_id || (escalated?.case_id);
-  const ticketId   = a.iris_case_id || escalated?.case_id;
-  const ticketUrl  = a.iris_case_url || escalated?.case_url;
 
   const startTx  = (t) => { setTxTarget(t); setTxComment(""); setTxErr(""); };
   const cancelTx = () => setTxTarget(null);
@@ -277,39 +269,6 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
     } catch { setTxErr("Network error."); }
     setTxBusy(false);
   };
-
-  async function handleEscalate(e) {
-    e.stopPropagation();
-    setEscalating(true);
-    setEscalateErr(null);
-    try {
-      const resp = await siemApi.escalateToIris({
-        username:         a.username,
-        anomaly_type:     a.anomaly_type,
-        description:      a.description,
-        agent_name:       a.agent_name,
-        src_ip:           a.src_ip,
-        rule_id:          a.rule_id,
-        rule_desc:        a.rule_desc,
-        process_name:     a.process_name,
-        file_path:        a.file_path,
-        raw_log:          a.raw_log,
-        detected_at:      a.detected_at,
-        incident_id:      a.incident_id,
-        risk_contribution: a.risk_contribution,
-      });
-      const data = await resp.json();
-      if (!resp.ok || data.error) {
-        setEscalateErr(data.error || `HTTP ${resp.status}`);
-      } else {
-        setEscalated(data);
-      }
-    } catch {
-      setEscalateErr("Network error — check IRIS connectivity.");
-    } finally {
-      setEscalating(false);
-    }
-  }
 
   // Wazuh deep-link: opens Wazuh Discover filtered by the first alert_id
   const wazuhLink = (integrations?.wazuh_url && (a.alert_ids?.[0]))
@@ -563,10 +522,9 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
             )}
           </div>
 
-          {/* ── CyIRIS Ticket indicator ────────────────────────────────── */}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            {/* Wazuh deep-link — SSO launch */}
-            {wazuhLink && (
+          {/* Wazuh deep-link — SSO launch */}
+          {wazuhLink && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <button
                 onClick={handleWazuhLaunch}
                 disabled={wazuhLaunching}
@@ -579,53 +537,8 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
                   cursor: wazuhLaunching ? "wait" : "pointer" }}>
                 {wazuhLaunching ? "Launching…" : "View in Wazuh"}
               </button>
-            )}
-
-            {/* SUCCESS — ticket already exists */}
-            {hasTicket && (
-              <a href={ticketUrl} target="_blank" rel="noopener noreferrer"
-                style={{ display: "inline-flex", alignItems: "center", gap: 5,
-                  background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.3)",
-                  color: "#00e5a0", fontSize: 11, fontFamily: "monospace",
-                  padding: "5px 12px", borderRadius: 3, textDecoration: "none" }}>
-                ✓ IRIS Case #{ticketId} ↗
-              </a>
-            )}
-
-            {/* FAILED — auto-raise attempt failed */}
-            {!hasTicket && escalateErr && (
-              <>
-                <span style={{ background: "rgba(255,59,59,0.1)", border: "1px solid rgba(255,59,59,0.3)",
-                  color: "#ff6b6b", fontSize: 10, fontFamily: "monospace",
-                  padding: "4px 10px", borderRadius: 3 }}>
-                  ⚠ Auto-raise failed
-                </span>
-                {integrations?.iris_enabled && (
-                  <button onClick={handleEscalate} disabled={escalating} style={{
-                    display: "inline-flex", alignItems: "center", gap: 5,
-                    background: "rgba(255,140,0,0.1)", border: "1px solid rgba(255,140,0,0.35)",
-                    color: "#ff8c00", fontSize: 11, fontFamily: "monospace",
-                    padding: "5px 12px", borderRadius: 3,
-                    cursor: escalating ? "wait" : "pointer" }}>
-                    {escalating ? "⏳ Raising…" : "🎫 Manual Ticket"}
-                  </button>
-                )}
-              </>
-            )}
-
-            {/* NONE — no ticket yet, ready to escalate */}
-            {!hasTicket && !escalateErr && integrations?.iris_enabled && (
-              <button onClick={handleEscalate} disabled={escalating}
-                style={{ display: "inline-flex", alignItems: "center", gap: 5,
-                  background: escalating ? "rgba(255,255,255,0.03)" : "rgba(255,59,59,0.08)",
-                  border: `1px solid ${escalating ? "rgba(255,255,255,0.1)" : "rgba(255,59,59,0.3)"}`,
-                  color: escalating ? "rgba(255,255,255,0.3)" : "#ff6b6b",
-                  fontSize: 11, fontFamily: "monospace", padding: "5px 12px",
-                  borderRadius: 3, cursor: escalating ? "default" : "pointer" }}>
-                {escalating ? "⏳ Escalating…" : "🚨 Escalate to IRIS"}
-              </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -735,12 +648,6 @@ function UserProfile({ username, integrations, anomalyStatuses, onStatusChange }
               fontSize: 10, fontFamily: "monospace", padding: "2px 8px",
               borderRadius: 2, fontWeight: 700 }}>
               {activeAnomalies.length} ACTIVE
-            </span>
-          )}
-          {integrations?.iris_enabled && (
-            <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9,
-              fontFamily: "monospace" }}>
-              • Expand any alert to escalate to IRIS
             </span>
           )}
         </div>

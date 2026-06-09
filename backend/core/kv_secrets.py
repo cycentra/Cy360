@@ -173,16 +173,11 @@ FLASK_KV_MAP: dict[str, str] = {
     # ── NOT in vault — reason ─────────────────────────────────────────────────
     # SMTP_PASSWORD       — UI-managed (cy_sso_config DB); host/user/from are
     #                       also UI fields so vault can't bootstrap SMTP alone
-    # CLOUD_IRIS_URL      — hardcoded default in helpers.py + setup.sh writes
-    #                       https://cyiris.cycentra.com to .env at install time
     # SECRET_KEY, JWT_SECRET, ADMIN_API_KEY         — openssl rand per install
     # CYCENTRA_DB_URL, POSTGRES_PASSWORD             — per-install DB credentials
     # OAUTH2PROXY_SECRET, OAUTH2PROXY_COOKIE_SECRET  — openssl rand per install
-    # CYIRIS_OIDC_SECRET, CYSIEM_OIDC_SECRET,
-    #   CY360SSO_OIDC_SECRET                         — openssl rand per install
-    # IRIS_SECRET_KEY, IRIS_DB_PASS, IRIS_ADM_PASSWORD — per-install CyIRIS
+    # CYSIEM_OIDC_SECRET, CY360SSO_OIDC_SECRET    — openssl rand per install
     # NODE_RED_CREDENTIAL_SECRET                     — openssl rand per install
-    # IRIS_API_KEY, CLOUD_IRIS_API_KEY               — written by platform UI
     # CYSOAR_SESSION_SECRET                          — alias of NODE_RED_CREDENTIAL_SECRET
 }
 
@@ -191,7 +186,6 @@ FLASK_KV_MAP: dict[str, str] = {
 # Only company-wide credentials here.  Install-specific values are excluded:
 #   CORRELATION_DB_URL — per-install PostgreSQL connection string
 #   WAZUH_API_*        — auto-detected by setup.sh from local Wazuh config
-#   IRIS_API_KEY, CLOUD_IRIS_API_KEY — written by UI (_sync_iris_to_siem_env)
 ENGINE_KV_MAP: dict[str, str] = {
     "CLOUD_MISP_URL":     "CLOUD-MISP-URL",
     "CLOUD_MISP_API_KEY": "CLOUD-MISP-API-KEY",

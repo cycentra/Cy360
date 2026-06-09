@@ -40,7 +40,7 @@ from sqlalchemy import select, func, desc, delete
 from pydantic import BaseModel
 
 from config import get_settings
-from models import get_db, init_db, Alert, Incident, UEBABaseline, UEBAAnomaly, RiskScore, AuditLog
+from models import get_db, init_db, Alert, Incident, UEBABaseline, UEBAAnomaly, RiskScore, AuditLog, write_audit
 from ingestor import run_ingestor
 from risk_scorer import recalculate_all
 from normaliser import normalise
@@ -109,7 +109,6 @@ FP_AUTO_CLOSE_DAYS = 7
 
 async def _fp_auto_close_scheduler():
     from models import AsyncSessionLocal
-    from iris_connector import write_audit
     await asyncio.sleep(120)  # let engine fully boot before first check
     while True:
         try:
@@ -177,27 +176,6 @@ async def _auto_archive_scheduler():
         except Exception as e:
             log.error("auto_archive_error", error=str(e))
         await asyncio.sleep(6 * 3600)
-
-# CyIRIS sync scheduler: poll open-linked incidents every 5 minutes
-async def _iris_sync_scheduler():
-    from iris_connector import sync_closed_cases
-    from models import AsyncSessionLocal
-    await asyncio.sleep(60)   # initial delay — let ingestor settle
-    while True:
-        try:
-            async with AsyncSessionLocal() as db:
-                closed = await sync_closed_cases(db)
-                await db.commit()
-                if closed:
-                    await manager.broadcast(_DUMPS({
-                        'type':      'iris_cases_synced',
-                        'closed':    closed,
-                        'timestamp': datetime.now(timezone.utc).isoformat(),
-                    }))
-        except Exception as e:
-            log.error('iris_sync_scheduler_error', error=str(e))
-        await asyncio.sleep(300)  # every 5 minutes
-
 
 # ── Nightly feedback-adjustment scheduler ─────────────────────────────────────
 # Runs once per day.  Consumes analyst verdicts to tune rule confidence scores.
@@ -337,7 +315,7 @@ async def lifespan(app: FastAPI):
                 from pathlib import Path as _Path
                 _ai = _Path("/opt/cycentra/ai_settings.json")
                 _raw = _ai.read_text() if _ai.exists() else "{}"
-                _fp_thresh = float(_json.loads(_raw).get("iris", {}).get("fpThreshold", 90.0))
+                _fp_thresh = float(_json.loads(_raw).get("system", {}).get("fpThreshold", 90.0))
             except Exception:
                 _fp_thresh = 90.0
             await _db.execute(_text(f"""
@@ -433,8 +411,6 @@ async def lifespan(app: FastAPI):
     log.info("ws_listener_started")
     asyncio.create_task(_campaign_scheduler())   # ENH-1
     log.info("campaign_scheduler_started")
-    asyncio.create_task(_iris_sync_scheduler())
-    log.info("iris_sync_scheduler_started")
     asyncio.create_task(_fp_auto_close_scheduler())
     log.info("fp_auto_close_scheduler_started")
     asyncio.create_task(_auto_archive_scheduler())
@@ -534,9 +510,12 @@ def _incident_to_dict(i: Incident) -> dict:
         "kill_chain_stage":      i.kill_chain_stage or 0,
         "kill_chain_stage_name": i.kill_chain_stage_name,
         "notes":             i.notes,
-        "iris_case_id":      i.iris_case_id,
-        "iris_case_status":  i.iris_case_status,
-        "iris_case_url":     i.iris_case_url,
+        "case_opened_at":    i.case_opened_at.isoformat() if i.case_opened_at else None,
+        "case_ack_at":       i.case_ack_at.isoformat() if i.case_ack_at else None,
+        "case_type":         i.case_type or "generic",
+        "case_restricted":   i.case_restricted or False,
+        "case_mttd_seconds": i.case_mttd_seconds,
+        "case_mtta_seconds": i.case_mtta_seconds,
         "fp_probability":    float(i.fp_probability) if i.fp_probability is not None else None,
         "asset_tier":        i.asset_tier,
         "soar_actions":      i.soar_actions or [],
@@ -808,55 +787,16 @@ async def get_incident(incident_id: str, db: AsyncSession = Depends(get_db)):
     return result
 
 
-@app.post("/incidents/{incident_id}/escalate")
-async def escalate_incident_to_iris(
-    incident_id: str,
-    db: AsyncSession = Depends(get_db),
-):
-    """Manually escalate an incident to DFIR IRIS (CyIRIS).
-
-    Bypasses the automatic FP-threshold logic so an analyst can raise a ticket
-    for any incident regardless of confidence score.  If the incident already
-    has a CyIRIS case this returns the existing ticket info rather than creating
-    a duplicate.
-    """
-    from iris_connector import create_iris_case, _load_iris_config
-    inc = (await db.execute(
-        select(Incident).where(Incident.id == incident_id)
-    )).scalar_one_or_none()
-    if not inc:
-        raise HTTPException(status_code=404, detail="Incident not found")
-
-    # Already has a ticket — return existing info
-    if inc.iris_case_id:
-        return {
-            "iris_case_id":     inc.iris_case_id,
-            "iris_case_url":    inc.iris_case_url,
-            "iris_case_status": inc.iris_case_status,
-            "already_existed":  True,
-        }
-
-    if not _load_iris_config():
-        raise HTTPException(
-            status_code=422,
-            detail="CyIRIS is not configured. Enable it in System Settings → Integrations → CyIRIS."
-        )
-
-    result = await create_iris_case(db, inc)
-    if not result:
-        raise HTTPException(status_code=422, detail="IRIS case creation failed — check CyIRIS connectivity and API key.")
-
-    return {**result, "already_existed": False}
-
-
 class IncidentPatch(BaseModel):
     status:                Optional[str] = None
     assigned_to:           Optional[str] = None
     notes:                 Optional[str] = None
     false_positive_reason: Optional[str] = None
-    iris_case_id:          Optional[str] = None
-    iris_case_url:         Optional[str] = None
-    iris_case_status:      Optional[str] = None
+    case_type:             Optional[str] = None
+    case_opened_at:        Optional[str] = None   # ISO string
+    case_ack_at:           Optional[str] = None   # ISO string
+    case_mttd_seconds:     Optional[int] = None
+    case_mtta_seconds:     Optional[int] = None
 
 
 @app.patch("/incidents/{incident_id}")
@@ -879,12 +819,18 @@ async def patch_incident(
         inc.notes = body.notes
     if body.false_positive_reason is not None:
         inc.false_positive_reason = body.false_positive_reason
-    if body.iris_case_id is not None:
-        inc.iris_case_id = body.iris_case_id
-    if body.iris_case_url is not None:
-        inc.iris_case_url = body.iris_case_url
-    if body.iris_case_status is not None:
-        inc.iris_case_status = body.iris_case_status
+    if body.case_type is not None:
+        inc.case_type = body.case_type
+    if body.case_opened_at is not None:
+        from datetime import datetime as _dt
+        inc.case_opened_at = _dt.fromisoformat(body.case_opened_at)
+    if body.case_ack_at is not None:
+        from datetime import datetime as _dt
+        inc.case_ack_at = _dt.fromisoformat(body.case_ack_at)
+    if body.case_mttd_seconds is not None:
+        inc.case_mttd_seconds = body.case_mttd_seconds
+    if body.case_mtta_seconds is not None:
+        inc.case_mtta_seconds = body.case_mtta_seconds
 
     inc.updated_at = datetime.now(timezone.utc)
     await db.commit()
@@ -956,7 +902,7 @@ async def batch_close_incidents(req: BatchCloseReq, db: AsyncSession = Depends(g
     Transitions each to 'closed' with an audit entry — does not delete any rows.
     Returns counts for each source status.
     """
-    from iris_connector import write_audit
+    # write_audit imported at top level from models
     targets = list((await db.execute(
         select(Incident).where(Incident.status.in_(["false_positive", "resolved"]))
     )).scalars().all())
@@ -1024,7 +970,7 @@ async def transition_incident(
                    f"Allowed: {sorted(allowed)}",
         )
 
-    from iris_connector import write_audit
+    # write_audit imported at top level from models
     inc.status     = to_st
     inc.updated_at = datetime.now(timezone.utc)
     if to_st in ("resolved", "closed", "false_positive"):
@@ -1438,7 +1384,7 @@ async def bulk_false_positive(req: BulkFPReq, db: AsyncSession = Depends(get_db)
     """Mark multiple incidents as false_positive in one call.
     Used by the agentic chat 'close all false positives' action.
     """
-    from iris_connector import write_audit
+    # write_audit imported at top level from models
     results = []
     for iid in req.incident_ids:
         inc = (await db.execute(
@@ -1499,7 +1445,7 @@ async def write_audit_entry(req: AuditWriteReq, db: AsyncSession = Depends(get_d
     the Flask proxy is trusted loopback; it never accepts user-controlled payloads
     directly without session authentication.
     """
-    from iris_connector import write_audit
+    # write_audit imported at top level from models
     try:
         await write_audit(
             db,

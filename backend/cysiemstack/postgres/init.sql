@@ -74,10 +74,13 @@ CREATE TABLE IF NOT EXISTS incidents (
     -- ENH-2: kill-chain tracking
     kill_chain_stage      INTEGER DEFAULT 0,
     kill_chain_stage_name TEXT,
-    -- CyIRIS integration (v1.0.104+)
-    iris_case_id        INTEGER,
-    iris_case_status    TEXT,
-    iris_case_url       TEXT,
+    -- CyCases native case management
+    case_opened_at      TIMESTAMPTZ,
+    case_ack_at         TIMESTAMPTZ,
+    case_type           TEXT NOT NULL DEFAULT 'generic',
+    case_restricted     BOOLEAN NOT NULL DEFAULT FALSE,
+    case_mttd_seconds   BIGINT,
+    case_mtta_seconds   BIGINT,
     -- FP auto-scoring (v1.0.103+)
     confidence_score    NUMERIC(5,1),
     -- FP probability + SOAR (v1.0.120+)

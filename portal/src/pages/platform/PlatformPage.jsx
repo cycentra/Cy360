@@ -169,17 +169,6 @@ function SSOConfigPanel() {
 
   const ssoGuides = [
     {
-      id: "cyiris", name: "CyIRIS (DFIR IRIS)", protocol: "OIDC", color: "#b06eff", icon: "\uD83D\uDD0D",
-      steps: [
-        "Install CyIRIS via the portal — OIDC is pre-configured automatically.",
-        "Click the CyIRIS link in the portal. You land on the CyIRIS login page.",
-        "Click \u2018OIDC Sign In\u2019 — CyCentra session is recognised, no password needed.",
-        "First-time users are provisioned automatically with the Analyst role.",
-        `OIDC Discovery: https://cyasm.${_BASE_DOMAIN}/oidc/.well-known/openid-configuration`,
-        `Callback URI (auto-set): https://cyiris.${_BASE_DOMAIN}/oidc-authorize`,
-      ],
-    },
-    {
       id: "cysoar", name: "CySOAR (Node-RED SOAR)", protocol: "OIDC", color: "#4d9eff", icon: "\u26A1",
       steps: [
         "Install CySOAR via the portal — OIDC is pre-configured automatically.",
@@ -437,7 +426,7 @@ export function PlatformPage({ installedModules, onInstall, onUninstall }) {
                         </div>
 
                         {/* Version & Update row — only for updateable modules */}
-                        {(mod.id === "cyiris" || mod.id === "cysoar") && installed.status === "running" && (
+                        {mod.id === "cysoar" && installed.status === "running" && (
                           <div style={{ borderTop:"1px solid rgba(255,255,255,0.06)", paddingTop:10 }}>
                             {moduleVersions[mod.id] && (
                               <div style={{ display:"flex", gap:16, marginBottom:8 }}>

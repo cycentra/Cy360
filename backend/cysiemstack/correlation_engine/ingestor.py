@@ -24,7 +24,7 @@ from ueba import analyse_alert
 from risk_scorer import calculate_entity_risk, compute_fp_score, CLOUD_ENTITY_NAMES
 from misp_enricher import enrich_incident
 from llm_enricher import enrich_incident as llm_enrich_incident
-from iris_connector import advance_incident_status, write_audit
+from models import write_audit
 from ueba_ml import ml_analyse_alert
 from cysoar_connector import cysoar_trigger
 from fp_pattern_store import check_fp_pattern
@@ -244,7 +244,7 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                                      incident.misp_enrichment or {})
             incident.fp_probability = fp_score
 
-            # 6b. CySOAR trigger (after AI enrichment, before IRIS decision)
+            # 6b. CySOAR trigger (after AI enrichment, before case decision)
             soar_actions = await cysoar_trigger(db, incident)
             if soar_actions:
                 await write_audit(
@@ -255,37 +255,96 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                     extra={"soar_actions": soar_actions},
                 )
 
-            # 7. Confidence-score-based status advancement + IRIS ticket
-            #    advance_incident_status() handles all bands and writes audit entries.
-            #
-            # enriched = True when:
-            #   (a) enrichment ran and returned data THIS cycle, OR
-            #   (b) incident already has enrichment stored from a previous cycle
-            #       (covers MISP with no IOC hits — still ran), OR
-            #   (c) alert_count has reached the LLM trigger threshold — the
-            #       enrichment window has closed; don't hold tickets indefinitely
-            #       when MISP is disabled and CyMind is not configured.
-            # Cloud/O365 incidents are considered enriched when:
-            #   (a) any enrichment data is present (same as now), OR
-            #   (b) it is a cloud-source incident — these events are definitionally "complete"
-            #       as Microsoft provides all context in a single event payload;
-            #       waiting for 3 alerts before treating them as enriched means cloud incidents
-            #       with high-severity rule triggers would never auto-ticket.
-            _cloud_cats = frozenset({'o365', 'azure', 'aws', 'gcp', 'github'})
-            _incident_is_cloud = bool(set(incident.categories or []) & _cloud_cats)
-            enriched = bool(
-                misp_result
-                or llm_result
-                or incident.llm_summary
-                or incident.misp_enrichment
-                or incident.alert_count >= LLM_TRIGGER_MIN_ALERTS
-                or _incident_is_cloud          # cloud events are self-contained; treat as enriched
-            )
-            new_status, iris_result = await advance_incident_status(
-                db, incident, fp_score,
-                actor="system",
-                enriched=enriched,
-            )
+            # 7. Confidence-score-based status advancement + native case opening
+            fp_threshold = _get_fp_threshold()
+            prev_status  = incident.status
+
+            if fp_score >= fp_threshold:
+                # Band 1: high FP probability → auto-close
+                if incident.status not in ("closed",):
+                    incident.status               = "closed"
+                    incident.closed_at            = datetime.now(timezone.utc)
+                    incident.updated_at           = datetime.now(timezone.utc)
+                    incident.false_positive_reason = (
+                        f"Auto-closed: FP probability {fp_score:.1f} ≥ threshold {fp_threshold:.1f}"
+                    )
+                    await db.flush()
+                    await write_audit(
+                        db, "incident", incident.id,
+                        action="auto_close",
+                        actor="system",
+                        from_status=prev_status,
+                        to_status="closed",
+                        comment=incident.false_positive_reason,
+                        extra={"fp_score": fp_score, "threshold": fp_threshold},
+                    )
+            elif fp_score >= 40.0:
+                # Band 2: moderate FP → keep investigating
+                if incident.status not in ("closed", "false_positive", "in_review", "resolved"):
+                    new_s = "investigating"
+                    if incident.status != new_s:
+                        incident.status     = new_s
+                        incident.updated_at = datetime.now(timezone.utc)
+                        await db.flush()
+                        await write_audit(
+                            db, "incident", incident.id,
+                            action="status_change",
+                            actor="system",
+                            from_status=prev_status,
+                            to_status=new_s,
+                            comment=f"Under investigation: FP probability {fp_score:.1f}",
+                            extra={"fp_score": fp_score},
+                        )
+            else:
+                # Band 3: low FP + conditions met → open case natively
+                if incident.status not in ("closed", "false_positive", "resolved", "in_review"):
+                    incident.status     = "in_review"
+                    incident.updated_at = datetime.now(timezone.utc)
+                    await db.flush()
+                    await write_audit(
+                        db, "incident", incident.id,
+                        action="status_change",
+                        actor="system",
+                        from_status=prev_status,
+                        to_status="in_review",
+                        comment=f"Advanced to review: FP probability {fp_score:.1f} below threshold {fp_threshold:.1f}",
+                        extra={"fp_score": fp_score},
+                    )
+
+                if (incident.case_opened_at is None
+                        and incident.severity in ("high", "critical")
+                        and incident.alert_count >= 3):
+                    now_ts = datetime.now(timezone.utc)
+                    incident.case_opened_at = now_ts
+                    incident.case_type = _infer_case_type(
+                        incident.categories or [], incident.mitre_tactics or []
+                    )
+                    if incident.first_seen:
+                        incident.case_mttd_seconds = int(
+                            (now_ts - incident.first_seen).total_seconds()
+                        )
+                    await db.flush()
+                    from sqlalchemy import text as _text
+                    await db.execute(
+                        _text("""INSERT INTO case_comments
+                                 (incident_id, author_email, body, is_system)
+                                 VALUES (:iid, 'system', :body, TRUE)"""),
+                        {"iid": incident.id,
+                         "body": (
+                             f"Case auto-opened by correlation engine. "
+                             f"Severity: {incident.severity}. "
+                             f"Tactics: {', '.join(incident.mitre_tactics or []) or 'none'}. "
+                             f"Kill chain stage: {incident.kill_chain_stage_name or 'unknown'}."
+                         )},
+                    )
+                    await write_audit(
+                        db, "incident", incident.id,
+                        action="case_auto_opened",
+                        actor="system",
+                        to_status="open",
+                        extra={"case_type": incident.case_type},
+                    )
+
             await db.commit()
 
             # 8. Push live event to WebSocket clients
@@ -301,8 +360,7 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                 "ueba_anomalies":    len(ueba_anomalies),
                 "misp_hits":         len(misp_result.get("ioc_hits", [])),
                 "llm_ready":         bool(llm_result),
-                "iris_case_id":      iris_result.get("iris_case_id"),
-                "iris_auto_closed":  new_status == "closed",
+                "case_opened":       incident.case_opened_at is not None,
                 "fp_probability":    fp_score,
                 "agent_name":        alert.get("agent_name"),
                 "rule_desc":         alert.get("rule_desc"),
@@ -326,12 +384,22 @@ def _get_fp_threshold() -> float:
         import json as _j
         raw = Path("/opt/cycentra/ai_settings.json").read_text()
         stored = _j.loads(raw)
-        val = stored.get("iris", {}).get("fpThreshold")
+        val = stored.get("system", {}).get("fpThreshold")
         if val is not None:
             return float(val)
     except Exception:
         pass
-    return settings.iris_fp_threshold
+    return getattr(settings, "fp_threshold", 90.0)
+
+
+def _infer_case_type(categories: list, tactics: list) -> str:
+    combined = " ".join(categories + tactics).lower()
+    if "ransomware" in combined:   return "ransomware"
+    if "phishing"   in combined:   return "phishing"
+    if "brute"      in combined:   return "brute_force"
+    if "exfil"      in combined:   return "data_exfil"
+    if "lateral"    in combined:   return "lateral_movement"
+    return "generic"
 
 
 async def _reenrich_held_incident(incident_id: str) -> None:
@@ -367,15 +435,33 @@ async def _reenrich_held_incident(incident_id: str) -> None:
             )
             incident.fp_probability = fp_score
 
-            # Temporarily reset to investigating so advance_incident_status can promote
+            # Temporarily reset to investigating so band logic can promote
             incident.status = "investigating"
             await db.flush()
 
-            await advance_incident_status(
-                db, incident, fp_score,
-                actor="system",
-                enriched=True,
-            )
+            fp_threshold = _get_fp_threshold()
+            if fp_score >= fp_threshold:
+                incident.status               = "closed"
+                incident.closed_at            = datetime.now(timezone.utc)
+                incident.updated_at           = datetime.now(timezone.utc)
+                incident.false_positive_reason = (
+                    f"Auto-closed: FP probability {fp_score:.1f} ≥ threshold {fp_threshold:.1f}"
+                )
+            elif fp_score < 40.0:
+                incident.status     = "in_review"
+                incident.updated_at = datetime.now(timezone.utc)
+                if (incident.case_opened_at is None
+                        and incident.severity in ("high", "critical")
+                        and incident.alert_count >= 3):
+                    incident.case_opened_at = datetime.now(timezone.utc)
+                    incident.case_type = _infer_case_type(
+                        incident.categories or [], incident.mitre_tactics or []
+                    )
+                    if incident.first_seen:
+                        incident.case_mttd_seconds = int(
+                            (incident.case_opened_at - incident.first_seen).total_seconds()
+                        )
+            await db.flush()
             await db.commit()
             log.info("held_incident_reprocessed",
                      incident_id=incident_id, fp_score=fp_score,

@@ -52,6 +52,8 @@ import { useAppState } from './hooks/useAppState.js';
 import { Sidebar } from './sidebar/Sidebar.jsx';
 
 import { SiemIncidentsPage } from './siem/SiemIncidentsPage';
+import CasesListPage         from './pages/cases/CasesListPage.jsx';
+import CaseDetailPage        from './pages/cases/CaseDetailPage.jsx';
 import { HostIntelligencePage } from './pages/HostIntelligencePage.jsx';
 import { SiemUebaPage }       from './siem/SiemUebaPage';
 import { InternalExposureDashboard } from './siem/InternalExposureDashboard';
@@ -230,7 +232,8 @@ export default function App() {
     handleScanSelect,
   } = useAppState();
 
-  const [showCyMind, setShowCyMind] = useState(false);
+  const [showCyMind,       setShowCyMind]       = useState(false);
+  const [casesIncidentId,  setCasesIncidentId]  = useState(null);
 
   if (!authReady) return null;
   if (!user) return <LoginPage />;
@@ -347,6 +350,8 @@ export default function App() {
             {activeTab==="assets"         && <AssetsPage assets={assets} setSelectedAsset={setSelectedAsset} setShowImport={setShowImport}/>}
             {activeTab==="vulns"          && <VulnerabilityPage assets={assets} scanHistory={scanHistory} selectedScanId={selectedScanId} onScanSelect={handleScanSelect}/>}
             {activeTab==="siem-incidents"   && <SiemIncidentsPage/>}
+            {activeTab==="cases"            && <CasesListPage onOpenCase={id => { setCasesIncidentId(id); setActiveTab("cases-detail"); }} />}
+            {activeTab==="cases-detail"     && <CaseDetailPage incidentId={casesIncidentId} onBack={() => setActiveTab("cases")} />}
             {activeTab==="siem-risk"        && <HostIntelligencePage/>}
             {activeTab==="siem-ueba"        && <SiemUebaPage/>}
             {activeTab==="internal-dashboard" && <InternalExposureDashboard setActiveTab={setActiveTab}/>}

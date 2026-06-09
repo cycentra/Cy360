@@ -7,7 +7,7 @@
  *
  * Sources consolidated here:
  *   - MarketplacePage  → AddonInstallFlow, AddonModulesSection
- *   - SystemSettingsPage → IntegrationsTab (MispTab, CyIrisTab, CyMindIntegrationTab)
+ *   - SystemSettingsPage → IntegrationsTab (MispTab, CyMindIntegrationTab)
  */
 
 import { useState, useEffect, useRef } from "react";
@@ -173,86 +173,6 @@ function AddonInstallFlow({ mod, onInstall, onCancel }) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// CyIrisConfigPanel — inline integration config drawer
-// Shown inside the CyIRIS unified card after module is installed.
-// Consolidates CyIrisTab logic from SystemSettingsPage → Integrations.
-// ════════════════════════════════════════════════════════════════════════════
-
-function CyIrisConfigPanel() {
-  const [iris,    setIris]    = useState({ fpThreshold: 90 });
-  const [loading, setLoading] = useState(true);
-  const [saving,  setSaving]  = useState(false);
-  const [saved,   setSaved]   = useState(false);
-
-  useEffect(() => {
-    fetch(`${API_BASE}/api/ai/settings`, { credentials: "include" })
-      .then(r => r.json())
-      .then(d => {
-        const raw = d.iris || {};
-        if (raw.fpThreshold === undefined) raw.fpThreshold = 90;
-        setIris(raw);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, []);
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await fetch(`${API_BASE}/api/ai/settings`, {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ iris }),
-      });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
-    } finally { setSaving(false); }
-  };
-
-  if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12, padding: "20px 24px" }}>Loading…</div>;
-
-  return (
-    <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", padding: "22px 24px", background: "rgba(0,0,0,0.15)" }}>
-      <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700, marginBottom: 16 }}>
-        Incident Escalation — Integration Settings
-      </div>
-
-      {/* Status notification */}
-      <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 5, padding: "14px 16px", marginBottom: 16 }}>
-        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, fontFamily: "monospace" }}>
-          ⭕ Incidents will not escalate to DFIR IRIS. False-positive auto-close still active.
-        </div>
-      </div>
-
-      {/* FP threshold */}
-      <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 5, padding: "16px 18px", marginBottom: 16 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div style={LABEL}>False Positive Auto-Close Threshold</div>
-          <span style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 14, fontWeight: 700 }}>
-            {iris.fpThreshold ?? 90}%
-          </span>
-        </div>
-        <input type="range" min={50} max={99} step={1} value={iris.fpThreshold ?? 90}
-          onChange={e => setIris(prev => ({ ...prev, fpThreshold: parseInt(e.target.value) }))}
-          style={{ width: "100%", accentColor: "#00e5a0", cursor: "pointer", marginBottom: 6 }} />
-        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, lineHeight: 1.5 }}>
-          Incidents with AI FP confidence ≥{" "}
-          <strong style={{ color: "#00e5a0" }}>{iris.fpThreshold ?? 90}%</strong>{" "}
-          are <strong style={{ color: "#ff8c00" }}>auto-closed</strong> without a ticket.
-        </div>
-      </div>
-
-      <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-        <button onClick={handleSave} disabled={saving} style={{ ...BTN(), opacity: saving ? 0.5 : 1 }}>
-          {saving ? "Saving…" : "Save CyIRIS Settings"}
-        </button>
-        {saved && <span style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace" }}>✓ Saved — correlation engine updated</span>}
-      </div>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
 // UnifiedModuleCard — install + configure in one card
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -270,14 +190,6 @@ function UnifiedModuleCard({ mod, installedModules, platformStatus, onInstall, o
   const isInstalled = !!installedModules[mod.id] || isRunning;
   const showFlow    = installing;
 
-  // Auto-expand config drawer for CyIRIS when the module is installed
-  useEffect(() => {
-    if (mod.id === "cyiris" && isInstalled && !showConfig) {
-      setShowConfig(true);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isInstalled]);
-
   const handleUninstallConfirm = async () => {
     try {
       const r = await fetch(`${API_BASE}/api/platform/uninstall`, {
@@ -290,7 +202,7 @@ function UnifiedModuleCard({ mod, installedModules, platformStatus, onInstall, o
   };
 
   // Does this module have integration configuration?
-  const hasConfigPanel = mod.id === "cyiris";
+  const hasConfigPanel = false;
 
   return (
     <>
@@ -372,8 +284,7 @@ function UnifiedModuleCard({ mod, installedModules, platformStatus, onInstall, o
           />
         )}
 
-        {/* ── Integration config drawer ────────────────────────────────── */}
-        {hasConfigPanel && showConfig && <CyIrisConfigPanel />}
+        {/* ── Integration config drawer — reserved for future modules ─── */}
       </div>
 
       {/* Uninstall confirmation modal */}

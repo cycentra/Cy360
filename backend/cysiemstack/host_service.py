@@ -535,7 +535,7 @@ async def get_host_detail(agent_id: str, session: AsyncSession) -> Optional[dict
     inc_rows = await session.execute(
         text("""
             SELECT id, severity, status, first_seen, last_seen,
-                   llm_summary, mitre_ids, iris_case_id
+                   llm_summary, mitre_ids, case_opened_at
             FROM incidents
             WHERE :aid = ANY(affected_agents)
               AND status NOT IN ('closed','false_positive')
@@ -546,14 +546,14 @@ async def get_host_detail(agent_id: str, session: AsyncSession) -> Optional[dict
     )
     active_incidents = [
         {
-            "id":          r.id,
-            "severity":    r.severity,
-            "status":      r.status,
-            "first_seen":  r.first_seen.isoformat() if r.first_seen else None,
-            "last_seen":   r.last_seen.isoformat()  if r.last_seen  else None,
-            "summary":     r.llm_summary,
-            "mitre_ids":   r.mitre_ids or [],
-            "iris_case_id": r.iris_case_id,
+            "id":             r.id,
+            "severity":       r.severity,
+            "status":         r.status,
+            "first_seen":     r.first_seen.isoformat() if r.first_seen else None,
+            "last_seen":      r.last_seen.isoformat()  if r.last_seen  else None,
+            "summary":        r.llm_summary,
+            "mitre_ids":      r.mitre_ids or [],
+            "case_opened_at": r.case_opened_at.isoformat() if r.case_opened_at else None,
         }
         for r in inc_rows.fetchall()
     ]

@@ -617,13 +617,13 @@ function AiDispositionWidget({ incidents }) {
   const stillOpen = incidents.filter(i =>
     i.status === "open" || i.status === "investigating" || i.status === "in_review" || i.status === "held"
   );
-  const ticketsRaised  = incidents.filter(i => i.iris_case_id);
+  const casesOpen  = incidents.filter(i => i.case_opened_at);
 
   const aiCount          = aiClosed.length;
   const manResolvedCount = manuallyResolved.length;
   const manClosedCount   = manuallyClosed.length;
   const fpManualCount    = falsePositiveManual.length;
-  const ticketCount      = ticketsRaised.length;
+  const ticketCount      = casesOpen.length;
   const totalClosed      = aiCount + manResolvedCount + manClosedCount + fpManualCount;
   const manualTotalCount = manResolvedCount + manClosedCount + fpManualCount;
   const aiPct     = totalClosed > 0 ? Math.round((aiCount / totalClosed) * 100) : 0;
@@ -907,7 +907,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
   const aiAutoClose   = incidents.filter(i =>
     (i.status === "false_positive" || i.status === "closed") && i.fp_probability != null && i.fp_probability >= 0.7
   ).length;
-  const ticketsRaised = incidents.filter(i => i.iris_case_id).length;
+  const casesOpen = incidents.filter(i => i.case_opened_at).length;
 
   return (
     <div>
@@ -960,7 +960,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
         <KpiCard label="Critical & High" value={critHighInc}   accent="#ff8c00"  icon="⚡" sub="High-severity incidents" />
         <KpiCard label="High-Risk Entities" value={highRiskEnt} accent="#b06eff" icon="🎯" sub="Score ≥ 50" />
         <KpiCard label="AI Auto-Closed"  value={aiAutoClose}   accent="#00e5a0"  icon="🤖" sub="FP ≥ 70% confidence" />
-        <KpiCard label="Tickets Raised"  value={ticketsRaised} accent="#f5c518"  icon="🎫" sub="Escalated to IRIS" />
+        <KpiCard label="Cases Open"  value={casesOpen} accent="#b06eff"  icon="🗂️" sub="Active case investigations" />
       </div>
 
       {/* ── Detection Posture Score ── */}

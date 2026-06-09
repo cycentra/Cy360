@@ -54,7 +54,7 @@ _WAZUH_API_USER   = os.environ.get("WAZUH_API_USER",     "wazuh-wui")
 _WAZUH_API_PASS   = os.environ.get("WAZUH_API_PASSWORD", "")
 _WAZUH_TIMEOUT    = 8
 
-# CyIRIS PostgreSQL — same DB as cy_users (correlation DB)
+# CyCases / Correlation DB (PostgreSQL)
 # The Incident model is in cysiemstack; we query it directly via psycopg2
 # to avoid importing the async SQLAlchemy session into a sync Flask context.
 _CORR_DB_URL = os.environ.get(
@@ -761,9 +761,9 @@ def _collect_wazuh_sca_subscore(token: str) -> tuple[Optional[float], str]:
     return float(score), detail
 
 
-def _collect_iris_mttr_subscore() -> tuple[Optional[float], str]:
+def _collect_cases_mttr_subscore() -> tuple[Optional[float], str]:
     """
-    Sub-score from CyIRIS mean time to remediate (MTTR), derived from the
+    Sub-score from CyCases mean time to remediate (MTTR), derived from the
     Incident table's first_seen and closed_at columns.
 
     Scoring (lower MTTR = higher score):
@@ -829,8 +829,8 @@ def _collect_iris_mttr_subscore() -> tuple[Optional[float], str]:
                 "MTTR — " + ", ".join(detail_parts))
 
     except Exception as exc:
-        log.debug("[benchmark] IRIS MTTR query failed: %s", exc)
-        return None, "CyIRIS not configured or no incident data"
+        log.debug("[benchmark] cases MTTR query failed: %s", exc)
+        return None, "CyCases not configured or no incident data"
 
 
 def _collect_internal_posture_subscore() -> tuple[Optional[float], str, dict]:
@@ -903,6 +903,22 @@ def _collect_internal_posture_subscore() -> tuple[Optional[float], str, dict]:
     breakdown = {k: round(comp_sums[k] / comp_weights[k], 1)
                  for k in comp_sums if comp_weights[k] > 0}
 
+    # Penalise open restricted cases (sensitive investigations signal elevated risk)
+    try:
+        _rconn = psycopg2.connect(_CORR_DB_URL)
+        _rcur  = _rconn.cursor()
+        _rcur.execute("""
+            SELECT COUNT(*) FROM incidents
+            WHERE case_restricted = TRUE
+              AND status IN ('open','investigating','in_review')
+        """)
+        restricted_open = (_rcur.fetchone() or [0])[0] or 0
+        _rconn.close()
+        restricted_penalty = min(9, restricted_open * 3)
+        overall = max(0, overall - restricted_penalty)
+    except Exception:
+        pass  # DB unavailable — skip penalty rather than failing
+
     detail = (f"Internal posture: {total} hosts · "
               f"SCA {breakdown.get('sca', '?')} · "
               f"Vuln {breakdown.get('vuln', '?')} · "
@@ -917,12 +933,12 @@ def _collect_vuln_score() -> dict:
     Primary:  reads from host_posture_cache (5-component posture model)
               which covers SCA, vulnerability CVEs, FIM, malware, compliance.
     Fallback: direct Wazuh API calls (original 3-component model).
-    Blended with CyIRIS MTTR.
+    Blended with CyCases MTTR.
 
     Sub-score weights (primary path):
       50% — Internal host posture (SCA + CVE + FIM/malware + compliance)
       25% — Wazuh vulnerability detector (CVE severity counts)
-      25% — CyIRIS mean time to remediate by severity
+      25% — CyCases mean time to remediate by severity
     """
     token = _wazuh_token()
 
@@ -949,8 +965,8 @@ def _collect_vuln_score() -> dict:
         sub_scores["wazuh_sca"]  = score
         sub_details["wazuh_sca"] = detail
 
-    # ── CyIRIS MTTR ───────────────────────────────────────────────────────────
-    score, detail = _collect_iris_mttr_subscore()
+    # ── CyCases MTTR ───────────────────────────────────────────────────────────
+    score, detail = _collect_cases_mttr_subscore()
     sub_scores["iris_mttr"]  = score
     sub_details["iris_mttr"] = detail
 
@@ -993,7 +1009,7 @@ def _collect_vuln_score() -> dict:
 # ── 5. Threat Intelligence — direct MISP API ──────────────────────────────────
 
 def _read_cysiemstack_env() -> dict:
-    """Parse /opt/cycentra/cysiemstack.env → key/value dict. Mirrors iris_connector pattern."""
+    """Parse /opt/cycentra/cysiemstack.env → key/value dict. Mirrors ingestor pattern."""
     env: dict = {}
     env_file = Path("/opt/cycentra/cysiemstack.env")
     if not env_file.exists():
@@ -1084,7 +1100,7 @@ def _collect_threat_intel_score() -> dict:
     Threat intelligence coverage score (0-100).
 
     Reads MISP credentials from /opt/cycentra/ai_settings.json directly
-    (same source as iris_connector.py — ai_settings.json is written by the
+    (same source as ingestor.py — ai_settings.json is written by the
     System Settings UI and is available to the Flask backend process).
 
     Sub-signals:

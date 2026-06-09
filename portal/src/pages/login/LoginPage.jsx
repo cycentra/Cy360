@@ -164,7 +164,7 @@ export function LoginPage() {
               { label: "CySIEM",    color: "#ff3b3b" },
               { label: "UEBA",      color: "#ff8c00" },
               { label: "CySOAR",    color: "#4d9eff" },
-              { label: "CyIRIS",    color: "#b06eff" },
+              
               { label: "CyComp",    color: "#4d9eff" },
               { label: "CyMind AI", color: "#00e5a0" },
             ].map(({ label, color }) => (
@@ -203,7 +203,7 @@ export function LoginPage() {
                 icon: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>),
               },
               {
-                key: "grc", name: "GRC & DFIR", tag: "CyComp · CyIRIS", color: "#b06eff",
+                key: "grc", name: "GRC & DFIR", tag: "CyComp · CyCases", color: "#b06eff",
                 desc: "Risk register · NIS2 / DORA / ISO 27001 · case management",
                 icon: (<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>),
               },
@@ -436,7 +436,7 @@ export function LoginPage() {
 
           <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 20, marginTop: 24, color: "rgba(255,255,255,0.2)", fontSize: 11, textAlign: "center", lineHeight: 1.6 }}>
             Single sign-on gateway · All modules share this session<br/>
-            CyASM · CySIEM · UEBA · CySOAR · CyIRIS · CyComp · CyMind — one login
+            CyASM · CySIEM · UEBA · CySOAR · CyCases · CyComp · CyMind — one login
           </div>
           </>
           )}

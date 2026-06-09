@@ -88,10 +88,13 @@ class Incident(Base):
     # ENH-2: kill chain tracking
     kill_chain_stage      = Column(Integer, default=0)
     kill_chain_stage_name = Column(Text, nullable=True)
-    # CyIRIS integration
-    iris_case_id     = Column(Integer, nullable=True)   # DFIR IRIS case ID
-    iris_case_status = Column(Text, nullable=True)       # "open" | "closed"
-    iris_case_url    = Column(Text, nullable=True)       # deep link to case in IRIS UI
+    # CyCases native case management
+    case_opened_at    = Column(TIMESTAMP(timezone=True), nullable=True)
+    case_ack_at       = Column(TIMESTAMP(timezone=True), nullable=True)
+    case_type         = Column(Text, default="generic")
+    case_restricted   = Column(Boolean, default=False)
+    case_mttd_seconds = Column(BigInteger, nullable=True)
+    case_mtta_seconds = Column(BigInteger, nullable=True)
     # fp_probability: multi-factor false-positive probability 0–100.
     # High score = likely FP/noise.  Replaces the old single-factor confidence_score.
     fp_probability   = Column(Numeric(5, 1), nullable=True)
@@ -120,13 +123,13 @@ class AuditLog(Base):
     id           = Column(BigInteger, primary_key=True, autoincrement=True)
     entity_type  = Column(Text, nullable=False)   # "incident" | "asm_finding" | "asset"
     entity_id    = Column(Text, nullable=False)   # incident id, finding_id, or asset hostname
-    action       = Column(Text, nullable=False)   # "status_change" | "iris_created" | "soar_triggered" | "auto_fp" | "comment"
+    action       = Column(Text, nullable=False)   # "status_change" | "case_auto_opened" | "soar_triggered" | "auto_fp" | "comment"
     from_status  = Column(Text, nullable=True)
     to_status    = Column(Text, nullable=True)
     comment      = Column(Text, nullable=True)    # mandatory for analyst-initiated transitions
     actor        = Column(Text, nullable=False)   # email or "system"
     created_at   = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
-    extra        = Column(JSONB, default=dict)    # fp_score, rule_ids, iris_case_id, etc.
+    extra        = Column(JSONB, default=dict)    # fp_score, rule_ids, case_type, etc.
 
     __table_args__ = (
         Index("ix_audit_entity", "entity_type", "entity_id"),
@@ -276,6 +279,33 @@ class FpPattern(Base):
         Index("ix_fp_patterns_fingerprint", "fingerprint"),
         Index("ix_fp_patterns_auto_close",  "auto_close"),
     )
+
+async def write_audit(
+    db,
+    entity_type: str,
+    entity_id: str,
+    action: str,
+    actor: str,
+    from_status: str | None = None,
+    to_status: str | None = None,
+    comment: str | None = None,
+    extra: dict | None = None,
+) -> None:
+    """Append an immutable audit entry to the audit_log table."""
+    from datetime import datetime, timezone
+    entry = AuditLog(
+        entity_type = entity_type,
+        entity_id   = entity_id,
+        action      = action,
+        actor       = actor,
+        from_status = from_status,
+        to_status   = to_status,
+        comment     = comment,
+        extra       = extra or {},
+        created_at  = datetime.now(timezone.utc),
+    )
+    db.add(entry)
+
 
 async def get_db():
     async with AsyncSessionLocal() as session:

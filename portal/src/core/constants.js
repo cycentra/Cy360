@@ -22,7 +22,6 @@ export const CYSCAN_URL    = `https://cyasm.${_BASE_DOMAIN}`;
 export const PORTAL_URL    = `https://cy360.${_BASE_DOMAIN}`;
 export const PORTAL_ISSUER = `https://cy360.${_BASE_DOMAIN}`;
 export const SIEM_BASE_URL = `https://cysiem.${_BASE_DOMAIN}`;
-export const IRIS_BASE_URL = `https://cyiris.${_BASE_DOMAIN}`;
 export const MISP_BASE_URL = `https://cymisp.${_BASE_DOMAIN}`;
 
 // API_BASE is empty — all fetch() calls use same-origin relative URLs.
@@ -32,7 +31,6 @@ export const API_BASE = "";
 // ── Module default URLs ───────────────────────────────────────────────────────
 export const MODULE_DEFAULT_URLS = {
   cysiem: SIEM_BASE_URL,
-  cyiris: IRIS_BASE_URL,
   cysoar: `${PORTAL_URL}/cysoar`,
   cymisp: MISP_BASE_URL,
 };

@@ -71,6 +71,7 @@ export function buildNavSections({ installedModules = {}, data = null }) {
         { id: "host-inventory",     label: "Host Intelligence",       icon: SvgHost,                                  accent: "#00e5a0" },
         { id: "siem-incidents",     label: "Active Incidents",        icon: <span style={{ fontSize: 13 }}>🔥</span>, accent: "#ff3b3b" },
         { id: "siem-ueba",          label: "Behavioral Analytics",    icon: <span style={{ fontSize: 13 }}>👤</span>, accent: "#b06eff" },
+        { id: "cases",              label: "Case Management",         icon: <span style={{ fontSize: 13 }}>🗂️</span>, accent: "#b06eff" },
       ],
     },
     {

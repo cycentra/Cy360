@@ -239,145 +239,6 @@ def siem_incident_transition_options(incident_id):
     return add_cors_headers(make_response('', 204))
 
 
-@siem_bp.route("/incidents/<incident_id>/escalate", methods=["POST"])
-@require_siem_analyst
-def siem_incident_escalate(incident_id):
-    """Manually escalate a SIEM incident to CyIRIS.
-
-    Handled entirely within Flask (not proxied to the engine) so that
-    get_iris_config() can read cloud credentials from /opt/cycentra/.env —
-    the systemd engine service uses cysiemstack.env which does not have those vars.
-
-    Steps:
-      1. Fetch incident from engine
-      2. If already ticketed, return existing ticket info
-      3. Create IRIS case via get_iris_config()
-      4. PATCH incident in engine to persist iris_case_id/url/status
-    """
-    from core.helpers import get_iris_config, get_iris_public_url
-
-    # ── 1. Fetch incident from engine ─────────────────────────────────────────
-    try:
-        inc_resp = _req.get(
-            f"{SIEM_ENGINE_URL}/incidents/{incident_id}",
-            timeout=PROXY_TIMEOUT,
-        )
-    except _req.exceptions.ConnectionError:
-        return _engine_offline_response()
-    except _req.exceptions.Timeout:
-        return jsonify({"error": "Engine request timed out"}), 504
-
-    if inc_resp.status_code == 404:
-        return jsonify({"error": "Incident not found"}), 404
-    if not inc_resp.ok:
-        return jsonify({"error": f"Engine returned HTTP {inc_resp.status_code}"}), 502
-
-    inc = inc_resp.json()
-
-    # ── 2. Already ticketed ────────────────────────────────────────────────────
-    if inc.get("iris_case_id"):
-        return jsonify({
-            "iris_case_id":     inc["iris_case_id"],
-            "iris_case_url":    inc.get("iris_case_url"),
-            "iris_case_status": inc.get("iris_case_status", "open"),
-            "already_existed":  True,
-        })
-
-    # ── 3. Check IRIS config ───────────────────────────────────────────────────
-    cfg = get_iris_config()
-    if not cfg:
-        return jsonify({"error": "CyIRIS is not configured. Enable it in System Settings → Integrations → CyIRIS."}), 422
-
-    # ── 4. Build IRIS case ─────────────────────────────────────────────────────
-    analyst_email = session.get("user_email", "unknown")
-    sev = (inc.get("severity") or "low").lower()
-    _SEV_MAP = {"critical": 1, "high": 2, "medium": 3, "low": 4}
-    case_sev = _SEV_MAP.get(sev, 4)
-
-    agents = ", ".join(inc.get("affected_agents") or []) or "unknown"
-    users  = ", ".join(inc.get("affected_users")  or []) or "none"
-    ips    = ", ".join(inc.get("src_ips")          or []) or "none"
-    mitre  = ", ".join(inc.get("mitre_ids")        or []) or "None"
-
-    rules_fired = inc.get("correlated_rules") or []
-    rules_str = "\n".join(
-        f"  • {r.get('rule_id', '?')} — {r.get('description', '')}"
-        for r in rules_fired[:5]
-    ) or "  (none)"
-
-    case_name = (
-        f"[Incident] {sev.upper()} — {inc.get('id', incident_id)}"
-    )
-    case_description = (
-        f"## CySIEM Incident: {inc.get('id', incident_id)}\n\n"
-        f"**Severity:** {sev.upper()}  \n"
-        f"**Status:** {inc.get('status', 'open')}  \n"
-        f"**First Seen:** {inc.get('first_seen', 'N/A')}  \n"
-        f"**Last Seen:** {inc.get('last_seen', 'N/A')}  \n"
-        f"**Alert Count:** {inc.get('alert_count', 0)}  \n\n"
-        f"**Affected Hosts:** {agents}  \n"
-        f"**Affected Users:** {users}  \n"
-        f"**Source IPs:** {ips}  \n"
-        f"**MITRE ATT&CK:** {mitre}  \n\n"
-        f"### Correlated Rules\n{rules_str}\n"
-    )
-    if inc.get("llm_summary"):
-        case_description += f"\n### AI Narrative\n{inc['llm_summary']}\n"
-    case_description += f"\n---\n*Escalated manually by {analyst_email} via CyCentra360 Active Incidents*"
-
-    try:
-        resp = _req.post(
-            f"{cfg['url'].rstrip('/')}/api/v2/cases",
-            headers={
-                "Authorization": f"Bearer {cfg['apiKey']}",
-                "Content-Type":  "application/json",
-                "Accept":        "application/json",
-            },
-            json={
-                "case_name":        case_name,
-                "case_description": case_description,
-                "case_customer":    cfg.get("customerId", 1),
-                "case_severity_id": case_sev,
-                "case_soc_id":      incident_id,
-            },
-            timeout=10,
-            verify=False,
-        )
-    except _req.exceptions.ConnectionError:
-        return jsonify({"error": "Cannot reach CyIRIS. Check URL in System Settings → CyIRIS."}), 503
-    except _req.exceptions.Timeout:
-        return jsonify({"error": "CyIRIS request timed out"}), 504
-
-    if resp.status_code not in (200, 201):
-        return jsonify({"error": f"IRIS returned HTTP {resp.status_code}", "detail": resp.text[:300]}), 502
-
-    data  = resp.json()
-    case  = data if "case_id" in data else data.get("data", data)
-    case_id  = case.get("case_id")
-    _public_iris = get_iris_public_url(cfg['url'])
-    case_url = f"{_public_iris}/case?cid={case_id}" if case_id else _public_iris
-
-    # ── 5. Persist ticket info back to the engine ──────────────────────────────
-    try:
-        _req.patch(
-            f"{SIEM_ENGINE_URL}/incidents/{incident_id}",
-            json={
-                "iris_case_id":     str(case_id),
-                "iris_case_url":    case_url,
-                "iris_case_status": "open",
-            },
-            timeout=PROXY_TIMEOUT,
-        )
-    except Exception:
-        pass  # ticket was created — don't fail the response over a patch error
-
-    return jsonify({
-        "iris_case_id":     case_id,
-        "iris_case_url":    case_url,
-        "iris_case_status": "open",
-        "already_existed":  False,
-    })
-
 
 @siem_bp.route("/incidents/<incident_id>/analyse", methods=["POST"])
 @require_siem_analyst
@@ -453,115 +314,14 @@ def siem_ueba_detail(username):
     return _proxy(f"/ueba/{username}")
 
 
-@siem_bp.route("/ueba/escalate", methods=["POST"])
-@require_siem_analyst
-def siem_ueba_escalate():
-    """Create a case in IRIS from a UEBA anomaly.
-
-    Uses get_iris_config() so it works with all three IRIS modes: local,
-    cloud (CLOUD_IRIS_*), and the legacy IRIS_URL / IRIS_API_KEY env vars.
-    Calls /api/v2/cases to match the engine iris_connector and ASM escalate routes.
-    """
-    from core.helpers import get_iris_config, get_iris_public_url
-    cfg = get_iris_config()
-    if not cfg:
-        return jsonify({"error": "CyIRIS not configured. Enable it in AI & Integration Settings."}), 503
-
-    body = request.get_json(silent=True) or {}
-    username     = body.get("username", "unknown")
-    anomaly_type = body.get("anomaly_type", "unknown")
-    description  = body.get("description", "")
-    agent_name   = body.get("agent_name", "unknown")
-    src_ip       = body.get("src_ip", "")
-    rule_id      = body.get("rule_id", "")
-    rule_desc    = body.get("rule_desc", "")
-    process_name = body.get("process_name", "")
-    file_path    = body.get("file_path", "")
-    raw_log      = body.get("raw_log", "")
-    detected_at  = body.get("detected_at", "")
-    incident_id  = body.get("incident_id", "")
-    risk_score   = body.get("risk_contribution", 0)
-
-    analyst_email = session.get("user_email", "unknown")
-
-    case_name = f"[UEBA] {anomaly_type.replace('_', ' ').title()} — {username} on {agent_name}"
-
-    case_description = (
-        f"## UEBA Anomaly: {anomaly_type.replace('_', ' ').title()}\n\n"
-        f"**User:** `{username}`  \n"
-        f"**Host:** `{agent_name}`  \n"
-        f"**Detected:** {detected_at}  \n"
-        f"**Risk Contribution:** +{risk_score}  \n\n"
-        f"### Detection Details\n"
-        f"{description}\n\n"
-    )
-    if src_ip:
-        case_description += f"**Source IP:** `{src_ip}`  \n"
-    if rule_id:
-        case_description += f"**Rule:** {rule_id} — {rule_desc}  \n"
-    if process_name:
-        case_description += f"**Process:** `{process_name}`  \n"
-    if file_path:
-        case_description += f"**File:** `{file_path}`  \n"
-    if incident_id:
-        case_description += f"\n**CySIEM Incident:** `{incident_id}`  \n"
-    if raw_log:
-        case_description += f"\n### Raw Log\n```\n{raw_log[:1000]}\n```\n"
-    case_description += f"\n---\n*Escalated by {analyst_email} via CyCentra360 UEBA*"
-
-    # Severity: UEBA anomalies don't have a simple severity field so default to medium (3)
-    _UEBA_SEV_MAP = {"high_risk": 2, "critical_risk": 1}
-    case_sev = _UEBA_SEV_MAP.get(anomaly_type, 3)
-
-    try:
-        resp = _req.post(
-            f"{cfg['url'].rstrip('/')}/api/v2/cases",
-            headers={
-                "Authorization": f"Bearer {cfg['apiKey']}",
-                "Content-Type":  "application/json",
-                "Accept":        "application/json",
-            },
-            json={
-                "case_name":         case_name,
-                "case_description":  case_description,
-                "case_customer":     cfg.get("customerId", 1),
-                "case_severity_id":  case_sev,
-                "case_soc_id":       incident_id or "",
-            },
-            timeout=10,
-            verify=False,  # self-signed certs common on internal IRIS installs
-        )
-        if resp.status_code in (200, 201):
-            data = resp.json()
-            case = data if "case_id" in data else data.get("data", data)
-            case_id  = case.get("case_id")
-            _public_iris_ueba = get_iris_public_url(cfg['url'])
-            case_url = f"{_public_iris_ueba}/case?cid={case_id}" if case_id else _public_iris_ueba
-            return jsonify({"case_id": case_id, "case_url": case_url, "case_name": case_name})
-        return jsonify({"error": f"IRIS returned HTTP {resp.status_code}", "detail": resp.text[:300]}), 502
-    except _req.exceptions.ConnectionError:
-        return jsonify({"error": "Cannot reach CyIRIS. Check the URL in AI & Integration Settings."}), 503
-    except _req.exceptions.Timeout:
-        return jsonify({"error": "CyIRIS request timed out"}), 504
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 
 @siem_bp.route("/ueba/integrations")
 @require_siem_auth
 def siem_ueba_integrations():
-    """Return public integration URLs (no secrets) for the frontend to construct deep-links.
-
-    Uses get_iris_config() so iris_enabled is True for local, cloud, and legacy
-    IRIS_URL/IRIS_API_KEY configs — not just the old env-var path.
-    """
+    """Return public integration URLs for the frontend to construct deep-links."""
     from core.config import WAZUH_URL
-    from core.helpers import get_iris_config, get_iris_public_url
-    iris_cfg = get_iris_config()
     return jsonify({
-        "iris_url":      get_iris_public_url(iris_cfg["url"]) if iris_cfg else None,
         "wazuh_url":     WAZUH_URL or None,
-        "iris_enabled":  bool(iris_cfg),
         "wazuh_enabled": bool(WAZUH_URL),
     })
 
@@ -983,7 +743,7 @@ def _sync_host_detail(agent_id):
 
             cur.execute("""
                 SELECT id, severity, status, first_seen, last_seen,
-                       llm_summary, mitre_ids, iris_case_id
+                       llm_summary, mitre_ids, case_opened_at
                 FROM incidents
                 WHERE %s = ANY(affected_agents)
                   AND status NOT IN ('closed','false_positive')
@@ -993,7 +753,7 @@ def _sync_host_detail(agent_id):
                 "id": r["id"], "severity": r["severity"], "status": r["status"],
                 "first_seen": _iso(r["first_seen"]), "last_seen": _iso(r["last_seen"]),
                 "summary": r["llm_summary"], "mitre_ids": r["mitre_ids"] or [],
-                "iris_case_id": r["iris_case_id"],
+                "case_opened_at": _iso(r["case_opened_at"]),
             } for r in cur.fetchall()]
 
             cur.execute("""
@@ -2462,156 +2222,6 @@ def siem_host_item_statuses_options(agent_id):
     return add_cors_headers(make_response('', 204))
 
 
-_HOST_SEV_MAP = {"critical": 1, "high": 2, "medium": 3, "low": 4, "info": 5}
-
-
-@siem_bp.route("/hosts/<agent_id>/raise-ticket", methods=["POST"])
-@require_siem_analyst
-def siem_host_raise_ticket(agent_id):
-    """
-    Create a CyIRIS case from a host posture finding (SCA/CVE/Alert/MITRE/Compliance).
-
-    Request body:
-      {
-        "item_type":   "vulnerability|sca|alert|mitre|compliance",
-        "item":        { ...item fields },
-        "host_name":   "hostname",
-        "explanation": "AI explanation from /enrich (optional, enriches case body)",
-        "remediation": "AI remediation steps (optional)"
-      }
-    """
-    from core.helpers import get_iris_config, get_iris_public_url
-    import hashlib
-
-    cfg = get_iris_config()
-    if not cfg:
-        return jsonify({
-            "error": "CyIRIS is not configured. Enable it in System Settings → Integrations → CyIRIS."
-        }), 503
-
-    body        = request.get_json(silent=True) or {}
-    item_type   = body.get("item_type", "finding").strip().lower()
-    item        = body.get("item", {})
-    host_name   = body.get("host_name", agent_id)
-    explanation = body.get("explanation", "")
-    remediation = body.get("remediation", "")
-    analyst     = session.get("user_email", "analyst")
-
-    # Derive title, severity, soc_id from item_type
-    if item_type == "vulnerability":
-        cve      = item.get("cve", item.get("name", "CVE-Unknown"))
-        pkg      = item.get("name", item.get("package_name", ""))
-        ver      = item.get("version", item.get("package_version", ""))
-        sev_key  = (item.get("severity") or "medium").lower()
-        case_name = f"[HOST-VULN] {cve} — {host_name}"
-        soc_id_raw = f"{host_name}|{cve}".lower()
-        detail_md = (
-            f"**CVE:** `{cve}`  \n"
-            f"**Package:** {pkg} {ver}  \n"
-            f"**CVSS:** {item.get('cvss', item.get('cvss3_score', '—'))}  \n"
-            f"**Description:** {item.get('title', item.get('description', '—'))}  \n"
-        )
-    elif item_type == "sca":
-        title    = item.get("title", item.get("description", "SCA Failure"))
-        sev_key  = "medium"
-        case_name = f"[HOST-SCA] {title[:80]} — {host_name}"
-        soc_id_raw = f"{host_name}|sca|{item.get('id', title)}".lower()
-        detail_md = (
-            f"**Check:** {title}  \n"
-            f"**Policy:** {item.get('policy', '—')}  \n"
-            f"**Result:** {item.get('result', 'failed')}  \n"
-            f"**Rationale:** {item.get('rationale', '—')}  \n"
-        )
-    elif item_type == "alert":
-        rule_desc = item.get("rule_description", item.get("description", "Security Alert"))
-        lvl       = int(item.get("rule_level", 7))
-        sev_key   = "critical" if lvl >= 15 else "high" if lvl >= 12 else "medium" if lvl >= 7 else "low"
-        case_name = f"[HOST-ALERT] {rule_desc[:80]} — {host_name}"
-        soc_id_raw = f"{host_name}|alert|{item.get('rule_id', rule_desc)}".lower()
-        detail_md = (
-            f"**Rule:** [{item.get('rule_id', '—')}] {rule_desc}  \n"
-            f"**Level:** {lvl}  \n"
-            f"**Category:** {item.get('category', '—')}  \n"
-            f"**Source IP:** {item.get('src_ip', '—')}  \n"
-            f"**User:** {item.get('username', '—')}  \n"
-        )
-    elif item_type == "mitre":
-        tech  = item.get("technique", item.get("id", "Unknown Technique"))
-        tactic = item.get("tactic", "—")
-        sev_key = "high"
-        case_name = f"[HOST-MITRE] {tech} — {host_name}"
-        soc_id_raw = f"{host_name}|mitre|{tech}".lower()
-        detail_md = (
-            f"**Technique:** {tech}  \n"
-            f"**Tactic:** {tactic}  \n"
-            f"**Alert count:** {item.get('count', '—')}  \n"
-            f"**Description:** {item.get('description', '—')}  \n"
-        )
-    else:  # compliance or generic
-        title   = item.get("requirement", item.get("title", item.get("description", "Compliance Finding")))
-        sev_key = "medium"
-        case_name = f"[HOST-COMP] {str(title)[:80]} — {host_name}"
-        soc_id_raw = f"{host_name}|compliance|{title}".lower()
-        detail_md = (
-            f"**Framework:** {item.get('framework', item.get('policy', '—'))}  \n"
-            f"**Requirement:** {title}  \n"
-            f"**Status:** {item.get('result', item.get('status', '—'))}  \n"
-        )
-
-    severity_id = _HOST_SEV_MAP.get(sev_key, 3)
-    soc_id = "HPST-" + hashlib.sha256(soc_id_raw.encode()).hexdigest()[:6].upper()
-
-    case_body = (
-        f"## Host Posture Finding: {item_type.upper()}\n\n"
-        f"**Host:** `{host_name}` (agent ID: `{agent_id}`)  \n"
-        f"**Severity:** {sev_key.upper()}  \n\n"
-        f"### Finding Details\n{detail_md}\n"
-    )
-    if explanation:
-        case_body += f"\n### AI Analysis\n{explanation}\n"
-    if remediation:
-        case_body += f"\n### Recommended Remediation\n{remediation}\n"
-    case_body += f"\n---\n*Raised by `{analyst}` via CyCentra360 Host Intelligence*"
-
-    payload = {
-        "case_name":        case_name,
-        "case_description": case_body,
-        "case_customer":    cfg["customerId"],
-        "case_severity_id": severity_id,
-        "case_soc_id":      soc_id,
-    }
-    try:
-        resp = _req.post(
-            f"{cfg['url'].rstrip('/')}/api/v2/cases",
-            headers={
-                "Authorization": f"Bearer {cfg['apiKey']}",
-                "Content-Type":  "application/json",
-                "Accept":        "application/json",
-            },
-            json=payload,
-            timeout=10,
-            verify=False,
-        )
-        if resp.status_code in (200, 201):
-            data    = resp.json()
-            case    = data if "case_id" in data else data.get("data", data)
-            case_id = case.get("case_id")
-            _public_iris_host = get_iris_public_url(cfg['url'])
-            case_url = f"{_public_iris_host}/case?cid={case_id}" if case_id else _public_iris_host
-            return jsonify({"case_id": case_id, "case_url": case_url, "case_name": case_name})
-        return jsonify({"error": f"IRIS returned HTTP {resp.status_code}", "detail": resp.text[:300]}), 502
-    except _req.exceptions.ConnectionError:
-        return jsonify({"error": "Cannot reach CyIRIS. Check URL in System Settings."}), 503
-    except _req.exceptions.Timeout:
-        return jsonify({"error": "CyIRIS request timed out."}), 504
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
-
-
-@siem_bp.route("/hosts/<agent_id>/raise-ticket", methods=["OPTIONS"])
-def siem_host_raise_ticket_options(agent_id):
-    from core.helpers import add_cors_headers
-    return add_cors_headers(make_response('', 204))
 
 
 # ══════════════════════════════════════════════════════════════════════════════

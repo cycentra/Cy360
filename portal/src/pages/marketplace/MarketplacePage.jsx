@@ -1220,7 +1220,7 @@ function AddonInstallFlow({ mod, onInstall, onCancel }) {
   );
 }
 
-// ── Platform Extensions section (CyIRIS + CySOAR) ────────────────────────────
+// ── Platform Extensions section (CySOAR and other addons) ──────────────────────
 
 function AddonModulesSection({ installedModules = {}, onInstall, onUninstall }) {
   const [installing,      setInstalling]      = useState(null);

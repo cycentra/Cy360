@@ -215,18 +215,26 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
   const handleRaise = async () => {
     setRaising(true);
     setRaiseErr("");
-    const data = await siemFetch(siemApi.escalateIncident(inc.id));
-    setRaising(false);
-    if (data._offline) { setRaiseErr("Engine offline — try again shortly."); return; }
-    if (data._error)   { setRaiseErr(data._error || "Escalation failed."); return; }
-    const updated = {
-      ...inc,
-      iris_case_id:     data.iris_case_id,
-      iris_case_url:    data.iris_case_url,
-      iris_case_status: data.iris_case_status || "open",
-    };
-    setInc(updated);
-    onPatched?.(updated);
+    try {
+      const res = await fetch("/api/cases", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ incident_id: inc.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setRaising(false);
+      if (!res.ok) { setRaiseErr(data.error || `HTTP ${res.status}`); return; }
+      const updated = {
+        ...inc,
+        case_opened_at: data.case_opened_at || new Date().toISOString(),
+      };
+      setInc(updated);
+      onPatched?.(updated);
+    } catch {
+      setRaising(false);
+      setRaiseErr("Network error — try again shortly.");
+    }
   };
 
   const handleWazuhLaunch = async () => {
@@ -489,65 +497,60 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
           </>
         )}
 
-        {/* CyIRIS ticket */}
-        {inc.iris_case_id ? (
+        {/* Case management */}
+        {inc.case_opened_at ? (
           <>
-            <SectionLabel>🎫 CYIRIS TICKET</SectionLabel>
+            <SectionLabel>🗂️ CASE MANAGEMENT</SectionLabel>
             <div style={{
-              background: inc.iris_case_status === "closed"
-                ? "rgba(0,229,160,0.04)" : "rgba(77,158,255,0.04)",
-              border: `1px solid ${inc.iris_case_status === "closed" ? "rgba(0,229,160,0.2)" : "rgba(77,158,255,0.2)"}`,
+              background: inc.status === "closed" ? "rgba(0,229,160,0.04)" : "rgba(77,158,255,0.04)",
+              border: `1px solid ${inc.status === "closed" ? "rgba(0,229,160,0.2)" : "rgba(77,158,255,0.2)"}`,
               borderRadius: 4, padding: "14px 16px",
               display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12,
             }}>
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                   <span style={{
-                    background: inc.iris_case_status === "closed" ? "rgba(0,229,160,0.15)" : "rgba(77,158,255,0.15)",
-                    color: inc.iris_case_status === "closed" ? "#00e5a0" : "#4d9eff",
-                    border: `1px solid ${inc.iris_case_status === "closed" ? "rgba(0,229,160,0.4)" : "rgba(77,158,255,0.4)"}`,
+                    background: inc.status === "closed" ? "rgba(0,229,160,0.15)" : "rgba(77,158,255,0.15)",
+                    color: inc.status === "closed" ? "#00e5a0" : "#4d9eff",
+                    border: `1px solid ${inc.status === "closed" ? "rgba(0,229,160,0.4)" : "rgba(77,158,255,0.4)"}`,
                     fontSize: 10, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 2,
                     letterSpacing: "0.5px",
                   }}>
-                    {inc.iris_case_status === "closed" ? "✓ CLOSED" : "● OPEN"}
+                    {inc.status === "closed" ? "✓ CLOSED" : "● OPEN"}
                   </span>
                   <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, fontFamily: "monospace" }}>
-                    Case #{inc.iris_case_id}
+                    {inc.status?.toUpperCase()}
                   </span>
                 </div>
                 <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11 }}>
-                  {inc.iris_case_status === "closed"
-                    ? "Analyst closed this ticket in DFIR IRIS — incident auto-closed."
-                    : "Ticket raised in DFIR IRIS and assigned to an analyst for investigation."}
+                  Case opened for this incident and assigned to an analyst for investigation.
                 </div>
               </div>
-              {inc.iris_case_url && (
-                <a href={inc.iris_case_url} target="_blank" rel="noopener noreferrer"
-                  style={{
-                    background: inc.iris_case_status === "closed" ? "rgba(0,229,160,0.1)" : "rgba(77,158,255,0.1)",
-                    border: `1px solid ${inc.iris_case_status === "closed" ? "rgba(0,229,160,0.3)" : "rgba(77,158,255,0.3)"}`,
-                    color: inc.iris_case_status === "closed" ? "#00e5a0" : "#4d9eff",
-                    padding: "6px 12px", borderRadius: 4, fontSize: 11,
-                    fontFamily: "monospace", textDecoration: "none", whiteSpace: "nowrap", flexShrink: 0,
-                    fontWeight: 700,
-                  }}>
-                  ↗ Open in CyIRIS
-                </a>
-              )}
+              <a href={`/cases/${inc.id}`}
+                style={{
+                  background: "rgba(77,158,255,0.1)",
+                  border: "1px solid rgba(77,158,255,0.3)",
+                  color: "#4d9eff",
+                  padding: "6px 12px", borderRadius: 4, fontSize: 11,
+                  fontFamily: "monospace", textDecoration: "none", whiteSpace: "nowrap", flexShrink: 0,
+                  fontWeight: 700,
+                }}>
+                View Case →
+              </a>
             </div>
           </>
         ) : (
           <>
-            <SectionLabel>🎫 CYIRIS TICKET</SectionLabel>
+            <SectionLabel>🗂️ CASE MANAGEMENT</SectionLabel>
             <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
               borderRadius: 4, padding: "14px 16px", display: "flex",
               alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
               <div>
                 <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, marginBottom: 4 }}>
-                  No ticket raised automatically for this incident.
+                  No case opened automatically for this incident.
                 </div>
                 <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace" }}>
-                  Raise a ticket manually to assign this incident for analyst investigation in CyIRIS.
+                  Open a case to assign this incident for analyst investigation.
                 </div>
                 {raiseErr && (
                   <div style={{ color: "#ff6464", fontSize: 11, fontFamily: "monospace", marginTop: 6 }}>
@@ -564,7 +567,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
                   color: "#4d9eff", padding: "8px 16px", borderRadius: 4, cursor: raising ? "wait" : "pointer",
                   fontSize: 12, fontFamily: "monospace", fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0,
                 }}>
-                {raising ? "Raising ticket…" : "🎫 Raise CyIRIS Ticket"}
+                {raising ? "Opening case…" : "🗂️ Open Case"}
               </button>
             </div>
           </>
@@ -743,7 +746,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
             {auditLog.map((entry, i) => {
               const isSystem = entry.actor === "system";
               const actionColor = {
-                status_change: "#f5c518", iris_created: "#4d9eff",
+                status_change: "#f5c518", case_auto_opened: "#4d9eff",
                 soar_triggered: "#b36bff", auto_fp: "#888", comment: "#00e5a0",
               }[entry.action] || "#888";
               return (
@@ -1826,23 +1829,22 @@ export function SiemIncidentsPage() {
                       🔴 IOC
                     </span>
                   )}
-                  {inc.iris_case_id && (
+                  {inc.case_opened_at && (
                     <span
-                      title={`CyIRIS Ticket #${inc.iris_case_id} — ${(inc.iris_case_status || "open").toUpperCase()}`}
+                      title={`CyCases — ${inc.status}`}
                       style={{
-                        background: inc.iris_case_status === "closed"
-                          ? "rgba(0,229,160,0.1)" : "rgba(77,158,255,0.12)",
-                        color: inc.iris_case_status === "closed" ? "#00e5a0" : "#4d9eff",
-                        border: `1px solid ${inc.iris_case_status === "closed" ? "rgba(0,229,160,0.3)" : "rgba(77,158,255,0.3)"}`,
+                        background: "rgba(77,158,255,0.12)",
+                        color: "#4d9eff",
+                        border: "1px solid rgba(77,158,255,0.3)",
                         fontSize: 9, fontFamily: "monospace", padding: "1px 5px",
-                        borderRadius: 2, fontWeight: 700, cursor: inc.iris_case_url ? "pointer" : "default",
+                        borderRadius: 2, fontWeight: 700, cursor: "pointer",
                       }}
-                      onClick={e => { e.stopPropagation(); if (inc.iris_case_url) window.open(inc.iris_case_url, "_blank", "noopener"); }}
+                      onClick={e => { e.stopPropagation(); window.location.href = `/cases/${inc.id}`; }}
                     >
-                      {inc.iris_case_status === "closed" ? "✓ IRIS" : "🎫 IRIS"}
+                      🗂️ CASE
                     </span>
                   )}
-                  {!inc.llm_summary && !(inc.misp_enrichment?.ioc_hits || []).length && !inc.iris_case_id && (
+                  {!inc.llm_summary && !(inc.misp_enrichment?.ioc_hits || []).length && !inc.case_opened_at && (
                     <span style={{ color: "rgba(255,255,255,0.42)", fontSize: 10 }}>—</span>
                   )}
                 </div>

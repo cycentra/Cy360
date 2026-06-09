@@ -14,7 +14,7 @@ Routes:
   GET  /api/system/latest-version   query GitHub Releases API for latest published version (ghToken required)
   POST /api/system/update           trigger cycentra-setup.sh --update (GH_TOKEN read from server .env)
   POST /api/system/upgrade          trigger cycentra-setup.sh full install (major upgrade)
-  GET  /api/system/env/<target>  read env file (global|cysiemstack|cyiris|cysoar|cymisp|cysiem)
+  GET  /api/system/env/<target>  read env file (global|cysiemstack|cysoar|cymisp|cysiem)
   PUT  /api/system/env/<target>  write env file
   GET  /api/system/license         current license status (type, days, customer, valid)
   POST /api/system/license/upload  upload a .lic file — validates and activates immediately
@@ -45,7 +45,6 @@ system_bp = Blueprint("system", __name__)
 _ENV_FILE_MAP = {
     "global":      "/opt/cycentra/.env",
     "cysiemstack": "/opt/cycentra/cysiemstack.env",
-    "cyiris":      "/opt/cycentra/modules/cyiris/.env",
     "cysoar":      "/opt/cycentra/modules/cysoar/.env",
     "cymisp":      "/opt/cycentra/modules/cymisp/.env",
 }
@@ -57,8 +56,8 @@ _SECRET_KEYS = {
     "WAZUH_API_PASSWORD",
     "API_KEY", "CS_TOKEN",
     "GOOGLE_CLIENT_SECRET", "MICROSOFT_CLIENT_SECRET",
-    "CYIRIS_OIDC_SECRET", "CYSOAR_OIDC_SECRET",
-    "IRIS_SECRET", "IRIS_DB_PASS", "NODE_RED_CREDENTIAL_SECRET",
+    "CYSOAR_OIDC_SECRET",
+    "NODE_RED_CREDENTIAL_SECRET",
     "JWT_SECRET", "ADMIN_API_KEY", "SMTP_PASS",
 }
 
@@ -231,59 +230,6 @@ def _sync_misp_to_siem_env(misp: dict) -> None:
         pass  # Non-fatal — server may not have write permission in dev mode
 
 
-def _sync_iris_to_siem_env(iris: dict) -> None:
-    """Resolve effective CyIRIS config and write it into cysiemstack.env so the
-    correlation engine picks it up immediately without a restart."""
-    env_path = Path(_ENV_FILE_MAP["cysiemstack"])
-    if not env_path.parent.exists():
-        return
-
-    mode = iris.get("mode", "disabled")
-
-    if mode == "cloud":
-        eff_url = os.environ.get("CLOUD_IRIS_URL", "https://cyiris.cycentra.com").rstrip("/")
-        # Prefer env var; fall back to key stored in ai_settings.json by the UI
-        eff_key = os.environ.get("CLOUD_IRIS_API_KEY", "").strip() or iris.get("apiKey", "").strip()
-        customer_id = os.environ.get("CLOUD_IRIS_CUSTOMER_ID", "") or str(iris.get("customerId", "1"))
-        enabled = "true" if eff_key else "false"
-    elif mode == "local":
-        eff_url = iris.get("url", "").rstrip("/")
-        eff_key = iris.get("apiKey", "")
-        customer_id = str(iris.get("customerId", "1"))
-        enabled = "true" if (eff_url and eff_key) else "false"
-    else:  # disabled
-        eff_url, eff_key, customer_id, enabled = "", "", "1", "false"
-
-    updates = {
-        "IRIS_MODE":        mode,
-        "IRIS_ENABLED":     enabled,
-        "IRIS_URL":         eff_url,
-        "IRIS_API_KEY":     eff_key,
-        "IRIS_CUSTOMER_ID": customer_id,
-        "IRIS_FP_THRESHOLD": str(iris.get("fpThreshold", "90.0")),
-    }
-
-    try:
-        lines = env_path.read_text().splitlines() if env_path.exists() else []
-    except Exception:
-        lines = []
-
-    result, seen = [], set()
-    for line in lines:
-        key = line.split("=", 1)[0].strip()
-        if key in updates:
-            result.append(f'{key}={updates[key]}')
-            seen.add(key)
-        else:
-            result.append(line)
-    for k, v in updates.items():
-        if k not in seen:
-            result.append(f'{k}={v}')
-    try:
-        env_path.write_text("\n".join(result) + "\n")
-    except Exception:
-        pass
-
 
 @system_bp.route("/api/ai/settings", methods=["OPTIONS"])
 def ai_settings_options():
@@ -302,8 +248,6 @@ def ai_settings_get():
                 data["cymind_memory"]["apiKey"] = "••••••••"
             if "misp" in data and data["misp"].get("apiKey"):
                 data["misp"]["apiKey"] = "••••••••"
-            if "iris" in data and data["iris"].get("apiKey"):
-                data["iris"]["apiKey"] = "••••••••"
             return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -314,7 +258,7 @@ def ai_settings_get():
 def ai_settings_post():
     data = request.get_json() or {}
     # Only accept known top-level keys to prevent arbitrary data storage
-    allowed = {"provider", "fields", "prompts", "cymind_memory", "misp", "iris"}
+    allowed = {"provider", "fields", "prompts", "cymind_memory", "misp"}
     payload = {k: v for k, v in data.items() if k in allowed}
     if not payload:
         return jsonify({"error": "No valid settings provided"}), 400
@@ -351,21 +295,12 @@ def ai_settings_post():
             existing_misp_key = existing.get("misp", {}).get("apiKey", "")
             if existing_misp_key:
                 payload.setdefault("misp", {})["apiKey"] = existing_misp_key
-        # Same guard for the iris block
-        incoming_iris_key = payload.get("iris", {}).get("apiKey", "")
-        if not incoming_iris_key or incoming_iris_key == _MASK:
-            existing_iris_key = existing.get("iris", {}).get("apiKey", "")
-            if existing_iris_key:
-                payload.setdefault("iris", {})["apiKey"] = existing_iris_key
         existing.update(payload)
         AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         AI_SETTINGS_FILE.write_text(json.dumps(existing, indent=2))
         # Sync MISP settings into cysiemstack.env
         if "misp" in existing:
             _sync_misp_to_siem_env(existing["misp"])
-        # Sync CyIRIS settings into cysiemstack.env
-        if "iris" in existing:
-            _sync_iris_to_siem_env(existing["iris"])
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -427,121 +362,6 @@ def misp_test():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-# ── CyIRIS connectivity test ──────────────────────────────────────────────────
-
-@system_bp.route("/api/system/iris/test", methods=["OPTIONS"])
-def iris_test_options():
-    return add_cors_headers(make_response('', 204))
-
-
-@system_bp.route("/api/system/iris/test", methods=["POST"])
-def iris_test():
-    """Test connectivity to a DFIR IRIS instance using its REST API."""
-    data    = request.get_json() or {}
-    url     = data.get("url", "").rstrip("/")
-    api_key = data.get("apiKey", "").strip()    # strip whitespace/newlines before comparison
-
-    # If the UI sent an empty key with useStored=True (cloud mode, masked placeholder),
-    # fall back to the key stored in ai_settings.json, then to the env var (same
-    # pattern as the MISP handler — CLOUD_MISP_API_KEY).
-    if (not api_key or api_key == "\u2022" * 8) and data.get("useStored"):
-        try:
-            stored = json.loads(AI_SETTINGS_FILE.read_text()) if AI_SETTINGS_FILE.exists() else {}
-            api_key = stored.get("iris", {}).get("apiKey", "")
-        except Exception:
-            pass
-        # Fallback to env var if still missing (cloud mode: key lives in .env, not in UI)
-        if not api_key:
-            api_key = os.environ.get("CLOUD_IRIS_API_KEY", "").strip()
-        # Override the URL with CLOUD_IRIS_URL from env — the stored internal address
-        # (e.g. http://127.0.0.1:4433) bypasses the nginx IAP (oauth2-proxy) gate that
-        # sits in front of https://cyiris.DOMAIN and would block Bearer-token requests
-        # with an HTML redirect.  Same resolution as iris_connector.py and
-        # _sync_iris_to_siem_env().
-        url = os.environ.get("CLOUD_IRIS_URL", url).rstrip("/")
-
-    if not url:
-        return jsonify({"ok": False, "error": "CyIRIS URL is required"}), 400
-    if not api_key or api_key == "\u2022" * 8:
-        return jsonify({"ok": False, "error": "CyIRIS API Key is required — enter your key in the field above"}), 400
-
-    try:
-        # GET /api/ping — lightweight auth-required ping endpoint built into IRIS
-        resp = http_requests.get(
-            f"{url}/api/ping",
-            headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
-            timeout=8,
-            verify=False,   # IRIS commonly runs with self-signed certs on-premise
-        )
-        if resp.status_code == 401:
-            # Distinguish a genuine IRIS 401 (JSON body) from an oauth2-proxy / nginx
-            # authentication-gateway 401 (HTML body).  If the Bearer token was blocked
-            # by a reverse-proxy the fix is the URL, not the key.
-            try:
-                body401 = resp.json()
-                if body401.get("status") == "error":
-                    # Real IRIS 401 — key does not match any active IRIS user
-                    return jsonify({"ok": False, "error": (
-                        f"Invalid API key (401) — verify with: "
-                        f"curl {url}/api/ping -H 'Authorization: Bearer YOUR_KEY' "
-                        "— get key from IRIS: avatar \u2192 My Settings \u2192 API Key"
-                    )}), 400
-            except Exception:
-                pass
-            # Non-JSON 401 — likely from an nginx oauth2-proxy gate in front of IRIS.
-            # Bearer tokens are not forwarded by oauth2-proxy; browser session cookie required.
-            return jsonify({"ok": False, "error": (
-                f"401 from an auth proxy — '{url}' is behind a login gateway that blocks "
-                "API key access. Use the internal address (e.g. http://127.0.0.1:4433) "
-                "to bypass it"
-            )}), 400
-        if resp.status_code == 403:
-            # Distinguish a real IRIS 403 from a non-IRIS server (e.g. CyCentra's own
-            # nginx at port 80 returning 403 when the user entered the wrong URL/port).
-            try:
-                err_body = resp.json()
-                # IRIS error responses always carry {"status": "error", "message": ...}
-                if err_body.get("status") == "error":
-                    return jsonify({"ok": False, "error": f"Access denied — IRIS rejected the API key (403). Verify the key in IRIS → My Profile → API Key"}), 400
-            except Exception:
-                pass
-            return jsonify({"ok": False, "error": "403 received — the URL may be wrong (e.g. pointing to the wrong port). Local CyIRIS listens on port 4433 by default"}), 400
-        if resp.ok:
-            # Validate the ping response is actually from a DFIR IRIS instance.
-            # A plain nginx default page or proxy can return HTTP 200 with HTML/empty
-            # body; without this check ver_resp.json() raises a cryptic JSONDecodeError.
-            try:
-                ping_data = resp.json()
-                if ping_data.get("status") != "success":
-                    return jsonify({"ok": False, "error": "Server responded but is not a DFIR IRIS instance — check the URL"}), 400
-            except Exception:
-                return jsonify({"ok": False, "error": "Server returned a non-JSON response — is the URL pointing to DFIR IRIS?"}), 400
-
-            # Also fetch version info for a richer confirmation message
-            ver_resp = http_requests.get(
-                f"{url}/api/versions",
-                headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
-                timeout=5, verify=False,
-            )
-            version = "unknown"
-            if ver_resp.ok:
-                try:
-                    ver_data = ver_resp.json()
-                    version = ver_data.get("data", {}).get("iris_current", "unknown")
-                except Exception:
-                    pass    # version info is cosmetic — don't fail the whole test
-            return jsonify({"ok": True, "message": f"DFIR IRIS v{version} — connected"})
-        return jsonify({"ok": False, "error": f"IRIS returned HTTP {resp.status_code}"}), 400
-    except http_requests.exceptions.SSLError as e:
-        return jsonify({"ok": False, "error": f"SSL error — {e}"}), 400
-    except http_requests.exceptions.ConnectionError:
-        return jsonify({"ok": False, "error": "Cannot reach CyIRIS server — check URL and network"}), 400
-    except http_requests.exceptions.Timeout:
-        return jsonify({"ok": False, "error": "Connection timed out"}), 400
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
 # ── MISP effective config (single source of truth for other modules) ──────────
 
 @system_bp.route("/api/system/misp-config", methods=["OPTIONS"])
@@ -554,7 +374,7 @@ def misp_config_get():
     """
     Return the resolved MISP connection parameters for the currently active mode.
 
-    Called by CySOAR / CyIRIS / external modules that need MISP creds — they
+    Called by CySOAR / external modules that need MISP creds — they
     should use this endpoint rather than reading ai_settings.json directly.
     The API key is never returned; callers receive url + mode only, and must
     authenticate through the portal backend to perform MISP calls.
@@ -574,11 +394,9 @@ def misp_config_get():
 
 @system_bp.route("/api/config")
 def config_debug():
-    from core.config import CYSOAR_IMAGE, CYIRIS_IMAGE_APP, CYIRIS_IMAGE_DB
+    from core.config import CYSOAR_IMAGE
     return jsonify({
         "CYSOAR_IMAGE":     CYSOAR_IMAGE,
-        "CYIRIS_IMAGE_APP": CYIRIS_IMAGE_APP,
-        "CYIRIS_IMAGE_DB":  CYIRIS_IMAGE_DB,
         "SIEM_ENGINE_URL":  os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100"),
         "env_file_loaded":  os.path.exists("/opt/cycentra/.env") or os.path.exists(".env"),
     })
@@ -2202,7 +2020,7 @@ def _fetch_incident_detail_block(message: str) -> str:
                 f"- **Correlated Rules**: {rules}",
                 f"- **UEBA Flags**: {ueba}",
                 f"- **Assigned To**: {inc.get('assigned_to') or 'Unassigned'}",
-                f"- **CyIRIS Case**: {inc.get('iris_case_id') or 'None'}",
+                f"- **Case Opened**: {inc.get('case_opened_at') or 'None'}",
                 f"- **FP Probability**: {inc.get('fp_probability', '?')}%",
                 "",
                 f"**AI Summary**: {summary}",
@@ -2463,22 +2281,21 @@ def _detect_action_intent(message: str) -> dict | None:
                                "comment":     f"Escalated via CyMind agentic chat"},
                 "label":      f"Escalate incident {inc_id}",
                 "risk":       "medium",
-                "summary":    f"This will escalate incident **{inc_id}** to CyIRIS (creating an investigation case if one doesn't already exist) and bump the severity to the next level if not already at critical.",
+                "summary":    f"This will escalate incident **{inc_id}** — bump severity and open a case if not already open.",
                 "reversible": True,
             }
 
-    # ── 12. Create CyIRIS investigation case ─────────────────────────────────
-    if _re.search(r'\b(?:create|open|raise)\b.{0,20}(?:iris|cyiris|case|ticket|investigation)\b'
-                  r'|\b(?:iris|cyiris)\b.{0,20}\b(?:case|ticket)\b', lm):
+    # ── 12. Open CyCases investigation case ─────────────────────────────────
+    if _re.search(r'\b(?:create|open|raise)\b.{0,20}(?:case|investigation)\b', lm):
         incs = _INC_RE.findall(msg)
         if incs:
             inc_id = incs[0].upper()
             return {
-                "type":       "create_cyiris_case",
+                "type":       "open_case",
                 "params":     {"incident_id": inc_id},
-                "label":      f"Create CyIRIS case for {inc_id}",
+                "label":      f"Open case for {inc_id}",
                 "risk":       "low",
-                "summary":    f"This will create a CyIRIS investigation case for incident **{inc_id}**. If a case already exists for this incident, the existing case URL will be returned instead.",
+                "summary":    f"This will open a CyCases investigation for incident **{inc_id}**.",
                 "reversible": True,
             }
 
@@ -2913,63 +2730,53 @@ def _execute_agentic_action(action_type: str, params: dict, actor_email: str) ->
         except Exception as e:
             return {"success": False, "message": f"Could not reach engine: {e}"}
 
-    # ── Escalate incident to CyIRIS ───────────────────────────────────────────
+    # ── Escalate incident ─────────────────────────────────────────────────────
     elif action_type == "escalate_incident":
         inc_id  = params.get("incident_id", "").strip()
         comment = params.get("comment") or f"Escalated via CyMind agentic chat by {actor_email}"
         if not inc_id:
             return {"success": False, "message": "Missing incident_id"}
         try:
-            r = http_requests.post(
-                f"{engine}/incidents/{inc_id}/escalate",
+            # Bump severity via PATCH and open case via /api/cases
+            from flask import current_app
+            import requests as _hr
+            r = _hr.post(
+                f"http://127.0.0.1:5252/api/cases",
+                json={"incident_id": inc_id},
                 timeout=_t,
+                cookies={"session": "system"},
             )
-            if r.ok:
-                data = r.json()
-                _write_action_audit(engine, inc_id, "escalated",
-                                    comment=comment, actor=actor_email,
-                                    extra={"iris_case_id": data.get("iris_case_id")})
-                already = data.get("already_existed", False)
-                case_id = data.get("iris_case_id", "")
-                case_url = data.get("iris_case_url", "")
-                msg = (
-                    f"Incident **{inc_id}** escalated. CyIRIS case **{case_id}** {'already existed' if already else 'created'}."
-                    + (f" [Open in CyIRIS]({case_url})" if case_url else "")
-                )
-                return {"success": True, "message": msg, "data": data}
-            return {"success": False,
-                    "message": f"Engine returned HTTP {r.status_code}: {r.text[:200]}"}
+            _write_action_audit(engine, inc_id, "escalated",
+                                comment=comment, actor=actor_email)
+            return {"success": True,
+                    "message": f"Incident **{inc_id}** escalated — severity bumped and case opened.",
+                    "data": r.json() if r.ok else {}}
         except Exception as e:
-            return {"success": False, "message": f"Could not reach engine: {e}"}
+            return {"success": False, "message": f"Could not escalate: {e}"}
 
-    # ── Create CyIRIS case ────────────────────────────────────────────────────
-    elif action_type == "create_cyiris_case":
+    # ── Open CyCases investigation ───────────────────────────────────────────
+    elif action_type == "open_case":
         inc_id = params.get("incident_id", "").strip()
         if not inc_id:
             return {"success": False, "message": "Missing incident_id"}
         try:
             r = http_requests.post(
-                f"{engine}/incidents/{inc_id}/escalate",
+                f"http://127.0.0.1:5252/api/cases",
+                json={"incident_id": inc_id},
                 timeout=_t,
             )
             if r.ok:
                 data = r.json()
-                _write_action_audit(engine, inc_id, "iris_case_created",
-                                    comment=f"CyIRIS case created via chat by {actor_email}",
-                                    actor=actor_email,
-                                    extra={"iris_case_id": data.get("iris_case_id")})
-                already   = data.get("already_existed", False)
-                case_id   = data.get("iris_case_id", "")
-                case_url  = data.get("iris_case_url", "")
-                msg = (
-                    f"CyIRIS case **{case_id}** {'already existed' if already else 'created'} for incident **{inc_id}**."
-                    + (f" [Open in CyIRIS]({case_url})" if case_url else "")
-                )
-                return {"success": True, "message": msg, "data": data}
+                _write_action_audit(engine, inc_id, "case_opened",
+                                    comment=f"Case opened via CyMind chat by {actor_email}",
+                                    actor=actor_email)
+                return {"success": True,
+                        "message": f"CyCases investigation opened for incident **{inc_id}**. View at /cases/{inc_id}.",
+                        "data": data}
             return {"success": False,
-                    "message": f"Engine returned HTTP {r.status_code}: {r.text[:200]}"}
+                    "message": f"Case service returned HTTP {r.status_code}: {r.text[:200]}"}
         except Exception as e:
-            return {"success": False, "message": f"Could not reach engine: {e}"}
+            return {"success": False, "message": f"Could not open case: {e}"}
 
     # ── Enrich IOC (MISP + risk score lookup) ─────────────────────────────────
     elif action_type == "enrich_ioc":

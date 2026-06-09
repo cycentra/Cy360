@@ -6,7 +6,7 @@
  * Each tab supports click-to-expand with:
  *   • Status buttons (persisted in tab-level statusMap while panel is open)
  *   • Manual "Analyze with AI" button (on-demand enrichment; results cached in tab)
- *   • "Raise CyIRIS Ticket" (available with or without AI enrichment)
+ *   • "Open Case" button (opens a CyCases investigation via POST /api/cases)
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -140,15 +140,14 @@ function EnrichmentPanel({
 
   function raiseTicket() {
     setTicket("loading");
-    fetch(`${API}/hosts/${agentId}/raise-ticket`, {
+    // Open a CyCases investigation if this item is linked to an incident
+    const incId = item?.incident_id || null;
+    if (!incId) { setTicket({ error: "No incident linked to this item" }); return; }
+    fetch(`/api/cases`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        item_type: itemType, item, host_name: hostName,
-        explanation: result?.explanation || "",
-        remediation: result?.remediation || "",
-      }),
+      body: JSON.stringify({ incident_id: incId }),
     })
       .then(r => r.json())
       .then(d => setTicket(d.error ? "error" : d))
@@ -334,7 +333,7 @@ function EnrichmentPanel({
         )}
       </div>
 
-      {/* ── Raise Ticket ── */}
+      {/* ── Open Case ── */}
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <button
           onClick={raiseTicket}
@@ -342,21 +341,21 @@ function EnrichmentPanel({
           style={{
             padding: "6px 14px", borderRadius: 4, cursor: "pointer",
             fontSize: 11, fontFamily: "monospace",
-            background: ticketStatus?.case_id
+            background: ticketStatus?.id
               ? "rgba(176,110,255,0.15)" : "rgba(77,158,255,0.08)",
-            border: ticketStatus?.case_id
+            border: ticketStatus?.id
               ? "1px solid rgba(176,110,255,0.4)" : "1px solid rgba(77,158,255,0.25)",
-            color: ticketStatus?.case_id ? "#b06eff" : "#4d9eff",
+            color: ticketStatus?.id ? "#b06eff" : "#4d9eff",
           }}>
-          {ticketStatus === "loading"  ? "Creating ticket…"
-            : ticketStatus === "error" ? "⚠ Ticket Failed — Retry"
-            : ticketStatus?.case_id    ? `✓ IRIS #${ticketStatus.case_id}`
-            : "↗ Raise CyIRIS Ticket"}
+          {ticketStatus === "loading"  ? "Opening case…"
+            : ticketStatus === "error" ? "⚠ Failed — Retry"
+            : ticketStatus?.id         ? "✓ Case Open"
+            : "🗬️ Open Case"}
         </button>
-        {ticketStatus?.case_url && (
-          <a href={ticketStatus.case_url} target="_blank" rel="noopener noreferrer"
+        {ticketStatus?.id && (
+          <a href={`/cases/${item?.incident_id}`}
             style={{ fontSize: 10, color: "#b06eff", textDecoration: "underline" }}>
-            Open in CyIRIS →
+            View Case →
           </a>
         )}
         {ticketStatus === "error" && (
@@ -439,7 +438,7 @@ function OverviewTab({ detail }) {
               <span style={{ fontFamily: "monospace", fontSize: 10, color: "#888" }}>{inc.id}</span>
               <Pill label={inc.severity?.toUpperCase()} color={SEV_COLOR[inc.severity] || "#888"} />
               <span style={{ fontSize: 12, color: "#e8eaed", flex: 1 }}>{inc.summary?.slice(0, 80)}…</span>
-              {inc.iris_case_id && <Pill label={`IRIS #${inc.iris_case_id}`} color="#b06eff" />}
+              {inc.case_opened_at && <Pill label="🗂️ CASE" color="#b06eff" />}
             </div>
           ))}
         </div>
