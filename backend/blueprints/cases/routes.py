@@ -255,11 +255,67 @@ def get_case(incident_id):
 @cases_bp.route("/api/cases", methods=["POST"])
 @_require_analyst
 def create_case():
+    """Open a case. Accepts either:
+      { incident_id }               — open on an existing SIEM incident
+      { finding: {...asm fields} }  — create a synthetic ASM tracking incident and open a case
+    """
+    import hashlib as _hash
     email = session["user_email"]
     body  = request.get_json(silent=True) or {}
+
     incident_id = body.get("incident_id", "").strip()
+    finding     = body.get("finding")      # present when called from Vulnerabilities page
+
+    # ── If no incident_id but finding data provided, create a synthetic incident ─
+    if not incident_id and finding:
+        vuln   = (finding.get("vulnerability") or "ASM Finding").strip()[:200]
+        sev    = (finding.get("severity") or "medium").lower()
+        if sev not in ("critical", "high", "medium", "low"):
+            sev = "medium"
+        asset  = (finding.get("asset") or "unknown").strip()[:200]
+        module = (finding.get("module") or "asm").strip()[:100]
+        desc   = (finding.get("description") or "").strip()
+        rec    = (finding.get("recommendation") or "").strip()
+        cve    = (finding.get("cve") or "").strip()
+
+        raw_key    = f"{asset}|{vuln}|{module}".lower()
+        incident_id = "ASM-" + _hash.sha256(raw_key.encode()).hexdigest()[:8].upper()
+
+        note_parts = [f"ASM Finding: {vuln}"]
+        if cve:    note_parts.append(f"CVE: {cve}")
+        note_parts.append(f"Asset: {asset}  Module: {module}")
+        if desc:   note_parts.append(f"Description: {desc}")
+        if rec:    note_parts.append(f"Remediation: {rec}")
+        notes = "\n".join(note_parts)
+
+        try:
+            conn = _db()
+            cur  = conn.cursor()
+            cur.execute("""
+                INSERT INTO incidents
+                    (id, first_seen, last_seen, updated_at, status, severity, alert_count, categories, notes)
+                VALUES (%s, NOW(), NOW(), NOW(), 'investigating', %s, 0, ARRAY['asm'], %s)
+                ON CONFLICT (id) DO UPDATE
+                    SET last_seen = NOW(), updated_at = NOW(), notes = EXCLUDED.notes
+            """, [incident_id, sev, notes])
+            conn.commit()
+            result = open_case(conn, incident_id, email, case_type="generic")
+            _write_action_audit(conn, incident_id, "asm_case_opened", email,
+                                extra={"asset": asset, "vuln": vuln})
+            conn.commit()
+            # Serialize datetimes before jsonify
+            safe = {k: (_iso(v) if hasattr(v, "isoformat") else v) for k, v in result.items()}
+            safe["incident_id"] = incident_id
+            conn.close()
+            return jsonify(safe), 201
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 404
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
     if not incident_id:
         return jsonify({"error": "incident_id is required"}), 400
+
     case_type = body.get("case_type")
     try:
         conn = _db()
@@ -267,8 +323,10 @@ def create_case():
         _write_action_audit(conn, incident_id, "case_opened", email,
                             comment=f"Case opened via API by {email}")
         conn.commit()
+        # Serialize datetimes before jsonify
+        safe = {k: (_iso(v) if hasattr(v, "isoformat") else v) for k, v in result.items()}
         conn.close()
-        return jsonify(result), 201
+        return jsonify(safe), 201
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 404
     except Exception as exc:
