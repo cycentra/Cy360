@@ -258,7 +258,7 @@ def ai_settings_get():
 def ai_settings_post():
     data = request.get_json() or {}
     # Only accept known top-level keys to prevent arbitrary data storage
-    allowed = {"provider", "fields", "prompts", "cymind_memory", "misp"}
+    allowed = {"provider", "fields", "prompts", "cymind_memory", "misp", "system"}
     payload = {k: v for k, v in data.items() if k in allowed}
     if not payload:
         return jsonify({"error": "No valid settings provided"}), 400

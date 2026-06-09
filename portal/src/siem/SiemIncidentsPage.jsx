@@ -126,12 +126,16 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
   const [requestingAi, setRequestingAi]     = useState(false);
   const [aiRequestErr, setAiRequestErr]     = useState("");
 
-  // Fetch full incident detail on mount
+  // Fetch full incident detail on mount — preserve case_opened_at if DB hasn't
+  // propagated it yet (race between psycopg2 write and SQLAlchemy read).
   useEffect(() => {
     (async () => {
       const data = await siemFetch(siemApi.getIncident(initialIncident.id));
       if (!data._error && !data._offline) {
-        setInc(data);
+        setInc(prev => ({
+          ...data,
+          case_opened_at: data.case_opened_at || prev.case_opened_at,
+        }));
         setNotes(data.notes || "");
         setAssignee(data.assigned_to || "");
       }
@@ -225,11 +229,16 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
       const data = await res.json().catch(() => ({}));
       setRaising(false);
       if (!res.ok) { setRaiseErr(data.error || `HTTP ${res.status}`); return; }
-      // Re-fetch the full incident so case_opened_at reflects DB truth
+      // Guarantee case_opened_at is set immediately — don't depend on re-fetch timing.
+      // Use the value from the POST response; fall back to current time.
+      const caseOpenedAt = data.case_opened_at || new Date().toISOString();
+      // Re-fetch for other fresh fields but always keep the authoritative case_opened_at.
       const freshRes = await siemFetch(siemApi.getIncident(inc.id)).catch(() => null);
-      const updated = freshRes
-        ? { ...inc, ...freshRes }
-        : { ...inc, case_opened_at: data.case_opened_at || new Date().toISOString() };
+      const updated = {
+        ...inc,
+        ...(freshRes && !freshRes._error && !freshRes._offline ? freshRes : {}),
+        case_opened_at: caseOpenedAt,
+      };
       setInc(updated);
       onPatched?.(updated);
     } catch {

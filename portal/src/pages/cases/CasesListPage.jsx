@@ -118,18 +118,43 @@ function FilterSelect({ value, onChange, options, placeholder }) {
 
 // ── New Case Modal ────────────────────────────────────────────────────────────
 function NewCaseModal({ onClose, onCreated }) {
-  const [incidentId, setIncidentId] = useState("");
-  const [saving, setSaving]         = useState(false);
-  const [err, setErr]               = useState("");
+  const [query,      setQuery]      = useState("");
+  const [results,    setResults]    = useState([]);
+  const [searching,  setSearching]  = useState(false);
+  const [selected,   setSelected]   = useState(null);  // { id, severity, status, categories }
+  const [saving,     setSaving]     = useState(false);
+  const [err,        setErr]        = useState("");
   const inputRef = useRef(null);
+  const searchRef = useRef(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
-  const handleKeyDown = e => { if (e.key === "Escape") onClose(); };
+  // Debounced incident search
+  useEffect(() => {
+    if (!query.trim()) { setResults([]); return; }
+    clearTimeout(searchRef.current);
+    searchRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const qs = new URLSearchParams({ limit: 12 });
+        // Try as ID prefix first, then as free-text
+        const r = await fetch(`/api/siem/incidents?${qs}`, { credentials: "include" });
+        const d = r.ok ? await r.json() : { incidents: [] };
+        const q = query.trim().toLowerCase();
+        const filtered = (d.incidents || []).filter(i =>
+          i.id?.toLowerCase().includes(q) ||
+          (i.categories || []).some(c => c.toLowerCase().includes(q)) ||
+          (i.mitre_tactics || []).some(t => t.toLowerCase().includes(q))
+        );
+        setResults(filtered.slice(0, 8));
+      } catch { setResults([]); }
+      finally { setSearching(false); }
+    }, 300);
+  }, [query]);
 
   const handleSubmit = async () => {
-    const id = incidentId.trim();
-    if (!id) { setErr("Incident ID is required."); return; }
+    const id = (selected?.id || query).trim();
+    if (!id) { setErr("Select or enter an incident ID."); return; }
     setSaving(true); setErr("");
     try {
       const r = await fetch("/api/cases", {
@@ -141,75 +166,98 @@ function NewCaseModal({ onClose, onCreated }) {
         const d = await r.json().catch(() => ({}));
         throw new Error(d.error || `HTTP ${r.status}`);
       }
-      const created = await r.json();
-      onCreated(created);
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setSaving(false);
-    }
+      onCreated(await r.json());
+    } catch (e) { setErr(e.message); }
+    finally { setSaving(false); }
+  };
+
+  const SEV_COLOR = { critical: "#ff3b3b", high: "#ff8c00", medium: "#4d9eff", low: "#888" };
+  const inputS = {
+    width: "100%", boxSizing: "border-box",
+    background: C.bg, border: `1px solid ${err ? C.red : "rgba(255,255,255,0.12)"}`,
+    color: C.text, padding: "9px 12px", borderRadius: 3,
+    fontFamily: "monospace", fontSize: 12, outline: "none",
   };
 
   return (
     <div
-      onKeyDown={handleKeyDown}
+      onKeyDown={e => e.key === "Escape" && onClose()}
       onClick={e => e.target === e.currentTarget && onClose()}
-      style={{
-        position: "fixed", inset: 0, zIndex: 900,
-        background: "rgba(0,0,0,0.65)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-      }}
+      style={{ position: "fixed", inset: 0, zIndex: 900, background: "rgba(0,0,0,0.65)",
+        display: "flex", alignItems: "center", justifyContent: "center" }}
     >
-      <div style={{
-        background: C.surface, border: `1px solid rgba(255,255,255,0.1)`,
-        borderRadius: 6, padding: 28, width: 420,
-        boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
-      }}>
+      <div style={{ background: C.surface, border: "1px solid rgba(255,255,255,0.1)",
+        borderRadius: 6, padding: 28, width: 460, boxShadow: "0 20px 60px rgba(0,0,0,0.6)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
           <div style={{ color: C.text, fontSize: 13, fontWeight: 600 }}>Open New Case</div>
           <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16 }}>✕</button>
         </div>
 
+        {/* Search / type incident ID */}
         <div style={{ marginBottom: 6, color: C.muted, fontSize: 10, fontFamily: "monospace", letterSpacing: "1px" }}>
-          INCIDENT ID
+          SEARCH INCIDENT
         </div>
-        <input
-          ref={inputRef}
-          value={incidentId}
-          onChange={e => setIncidentId(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && handleSubmit()}
-          placeholder="e.g. INC-2024-001 or SIEM incident UUID"
-          style={{
-            width: "100%", boxSizing: "border-box",
-            background: C.bg, border: `1px solid ${err ? C.red : "rgba(255,255,255,0.12)"}`,
-            color: C.text, padding: "9px 12px", borderRadius: 3,
-            fontFamily: "monospace", fontSize: 12, outline: "none",
-          }}
-        />
-        {err && (
-          <div style={{ color: C.red, fontSize: 10, fontFamily: "monospace", marginTop: 6 }}>{err}</div>
+        <div style={{ position: "relative" }}>
+          <input
+            ref={inputRef}
+            value={selected ? selected.id : query}
+            onChange={e => { setSelected(null); setQuery(e.target.value); setErr(""); }}
+            onKeyDown={e => e.key === "Enter" && !results.length && handleSubmit()}
+            placeholder="Type incident ID or category (e.g. INC-001, phishing, brute_force)"
+            style={{ ...inputS, paddingRight: searching ? 36 : 12 }}
+          />
+          {searching && (
+            <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
+              color: C.muted, fontSize: 10 }}>…</span>
+          )}
+        </div>
+
+        {/* Results dropdown */}
+        {results.length > 0 && !selected && (
+          <div style={{ background: C.bg, border: "1px solid rgba(255,255,255,0.1)",
+            borderRadius: 3, marginTop: 4, maxHeight: 220, overflowY: "auto" }}>
+            {results.map(inc => (
+              <div key={inc.id} onClick={() => { setSelected(inc); setResults([]); setErr(""); }}
+                style={{ padding: "8px 12px", cursor: "pointer", borderBottom: "1px solid rgba(255,255,255,0.04)",
+                  display: "flex", alignItems: "center", gap: 10 }}
+                onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.04)"}
+                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                <span style={{ color: SEV_COLOR[inc.severity] || "#888", fontSize: 9, fontFamily: "monospace",
+                  fontWeight: 700, minWidth: 52 }}>{(inc.severity || "").toUpperCase()}</span>
+                <span style={{ color: C.text, fontFamily: "monospace", fontSize: 11, flex: 1 }}>{inc.id}</span>
+                <span style={{ color: C.muted, fontSize: 10 }}>{(inc.categories || []).slice(0,2).join(", ")}</span>
+              </div>
+            ))}
+          </div>
         )}
 
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 22 }}>
-          <button
-            onClick={onClose}
-            style={{
-              background: "none", border: `1px solid rgba(255,255,255,0.12)`,
+        {/* Selected incident pill */}
+        {selected && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8,
+            background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.2)",
+            borderRadius: 3, padding: "6px 10px" }}>
+            <span style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 11, fontWeight: 700 }}>{selected.id}</span>
+            <span style={{ color: C.muted, fontSize: 10 }}>{selected.severity} · {selected.status}</span>
+            <button onClick={() => { setSelected(null); setQuery(""); }}
+              style={{ background: "none", border: "none", color: C.muted, cursor: "pointer",
+                fontSize: 12, marginLeft: "auto", padding: 0 }}>✕</button>
+          </div>
+        )}
+
+        {err && <div style={{ color: C.red, fontSize: 10, fontFamily: "monospace", marginTop: 8 }}>✗ {err}</div>}
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
+          <button onClick={onClose}
+            style={{ background: "none", border: "1px solid rgba(255,255,255,0.12)",
               color: C.muted, padding: "7px 18px", borderRadius: 3,
-              fontFamily: "monospace", fontSize: 11, cursor: "pointer",
-            }}
-          >Cancel</button>
-          <button
-            onClick={handleSubmit}
-            disabled={saving}
-            style={{
-              background: saving ? "rgba(0,229,160,0.08)" : "rgba(0,229,160,0.12)",
-              border: `1px solid ${C.accent}40`,
-              color: C.accent, padding: "7px 18px", borderRadius: 3,
-              fontFamily: "monospace", fontSize: 11, cursor: saving ? "not-allowed" : "pointer",
-              fontWeight: 700,
-            }}
-          >{saving ? "Opening…" : "Open Case"}</button>
+              fontFamily: "monospace", fontSize: 11, cursor: "pointer" }}>Cancel</button>
+          <button onClick={handleSubmit} disabled={saving}
+            style={{ background: saving ? "rgba(0,229,160,0.08)" : "rgba(0,229,160,0.12)",
+              border: `1px solid ${C.accent}40`, color: C.accent,
+              padding: "7px 18px", borderRadius: 3, fontFamily: "monospace",
+              fontSize: 11, cursor: saving ? "not-allowed" : "pointer", fontWeight: 700 }}>
+            {saving ? "Opening…" : "Open Case"}
+          </button>
         </div>
       </div>
     </div>

@@ -712,3 +712,73 @@ def unrestrict_case(incident_id):
         return jsonify({"ok": True})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+
+# ── ASM finding case ───────────────────────────────────────────────────────────
+# Creates a lightweight tracking incident in the correlation DB from an ASM
+# finding (no Wazuh alert required). The incident is tagged source=asm so it
+# can be filtered separately from correlated incidents.
+
+@cases_bp.route("/api/cases/asm", methods=["POST"])
+@_require_analyst
+def create_asm_case():
+    """Open a CyCases investigation from an ASM vulnerability finding.
+
+    Body: { vulnerability, severity, asset, module, description, recommendation, cve }
+    Creates a synthetic tracking incident and immediately opens a case on it.
+    """
+    import hashlib as _hash
+    email = session["user_email"]
+    body  = request.get_json(silent=True) or {}
+
+    vuln   = (body.get("vulnerability") or "ASM Finding").strip()[:200]
+    sev    = (body.get("severity") or "medium").lower()
+    if sev not in ("critical", "high", "medium", "low"):
+        sev = "medium"
+    asset  = (body.get("asset") or "unknown").strip()[:200]
+    module = (body.get("module") or "asm").strip()[:100]
+    desc   = (body.get("description") or "").strip()
+    rec    = (body.get("recommendation") or "").strip()
+    cve    = (body.get("cve") or "").strip()
+
+    # Deterministic incident ID: ASM-<hash of asset+vuln+module> so re-raises
+    # for the same finding reuse the existing case rather than duplicating.
+    raw_key = f"{asset}|{vuln}|{module}".lower()
+    inc_id  = "ASM-" + _hash.sha256(raw_key.encode()).hexdigest()[:8].upper()
+
+    note_parts = [f"ASM Finding: {vuln}"]
+    if cve:         note_parts.append(f"CVE: {cve}")
+    note_parts.append(f"Asset: {asset}  Module: {module}")
+    if desc:        note_parts.append(f"\nDescription: {desc}")
+    if rec:         note_parts.append(f"\nRemediation: {rec}")
+    notes = "\n".join(note_parts)
+
+    try:
+        conn = _db()
+        cur  = conn.cursor()
+
+        # Upsert the synthetic incident (idempotent)
+        cur.execute("""
+            INSERT INTO incidents
+                (id, first_seen, last_seen, updated_at, status, severity,
+                 alert_count, categories, notes)
+            VALUES (%s, NOW(), NOW(), NOW(), 'investigating', %s, 0,
+                    ARRAY['asm'], %s)
+            ON CONFLICT (id) DO UPDATE
+                SET last_seen  = NOW(),
+                    updated_at = NOW(),
+                    notes      = EXCLUDED.notes
+        """, [inc_id, sev, notes])
+        conn.commit()
+
+        # Open the case (open_case is idempotent when already open)
+        from blueprints.cases.service import open_case as _open_case
+        result = _open_case(conn, inc_id, email, case_type="generic")
+        _write_action_audit(conn, inc_id, "asm_case_opened", email,
+                            extra={"asset": asset, "vuln": vuln, "severity": sev})
+        conn.commit()
+        conn.close()
+        return jsonify({**result, "incident_id": inc_id}), 201
+
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500

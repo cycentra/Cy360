@@ -101,13 +101,6 @@ export function buildNavSections({ installedModules = {}, data = null }) {
       section: "OPERATIONS",
       items: [
         { id: "audit-trail", label: "Audit Trail", icon: SvgAudit, accent: "#b06eff" },
-        {
-          id:          "open-cysiem",
-          label:       "CySIEM",
-          icon:        <span style={{ fontSize: 14 }}>👁️</span>,
-          accent:      "#ff8c00",
-          externalUrl: getModuleUrl("cysiem"),
-        },
         ...addonInstalled.map(([id]) => {
           const mod = PLATFORM_MODULES[id];
           return {

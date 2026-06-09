@@ -3037,15 +3037,135 @@ function AgentInstallerTab() {
   );
 }
 
+
+// ════════════════════════════════════════════════════════════════════════════
+// SIEM Automation — FP threshold + auto-case configuration
+// ════════════════════════════════════════════════════════════════════════════
+
+function SiemAutomationTab() {
+  const [fpThreshold, setFpThreshold] = useState(90);
+  const [saving,      setSaving]      = useState(false);
+  const [saved,       setSaved]       = useState(false);
+  const [err,         setErr]         = useState("");
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/ai/settings`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => {
+        const val = d?.system?.fpThreshold;
+        if (val != null) setFpThreshold(Number(val));
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleSave = () => {
+    setSaving(true); setErr(""); setSaved(false);
+    fetch(`${API_BASE}/api/ai/settings`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ system: { fpThreshold: fpThreshold } }),
+    })
+      .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(d.error || "Save failed")))
+      .then(() => { setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2500); })
+      .catch(e => { setSaving(false); setErr(String(e)); });
+  };
+
+  const LABEL_S = { color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace",
+    letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 8 };
+  const CARD_S  = { background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)",
+    borderRadius: 5, padding: "18px 20px", marginBottom: 16 };
+
+  return (
+    <div>
+      <div style={{ color: "white", fontSize: 14, fontWeight: 600, marginBottom: 4 }}>SIEM Automation</div>
+      <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginBottom: 24 }}>
+        Configure automatic incident lifecycle transitions. Changes take effect on the next alert processed.
+      </div>
+
+      {/* FP threshold slider */}
+      <div style={CARD_S}>
+        <div style={LABEL_S}>False Positive Auto-Close Threshold</div>
+        <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, marginBottom: 14, lineHeight: 1.6 }}>
+          Incidents whose FP probability reaches or exceeds this threshold are automatically closed
+          without analyst review. Lowering this value closes more incidents automatically;
+          raising it sends more to the analyst queue.
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <input
+            type="range" min={50} max={99} step={1} value={fpThreshold}
+            onChange={e => setFpThreshold(Number(e.target.value))}
+            style={{ flex: 1, accentColor: "#00e5a0" }}
+          />
+          <span style={{ color: "#00e5a0", fontFamily: "monospace", fontWeight: 700, fontSize: 14, minWidth: 42, textAlign: "right" }}>
+            {fpThreshold}%
+          </span>
+        </div>
+      </div>
+
+      {/* Band explanation */}
+      <div style={CARD_S}>
+        <div style={LABEL_S}>Automated Decision Bands (read-only)</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {[
+            { range: `≥ ${fpThreshold}%`, action: "Auto-close",        color: "#ff3b3b",
+              desc: "Immediately closed. No analyst review. Audit: auto_close." },
+            { range: `40% – ${fpThreshold - 1}%`, action: "Investigating", color: "#f5c518",
+              desc: "Held in the ambiguity band. Re-evaluated on every new correlated alert." },
+            { range: "< 40%",             action: "In Review → Case",  color: "#00e5a0",
+              desc: "Advanced to in_review. If severity is high/critical and ≥ 3 alerts, a CyCases investigation opens automatically." },
+          ].map(b => (
+            <div key={b.range} style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+              <span style={{ background: `${b.color}18`, border: `1px solid ${b.color}40`, color: b.color,
+                fontSize: 9, fontFamily: "monospace", fontWeight: 700, padding: "3px 8px", borderRadius: 2,
+                whiteSpace: "nowrap", minWidth: 110, textAlign: "center" }}>{b.range}</span>
+              <div>
+                <span style={{ color: b.color, fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{b.action}</span>
+                <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, marginLeft: 8 }}>{b.desc}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Case auto-open criteria */}
+      <div style={CARD_S}>
+        <div style={LABEL_S}>Case Auto-Open Criteria</div>
+        <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, lineHeight: 1.8, fontFamily: "monospace" }}>
+          All conditions must be true for CyCases to open automatically:<br/>
+          {"  "}① FP probability &lt; 40%<br/>
+          {"  "}② Severity is <span style={{ color: "#ff3b3b" }}>critical</span> or <span style={{ color: "#ff8c00" }}>high</span><br/>
+          {"  "}③ Alert count ≥ 3 correlated alerts<br/>
+          {"  "}④ No case already open for this incident<br/>
+          {"  "}⑤ Enrichment complete (MISP ran, LLM ran, or ≥ 3 alerts)
+        </div>
+      </div>
+
+      {err && <div style={{ color: "#ff6464", fontSize: 11, fontFamily: "monospace", marginBottom: 10 }}>✗ {err}</div>}
+      <button
+        onClick={handleSave}
+        disabled={saving}
+        style={{
+          background: saved ? "rgba(0,229,160,0.15)" : "rgba(0,229,160,0.1)",
+          border: "1px solid rgba(0,229,160,0.35)", color: "#00e5a0",
+          padding: "8px 22px", borderRadius: 3, fontFamily: "monospace", fontSize: 12,
+          fontWeight: 700, cursor: saving ? "not-allowed" : "pointer",
+        }}>
+        {saving ? "Saving…" : saved ? "✓ Saved" : "Save Automation Settings"}
+      </button>
+    </div>
+  );
+}
+
 // ── Two-column Settings layout ────────────────────────────────────────────────
 
 const PLATFORM_TABS = [
-  { id: "updates",   label: "Updates & Version" },
-  { id: "env",       label: "Environment Config" },
-  { id: "scheduler", label: "Scheduler" },
-  { id: "users",     label: "Users & Auth" },
-  { id: "backup",    label: "Backup & Restore" },
-  { id: "server",    label: "Server Status" },
+  { id: "updates",    label: "Updates & Version" },
+  { id: "env",        label: "Environment Config" },
+  { id: "scheduler",  label: "Scheduler" },
+  { id: "users",      label: "Users & Auth" },
+  { id: "backup",     label: "Backup & Restore" },
+  { id: "server",     label: "Server Status" },
+  { id: "automation", label: "SIEM Automation" },
 ];
 
 const COMP_TABS = [
@@ -3151,6 +3271,7 @@ export function SystemSettingsPage() {
               )}
               {tab === "backup"    && <BackupTab />}
               {tab === "server"    && <ServerStatusTab />}
+              {tab === "automation" && <SiemAutomationTab />}
             </>
           )}
 
