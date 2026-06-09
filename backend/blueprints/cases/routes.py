@@ -869,3 +869,106 @@ def create_asm_case():
 
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+
+# ── Delete (close) a case ──────────────────────────────────────────────────────
+
+@cases_bp.route("/api/cases/<incident_id>", methods=["DELETE"])
+@_require_analyst
+def delete_case(incident_id):
+    """Remove the case from an incident — nulls out all case_* columns.
+    The underlying incident row is kept; only the case metadata is cleared.
+    Admins can delete any case; analysts can only delete unrestricted cases.
+    """
+    email = session["user_email"]
+    role  = get_user_role(email)
+    try:
+        conn = _db()
+        if not _check_restriction(conn, incident_id, email, role):
+            conn.close()
+            return jsonify({"error": "Access restricted — cannot delete this case"}), 403
+        cur = conn.cursor()
+        cur.execute("SELECT case_opened_at FROM incidents WHERE id = %s", [incident_id])
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return jsonify({"error": "Incident not found"}), 404
+        if not row["case_opened_at"]:
+            conn.close()
+            return jsonify({"error": "No open case for this incident"}), 400
+        cur.execute("""
+            UPDATE incidents
+            SET case_opened_at    = NULL,
+                case_ack_at       = NULL,
+                case_type         = 'generic',
+                case_mttd_seconds = NULL,
+                case_mtta_seconds = NULL,
+                case_restricted   = FALSE,
+                updated_at        = %s
+            WHERE id = %s
+        """, [datetime.now(timezone.utc), incident_id])
+        _write_action_audit(conn, incident_id, "case_deleted", email,
+                            comment=f"Case removed by {email}")
+        conn.commit()
+        conn.close()
+        return jsonify({"ok": True})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── ASM case status lookup ─────────────────────────────────────────────────────
+
+@cases_bp.route("/api/asm/cases", methods=["GET"])
+@_require_analyst
+def list_asm_cases():
+    """Return a map of ASM-* incident IDs → case metadata for all ASM incidents
+    that currently have an open case.  Used by the Vulnerability Explorer to
+    restore the 'Case open' badge state after a page refresh.
+    """
+    try:
+        conn = _db()
+        cur  = conn.cursor()
+        cur.execute("""
+            SELECT id, status, case_opened_at, case_type, assigned_to
+            FROM incidents
+            WHERE id LIKE 'ASM-%%' AND case_opened_at IS NOT NULL
+        """)
+        rows   = cur.fetchall()
+        conn.close()
+        result = {}
+        for row in rows:
+            result[row["id"]] = {
+                "incident_id":    row["id"],
+                "status":         row["status"],
+                "case_opened_at": _iso(row["case_opened_at"]),
+                "case_type":      row["case_type"],
+                "assigned_to":    row["assigned_to"],
+            }
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Analyst list (for assignment dropdown) ────────────────────────────────────
+
+@cases_bp.route("/api/cases/assignable-users", methods=["GET"])
+@_require_analyst
+def assignable_users():
+    """Return users with analyst or admin role for the case-assignment dropdown."""
+    try:
+        conn = _db()
+        cur  = conn.cursor()
+        cur.execute("""
+            SELECT email, name, role
+            FROM cy_users
+            WHERE role IN ('analyst', 'admin')
+            ORDER BY name, email
+        """)
+        rows = cur.fetchall()
+        conn.close()
+        return jsonify([
+            {"email": r["email"], "name": r["name"] or r["email"], "role": r["role"]}
+            for r in rows
+        ])
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500

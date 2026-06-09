@@ -112,6 +112,10 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
   const [alertsExpanded, setAlertsExpanded] = useState(false);
   const [raising, setRaising]   = useState(false);
   const [raiseErr, setRaiseErr] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteErr, setDeleteErr] = useState("");
+  // Analyst list for assignment dropdown
+  const [analysts, setAnalysts] = useState([]);
   // Transition modal state
   const [showTransition, setShowTransition] = useState(false);
   const [transitionTo, setTransitionTo]     = useState("");
@@ -126,8 +130,15 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
   const [requestingAi, setRequestingAi]     = useState(false);
   const [aiRequestErr, setAiRequestErr]     = useState("");
 
-  // Fetch full incident detail on mount — preserve case_opened_at if DB hasn't
-  // propagated it yet (race between psycopg2 write and SQLAlchemy read).
+  // Fetch full incident detail + analyst list on mount
+  useEffect(() => {
+    fetch("/api/cases/assignable-users", { credentials: "include" })
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setAnalysts(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  }, []);
+
+  // Preserve case_opened_at if DB hasn't propagated it yet.
   useEffect(() => {
     (async () => {
       const data = await siemFetch(siemApi.getIncident(initialIncident.id));
@@ -214,6 +225,25 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
       llm_remediation:  data.llm_remediation,
       llm_generated_at: data.llm_generated_at,
     }));
+  };
+
+  const handleDeleteCase = async () => {
+    if (!window.confirm("Remove this case? The incident is kept but the case investigation record will be cleared.")) return;
+    setDeleting(true);
+    setDeleteErr("");
+    try {
+      const res = await fetch(`/api/cases/${inc.id}`, { method: "DELETE", credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      setDeleting(false);
+      if (!res.ok) { setDeleteErr(data.error || `HTTP ${res.status}`); return; }
+      const updated = { ...inc, case_opened_at: null, case_type: "generic",
+                        case_mttd_seconds: null, case_mtta_seconds: null };
+      setInc(updated);
+      onPatched?.(updated);
+    } catch {
+      setDeleting(false);
+      setDeleteErr("Network error — try again.");
+    }
   };
 
   const handleRaise = async () => {
@@ -515,39 +545,56 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
               background: inc.status === "closed" ? "rgba(0,229,160,0.04)" : "rgba(77,158,255,0.04)",
               border: `1px solid ${inc.status === "closed" ? "rgba(0,229,160,0.2)" : "rgba(77,158,255,0.2)"}`,
               borderRadius: 4, padding: "14px 16px",
-              display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12,
             }}>
-              <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                  <span style={{
-                    background: inc.status === "closed" ? "rgba(0,229,160,0.15)" : "rgba(77,158,255,0.15)",
-                    color: inc.status === "closed" ? "#00e5a0" : "#4d9eff",
-                    border: `1px solid ${inc.status === "closed" ? "rgba(0,229,160,0.4)" : "rgba(77,158,255,0.4)"}`,
-                    fontSize: 10, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 2,
-                    letterSpacing: "0.5px",
-                  }}>
-                    {inc.status === "closed" ? "✓ CLOSED" : "● OPEN"}
-                  </span>
-                  <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, fontFamily: "monospace" }}>
-                    {inc.status?.toUpperCase()}
-                  </span>
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    <span style={{
+                      background: inc.status === "closed" ? "rgba(0,229,160,0.15)" : "rgba(77,158,255,0.15)",
+                      color: inc.status === "closed" ? "#00e5a0" : "#4d9eff",
+                      border: `1px solid ${inc.status === "closed" ? "rgba(0,229,160,0.4)" : "rgba(77,158,255,0.4)"}`,
+                      fontSize: 10, fontFamily: "monospace", fontWeight: 700, padding: "2px 8px", borderRadius: 2,
+                      letterSpacing: "0.5px",
+                    }}>
+                      {inc.status === "closed" ? "✓ CLOSED" : "● OPEN"}
+                    </span>
+                    <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, fontFamily: "monospace" }}>
+                      {inc.status?.toUpperCase()}
+                    </span>
+                  </div>
+                  <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11 }}>
+                    Case opened for this incident and assigned to an analyst for investigation.
+                  </div>
+                  {deleteErr && (
+                    <div style={{ color: "#ff6464", fontSize: 11, fontFamily: "monospace", marginTop: 6 }}>
+                      ✗ {deleteErr}
+                    </div>
+                  )}
                 </div>
-                <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 11 }}>
-                  Case opened for this incident and assigned to an analyst for investigation.
+                <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                  <button
+                    onClick={() => onOpenCase ? onOpenCase(inc.id) : null}
+                    style={{
+                      background: "rgba(77,158,255,0.1)", border: "1px solid rgba(77,158,255,0.3)",
+                      color: "#4d9eff", padding: "6px 12px", borderRadius: 4, fontSize: 11,
+                      fontFamily: "monospace", cursor: onOpenCase ? "pointer" : "default",
+                      fontWeight: 700, whiteSpace: "nowrap",
+                    }}>
+                    View Case →
+                  </button>
+                  <button
+                    onClick={handleDeleteCase}
+                    disabled={deleting}
+                    style={{
+                      background: "rgba(255,59,59,0.07)", border: "1px solid rgba(255,59,59,0.25)",
+                      color: "#ff6464", padding: "6px 12px", borderRadius: 4, fontSize: 11,
+                      fontFamily: "monospace", fontWeight: 700, whiteSpace: "nowrap",
+                      cursor: deleting ? "wait" : "pointer",
+                    }}>
+                    {deleting ? "Removing…" : "✕ Remove Case"}
+                  </button>
                 </div>
               </div>
-              <button
-                onClick={() => onOpenCase ? onOpenCase(inc.id) : null}
-                style={{
-                  background: "rgba(77,158,255,0.1)",
-                  border: "1px solid rgba(77,158,255,0.3)",
-                  color: "#4d9eff",
-                  padding: "6px 12px", borderRadius: 4, fontSize: 11,
-                  fontFamily: "monospace", cursor: onOpenCase ? "pointer" : "default",
-                  fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0,
-                }}>
-                View Case →
-              </button>
             </div>
           </>
         ) : (
@@ -801,12 +848,31 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
         <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
           borderRadius: 4, padding: "16px 18px" }}>
           <div style={{ marginBottom: 10 }}>
-            <label style={{ color: "rgba(255,255,255,0.65)", fontSize: 11, fontFamily: "monospace" }}>Assigned To</label>
-            <input value={assignee} onChange={e => setAssignee(e.target.value)}
-              placeholder="analyst email…"
-              style={{ width: "100%", background: "rgba(255,255,255,0.05)",
-                border: "1px solid rgba(255,255,255,0.12)", color: "white",
-                padding: "8px 10px", borderRadius: 4, fontSize: 12, marginTop: 4, boxSizing: "border-box" }} />
+            <label style={{ color: "rgba(255,255,255,0.65)", fontSize: 11, fontFamily: "monospace" }}>
+              Assign To Analyst
+            </label>
+            {analysts.length > 0 ? (
+              <select
+                value={assignee}
+                onChange={e => setAssignee(e.target.value)}
+                style={{ width: "100%", background: "rgba(255,255,255,0.05)",
+                  border: "1px solid rgba(255,255,255,0.12)", color: "white",
+                  padding: "8px 10px", borderRadius: 4, fontSize: 12, marginTop: 4,
+                  boxSizing: "border-box", cursor: "pointer" }}>
+                <option value="">— Unassigned —</option>
+                {analysts.map(a => (
+                  <option key={a.email} value={a.email}>
+                    {a.name !== a.email ? `${a.name} (${a.email})` : a.email} · {a.role}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input value={assignee} onChange={e => setAssignee(e.target.value)}
+                placeholder="analyst email…"
+                style={{ width: "100%", background: "rgba(255,255,255,0.05)",
+                  border: "1px solid rgba(255,255,255,0.12)", color: "white",
+                  padding: "8px 10px", borderRadius: 4, fontSize: 12, marginTop: 4, boxSizing: "border-box" }} />
+            )}
           </div>
           <div style={{ marginBottom: 10 }}>
             <label style={{ color: "rgba(255,255,255,0.65)", fontSize: 11, fontFamily: "monospace" }}>Notes</label>

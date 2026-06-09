@@ -1,3 +1,14 @@
+## v1.0.26 -- 2026-06-09
+
+### New Features & Fixes
+
+  - **Vulnerabilities — case badge persists after refresh**: On mount the Vulnerability Explorer calls `GET /api/asm/cases` and uses SubtleCrypto SHA-256 to map each finding to its deterministic `ASM-XXXX` incident ID, restoring the `✓ Case open` badge without re-querying per row.
+  - **Delete / Remove Case**: `✕ Remove Case` button added to Active Incidents drawer and Vulnerability drawer. Calls `DELETE /api/cases/<id>`, nulls case fields, reverts UI to Open Case. Confirmation dialog shown. Audit entry written.
+  - **Assign to Analyst dropdown**: Notes & Assignment section now shows a `<select>` populated from `GET /api/cases/assignable-users` (all analyst/admin role users). Falls back to free-text input if endpoint unavailable.
+  - **New endpoints**: `DELETE /api/cases/<id>`, `GET /api/asm/cases`, `GET /api/cases/assignable-users`.
+
+---
+
 ## v1.0.24 -- 2026-06-09
 
 ### Bug Fixes
