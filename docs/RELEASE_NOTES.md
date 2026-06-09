@@ -1,3 +1,12 @@
+## v1.0.24 -- 2026-06-09
+
+### Bug Fixes
+
+  - siem-proxy): inject authoritative case_opened_at from psycopg2 into incident responses
+  - cases): prevent HTTP 500 on non-string description/recommendation; persist case_opened_at across page refresh
+
+---
+
 ## v1.0.25 -- 2026-06-09
 
 ### Bug Fixes
