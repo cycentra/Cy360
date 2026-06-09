@@ -1,3 +1,11 @@
+## v1.0.25 -- 2026-06-09
+
+### New Features
+
+  - cases): delete case, analyst assignment dropdown, vuln case persistence
+
+---
+
 ## v1.0.26 -- 2026-06-09
 
 ### New Features & Fixes
