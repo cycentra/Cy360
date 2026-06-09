@@ -1,3 +1,11 @@
+## v1.0.26 -- 2026-06-09
+
+### New Features
+
+  - cases+dashboard): case mgmt widgets, sort/filter, MCP tools, exposure widget
+
+---
+
 ## v1.0.27 -- 2026-06-09
 
 ### New Features
