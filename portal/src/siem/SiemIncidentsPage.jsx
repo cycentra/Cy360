@@ -102,7 +102,7 @@ function getCloudSource(categories) {
 }
 
 // ── Incident drawer ────────────────────────────────────────────────────────────
-function IncidentDrawer({ incident: initialIncident, onClose, onPatched }) {
+function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenCase }) {
   const [inc, setInc]           = useState(initialIncident);
   const [loadingDetail, setLoadingDetail] = useState(true);
   const [notes, setNotes]       = useState(initialIncident.notes || "");
@@ -1952,6 +1952,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
               incident={selected}
               onClose={() => setSelected(null)}
               onPatched={handlePatched}
+              onOpenCase={onOpenCase}
             />
           </>
         )}

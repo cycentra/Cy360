@@ -719,7 +719,7 @@ def unrestrict_case(incident_id):
 # finding (no Wazuh alert required). The incident is tagged source=asm so it
 # can be filtered separately from correlated incidents.
 
-@cases_bp.route("/api/cases/asm", methods=["POST"])
+@cases_bp.route("/api/asm/open-case", methods=["POST"])
 @_require_analyst
 def create_asm_case():
     """Open a CyCases investigation from an ASM vulnerability finding.
