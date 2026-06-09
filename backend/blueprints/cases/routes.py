@@ -154,11 +154,20 @@ def list_cases():
     severity   = request.args.get("severity")
     case_type  = request.args.get("type")
     assigned   = request.args.get("assigned_to")
+    unassigned = request.args.get("unassigned", "").lower() in ("1", "true")
+    source     = request.args.get("source")        # "asm" | "siem"
     date_from  = request.args.get("date_from")
     date_to    = request.args.get("date_to")
+    sort_by    = request.args.get("sort_by", "case_opened_at")
+    sort_dir   = "ASC" if request.args.get("sort_dir", "desc").lower() == "asc" else "DESC"
     page       = max(1, int(request.args.get("page", 1)))
     per_page   = min(200, int(request.args.get("per_page", 50)))
     offset     = (page - 1) * per_page
+
+    _SORT_COLS = {"case_opened_at", "severity", "status", "case_type", "assigned_to",
+                  "case_mttd_seconds", "first_seen", "last_seen"}
+    if sort_by not in _SORT_COLS:
+        sort_by = "case_opened_at"
 
     wheres = ["case_opened_at IS NOT NULL"]
     params = []
@@ -170,6 +179,12 @@ def list_cases():
         wheres.append("case_type = %s"); params.append(case_type)
     if assigned:
         wheres.append("assigned_to = %s"); params.append(assigned)
+    if unassigned:
+        wheres.append("assigned_to IS NULL")
+    if source == "asm":
+        wheres.append("id LIKE 'ASM-%%'")
+    elif source == "siem":
+        wheres.append("id NOT LIKE 'ASM-%%'")
     if date_from:
         wheres.append("case_opened_at >= %s"); params.append(date_from)
     if date_to:
@@ -185,7 +200,7 @@ def list_cases():
             f"SELECT id, status, severity, case_type, case_opened_at, case_ack_at, "
             f"case_mttd_seconds, case_mtta_seconds, case_restricted, assigned_to, "
             f"categories, first_seen, last_seen "
-            f"FROM incidents WHERE {where_sql} ORDER BY case_opened_at DESC "
+            f"FROM incidents WHERE {where_sql} ORDER BY {sort_by} {sort_dir} NULLS LAST "
             f"LIMIT %s OFFSET %s",
             params + [per_page, offset],
         )

@@ -258,7 +258,7 @@ def get_graph_data(conn, incident_id: str) -> dict:
 
 
 def compute_metrics(conn) -> dict:
-    """MTTD, MTTA, MTTR, open cases count, cases by severity/type."""
+    """MTTD, MTTA, MTTR, status breakdown, trend, analyst distribution, ASM/SIEM split."""
     cur = conn.cursor()
 
     cur.execute("""
@@ -303,6 +303,9 @@ def compute_metrics(conn) -> dict:
     """)
     open_cases = (_row(cur) or {}).get("cnt", 0) or 0
 
+    cur.execute("SELECT COUNT(*) AS cnt FROM incidents WHERE case_opened_at IS NOT NULL")
+    total_cases = (_row(cur) or {}).get("cnt", 0) or 0
+
     cur.execute("""
         SELECT severity, COUNT(*) AS cnt FROM incidents
         WHERE case_opened_at IS NOT NULL
@@ -317,11 +320,71 @@ def compute_metrics(conn) -> dict:
     """)
     cases_by_type = {r["case_type"]: r["cnt"] for r in _rows(cur)}
 
+    # Status breakdown
+    cur.execute("""
+        SELECT status, COUNT(*) AS cnt FROM incidents
+        WHERE case_opened_at IS NOT NULL
+        GROUP BY status
+    """)
+    cases_by_status = {r["status"]: r["cnt"] for r in _rows(cur)}
+
+    # 30-day trend: cases opened per day
+    cur.execute("""
+        SELECT (case_opened_at AT TIME ZONE 'UTC')::date AS day, COUNT(*) AS cnt
+        FROM incidents
+        WHERE case_opened_at IS NOT NULL
+          AND case_opened_at > NOW() - INTERVAL '30 days'
+        GROUP BY 1
+        ORDER BY 1
+    """)
+    trend_30d = [{"day": str(r["day"]), "count": r["cnt"]} for r in _rows(cur)]
+
+    # Average age of still-open cases
+    cur.execute("""
+        SELECT AVG(EXTRACT(EPOCH FROM (NOW() - case_opened_at)) / 3600.0) AS avg_h
+        FROM incidents
+        WHERE case_opened_at IS NOT NULL
+          AND status IN ('open', 'investigating', 'in_review')
+    """)
+    age_row = _row(cur)
+    avg_age_h = round(float(age_row["avg_h"]), 1) if age_row and age_row["avg_h"] else None
+
+    # Cases by assigned analyst (top 10)
+    cur.execute("""
+        SELECT COALESCE(assigned_to, 'Unassigned') AS analyst, COUNT(*) AS cnt
+        FROM incidents
+        WHERE case_opened_at IS NOT NULL
+        GROUP BY 1
+        ORDER BY cnt DESC
+        LIMIT 10
+    """)
+    by_analyst = [{"analyst": r["analyst"], "count": r["cnt"]} for r in _rows(cur)]
+
+    # ASM (External Exposure) vs SIEM (Internal) split
+    cur.execute("""
+        SELECT
+          COUNT(*) FILTER (WHERE id LIKE 'ASM-%%')       AS asm_count,
+          COUNT(*) FILTER (WHERE id NOT LIKE 'ASM-%%')   AS siem_count
+        FROM incidents
+        WHERE case_opened_at IS NOT NULL
+    """)
+    split_row = _row(cur) or {}
+    asm_vs_siem = {
+        "asm":  split_row.get("asm_count")  or 0,
+        "siem": split_row.get("siem_count") or 0,
+    }
+
     return {
-        "mttd_by_severity": mttd_by_severity,
+        "total_cases":       total_cases,
+        "open_cases":        open_cases,
+        "mttd_by_severity":  mttd_by_severity,
         "avg_mtta_hours":    avg_mtta_h,
         "avg_mttr_hours":    avg_mttr_h,
-        "open_cases":        open_cases,
+        "avg_age_hours":     avg_age_h,
         "cases_by_severity": cases_by_severity,
+        "cases_by_status":   cases_by_status,
         "cases_by_type":     cases_by_type,
+        "by_analyst":        by_analyst,
+        "trend_30d":         trend_30d,
+        "asm_vs_siem":       asm_vs_siem,
     }

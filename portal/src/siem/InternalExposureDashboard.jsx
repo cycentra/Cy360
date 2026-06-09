@@ -863,6 +863,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
   const [offline,      setOffline]      = useState(false);
   const [lastRefresh,  setLastRefresh]  = useState(null);
   const [postureScore, setPostureScore] = useState(null);
+  const [caseMetrics,  setCaseMetrics]  = useState(null);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -888,6 +889,11 @@ export function InternalExposureDashboard({ setActiveTab }) {
     if (!riskData._error)  setRiskScores((riskData.scores || riskData.entities || riskData || []).sort((a, b) => (b.score || 0) - (a.score || 0)));
     if (!uebaData._error)  setUebaUsers(Array.isArray(uebaData) ? uebaData : (uebaData.users || []));
     if (benchData?.breakdown?.siem) setPostureScore(benchData.breakdown.siem);
+    // Case metrics (best-effort — don't block dashboard if cases API is slow)
+    fetch("/api/cases/metrics", { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => d && setCaseMetrics(d))
+      .catch(() => {});
     setLoading(false);
     setLastRefresh(new Date());
   }, []);
@@ -968,6 +974,98 @@ export function InternalExposureDashboard({ setActiveTab }) {
         data={postureScore}
         onViewBenchmark={() => setActiveTab?.("benchmark")}
       />
+
+      {/* ── CyCases Summary widget ── */}
+      {caseMetrics && (() => {
+        const { total_cases = 0, open_cases = 0, cases_by_severity = {}, avg_mtta_hours, asm_vs_siem = {}, cases_by_status = {} } = caseMetrics;
+        const critHigh = (cases_by_severity.critical || 0) + (cases_by_severity.high || 0);
+        const statusEntries = Object.entries(cases_by_status)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5);
+        const STATUS_COLOR = { open: "#00e5a0", investigating: "#f5c518", in_review: "#4d9eff", resolved: "#888", closed: "#555" };
+        return (
+          <div style={{
+            background: "rgba(77,158,255,0.04)", border: "1px solid rgba(77,158,255,0.15)",
+            borderLeft: "4px solid rgba(77,158,255,0.5)",
+            borderRadius: 6, padding: "14px 20px", marginBottom: 16,
+            display: "flex", alignItems: "stretch", gap: 20, flexWrap: "wrap",
+          }}>
+            {/* Section label */}
+            <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", minWidth: 120 }}>
+              <div style={{ color: "#4d9eff", fontSize: 10, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 4 }}>
+                🗂️ CYCASES
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 9, fontFamily: "monospace" }}>
+                Investigation tracking
+              </div>
+              <button
+                onClick={() => setActiveTab?.("cases")}
+                style={{ marginTop: 8, background: "rgba(77,158,255,0.1)", border: "1px solid rgba(77,158,255,0.3)",
+                  color: "#4d9eff", padding: "4px 10px", borderRadius: 3,
+                  fontFamily: "monospace", fontSize: 9, cursor: "pointer", fontWeight: 700 }}>
+                View All →
+              </button>
+            </div>
+
+            {/* KPI tiles */}
+            {[
+              { label: "Total Cases",     value: total_cases, color: "#4d9eff" },
+              { label: "Active",          value: open_cases,  color: "#ff8c00" },
+              { label: "Crit / High",     value: critHigh,    color: "#ff3b3b" },
+              { label: "Avg MTTA",        value: avg_mtta_hours != null ? (avg_mtta_hours < 1 ? `${Math.round(avg_mtta_hours * 60)}m` : `${avg_mtta_hours.toFixed(1)}h`) : "—", color: "#b06eff", raw: true },
+            ].map(k => (
+              <div key={k.label} style={{ textAlign: "center", minWidth: 70 }}>
+                <div style={{ color: k.color, fontSize: 22, fontWeight: 800, fontFamily: "monospace", lineHeight: 1 }}>
+                  {k.raw ? k.value : k.value}
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 8, fontFamily: "monospace", marginTop: 3 }}>
+                  {k.label.toUpperCase()}
+                </div>
+              </div>
+            ))}
+
+            {/* Status mini-bar */}
+            {statusEntries.length > 0 && (
+              <div style={{ flex: 1, minWidth: 160, display: "flex", flexDirection: "column", justifyContent: "center", gap: 4 }}>
+                <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 8, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 2 }}>BY STATUS</div>
+                {statusEntries.map(([st, cnt]) => (
+                  <div key={st} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={{ flex: 1, height: 4, background: "rgba(255,255,255,0.05)", borderRadius: 2, overflow: "hidden" }}>
+                      <div style={{ width: `${(cnt / total_cases) * 100}%`, height: "100%",
+                        background: STATUS_COLOR[st] || "#888", borderRadius: 2 }} />
+                    </div>
+                    <span style={{ color: STATUS_COLOR[st] || "#888", fontSize: 8, fontFamily: "monospace", minWidth: 20, textAlign: "right" }}>{cnt}</span>
+                    <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 8, fontFamily: "monospace", minWidth: 64 }}>{st.toUpperCase()}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Source split + note */}
+            <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: 6, minWidth: 140 }}>
+              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 8, fontFamily: "monospace", letterSpacing: "1px" }}>SOURCE</div>
+              <div style={{ display: "flex", gap: 12 }}>
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ color: "#ff8c00", fontSize: 16, fontWeight: 700, fontFamily: "monospace" }}>{asm_vs_siem.asm || 0}</div>
+                  <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 8, fontFamily: "monospace" }}>EXTERNAL</div>
+                </div>
+                <div style={{ textAlign: "center" }}>
+                  <div style={{ color: "#4d9eff", fontSize: 16, fontWeight: 700, fontFamily: "monospace" }}>{asm_vs_siem.siem || 0}</div>
+                  <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 8, fontFamily: "monospace" }}>INTERNAL</div>
+                </div>
+              </div>
+              <div style={{ background: "rgba(245,197,24,0.07)", border: "1px solid rgba(245,197,24,0.2)",
+                borderRadius: 3, padding: "4px 8px" }}>
+                <div style={{ color: "#f5c518", fontSize: 8, fontFamily: "monospace", fontWeight: 700 }}>ℹ POSTURE NOTE</div>
+                <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 8, fontFamily: "monospace", marginTop: 2, lineHeight: 1.4 }}>
+                  Case severity is tracked separately from the posture score. Open critical/high cases
+                  are a qualitative risk signal — reviewed by analysts alongside the posture grade.
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Row 1: State Overview + Severity Donut + Category Histogram ── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>

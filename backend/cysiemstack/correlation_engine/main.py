@@ -2349,6 +2349,204 @@ try:
             }, indent=2)
 
 
+        # ── MCP tools — CyCases investigation management ───────────────────────
+        # Cases live in the same correlation DB the engine uses, so we query
+        # via AsyncSessionLocal directly rather than calling the Flask API
+        # (which would require session auth).
+
+        @_mcp.tool()
+        async def list_cases(
+            status:   Optional[str] = None,
+            severity: Optional[str] = None,
+            assigned_to: Optional[str] = None,
+            limit: int = 20,
+        ) -> str:
+            """List CyCases investigations (correlated security incidents with open cases).
+
+            Use this when the analyst asks about:
+            - "show me all open cases"
+            - "how many cases are assigned to analyst X"
+            - "list critical cases under investigation"
+
+            Args:
+                status:      Filter by case status: open | investigating | in_review | resolved | closed
+                severity:    Filter by severity: low | medium | high | critical
+                assigned_to: Filter by analyst email (partial match allowed).
+                limit:       Maximum results (1–100, default 20).
+            """
+            async with AsyncSessionLocal() as db:
+                q = (
+                    select(Incident)
+                    .where(Incident.case_opened_at.isnot(None))
+                    .order_by(desc(Incident.case_opened_at))
+                    .limit(max(1, min(limit, 100)))
+                )
+                if status:      q = q.where(Incident.status == status)
+                if severity:    q = q.where(Incident.severity == severity)
+                if assigned_to: q = q.where(
+                    func.lower(Incident.assigned_to).contains(assigned_to.lower())
+                )
+                rows = (await db.execute(q)).scalars().all()
+                cases = [{
+                    "id":             c.id,
+                    "status":         c.status,
+                    "severity":       c.severity,
+                    "case_type":      c.case_type,
+                    "case_opened_at": c.case_opened_at.isoformat() if c.case_opened_at else None,
+                    "assigned_to":    c.assigned_to,
+                    "mttd_hours":     round(c.case_mttd_seconds / 3600, 1) if c.case_mttd_seconds else None,
+                    "mtta_hours":     round(c.case_mtta_seconds / 3600, 1) if c.case_mtta_seconds else None,
+                    "risk_score":     float(c.risk_score or 0),
+                    "categories":     c.categories or [],
+                    "notes_preview":  (c.notes or "")[:200],
+                } for c in rows]
+            return _stdlib_json.dumps({
+                "total": len(cases), "cases": cases,
+                "note": "Real case records — do not fabricate or modify.",
+            }, indent=2)
+
+        @_mcp.tool()
+        async def get_case(incident_id: str) -> str:
+            """Get full details for a CyCases investigation, including notes, assigned analyst,
+            MTTD/MTTA metrics, correlated rules, UEBA flags, and AI-generated narrative.
+
+            Args:
+                incident_id: Case / incident identifier (e.g. INC-0042 or ASM-AF738FFD).
+            """
+            async with AsyncSessionLocal() as db:
+                inc = (await db.execute(
+                    select(Incident).where(Incident.id == incident_id)
+                )).scalar_one_or_none()
+                if not inc:
+                    return _stdlib_json.dumps({"error": f"Case {incident_id} not found"})
+                return _stdlib_json.dumps(_incident_to_dict(inc), indent=2)
+
+        @_mcp.tool()
+        async def summarize_case_operations() -> str:
+            """Return a case management metrics summary: totals, status breakdown,
+            average detection/acknowledgement times, top risky open cases, and
+            analyst workload distribution.
+
+            Use this for questions like:
+            - "give me a case operations summary"
+            - "what is our mean time to detect / acknowledge?"
+            - "who has the most open cases?"
+            - "how many critical cases are still open?"
+            """
+            async with AsyncSessionLocal() as db:
+                # Totals
+                total_row = (await db.execute(
+                    select(func.count()).where(Incident.case_opened_at.isnot(None))
+                )).scalar()
+                open_row = (await db.execute(
+                    select(func.count()).where(
+                        Incident.case_opened_at.isnot(None),
+                        Incident.status.in_(["open", "investigating", "in_review"])
+                    )
+                )).scalar()
+
+                # Status breakdown
+                sta = (await db.execute(
+                    select(Incident.status, func.count().label("n"))
+                    .where(Incident.case_opened_at.isnot(None))
+                    .group_by(Incident.status)
+                )).all()
+
+                # Severity breakdown of open cases
+                sev = (await db.execute(
+                    select(Incident.severity, func.count().label("n"))
+                    .where(Incident.case_opened_at.isnot(None))
+                    .group_by(Incident.severity)
+                )).all()
+
+                # Avg MTTD / MTTA
+                mttd_row = (await db.execute(
+                    select(func.avg(Incident.case_mttd_seconds))
+                    .where(Incident.case_opened_at.isnot(None),
+                           Incident.case_mttd_seconds.isnot(None))
+                )).scalar()
+                mtta_row = (await db.execute(
+                    select(func.avg(Incident.case_mtta_seconds))
+                    .where(Incident.case_opened_at.isnot(None),
+                           Incident.case_mtta_seconds.isnot(None))
+                )).scalar()
+
+                # Analyst workload
+                analyst_rows = (await db.execute(
+                    select(Incident.assigned_to, func.count().label("n"))
+                    .where(Incident.case_opened_at.isnot(None))
+                    .group_by(Incident.assigned_to)
+                    .order_by(desc(func.count()))
+                    .limit(10)
+                )).all()
+
+            return _stdlib_json.dumps({
+                "total_cases":       total_row or 0,
+                "open_cases":        open_row  or 0,
+                "by_status":         {str(s): int(n) for s, n in sta},
+                "by_severity":       {str(s): int(n) for s, n in sev},
+                "avg_mttd_hours":    round(float(mttd_row) / 3600, 1) if mttd_row else None,
+                "avg_mtta_hours":    round(float(mtta_row) / 3600, 1) if mtta_row else None,
+                "analyst_workload":  [{"analyst": str(a or "Unassigned"), "count": int(n)}
+                                      for a, n in analyst_rows],
+                "note": "Exact database metrics. Do NOT estimate or add cases not shown here.",
+            }, indent=2)
+
+        @_mcp.tool()
+        async def assign_case(incident_id: str, analyst_email: str) -> str:
+            """Assign a CyCases investigation to an analyst.
+
+            Sets the assigned_to field on the incident and records the action.
+            Use when the analyst says: "assign case INC-0042 to alice@company.com"
+
+            Args:
+                incident_id:    Case ID (e.g. INC-0042 or ASM-AF738FFD).
+                analyst_email:  Full email address of the analyst to assign.
+            """
+            async with AsyncSessionLocal() as db:
+                inc = (await db.execute(
+                    select(Incident).where(Incident.id == incident_id)
+                )).scalar_one_or_none()
+                if not inc:
+                    return _stdlib_json.dumps({"error": f"Incident {incident_id} not found"})
+                if not inc.case_opened_at:
+                    return _stdlib_json.dumps({"error": f"No open case for {incident_id}"})
+                inc.assigned_to = analyst_email.strip()
+                inc.updated_at  = datetime.now(timezone.utc)
+                await db.commit()
+            return _stdlib_json.dumps({
+                "ok": True,
+                "incident_id":   incident_id,
+                "assigned_to":   analyst_email.strip(),
+                "message":       f"Case {incident_id} assigned to {analyst_email}.",
+            }, indent=2)
+
+        @_mcp.tool()
+        async def update_case_notes(incident_id: str, notes: str) -> str:
+            """Add or replace investigative notes on a case.
+
+            Use when the analyst dictates: "add note to case INC-0042: confirmed brute force"
+
+            Args:
+                incident_id: Case ID (e.g. INC-0042).
+                notes:       Free-text investigation notes to record on the case.
+            """
+            async with AsyncSessionLocal() as db:
+                inc = (await db.execute(
+                    select(Incident).where(Incident.id == incident_id)
+                )).scalar_one_or_none()
+                if not inc:
+                    return _stdlib_json.dumps({"error": f"Incident {incident_id} not found"})
+                if not inc.case_opened_at:
+                    return _stdlib_json.dumps({"error": f"No open case for {incident_id}"})
+                inc.notes      = notes.strip()[:4000]
+                inc.updated_at = datetime.now(timezone.utc)
+                await db.commit()
+            return _stdlib_json.dumps({
+                "ok": True, "incident_id": incident_id,
+                "message": "Notes updated successfully.",
+            }, indent=2)
+
         # Mount the MCP sub-application — SSE endpoint: /mcp/sse
         # FastMCP >=1.6 removed get_application(); fall back to the ASGI app directly.
         _mcp_asgi = (

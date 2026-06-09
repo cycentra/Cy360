@@ -1,3 +1,16 @@
+## v1.0.27 -- 2026-06-09
+
+### New Features
+
+  - **CasesListPage — 4 dashboard widgets**: Status donut, Severity donut, 30-day trend sparkline, Source/Workload panel. Fetches from enriched `/api/cases/metrics` endpoint.
+  - **CasesListPage — Sort + extended filters**: Server-side sort on all columns; Source (ASM/SIEM) and Analyst dropdown filters; pagination.
+  - **CasesListPage — Row actions**: Inline 🗑 Delete and 👤 Assign dropdown on every row.
+  - **AI Chat (MCP) — 5 case tools**: `list_cases`, `get_case`, `summarize_case_operations`, `assign_case`, `update_case_notes`.
+  - **InternalExposureDashboard — CyCases panel**: Live summary strip with posture note explaining case/score relationship.
+  - **Metrics endpoint**: `/api/cases/metrics` now returns `cases_by_status`, `trend_30d`, `avg_age_hours`, `by_analyst`, `total_cases`, `asm_vs_siem`.
+
+---
+
 ## v1.0.25 -- 2026-06-09
 
 ### New Features
