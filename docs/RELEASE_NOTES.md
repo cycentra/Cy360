@@ -1,3 +1,13 @@
+## v1.0.24 -- 2026-06-09
+
+### Bug Fixes
+
+  - **External Exposure > Vulnerabilities — Open Case HTTP 500**: Vulnerabilities that lack CVSS/EPSS scores (e.g. exposed-path, JS-secret, OSINT findings) can carry structured objects or arrays in their `description` and `recommendation` fields. Calling `.strip()` on a non-string raised `AttributeError` → 500. Fixed by coercing to `str()` before strip in both `create_case` (finding path) and `create_asm_case`.
+
+  - **Active Incidents — case state lost after page refresh**: After manually opening a case via psycopg2, the SIEM engine's SQLAlchemy async ORM session could hold a stale in-memory copy of the incident (loaded before the commit), causing `GET /incidents` to return `case_opened_at: null` on the next fetch. Fixed by adding a best-effort `PATCH /incidents/<id>` call to the SIEM engine after the psycopg2 commit, ensuring the async session also persists `case_opened_at` via its own ORM path.
+
+---
+
 ## v1.0.23 -- 2026-06-09
 
 ### Improvements
