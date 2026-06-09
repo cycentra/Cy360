@@ -671,33 +671,51 @@ function EvidenceTab({ caseId, initialEvidence }) {
 // TAB: Checklist
 // ─────────────────────────────────────────────────────────────────────────────
 function ChecklistTab({ caseId, initialChecklist }) {
-  const [items, setItems]       = useState(initialChecklist || []);
-  const [notes, setNotes]       = useState({});
+  const [items,    setItems]    = useState(initialChecklist || []);
+  // keyed by item.index (integer) — was incorrectly item.id (undefined)
+  const [notes,    setNotes]    = useState({});
   const [expanded, setExpanded] = useState({});
-  const [saving, setSaving]     = useState({});
+  const [saving,   setSaving]   = useState({});   // {index: "toggle"|"note"|false}
 
   const fetchChecklist = useCallback(() => {
     fetch(`/api/cases/${caseId}/checklist`, { credentials: "include" })
       .then(r => r.ok ? r.json() : Promise.reject())
-      .then(d => setItems(d.checklist || d || []))
+      // endpoint returns {case_type, steps:[...]}; get_case embeds as {checklist:[...]}
+      .then(d => setItems(d.steps || d.checklist || []))
       .catch(() => {});
   }, [caseId]);
 
   const handleToggle = async (item) => {
-    setSaving(s => ({ ...s, [item.id]: true }));
+    const idx = item.index;
+    setSaving(s => ({ ...s, [idx]: "toggle" }));
     try {
-      const r = await fetch(`/api/cases/${caseId}/checklist/${item.id}`, {
+      const r = await fetch(`/api/cases/${caseId}/checklist/${idx}`, {
         method: "PATCH", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ checked: !item.checked }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       fetchChecklist();
-    } catch {
-      // revert optimistically would go here
-    } finally {
-      setSaving(s => ({ ...s, [item.id]: false }));
-    }
+    } catch { /* silently leave state as-is */ }
+    finally { setSaving(s => ({ ...s, [idx]: false })); }
+  };
+
+  const handleSaveNote = async (item) => {
+    const idx  = item.index;
+    const text = (notes[idx] ?? item.note ?? "").trim();
+    setSaving(s => ({ ...s, [idx]: "note" }));
+    try {
+      const r = await fetch(`/api/cases/${caseId}/checklist/${idx}`, {
+        method: "PATCH", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ checked: item.checked, note: text }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      // Merge saved note back into local items so UI stays consistent
+      setItems(prev => prev.map(it => it.index === idx ? { ...it, note: text } : it));
+      setNotes(n => ({ ...n, [idx]: text }));
+    } catch { /* leave textarea as-is */ }
+    finally { setSaving(s => ({ ...s, [idx]: false })); }
   };
 
   const checked = items.filter(i => i.checked).length;
@@ -717,89 +735,149 @@ function ChecklistTab({ caseId, initialChecklist }) {
             </span>
           </div>
           <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2 }}>
-            <div style={{
-              height: "100%", borderRadius: 2,
+            <div style={{ height: "100%", borderRadius: 2,
               background: pct === 100 ? C.accent : C.blue,
-              width: `${pct}%`, transition: "width 0.3s",
-            }} />
+              width: `${pct}%`, transition: "width 0.3s" }} />
           </div>
         </div>
       )}
 
       {items.length === 0 ? (
-        <div style={{ color: C.muted, fontFamily: "monospace", fontSize: 11, textAlign: "center", padding: "30px 0" }}>No checklist items</div>
+        <div style={{ color: C.muted, fontFamily: "monospace", fontSize: 11, textAlign: "center", padding: "30px 0" }}>
+          No checklist items
+        </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {items.map((item, i) => (
-            <div key={item.id || i} style={{
-              background: C.surface, border: `1px solid ${item.checked ? "rgba(0,229,160,0.15)" : C.border}`,
-              borderRadius: 4, overflow: "hidden",
-            }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px" }}>
-                {/* Checkbox */}
-                <button
-                  onClick={() => !saving[item.id] && handleToggle(item)}
-                  style={{
-                    width: 18, height: 18, borderRadius: 3, flexShrink: 0, cursor: "pointer",
-                    border: `2px solid ${item.checked ? C.accent : "rgba(255,255,255,0.2)"}`,
-                    background: item.checked ? `${C.accent}20` : "transparent",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                  }}
-                >
-                  {item.checked && <span style={{ color: C.accent, fontSize: 10, fontWeight: 900 }}>✓</span>}
-                </button>
+          {items.map((item) => {
+            const idx         = item.index;
+            const isExpanded  = expanded[idx] || false;
+            const isSaving    = saving[idx];
+            const noteVal     = notes[idx] ?? item.note ?? "";
+            const noteDirty   = notes[idx] !== undefined && notes[idx] !== (item.note || "");
 
-                {/* Title */}
-                <div style={{ flex: 1, color: item.checked ? C.muted : C.text, fontSize: 12, textDecoration: item.checked ? "line-through" : "none" }}>
-                  {item.title}
+            return (
+              <div key={idx} style={{
+                background: C.surface,
+                border: `1px solid ${item.checked ? "rgba(0,229,160,0.15)" : C.border}`,
+                borderRadius: 4, overflow: "hidden",
+              }}>
+                {/* ── Main row ── */}
+                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px" }}>
+                  {/* Checkbox */}
+                  <button
+                    onClick={() => isSaving !== "toggle" && handleToggle(item)}
+                    disabled={isSaving === "toggle"}
+                    style={{
+                      width: 18, height: 18, borderRadius: 3, flexShrink: 0,
+                      cursor: isSaving === "toggle" ? "wait" : "pointer",
+                      border: `2px solid ${item.checked ? C.accent : "rgba(255,255,255,0.2)"}`,
+                      background: item.checked ? `${C.accent}20` : "transparent",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}
+                  >
+                    {item.checked && <span style={{ color: C.accent, fontSize: 10, fontWeight: 900 }}>✓</span>}
+                  </button>
+
+                  {/* Step number */}
+                  <span style={{ color: C.dim, fontSize: 9, fontFamily: "monospace", minWidth: 16 }}>
+                    {idx + 1}.
+                  </span>
+
+                  {/* Title */}
+                  <div style={{
+                    flex: 1,
+                    color: item.checked ? C.muted : C.text,
+                    fontSize: 12,
+                    textDecoration: item.checked ? "line-through" : "none",
+                  }}>
+                    {item.title}
+                  </div>
+
+                  {/* Checked-by badge */}
+                  {item.checked && item.checked_by && (
+                    <span style={{ color: C.dim, fontSize: 9, fontFamily: "monospace", whiteSpace: "nowrap" }}>
+                      {item.checked_by} · {fmtTs(item.checked_at)}
+                    </span>
+                  )}
+
+                  {/* Saved note indicator */}
+                  {item.note && !isExpanded && (
+                    <span title={item.note}
+                      style={{ color: C.yellow, fontSize: 10, cursor: "default" }}>📝</span>
+                  )}
+
+                  {/* Expand toggle (guidance + note) */}
+                  <button
+                    onClick={() => setExpanded(e => ({ ...e, [idx]: !e[idx] }))}
+                    title={isExpanded ? "Collapse" : "Guidance & note"}
+                    style={{ background: "none", border: "none", color: C.dim, cursor: "pointer", fontSize: 11, padding: "0 2px" }}
+                  >
+                    {isExpanded ? "▲" : "▼"}
+                  </button>
                 </div>
 
-                {/* Checked by/when */}
-                {item.checked && item.checked_by && (
-                  <span style={{ color: C.dim, fontSize: 9, fontFamily: "monospace" }}>
-                    {item.checked_by} · {fmtTs(item.checked_at)}
-                  </span>
+                {/* ── Expanded: guidance ── */}
+                {isExpanded && item.guidance && (
+                  <div style={{
+                    borderTop: `1px solid ${C.border}`,
+                    padding: "9px 14px 9px 54px",
+                    color: C.muted, fontSize: 11, lineHeight: 1.6, fontStyle: "italic",
+                    background: "rgba(255,255,255,0.01)",
+                  }}>
+                    {item.guidance}
+                  </div>
                 )}
 
-                {/* Expand guidance */}
-                {item.guidance && (
-                  <button
-                    onClick={() => setExpanded(e => ({ ...e, [item.id]: !e[item.id] }))}
-                    style={{ background: "none", border: "none", color: C.dim, cursor: "pointer", fontSize: 11 }}
-                  >
-                    {expanded[item.id] ? "▲" : "▼"}
-                  </button>
+                {/* ── Expanded: note input + save ── */}
+                {isExpanded && (
+                  <div style={{ padding: "10px 14px 12px 54px", borderTop: `1px solid ${C.border}` }}>
+                    <div style={{ color: C.dim, fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 5 }}>
+                      STEP NOTE
+                    </div>
+                    <textarea
+                      value={noteVal}
+                      onChange={e => setNotes(n => ({ ...n, [idx]: e.target.value }))}
+                      onKeyDown={e => { if (e.key === "Enter" && e.ctrlKey) handleSaveNote(item); }}
+                      placeholder="Add a note for this step… (Ctrl+Enter to save)"
+                      rows={2}
+                      style={{
+                        width: "100%", boxSizing: "border-box",
+                        background: C.bg,
+                        border: `1px solid ${noteDirty ? "rgba(77,158,255,0.35)" : "rgba(255,255,255,0.08)"}`,
+                        color: C.text, padding: "7px 10px", borderRadius: 3,
+                        fontFamily: "monospace", fontSize: 11, resize: "vertical", outline: "none",
+                        transition: "border-color 0.15s",
+                      }}
+                    />
+                    <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6, gap: 8 }}>
+                      {noteDirty && (
+                        <button
+                          onClick={() => setNotes(n => ({ ...n, [idx]: item.note || "" }))}
+                          style={{ background: "none", border: "none", color: C.dim,
+                            fontFamily: "monospace", fontSize: 10, cursor: "pointer" }}>
+                          Discard
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleSaveNote(item)}
+                        disabled={isSaving === "note"}
+                        style={{
+                          background: noteDirty ? "rgba(77,158,255,0.12)" : "rgba(255,255,255,0.04)",
+                          border: `1px solid ${noteDirty ? "rgba(77,158,255,0.35)" : "rgba(255,255,255,0.1)"}`,
+                          color: noteDirty ? C.blue : C.dim,
+                          padding: "5px 14px", borderRadius: 3, fontFamily: "monospace",
+                          fontSize: 10, fontWeight: noteDirty ? 700 : 400,
+                          cursor: isSaving === "note" ? "wait" : "pointer",
+                        }}
+                      >
+                        {isSaving === "note" ? "Saving…" : "Save Note"}
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
-
-              {/* Guidance */}
-              {item.guidance && expanded[item.id] && (
-                <div style={{
-                  borderTop: `1px solid ${C.border}`,
-                  padding: "10px 14px 10px 44px",
-                  color: C.muted, fontSize: 11, lineHeight: 1.6, fontStyle: "italic",
-                }}>{item.guidance}</div>
-              )}
-
-              {/* Note input */}
-              {expanded[item.id] && (
-                <div style={{ padding: "0 14px 12px 44px", borderTop: item.guidance ? "none" : `1px solid ${C.border}` }}>
-                  <textarea
-                    value={notes[item.id] || item.note || ""}
-                    onChange={e => setNotes(n => ({ ...n, [item.id]: e.target.value }))}
-                    placeholder="Add a note for this step…"
-                    rows={2}
-                    style={{
-                      width: "100%", boxSizing: "border-box",
-                      background: C.bg, border: `1px solid rgba(255,255,255,0.08)`,
-                      color: C.text, padding: "7px 10px", borderRadius: 3,
-                      fontFamily: "monospace", fontSize: 11, resize: "none", outline: "none",
-                    }}
-                  />
-                </div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
