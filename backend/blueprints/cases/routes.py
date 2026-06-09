@@ -250,6 +250,32 @@ def get_case(incident_id):
         return jsonify({"error": str(exc)}), 500
 
 
+# ── SIEM engine sync helper ────────────────────────────────────────────────────
+
+def _sync_case_to_siem(incident_id: str, case_data: dict) -> None:
+    """Best-effort PATCH to the SIEM correlation engine so its SQLAlchemy async
+    session also commits case_opened_at.  This prevents stale-session visibility
+    issues where the ORM loaded the incident before the psycopg2 write committed
+    and would otherwise serve case_opened_at=null until the next full reload.
+    Failure is silently swallowed — the psycopg2 commit already persisted the data."""
+    try:
+        import requests as _r
+        siem_url = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100")
+        payload = {k: v for k, v in {
+            "case_opened_at":    case_data.get("case_opened_at"),
+            "case_type":         case_data.get("case_type"),
+            "case_mttd_seconds": case_data.get("case_mttd_seconds"),
+        }.items() if v is not None}
+        if payload:
+            _r.patch(
+                f"{siem_url}/incidents/{incident_id}",
+                json=payload,
+                timeout=3,
+            )
+    except Exception:
+        pass
+
+
 # ── Open case ───────────────────────────────────────────────────────────────────
 
 @cases_bp.route("/api/cases", methods=["POST"])
@@ -274,8 +300,8 @@ def create_case():
             sev = "medium"
         asset  = (finding.get("asset") or "unknown").strip()[:200]
         module = (finding.get("module") or "asm").strip()[:100]
-        desc   = (finding.get("description") or "").strip()
-        rec    = (finding.get("recommendation") or "").strip()
+        desc   = str(finding.get("description") or "").strip()
+        rec    = str(finding.get("recommendation") or "").strip()
         cve    = (finding.get("cve") or "").strip()
 
         raw_key    = f"{asset}|{vuln}|{module}".lower()
@@ -326,6 +352,9 @@ def create_case():
         # Serialize datetimes before jsonify
         safe = {k: (_iso(v) if hasattr(v, "isoformat") else v) for k, v in result.items()}
         conn.close()
+        # Ensure the SIEM engine's async ORM session reflects case_opened_at so
+        # the change is visible in GET /incidents after page refresh.
+        _sync_case_to_siem(incident_id, safe)
         return jsonify(safe), 201
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 404
@@ -795,8 +824,8 @@ def create_asm_case():
         sev = "medium"
     asset  = (body.get("asset") or "unknown").strip()[:200]
     module = (body.get("module") or "asm").strip()[:100]
-    desc   = (body.get("description") or "").strip()
-    rec    = (body.get("recommendation") or "").strip()
+    desc   = str(body.get("description") or "").strip()
+    rec    = str(body.get("recommendation") or "").strip()
     cve    = (body.get("cve") or "").strip()
 
     # Deterministic incident ID: ASM-<hash of asset+vuln+module> so re-raises
