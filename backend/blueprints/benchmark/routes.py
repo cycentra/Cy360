@@ -57,10 +57,29 @@ _WAZUH_TIMEOUT    = 8
 # CyCases / Correlation DB (PostgreSQL)
 # The Incident model is in cysiemstack; we query it directly via psycopg2
 # to avoid importing the async SQLAlchemy session into a sync Flask context.
-_CORR_DB_URL = os.environ.get(
-    "CORRELATION_DB_URL",
-    "postgresql://correlation_user:correlation_pass@127.0.0.1:5433/correlation"
-)
+def _resolve_corr_db_url() -> str:
+    url = os.environ.get("CORRELATION_DB_URL", "").strip()
+    if url:
+        return url
+    url = os.environ.get("CYCENTRA_DB_URL", "").strip()
+    if url:
+        return url
+    try:
+        env_file = Path("/opt/cycentra/cysiemstack.env")
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                if k.strip() == "DATABASE_URL":
+                    raw = v.strip().strip('"').strip("'")
+                    return raw.replace("postgresql+asyncpg://", "postgresql://")
+    except Exception:
+        pass
+    return "postgresql://corruser:changeme@127.0.0.1:5433/correlation"
+
+_CORR_DB_URL = _resolve_corr_db_url()
 
 # ── Default source config ──────────────────────────────────────────────────────
 

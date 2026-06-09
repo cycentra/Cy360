@@ -25,17 +25,64 @@ from blueprints.cases.checklist_templates import TEMPLATES
 
 cases_bp = Blueprint("cases", __name__)
 
-_CORR_DB_URL = os.environ.get(
-    "CORRELATION_DB_URL",
-    "postgresql://correlation_user:correlation_pass@127.0.0.1:5433/correlation",
-)
+
+def _resolve_corr_db_url() -> str:
+    """
+    Resolve the correlation DB connection URL for psycopg2 (sync, Flask context).
+
+    Priority:
+      1. CORRELATION_DB_URL  env var (explicit override)
+      2. CYCENTRA_DB_URL     env var (Flask's own DB — same host/port/db, corruser)
+      3. DATABASE_URL from /opt/cycentra/cysiemstack.env, with asyncpg+ prefix stripped
+      4. Hard-coded fallback (dev-only; will fail on real installs with custom passwords)
+    """
+    # 1. Explicit override
+    url = os.environ.get("CORRELATION_DB_URL", "").strip()
+    if url:
+        return url
+
+    # 2. CYCENTRA_DB_URL — same correlation DB, already set for Flask process
+    url = os.environ.get("CYCENTRA_DB_URL", "").strip()
+    if url:
+        return url
+
+    # 3. Parse cysiemstack.env — where the engine keeps DATABASE_URL
+    try:
+        from pathlib import Path
+        env_file = Path("/opt/cycentra/cysiemstack.env")
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                if k.strip() == "DATABASE_URL":
+                    # Strip SQLAlchemy async driver prefix if present
+                    raw = v.strip().strip('"').strip("'")
+                    return raw.replace("postgresql+asyncpg://", "postgresql://")
+    except Exception:
+        pass
+
+    # 4. Dev fallback
+    return "postgresql://corruser:changeme@127.0.0.1:5433/correlation"
+
+
+_CORR_DB_URL = _resolve_corr_db_url()
 _MAX_EVIDENCE_BYTES = 100 * 1024 * 1024  # 100 MB
 
 
 def _db():
-    conn = psycopg2.connect(_CORR_DB_URL)
-    conn.cursor_factory = psycopg2.extras.RealDictCursor
-    return conn
+    try:
+        conn = psycopg2.connect(_CORR_DB_URL)
+        conn.cursor_factory = psycopg2.extras.RealDictCursor
+        return conn
+    except psycopg2.OperationalError as exc:
+        import logging as _log
+        _log.getLogger("cycentra.cases").error(
+            "CyCases DB connection failed. URL resolved to: %s... Error: %s",
+            _CORR_DB_URL[:50], exc,
+        )
+        raise
 
 
 def _require_analyst(f):
