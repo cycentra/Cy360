@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.27 -- 2026-06-09 22:17 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.28 -- 2026-06-10 09:05 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -581,7 +581,7 @@ else
     success "PostgreSQL 16 already installed"
 fi
 
-# Bind to :5433 to avoid conflict with CyIRIS Docker postgres on :5432
+# Bind to :5433 to avoid conflict with other Docker postgres containers on :5432
 # Try 5433 first (idempotent re-runs), then fall back to 5432 (fresh install)
 PG_CONF=$(sudo -u postgres psql -p 5433 -t -c "SHOW config_file;" 2>/dev/null | tr -d ' \n' \
        || sudo -u postgres psql -p 5432 -t -c "SHOW config_file;" 2>/dev/null | tr -d ' \n' \
@@ -1300,7 +1300,7 @@ if [[ "$MODE" == "full" ]]; then
     MICROSOFT_CLIENT_SECRET="${MICROSOFT_CLIENT_SECRET:-}"
     AI_PROVIDER="none"; AI_API_KEY=""; AI_MODEL=""
     SMTP_HOST=""; SMTP_PORT=""; SMTP_USER=""; SMTP_PASS=""; SUPPORT_EMAIL="support@${BASE_DOMAIN}"
-    INSTALL_CYSIEM=true; INSTALL_CYIRIS=true; INSTALL_CYSOAR=true
+    INSTALL_CYSIEM=true; INSTALL_CYSOAR=true
 
     info "Domain : ${BASE_DOMAIN}  |  OAuth: ${OAUTH_PROVIDER}"
     info "Post-install → edit /opt/cycentra/.env and restart: systemctl restart cycentra"
@@ -1312,17 +1312,13 @@ if [[ "$MODE" == "full" ]]; then
         info "Existing .env found — preserving session secrets"
         FLASK_SECRET=$(_get SECRET_KEY);   [[ -z "$FLASK_SECRET"   ]] && FLASK_SECRET=$(gen_secret)
         JWT_SECRET=$(_get JWT_SECRET);     [[ -z "$JWT_SECRET"     ]] && JWT_SECRET=$(gen_secret)
-        IRIS_SECRET=$(_get IRIS_SECRET);   [[ -z "$IRIS_SECRET"    ]] && IRIS_SECRET=$(gen_secret)
-        IRIS_DB_PASS=$(_get IRIS_DB_PASS); [[ -z "$IRIS_DB_PASS"   ]] && IRIS_DB_PASS=$(gen_pass)
         NODERED_SECRET=$(_get NODE_RED_CREDENTIAL_SECRET)
         [[ -z "$NODERED_SECRET" ]] && NODERED_SECRET=$(gen_secret)
     else
         FLASK_SECRET=$(gen_secret); JWT_SECRET=$(gen_secret)
-        IRIS_SECRET=$(gen_secret);  IRIS_DB_PASS=$(gen_pass)
         NODERED_SECRET=$(gen_secret)
     fi
     ADMIN_API_KEY=$(gen_secret)
-    CYIRIS_OIDC_SECRET=$(gen_secret)
     CYSOAR_OIDC_SECRET=$(gen_secret)
     CYSIEM_OIDC_SECRET=$(gen_secret)
     CY360SSO_OIDC_SECRET=$(gen_secret)
@@ -1342,7 +1338,7 @@ else
     CLIENT_NAME="${CLIENT_NAME:-cycentra}"
     CLIENT_EMAIL="${CLIENT_EMAIL:-admin@cycentra.com}"
     BASE_DOMAIN="${BASE_DOMAIN:-cycentra.com}"
-    INSTALL_CYSIEM=true; INSTALL_CYIRIS=true; INSTALL_CYSOAR=true
+    INSTALL_CYSIEM=true; INSTALL_CYSOAR=true
     success "Loaded existing configuration (domain: ${BASE_DOMAIN})"
 
     # ── Patch .env for update mode ────────────────────────────────────────────
@@ -1354,7 +1350,8 @@ else
 
     # Remove dead / orphaned variables
     for _dead in USE_CUSTOM_IMAGES SIEM_LLM_ENABLED SIEM_MISP_ENABLED \
-                 AI_PROVIDER AI_API_KEY AI_MODEL; do
+                 AI_PROVIDER AI_API_KEY AI_MODEL \
+                 POSTGRES_PASSWORD; do
         if grep -q "^${_dead}=" "$_env" 2>/dev/null; then
             sed -i "/^${_dead}=/d" "$_env"
             info "Removed orphaned var: ${_dead}"
@@ -1385,27 +1382,6 @@ PATCHEOF
         info "Backfilled CLOUD_MISP_API_KEY default"
     fi
 
-    # Add CLOUD_IRIS_* if missing (introduced in v1.0.X)
-    if ! grep -q "^CLOUD_IRIS_URL=" "$_env" 2>/dev/null; then
-        cat >> "$_env" << PATCHEOF
-
-# ── Cloud CyIRIS (Cycentra-managed DFIR IRIS at cyiris.cycentra.com) ──────────
-CLOUD_IRIS_URL=https://cyiris.cycentra.com
-CLOUD_IRIS_API_KEY=${CLOUD_IRIS_API_KEY:-}
-CLOUD_IRIS_CUSTOMER_ID=${CLOUD_IRIS_CUSTOMER_ID:-1}
-PATCHEOF
-        info "Added CLOUD_IRIS_* to .env"
-    fi
-
-    # Deduplicate CLOUD_IRIS_URL — can accumulate on CyIRIS reinstall (platform/routes.py
-    # appended rather than replaced in versions before v1.0.414).
-    _dup_count=$(grep -c "^CLOUD_IRIS_URL=" "$_env" 2>/dev/null || echo 0)
-    if [[ "$_dup_count" -gt 1 ]]; then
-        _iris_url_val=$(grep "^CLOUD_IRIS_URL=" "$_env" | tail -1 | cut -d= -f2-)
-        sed -i "/^CLOUD_IRIS_URL=/d" "$_env"
-        echo "CLOUD_IRIS_URL=${_iris_url_val}" >> "$_env"
-        info "Deduplicated CLOUD_IRIS_URL in .env (kept: ${_iris_url_val})"
-    fi
 
     # Add CYSIEM_OIDC_SECRET if missing (SSO v1 — introduced with full OIDC)
     if ! grep -q "^CYSIEM_OIDC_SECRET=" "$_env" 2>/dev/null; then
@@ -1563,24 +1539,17 @@ ENVEOF
 
     cat >> /opt/cycentra/.env << ENVEOF
 
-CYIRIS_OIDC_SECRET=${CYIRIS_OIDC_SECRET}
 CYSOAR_OIDC_SECRET=${CYSOAR_OIDC_SECRET}
 CYSIEM_OIDC_SECRET=${CYSIEM_OIDC_SECRET}
 CY360SSO_OIDC_SECRET=${CY360SSO_OIDC_SECRET}
 
 # ── IAP oauth2-proxy ────────────────────────────────────────────────────────────
 # oauth2-proxy uses OIDC against cyasm.DOMAIN. It is the single SSO gate for
-# cyiris, cysoar, and cysiem subdomains via nginx auth_request.
+# cysoar and cysiem subdomains via nginx auth_request.
 OAUTH2PROXY_SECRET=${OAUTH2PROXY_SECRET}
 OAUTH2PROXY_COOKIE_SECRET=${OAUTH2PROXY_COOKIE_SECRET}
 
-IRIS_SECRET=${IRIS_SECRET}
-IRIS_DB_PASS=${IRIS_DB_PASS}
-IRIS_ADM_EMAIL=${CLIENT_EMAIL}
-IRIS_ADM_PASSWORD=${IRIS_ADM_PASSWORD:-}
 CYCENTRA_PORTAL_URL=https://cy360.${BASE_DOMAIN}
-IRIS_SECRET_KEY=${IRIS_SECRET}
-POSTGRES_PASSWORD=${IRIS_DB_PASS}
 NODE_RED_CREDENTIAL_SECRET=${NODERED_SECRET}
 
 SMTP_HOST=${SMTP_HOST:-}
@@ -1606,13 +1575,6 @@ GH_TOKEN=${GH_TOKEN:-}
 CLOUD_MISP_URL=${CLOUD_MISP_URL:-https://cymisp.cycentra.com}
 CLOUD_MISP_API_KEY=${CLOUD_MISP_API_KEY:-BPxY79PEX9Y39eooVpNVu0UpayhYaqCfe74ZOHJb}
 
-# ── Cloud CyIRIS (Cycentra-managed DFIR IRIS at cyiris.cycentra.com) ──────────
-# When a customer selects "Cloud CyIRIS" in System Settings > Integrations, the
-# backend uses these credentials automatically.  CLOUD_IRIS_API_KEY must be set
-# to the vendor-issued API key for this installation.
-CLOUD_IRIS_URL=${CLOUD_IRIS_URL:-}
-CLOUD_IRIS_API_KEY=${CLOUD_IRIS_API_KEY:-}
-CLOUD_IRIS_CUSTOMER_ID=${CLOUD_IRIS_CUSTOMER_ID:-1}
 
 # ── CyMind (central AI hub — company-wide instance) ───────────────────────────
 # Populated at startup from vault (CYMIND-API-URL / CYMIND-API-KEY).
@@ -1762,7 +1724,7 @@ SIEMEOF
     #   - auth method is azure/oidc (runtime reads work; write bootstrap requires UI)
     #
     # Keys that are intentionally excluded from vault (app-managed at runtime)
-    # are also excluded here: IRIS_API_KEY, CLOUD_IRIS_API_KEY,
+    # are also excluded here: CLOUD_MISP_API_KEY,
     # CYSOAR_SESSION_SECRET, WAZUH_API_URL, WAZUH_API_USER, WAZUH_API_PASSWORD.
     _vault_push_env() {
         local env_file="$1"
@@ -1812,10 +1774,9 @@ SIEMEOF
         #   SECRET_KEY, JWT_SECRET, ADMIN_API_KEY          — openssl rand per install
         #   CYCENTRA_DB_URL, POSTGRES_PASSWORD              — per-install DB
         #   OAUTH2PROXY_SECRET, OAUTH2PROXY_COOKIE_SECRET   — openssl rand per install
-        #   CYIRIS_OIDC_SECRET, CYSIEM_OIDC_SECRET,
+        #   CYSIEM_OIDC_SECRET,
         #     CY360SSO_OIDC_SECRET                          — openssl rand per install
-        #   IRIS_SECRET_KEY, IRIS_DB_PASS, IRIS_ADM_PASSWORD — per-install CyIRIS
-        #   NODE_RED_CREDENTIAL_SECRET                      — openssl rand per install
+                #   NODE_RED_CREDENTIAL_SECRET                      — openssl rand per install
         #   CORRELATION_DB_URL                              — per-install DB URL
         local -a VAULT_KEYS=(
             # Marketplace
@@ -1860,7 +1821,7 @@ fi  # end full env block
 
 # ── Step 4.3b: IAP Gateway + CySIEM OIDC ────────────────────────────────────
 # Runs in all modes (full / update). Idempotent.
-# oauth2-proxy: single OIDC gate for cyiris, cysoar subdomains.
+# oauth2-proxy: single OIDC gate for cysoar and cysiem subdomains.
 # Wazuh Dashboard: configured for native OIDC auth via cyasm.DOMAIN/oidc.
 #   - Individual user identity from OIDC token email claim
 #   - OpenSearch Security backend roles from OIDC token roles claim
@@ -2650,9 +2611,7 @@ done
 
 # ── Step 15: nginx vhosts (full install only) ─────────────────────────────────
 # ── Step 15: nginx vhosts (full install only) ─────────────────────────────────
-# NOTE v7.2: CyIRIS and CySOAR nginx config removed from here.
-# They are now managed dynamically by routes.py on module install/uninstall:
-#   CyIRIS  → adds cyiris.DOMAIN server block + certbot expand on install
+# NOTE v7.2: CySOAR nginx config is managed dynamically by routes.py on module install/uninstall:
 #   CySOAR  → injects location CySOAR into portal server on install
 #   CyMISP  → was already routes.py-managed (unchanged)
 # Only permanent core services remain here: cy360, cyasm, cysiem.
@@ -2665,7 +2624,7 @@ if [[ "$MODE" == "full" ]]; then
 
     cat > "$SSL_CONF" << NGINXEOF
 # CyCentra 360 nginx — generated by setup wizard v7.2 — ${BASE_DOMAIN}
-# Module nginx blocks (cyiris, cysoar, cymisp) are managed by routes.py.
+# Module nginx blocks (cysoar, cymisp) are managed by routes.py.
 
 map \$http_upgrade \$connection_upgrade {
     default upgrade;
@@ -2797,7 +2756,7 @@ server {
         proxy_cookie_flags ~ samesite=none secure;
     }
 }
-# cyiris.DOMAIN server block is added by routes.py when CyIRIS is installed via portal
+# Module server blocks are added by routes.py when modules are installed via portal
 # cymisp.DOMAIN server block is added by routes.py when CyMISP is installed via portal
 # cymind.DOMAIN server block is added by cymind/install.sh when CyMind is installed
 NGINXEOF
@@ -2989,9 +2948,9 @@ SSLOPTEOF
         -m "$CLIENT_EMAIL" -d cysiem.${BASE_DOMAIN} \
         && success "SSL cert ready (cysiem)" \
         || true
-    # NOTE: cyiris/cymisp certs are obtained by routes.py (certbot --nginx -d cyiris.DOMAIN)
+    # NOTE: cymisp certs are obtained by routes.py (certbot --nginx -d cymisp.DOMAIN)
     # when those modules are installed via the portal. No cert is needed here
-    # because no cyiris/cymisp nginx block exists until the module is installed.
+    # because no cymisp nginx block exists until the module is installed.
 
     [[ -n "${DHPARAM_PID:-}" ]] && wait "$DHPARAM_PID" 2>/dev/null || true
 
@@ -3294,7 +3253,7 @@ info "Cron schedule management delegated to System Settings → Scheduler tab"
 # ── Step 23b: Firewall (UFW) ──────────────────────────────────────────────────
 # Strategy: all public traffic flows through nginx (80/443).  Internal services
 # (Flask 5252, SIEM engine 8100, PostgreSQL 5433, Redis 6379, Wazuh 5601,
-# oauth2-proxy 4180, CyIRIS 4433, CySOAR 1880) bind to loopback only — no UFW
+# oauth2-proxy 4180, CySOAR 1880) bind to loopback only — no UFW
 # rules needed for them.  CyMind on Server B reaches CyCentra via port 80
 # (nginx proxy), so no extra firewall holes are required.
 step_header "FIREWALL (UFW)"
@@ -3345,7 +3304,6 @@ _port_up 8100 && success "SIEM engine     :8100 UP" || warn "SIEM engine     :81
 _port_up 5433 && success "PostgreSQL      :5433 UP" || warn "PostgreSQL      :5433 DOWN"
 _port_up 6379 && success "Redis           :6379 UP" || warn "Redis           :6379 DOWN"
 _port_up 5601 && success "CySIEM Dashboard :5601 UP" || warn "CySIEM Dashboard :5601 DOWN (install via portal)"
-_port_up 4433 && success "CyIRIS          :4433 UP" || warn "CyIRIS          :4433 DOWN (install via portal)"
 _port_up 1880 && success "CySOAR          :1880 UP" || warn "CySOAR          :1880 DOWN (install via portal)"
 curl -sk --max-time 5 "http://127.0.0.1:5252/oidc/.well-known/openid-configuration" \
     | python3 -c "import sys,json; d=json.load(sys.stdin); assert '/oidc' in d.get('issuer',''), 'bad issuer'" 2>/dev/null \
@@ -3368,7 +3326,6 @@ if [[ "$MODE" == "full" ]]; then
     chk "Portal"  "https://cy360.${BASE_DOMAIN}"
     chk "Backend" "https://cyasm.${BASE_DOMAIN}/health"
     chk "CySIEM"  "https://cysiem.${BASE_DOMAIN}"
-    chk "CyIRIS"  "https://cyiris.${BASE_DOMAIN}/api/v2/ping"
 fi
 
 # ── Step 25: Cleanup ──────────────────────────────────────────────────────────
@@ -3387,7 +3344,6 @@ if [[ "$MODE" == "full" ]]; then
     echo -e "  ${CYAN}Portal         ${NC}  https://cy360.${BASE_DOMAIN}"
     echo -e "  ${CYAN}Backend API    ${NC}  https://cyasm.${BASE_DOMAIN}"
     echo -e "  ${CYAN}CySIEM         ${NC}  https://cysiem.${BASE_DOMAIN}"
-    echo -e "  ${CYAN}CyIRIS         ${NC}  https://cyiris.${BASE_DOMAIN}"
     echo -e "  ${CYAN}CySOAR         ${NC}  https://cysoar.${BASE_DOMAIN}"
 fi
 echo ""
@@ -3402,7 +3358,6 @@ echo ""
 
 if [[ "$MODE" == "full" ]]; then
     echo -e "  ${BOLD}Admin API key  :${NC}  ${WHITE}${ADMIN_API_KEY}${NC}"
-    echo -e "  ${BOLD}CyIRIS secret  :${NC}  ${WHITE}${CYIRIS_OIDC_SECRET}${NC}"
     echo -e "  ${BOLD}CySOAR secret  :${NC}  ${WHITE}${CYSOAR_OIDC_SECRET}${NC}"
     echo ""
 fi
@@ -3430,7 +3385,7 @@ echo -e "  ${DIM}2. Verify alerts flowing: redis-cli -p 6379 llen cysiemstack:al
 echo -e "  ${DIM}   (cysiem-to-redis tails CySIEM alerts → Redis — check: journalctl -u cysiem-to-redis -n 20)${NC}"
 echo -e "  ${DIM}3. Check engine log: tail -f /opt/cycentra/engine.log${NC}"
 echo -e "  ${DIM}4. Security MCP bridge available at http://127.0.0.1:8100/mcp/sse (inside cysiemstack-engine)${NC}"
-echo -e "  ${DIM}5. Install CyIRIS / CySOAR via portal${NC}"
+echo -e "  ${DIM}5. Install CySOAR or CyMISP via portal${NC}"
 echo -e "  ${DIM}6. To update: sudo bash cycentra-setup.sh --update${NC}"
 echo -e "  ${DIM}7. CyMind integration: install CyMind on Server B, then set CyMind URL in${NC}"
 echo -e "  ${DIM}   System Settings → CyMind — nginx /cymind/ proxy is injected automatically${NC}"
@@ -3454,7 +3409,6 @@ URLs:
   Portal:   https://cy360.${BASE_DOMAIN}
   Backend:  https://cyasm.${BASE_DOMAIN}
   CySIEM:   https://cysiem.${BASE_DOMAIN}
-  CyIRIS:   https://cyiris.${BASE_DOMAIN}
   CySOAR:   https://cysoar.${BASE_DOMAIN}
 
 Services:
@@ -3482,7 +3436,7 @@ Next steps:
      (cysiem-to-redis service tails CySIEM alerts → Redis)
   3. Check engine log: tail -f /opt/cycentra/engine.log
   4. Security MCP bridge: http://127.0.0.1:8100/mcp/sse (inside cysiemstack-engine)
-  5. Install CyIRIS/CySOAR via portal
+  5. Install CySOAR or CyMISP via portal
   6. Update: sudo bash cycentra-setup.sh --update
   7. SSH is on port ${_SSH_PORT:-2026} — reconnect: ssh -p ${_SSH_PORT:-2026} user@<server>
      Open port ${_SSH_PORT:-2026} in your Cloud Provider firewall before disconnecting.
