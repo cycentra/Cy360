@@ -1459,6 +1459,45 @@ def _run_host_refresh_background():
     t.start()
 
 
+# ── Wazuh auth helper ─────────────────────────────────────────────────────────
+
+def _wazuh_auth_token():
+    """Return a short-lived Wazuh JWT, or None if credentials are missing/wrong."""
+    if not WAZUH_API_PASS:
+        return None
+    import base64 as _b64
+    try:
+        creds = _b64.b64encode(f"{WAZUH_API_USER}:{WAZUH_API_PASS}".encode()).decode()
+        r = _req.get(
+            f"{WAZUH_API_URL}/security/user/authenticate",
+            headers={"Authorization": f"Basic {creds}"},
+            timeout=8, verify=False,
+        )
+        r.raise_for_status()
+        return r.json()["data"]["token"]
+    except Exception as exc:
+        _logger.warning("[wazuh-auth] token fetch failed: %s", exc)
+        return None
+
+
+def _wz(token, method, path, params=None, json_body=None, raw_body=None, extra_headers=None):
+    """Single Wazuh API call; returns (response_object | None)."""
+    headers = {"Authorization": f"Bearer {token}"}
+    if extra_headers:
+        headers.update(extra_headers)
+    try:
+        r = _req.request(
+            method, f"{WAZUH_API_URL}{path}",
+            headers=headers, params=params or {},
+            json=json_body, data=raw_body,
+            timeout=12, verify=False,
+        )
+        return r
+    except Exception as exc:
+        _logger.warning("[wazuh] %s %s failed: %s", method, path, exc)
+        return None
+
+
 # ── Flask routes ──────────────────────────────────────────────────────────────
 
 @siem_bp.route("/hosts", methods=["GET"])
@@ -2321,3 +2360,238 @@ def siem_internal_posture():
         return jsonify(_sync_internal_posture())
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+
+# ── Agent Group Management ─────────────────────────────────────────────────────
+# Thin proxy to Wazuh groups API.  All routes require at least viewer auth;
+# mutations require analyst or admin.
+
+@siem_bp.route("/agent-groups", methods=["GET"])
+@require_siem_auth
+def siem_agent_groups_list():
+    """List all Wazuh agent groups with agent counts."""
+    token = _wazuh_auth_token()
+    if not token:
+        return jsonify({"error": "Wazuh credentials not configured"}), 503
+    r = _wz(token, "GET", "/groups", params={
+        "select": "name,count,mergedSum,configSum", "limit": 500,
+    })
+    if r is None or r.status_code != 200:
+        code = r.status_code if r is not None else 503
+        return jsonify({"error": "Wazuh API error", "detail": r.text if r else ""}), code
+    data = r.json().get("data", {})
+    groups = data.get("affected_items", [])
+    return jsonify({"groups": groups, "total": data.get("total_affected_items", len(groups))})
+
+
+@siem_bp.route("/agent-groups", methods=["POST"])
+@require_siem_analyst
+def siem_agent_groups_create():
+    """Create a new Wazuh agent group."""
+    body = request.get_json(silent=True) or {}
+    group_id = (body.get("group_id") or "").strip()
+    if not group_id:
+        return jsonify({"error": "group_id is required"}), 400
+    if len(group_id) > 64 or not all(c.isalnum() or c in "-_." for c in group_id):
+        return jsonify({"error": "group_id may only contain alphanumerics, hyphens, underscores, and dots"}), 400
+    token = _wazuh_auth_token()
+    if not token:
+        return jsonify({"error": "Wazuh credentials not configured"}), 503
+    r = _wz(token, "POST", "/groups", json_body={"group_id": group_id})
+    if r is None:
+        return jsonify({"error": "Wazuh unreachable"}), 503
+    if r.status_code not in (200, 201):
+        return jsonify({"error": "Wazuh API error", "detail": r.text}), r.status_code
+    return jsonify({"status": "created", "group_id": group_id}), 201
+
+
+@siem_bp.route("/agent-groups", methods=["OPTIONS"])
+def siem_agent_groups_options():
+    from core.helpers import add_cors_headers
+    from flask import make_response
+    return add_cors_headers(make_response('', 204))
+
+
+@siem_bp.route("/agent-groups/<group_name>", methods=["DELETE"])
+@require_siem_admin
+def siem_agent_groups_delete(group_name):
+    """Delete a Wazuh agent group (admin only)."""
+    token = _wazuh_auth_token()
+    if not token:
+        return jsonify({"error": "Wazuh credentials not configured"}), 503
+    r = _wz(token, "DELETE", "/groups", params={"groups_list": group_name})
+    if r is None:
+        return jsonify({"error": "Wazuh unreachable"}), 503
+    if r.status_code not in (200, 204):
+        return jsonify({"error": "Wazuh API error", "detail": r.text}), r.status_code
+    return jsonify({"status": "deleted", "group_id": group_name})
+
+
+@siem_bp.route("/agent-groups/<group_name>", methods=["OPTIONS"])
+def siem_agent_groups_item_options(group_name):
+    from core.helpers import add_cors_headers
+    from flask import make_response
+    return add_cors_headers(make_response('', 204))
+
+
+@siem_bp.route("/agent-groups/<group_name>/config", methods=["GET"])
+@require_siem_auth
+def siem_agent_group_config_get(group_name):
+    """Retrieve the raw agent.conf XML for a group."""
+    token = _wazuh_auth_token()
+    if not token:
+        return jsonify({"error": "Wazuh credentials not configured"}), 503
+    r = _wz(token, "GET", f"/groups/{group_name}/files/agent.conf",
+            params={"raw": "true"})
+    if r is None:
+        return jsonify({"error": "Wazuh unreachable"}), 503
+    if r.status_code == 404:
+        return jsonify({"config": ""}), 200
+    if r.status_code != 200:
+        return jsonify({"error": "Wazuh API error", "detail": r.text}), r.status_code
+    return jsonify({"config": r.text})
+
+
+@siem_bp.route("/agent-groups/<group_name>/config", methods=["PUT"])
+@require_siem_analyst
+def siem_agent_group_config_put(group_name):
+    """Upload updated agent.conf XML for a group."""
+    xml_body = request.get_data()
+    if not xml_body:
+        return jsonify({"error": "Request body (XML) is required"}), 400
+    token = _wazuh_auth_token()
+    if not token:
+        return jsonify({"error": "Wazuh credentials not configured"}), 503
+    r = _wz(token, "PUT", f"/groups/{group_name}/files/agent.conf",
+            raw_body=xml_body,
+            extra_headers={"Content-Type": "application/octet-stream"})
+    if r is None:
+        return jsonify({"error": "Wazuh unreachable"}), 503
+    if r.status_code not in (200, 204):
+        return jsonify({"error": "Wazuh API error", "detail": r.text}), r.status_code
+    return jsonify({"status": "updated"})
+
+
+@siem_bp.route("/agent-groups/<group_name>/config", methods=["OPTIONS"])
+def siem_agent_group_config_options(group_name):
+    from core.helpers import add_cors_headers
+    from flask import make_response
+    return add_cors_headers(make_response('', 204))
+
+
+@siem_bp.route("/agent-groups/<group_name>/agents", methods=["GET"])
+@require_siem_auth
+def siem_agent_group_agents_list(group_name):
+    """List agents belonging to a group."""
+    token = _wazuh_auth_token()
+    if not token:
+        return jsonify({"error": "Wazuh credentials not configured"}), 503
+    try:
+        offset = max(0, int(request.args.get("offset", 0)))
+        limit  = min(500, max(1, int(request.args.get("limit", 500))))
+    except ValueError:
+        offset, limit = 0, 500
+    search = request.args.get("search", "").strip()
+    params = {
+        "select": "id,name,ip,status,version,os.platform,os.version,dateAdd,lastKeepAlive",
+        "limit": limit, "offset": offset,
+    }
+    if search:
+        params["search"] = search
+    r = _wz(token, "GET", f"/groups/{group_name}/agents", params=params)
+    if r is None:
+        return jsonify({"error": "Wazuh unreachable"}), 503
+    if r.status_code != 200:
+        return jsonify({"error": "Wazuh API error", "detail": r.text}), r.status_code
+    data = r.json().get("data", {})
+    return jsonify({
+        "agents": data.get("affected_items", []),
+        "total": data.get("total_affected_items", 0),
+    })
+
+
+@siem_bp.route("/agent-groups/<group_name>/agents", methods=["POST"])
+@require_siem_analyst
+def siem_agent_group_agents_assign(group_name):
+    """Assign one or more agents to the group (bulk assignment)."""
+    body = request.get_json(silent=True) or {}
+    agent_ids = body.get("agent_ids", [])
+    if not agent_ids or not isinstance(agent_ids, list):
+        return jsonify({"error": "agent_ids (list) is required"}), 400
+    agent_ids = [str(a).strip() for a in agent_ids if str(a).strip()]
+    if not agent_ids:
+        return jsonify({"error": "agent_ids must not be empty"}), 400
+    token = _wazuh_auth_token()
+    if not token:
+        return jsonify({"error": "Wazuh credentials not configured"}), 503
+    r = _wz(token, "PUT", "/agents/group",
+            params={"group_id": group_name},
+            json_body={"ids": agent_ids})
+    if r is None:
+        return jsonify({"error": "Wazuh unreachable"}), 503
+    if r.status_code not in (200, 201):
+        return jsonify({"error": "Wazuh API error", "detail": r.text}), r.status_code
+    resp_data = r.json().get("data", {})
+    return jsonify({
+        "status": "assigned",
+        "affected": resp_data.get("total_affected_items", len(agent_ids)),
+        "failed": resp_data.get("failed_items", []),
+    })
+
+
+@siem_bp.route("/agent-groups/<group_name>/agents", methods=["DELETE"])
+@require_siem_analyst
+def siem_agent_group_agents_remove(group_name):
+    """Remove one or more agents from a group."""
+    body = request.get_json(silent=True) or {}
+    agent_ids = body.get("agent_ids", [])
+    if not agent_ids or not isinstance(agent_ids, list):
+        return jsonify({"error": "agent_ids (list) is required"}), 400
+    agents_csv = ",".join(str(a).strip() for a in agent_ids if str(a).strip())
+    token = _wazuh_auth_token()
+    if not token:
+        return jsonify({"error": "Wazuh credentials not configured"}), 503
+    r = _wz(token, "DELETE", "/agents/group",
+            params={"group_id": group_name, "agents_list": agents_csv})
+    if r is None:
+        return jsonify({"error": "Wazuh unreachable"}), 503
+    if r.status_code not in (200, 204):
+        return jsonify({"error": "Wazuh API error", "detail": r.text}), r.status_code
+    return jsonify({"status": "removed"})
+
+
+@siem_bp.route("/agent-groups/<group_name>/agents", methods=["OPTIONS"])
+def siem_agent_group_agents_options(group_name):
+    from core.helpers import add_cors_headers
+    from flask import make_response
+    return add_cors_headers(make_response('', 204))
+
+
+@siem_bp.route("/agent-groups/available-agents", methods=["GET"])
+@require_siem_auth
+def siem_agent_groups_available_agents():
+    """List all Wazuh agents with their current group memberships (for assignment UI)."""
+    token = _wazuh_auth_token()
+    if not token:
+        return jsonify({"error": "Wazuh credentials not configured"}), 503
+    search = request.args.get("search", "").strip()
+    params = {
+        "select": "id,name,ip,status,group,os.platform",
+        "limit": 500, "offset": 0,
+    }
+    if search:
+        params["search"] = search
+    r = _wz(token, "GET", "/agents", params=params)
+    if r is None:
+        return jsonify({"error": "Wazuh unreachable"}), 503
+    if r.status_code != 200:
+        return jsonify({"error": "Wazuh API error", "detail": r.text}), r.status_code
+    data = r.json().get("data", {})
+    agents = data.get("affected_items", [])
+    # Normalise the `group` field — Wazuh returns a list or None
+    for a in agents:
+        a["groups"] = a.pop("group", None) or []
+    return jsonify({
+        "agents": agents,
+        "total": data.get("total_affected_items", len(agents)),
+    })
