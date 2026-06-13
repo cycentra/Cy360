@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.43 -- 2026-06-13 22:22 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.44 -- 2026-06-13 23:46 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1197,7 +1197,11 @@ if [[ -f "$_BUNDLE_SETUP" ]] && \
    ! cmp -s "$_BUNDLE_SETUP" "$_SETUP_DEST" 2>/dev/null; then
     cp "$_BUNDLE_SETUP" "$_SETUP_DEST"
     chmod 750 "$_SETUP_DEST"
-    success "Setup script updated from bundle → $_SETUP_DEST"
+    success "Setup script updated from bundle — re-executing new version..."
+    # Re-exec from the bundle copy so the NEW script runs completely from line 1.
+    # Running from $BUNDLE_DIR means manifest.json is present → local bundle detection
+    # fires → download is skipped → bundle-seed copies agent packages → no 404.
+    exec bash "$_BUNDLE_SETUP" "$@"
 elif [[ "$_SELF" != "$_SETUP_DEST" ]]; then
     cp "$_SELF" "$_SETUP_DEST"
     chmod 750  "$_SETUP_DEST"
