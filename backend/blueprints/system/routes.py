@@ -4536,7 +4536,7 @@ download_pkg() {{
     local pkg="$1"
     local url="${{PKG_BASE}}/${{pkg}}"
     local dest="${{TMPDIR_DL}}/${{pkg}}"
-    info "Downloading ${{pkg}} ..."
+    info "Downloading ${{pkg}} ..." >&2
     if command -v curl &>/dev/null; then
         curl -fsSL --retry 3 --retry-delay 2 -o "${{dest}}" "${{url}}" || err "Download failed: ${{url}}"
     elif command -v wget &>/dev/null; then
@@ -4544,7 +4544,7 @@ download_pkg() {{
     else
         err "curl or wget is required"
     fi
-    ok "Downloaded ${{pkg}}"
+    ok "Downloaded ${{pkg}}" >&2
     echo "${{dest}}"
 }}
 
