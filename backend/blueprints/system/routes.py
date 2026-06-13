@@ -4489,7 +4489,7 @@ def server_status_get():
 
 # ── Agent Installer ───────────────────────────────────────────────────────────
 
-_AGENT_PKG_DIR = Path("/opt/cycentra/agent-packages")
+_AGENT_PKG_DIR = Path("/var/lib/cycentra-agent-packages")
 
 _INSTALLER_SH = """\
 #!/bin/bash

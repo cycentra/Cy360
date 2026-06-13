@@ -6,8 +6,8 @@
 # cy360-agent-VERSION-ARCH.EXT naming scheme.
 #
 # Called by cycentra-setup.sh during fresh install and upgrades.
-# Packages are stored at /opt/cycentra/agent-packages/ and served over HTTPS
-# via NGINX from cy360.DOMAIN/agent-packages/.
+# Packages are stored at /var/lib/cycentra-agent-packages/ (www-data, 755) and
+# served over HTTPS via NGINX alias from cy360.DOMAIN/agent-packages/.
 #
 # Usage:
 #   sudo bash download-packages.sh [VERSION]
@@ -21,7 +21,7 @@ set -euo pipefail
 WAZUH_VERSION="${WAZUH_VERSION:-4.14.5}"
 WAZUH_RELEASE="${WAZUH_RELEASE:-1}"
 CY360_VERSION="${1:-$(cat /opt/cycentra/version 2>/dev/null || echo "1.0.0")}"
-DEST_DIR="${DEST_DIR:-/opt/cycentra/agent-packages}"
+DEST_DIR="${DEST_DIR:-/var/lib/cycentra-agent-packages}"
 WAZUH_BASE_RPM="https://packages.wazuh.com/4.x/yum"
 WAZUH_BASE_DEB="https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent"
 WAZUH_BASE_WIN="https://packages.wazuh.com/4.x/windows"
