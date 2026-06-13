@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.34 -- 2026-06-13 19:37 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.35 -- 2026-06-13 19:50 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -3297,18 +3297,25 @@ chmod 644 /var/log/cycentra/auth.log
 step_header "AGENT PACKAGE REPOSITORY"
 
 _AGENT_PKG_DIR="/opt/cycentra/agent-packages"
-_CY360_VER="$(cat /opt/cycentra/version 2>/dev/null || echo "1.0.0")"
+# Strip leading 'v' so filenames are cy360-agent-1.0.34-arm64.pkg not cy360-agent-v1.0.34-arm64.pkg
+_CY360_VER="$(cat /opt/cycentra/version 2>/dev/null || echo "1.0.0" | tr -d '[:space:]' | sed 's/^v//')"
 _WAZUH_VER="${WAZUH_VERSION:-4.14.5}"
 _WAZUH_REL="${WAZUH_RELEASE:-1}"
 _WAZUH_VR="${_WAZUH_VER}-${_WAZUH_REL}"
 
 mkdir -p "$_AGENT_PKG_DIR"
-chown www-data:www-data "$_AGENT_PKG_DIR" 2>/dev/null || true
 chmod 755 "$_AGENT_PKG_DIR"
+chown www-data:www-data "$_AGENT_PKG_DIR" 2>/dev/null || true
+
+# Remove any stale v-prefixed packages from previous broken runs
+find "$_AGENT_PKG_DIR" -maxdepth 1 -name "cy360-agent-v*" -type f -delete 2>/dev/null || true
 
 _dl_agent_pkg() {
     local url="$1" dest="$2"
     if [[ -f "$dest" ]]; then
+        # Re-apply permissions in case the file was written by root previously
+        chmod 644 "$dest"
+        chown www-data:www-data "$dest" 2>/dev/null || true
         success "Agent pkg present: $(basename "$dest")"
         return 0
     fi
