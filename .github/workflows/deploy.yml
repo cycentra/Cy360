@@ -139,6 +139,14 @@ jobs:
           # Include OOB RBAC default (local cyadmin account)
           [[ -f backend/rbac.default.json ]] && cp backend/rbac.default.json cycentra-release/rbac.default.json || true
 
+          # Include agent packages so servers never depend on packages.wazuh.com being reachable.
+          # setup.sh copies these to /var/lib/cycentra-agent-packages/ during install/update.
+          if [[ -d agent-packages ]]; then
+            mkdir -p cycentra-release/agent-packages
+            cp agent-packages/cy360-agent-* cycentra-release/agent-packages/ 2>/dev/null || true
+            echo "Agent packages bundled: $(ls cycentra-release/agent-packages/ | wc -l | tr -d ' ') files"
+          fi
+
           # Stamp the wheel filename into manifest so setup.sh can find it by name
           _whl_name=$(ls dist/*.whl 2>/dev/null | head -1 | xargs basename 2>/dev/null || echo "")
           printf '{\n  "version": "%s",\n  "ver_number": "%s",\n  "wheel": "%s",\n  "provider": "github-releases"\n}\n' \

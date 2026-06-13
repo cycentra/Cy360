@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.42 -- 2026-06-13 22:10 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.43 -- 2026-06-13 22:22 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -3481,6 +3481,35 @@ _dl_agent_pkg() {
         rm -f "${dest}.tmp" || true
     fi
 }
+
+# ── Seed from release bundle (avoids packages.wazuh.com dependency) ─────────
+# deploy.yml bundles agent-packages/ into cycentra-release.tar.gz; setup.sh
+# extracts to $BUNDLE_DIR.  Copy any bundled packages into the target dir now,
+# renaming to the current cy360 version and normalising separator to dash.
+_bundle_pkgs="${BUNDLE_DIR:-/tmp/cycentra-release}/agent-packages"
+if [[ -d "$_bundle_pkgs" ]]; then
+    _bundled=0
+    for _bpkg in "${_bundle_pkgs}"/cy360-agent-*; do
+        [[ -f "$_bpkg" ]] || continue
+        _bn=$(basename "$_bpkg")
+        if [[ "$_bn" =~ ^cy360-agent-[0-9]+\.[0-9]+\.[0-9]+(.*)$ ]]; then
+            _sfx="${BASH_REMATCH[1]}"
+            # Normalise separator: .arch.ext or _arch.ext → -arch.ext
+            if [[ "$_sfx" =~ ^[._]([^.]+\.[^.]+)$ ]]; then
+                _sfx="-${BASH_REMATCH[1]}"
+            fi
+            _dest="${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}${_sfx}"
+            if [[ ! -f "$_dest" ]]; then
+                cp "$_bpkg" "$_dest"
+                chmod 644 "$_dest"
+                chown www-data:www-data "$_dest" 2>/dev/null || true
+                success "Bundle pkg installed: $_bn → $(basename "$_dest")"
+                _bundled=$((_bundled+1))
+            fi
+        fi
+    done
+    [[ $_bundled -gt 0 ]] && success "Installed $_bundled agent package(s) from release bundle"
+fi
 
 _dl_agent_pkg \
     "https://packages.wazuh.com/4.x/yum/wazuh-agent-${_WAZUH_VR}.x86_64.rpm" \
