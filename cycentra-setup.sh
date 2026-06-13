@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.36 -- 2026-06-13 20:07 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.37 -- 2026-06-13 20:19 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -3349,6 +3349,21 @@ _dl_agent_pkg() {
         success "Agent pkg present: $(basename "$dest")"
         return 0
     fi
+
+    # Rename an existing same-type package (different cy360 version, same Wazuh binary)
+    # instead of re-downloading hundreds of MB on every cy360 version bump.
+    local _suffix="${dest#${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}}"
+    local _old_pkg
+    _old_pkg=$(find "$_AGENT_PKG_DIR" -maxdepth 1 \
+        -name "cy360-agent-*${_suffix}" -type f 2>/dev/null | sort | tail -1 || true)
+    if [[ -n "$_old_pkg" ]]; then
+        mv "$_old_pkg" "$dest"
+        chmod 644 "$dest"
+        chown www-data:www-data "$dest" 2>/dev/null || true
+        success "Renamed: $(basename "$_old_pkg") → $(basename "$dest")"
+        return 0
+    fi
+
     info "Downloading agent package: $(basename "$dest")"
     if curl -fsSL --retry 3 --retry-delay 5 --connect-timeout 15 --max-time 300 \
             -o "${dest}.tmp" "$url" 2>/dev/null; then
