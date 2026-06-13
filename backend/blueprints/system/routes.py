@@ -4647,7 +4647,7 @@ Write-Host "  CyCentra 360 Agent installed and running." -ForegroundColor Green
 def _read_installed_version() -> str:
     for vf in ("/opt/cycentra/version", "/opt/cycentra/.version"):
         if os.path.exists(vf):
-            return open(vf).read().strip()
+            return open(vf).read().strip().lstrip("v")
     return "1.0.0"
 
 
@@ -4669,7 +4669,11 @@ def get_agent_installer():
     fmt = request.args.get("format", "unix").lower()
     base_domain  = os.environ.get("BASE_DOMAIN", "").strip()
     server_url   = f"https://cy360.{base_domain}" if base_domain else request.host_url.rstrip("/")
-    wazuh_manager = os.environ.get("CY360_PUBLIC_IP", base_domain or request.host.split(":")[0])
+    wazuh_manager = (
+        os.environ.get("CY360_PUBLIC_IP") or
+        os.environ.get("WAZUH_MANAGER_IP") or
+        (f"cy360.{base_domain}" if base_domain else request.host.split(":")[0])
+    )
     version      = _read_installed_version()
 
     if fmt == "windows":
