@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.35 -- 2026-06-13 19:50 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.36 -- 2026-06-13 20:07 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -2291,8 +2291,8 @@ with open(path) as f:
 
 block = (
     "    # ── Agent package distribution — served directly by nginx ──\n"
+    "    # Symlink: /var/www/cycentra360/agent-packages -> /opt/cycentra/agent-packages\n"
     "    location /agent-packages/ {\n"
-    "        alias /opt/cycentra/agent-packages/;\n"
     "        autoindex off;\n"
     "        add_header Content-Disposition \"attachment\" always;\n"
     "        add_header X-Content-Type-Options \"nosniff\" always;\n"
@@ -2316,6 +2316,27 @@ AGENT_PKG_NGINX_PY
             warn "nginx reload failed after agent-packages injection — check: nginx -t"
     else
         [[ -f "$_NGINX_MOD" ]] && success "nginx: /agent-packages/ location already configured"
+    fi
+
+    # ── Remove legacy 'alias' directive from agent-packages location ─────────────
+    # Old configs used:  alias /opt/cycentra/agent-packages/;
+    # New configs use:   root /var/www/cycentra360 + symlink (NGINX can traverse it)
+    # www-data cannot traverse /opt/cycentra/ (root-owned 700), causing 403.
+    # The symlink is created in Step 22b below; this removes the alias line here.
+    if [[ -f "$_NGINX_MOD" ]] && grep -q 'alias /opt/cycentra/agent-packages' "$_NGINX_MOD" 2>/dev/null; then
+        python3 - "$_NGINX_MOD" << 'ALIAS_REMOVE_PY'
+import sys, re
+path = sys.argv[1]
+with open(path) as f:
+    text = f.read()
+text = re.sub(r'\n[ \t]+alias /opt/cycentra/agent-packages/;\n', '\n', text)
+with open(path, 'w') as f:
+    f.write(text)
+print("nginx: removed legacy alias /opt/cycentra/agent-packages/ directive")
+ALIAS_REMOVE_PY
+        nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
+            success "nginx: legacy alias directive removed and nginx reloaded" || \
+            warn "nginx reload failed after alias removal — check: nginx -t"
     fi
 
     # ── Ensure sites-enabled is a symlink to sites-available ─────────────────────
@@ -2720,8 +2741,10 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     root /var/www/cycentra360; index index.html;
     # ── Agent package distribution — served directly by nginx (no Flask proxy) ──
+    # Packages live at /opt/cycentra/agent-packages/ and are symlinked into the
+    # portal root (/var/www/cycentra360/agent-packages -> /opt/cycentra/agent-packages)
+    # so NGINX can serve them without needing to traverse /opt/cycentra/ (root-owned).
     location /agent-packages/ {
-        alias /opt/cycentra/agent-packages/;
         autoindex off;
         add_header Content-Disposition "attachment" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -3290,10 +3313,10 @@ chmod 644 /var/log/cycentra/auth.log
 
 # ── Step 22b: Agent Package Repository ───────────────────────────────────────
 # Downloads Wazuh agent packages and renames them to the cy360-agent-* scheme.
-# Runs on both fresh installs and updates. Packages are served statically by
-# nginx from /opt/cycentra/agent-packages/ at cy360.DOMAIN/agent-packages/.
-# Files are preserved across upgrades, migrations, and server reboots because
-# they live in /opt/cycentra/ (not in the app or Docker layers).
+# Runs on both fresh installs and updates. Packages are stored at
+# /opt/cycentra/agent-packages/ and symlinked into /var/www/cycentra360/agent-packages
+# so NGINX can serve them without needing to traverse /opt/cycentra/ (root-owned 700).
+# Files survive upgrades, migrations, and reboots — they live outside Docker layers.
 step_header "AGENT PACKAGE REPOSITORY"
 
 _AGENT_PKG_DIR="/opt/cycentra/agent-packages"
@@ -3306,6 +3329,13 @@ _WAZUH_VR="${_WAZUH_VER}-${_WAZUH_REL}"
 mkdir -p "$_AGENT_PKG_DIR"
 chmod 755 "$_AGENT_PKG_DIR"
 chown www-data:www-data "$_AGENT_PKG_DIR" 2>/dev/null || true
+
+# Symlink into portal root so NGINX (www-data) can serve packages without
+# needing execute permission on /opt/cycentra/ (which is root-owned 700).
+# NGINX follows symlinks by default (disable_symlinks off).
+mkdir -p /var/www/cycentra360
+ln -snf "$_AGENT_PKG_DIR" /var/www/cycentra360/agent-packages
+success "Agent packages symlink: /var/www/cycentra360/agent-packages → ${_AGENT_PKG_DIR}"
 
 # Remove any stale v-prefixed packages from previous broken runs
 find "$_AGENT_PKG_DIR" -maxdepth 1 -name "cy360-agent-v*" -type f -delete 2>/dev/null || true
