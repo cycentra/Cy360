@@ -4678,7 +4678,7 @@ def get_agent_installer():
 
     fmt = request.args.get("format", "unix").lower()
     base_domain  = os.environ.get("BASE_DOMAIN", "").strip()
-    server_url   = f"https://cysiem.{base_domain}" if base_domain else request.host_url.rstrip("/")
+    server_url   = f"https://cy360.{base_domain}" if base_domain else request.host_url.rstrip("/")
     wazuh_manager = (
         os.environ.get("CY360_PUBLIC_IP") or
         os.environ.get("WAZUH_MANAGER_IP") or
@@ -4712,14 +4712,19 @@ def get_agent_installer():
 
 @system_bp.route("/api/system/agent-packages", methods=["GET"])
 def list_agent_packages():
-    """Return available agent packages from /opt/cycentra/agent-packages/."""
+    """Return available agent packages from /var/lib/cycentra-agent-packages/."""
     if not session.get("user_email"):
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
-    base_domain = os.environ.get("BASE_DOMAIN", "").strip()
-    server_url  = f"https://cy360.{base_domain}" if base_domain else request.host_url.rstrip("/")
-    version     = _read_installed_version()
-    packages    = []
+    base_domain    = os.environ.get("BASE_DOMAIN", "").strip()
+    server_url     = f"https://cy360.{base_domain}" if base_domain else request.host_url.rstrip("/")
+    wazuh_manager  = (
+        os.environ.get("CY360_PUBLIC_IP") or
+        os.environ.get("WAZUH_MANAGER_IP") or
+        (f"cysiem.{base_domain}" if base_domain else request.host.split(":")[0])
+    )
+    version        = _read_installed_version()
+    packages       = []
 
     if _AGENT_PKG_DIR.exists():
         for f in sorted(_AGENT_PKG_DIR.iterdir()):
@@ -4733,9 +4738,10 @@ def list_agent_packages():
                 })
 
     return add_cors_headers(jsonify({
-        "ok":          True,
-        "version":     version,
-        "server_url":  server_url,
-        "pkg_dir":     str(_AGENT_PKG_DIR),
-        "packages":    packages,
+        "ok":           True,
+        "version":      version,
+        "server_url":   server_url,
+        "wazuh_manager": wazuh_manager,
+        "pkg_dir":      str(_AGENT_PKG_DIR),
+        "packages":     packages,
     }))

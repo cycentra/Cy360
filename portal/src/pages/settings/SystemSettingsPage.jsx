@@ -2943,9 +2943,10 @@ function AgentInstallerTab() {
     setTimeout(() => setDlMsg(null), 4000);
   };
 
-  const serverUrl = pkgInfo?.server_url || "—";
-  const version   = pkgInfo?.version   || "—";
-  const packages  = pkgInfo?.packages  || [];
+  const serverUrl    = pkgInfo?.server_url    || "—";
+  const wazuhManager = pkgInfo?.wazuh_manager || "—";
+  const version      = pkgInfo?.version       || "—";
+  const packages     = pkgInfo?.packages      || [];
 
   return (
     <div style={{ maxWidth: 780 }}>
@@ -2981,7 +2982,7 @@ function AgentInstallerTab() {
           <div>
             <div style={{ ...LABEL, marginBottom: 3, fontSize: 9 }}>Agent Registration</div>
             <code style={{ color: "#4d9eff", fontFamily: "monospace", fontSize: 12 }}>
-              {loading ? "Loading…" : serverUrl.replace(/^https?:\/\/cy360\./, "")}
+              {loading ? "Loading…" : wazuhManager}
             </code>
           </div>
         </div>
@@ -3103,7 +3104,7 @@ function AgentInstallerTab() {
           <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>Loading…</div>
         ) : packages.length === 0 ? (
           <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.7 }}>
-            No packages found at <code style={{ color: "rgba(0,229,160,0.5)" }}>/opt/cycentra/agent-packages/</code>.<br/>
+            No packages found at <code style={{ color: "rgba(0,229,160,0.5)" }}>/var/lib/cycentra-agent-packages/</code>.<br/>
             Packages are deployed automatically during installation and upgrades via <code style={{ color: "rgba(0,229,160,0.5)" }}>cycentra-setup.sh</code>.
           </div>
         ) : (
