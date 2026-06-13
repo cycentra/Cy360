@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.38 -- 2026-06-13 20:41 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.39 -- 2026-06-13 21:26 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -2362,6 +2362,51 @@ ALIAS_FIX_PY
             warn "nginx reload failed — check: nginx -t"
     fi
 
+    # ── Inject /agent-packages/ into cysiem nginx block if missing (idempotent) ──
+    # Packages must also be downloadable from cysiem.DOMAIN because the agent
+    # connects to CySIEM (Wazuh) and the installer uses SERVER_URL=cysiem.DOMAIN.
+    if [[ -f "$_NGINX_MOD" ]]; then
+        python3 - "$_NGINX_MOD" << 'CYSIEM_PKG_INJECT_PY'
+import sys
+
+path = sys.argv[1]
+text = open(path).read()
+
+# Anchor unique to the cysiem block — the Wazuh Dashboard proxy_pass
+cysiem_anchor = "    location / {\n        proxy_pass https://127.0.0.1:5601;\n"
+
+if cysiem_anchor not in text:
+    print("nginx cysiem: anchor not found (block may not exist yet)")
+    sys.exit(0)
+
+anchor_pos = text.find(cysiem_anchor)
+# Check 600 chars before anchor for an existing agent-packages block
+if "/agent-packages/" in text[max(0, anchor_pos - 600):anchor_pos]:
+    print("nginx cysiem: /agent-packages/ already present")
+    sys.exit(0)
+
+block = (
+    "    location /agent-packages/ {\n"
+    "        alias /var/lib/cycentra-agent-packages/;\n"
+    "        autoindex off;\n"
+    "        add_header Content-Disposition \"attachment\" always;\n"
+    "        add_header X-Content-Type-Options \"nosniff\" always;\n"
+    "        add_header Cache-Control \"no-store, must-revalidate\" always;\n"
+    "    }\n"
+)
+
+new_text = text.replace(cysiem_anchor, block + cysiem_anchor, 1)
+open(path, 'w').write(new_text)
+print("nginx cysiem: /agent-packages/ location block injected")
+CYSIEM_PKG_INJECT_PY
+        _py_exit=$?
+        if [[ $_py_exit -eq 0 ]]; then
+            nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
+                success "nginx cysiem: /agent-packages/ block added and nginx reloaded" || \
+                warn "nginx reload failed after cysiem agent-packages injection — check: nginx -t"
+        fi
+    fi
+
     # ── Ensure sites-enabled is a symlink to sites-available ─────────────────────
     # On servers where sites-enabled/cycentra-modules is a hardcopy file (not a
     # symlink), all nginx migration edits above are invisible to nginx because it
@@ -2837,6 +2882,13 @@ server {
     # Authentication handled by Wazuh Dashboard OIDC (cyasm.${BASE_DOMAIN}/oidc).
     # Individual user identity is established per OIDC token; roles claim maps to
     # OpenSearch Security backend roles (admin/analyst → all_access; viewer → read-only).
+    location /agent-packages/ {
+        alias /var/lib/cycentra-agent-packages/;
+        autoindex off;
+        add_header Content-Disposition "attachment" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Cache-Control "no-store, must-revalidate" always;
+    }
     location / {
         proxy_pass https://127.0.0.1:5601;
         proxy_ssl_verify off;

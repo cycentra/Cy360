@@ -4502,8 +4502,14 @@ _INSTALLER_SH = """\
 # and registers the agent automatically using the pre-configured server address.
 #
 # Usage (Linux/macOS):
-#   chmod +x agent-installer.sh && sudo ./agent-installer.sh
+#   bash agent-installer.sh
 # ──────────────────────────────────────────────────────────────────────────────
+
+# Re-launch as root if not already (installation requires root)
+if [[ ${{EUID}} -ne 0 ]]; then
+    echo "  Root required — re-launching with sudo ..."
+    exec sudo bash "${{BASH_SOURCE[0]}}" "$@"
+fi
 
 set -euo pipefail
 
@@ -4511,6 +4517,7 @@ SERVER_URL="{server_url}"
 WAZUH_MANAGER="{wazuh_manager}"
 AGENT_VERSION="{version}"
 PKG_BASE="${{SERVER_URL}}/agent-packages"
+TMPDIR_DL="/var/tmp"
 
 OS=$(uname -s)
 ARCH=$(uname -m)
@@ -4525,50 +4532,49 @@ info "Manager : ${{WAZUH_MANAGER}}"
 info "OS      : ${{OS}} / ${{ARCH}}"
 echo
 
-download_and_install() {{
+download_pkg() {{
     local pkg="$1"
     local url="${{PKG_BASE}}/${{pkg}}"
-    local tmp="/tmp/${{pkg}}"
+    local dest="${{TMPDIR_DL}}/${{pkg}}"
     info "Downloading ${{pkg}} ..."
     if command -v curl &>/dev/null; then
-        curl -fsSL --retry 3 --retry-delay 2 -o "${{tmp}}" "${{url}}" || err "Download failed: ${{url}}"
+        curl -fsSL --retry 3 --retry-delay 2 -o "${{dest}}" "${{url}}" || err "Download failed: ${{url}}"
     elif command -v wget &>/dev/null; then
-        wget -q --tries=3 -O "${{tmp}}" "${{url}}" || err "Download failed: ${{url}}"
+        wget -q --tries=3 -O "${{dest}}" "${{url}}" || err "Download failed: ${{url}}"
     else
         err "curl or wget is required"
     fi
     ok "Downloaded ${{pkg}}"
-    echo "${{tmp}}"
+    echo "${{dest}}"
 }}
 
 case "${{OS}}" in
   Linux)
-    # Detect package manager: RPM (yum/dnf) or DEB (apt/dpkg)
     if command -v rpm &>/dev/null && (command -v yum &>/dev/null || command -v dnf &>/dev/null); then
       case "${{ARCH}}" in
-        x86_64|amd64) PKG="cy360-agent-${{AGENT_VERSION}}-x86_64.rpm" ;;
+        x86_64|amd64)  PKG="cy360-agent-${{AGENT_VERSION}}-x86_64.rpm" ;;
         aarch64|arm64) PKG="cy360-agent-${{AGENT_VERSION}}-aarch64.rpm" ;;
         *) err "Unsupported architecture: ${{ARCH}}" ;;
       esac
-      TMP=$(download_and_install "${{PKG}}")
+      TMP=$(download_pkg "${{PKG}}")
       info "Installing (RPM) ..."
-      sudo WAZUH_MANAGER="${{WAZUH_MANAGER}}" rpm -ihv "${{TMP}}" || err "RPM install failed"
+      WAZUH_MANAGER="${{WAZUH_MANAGER}}" rpm -ihv "${{TMP}}" || err "RPM install failed"
     elif command -v dpkg &>/dev/null; then
       case "${{ARCH}}" in
         x86_64|amd64) PKG="cy360-agent-${{AGENT_VERSION}}-amd64.deb" ;;
         aarch64|arm64) PKG="cy360-agent-${{AGENT_VERSION}}-aarch64.deb" ;;
         *) err "Unsupported architecture: ${{ARCH}}" ;;
       esac
-      TMP=$(download_and_install "${{PKG}}")
+      TMP=$(download_pkg "${{PKG}}")
       info "Installing (DEB) ..."
-      sudo WAZUH_MANAGER="${{WAZUH_MANAGER}}" dpkg -i "${{TMP}}" || err "DEB install failed"
+      WAZUH_MANAGER="${{WAZUH_MANAGER}}" dpkg -i "${{TMP}}" || err "DEB install failed"
     else
       err "No supported package manager found (expected rpm/yum/dnf or dpkg/apt)"
     fi
     info "Enabling and starting agent service ..."
-    sudo systemctl daemon-reload
-    sudo systemctl enable wazuh-agent
-    sudo systemctl start wazuh-agent
+    systemctl daemon-reload
+    systemctl enable wazuh-agent
+    systemctl start wazuh-agent
     ok "CyCentra 360 Agent installed and running."
     ;;
 
@@ -4578,11 +4584,13 @@ case "${{OS}}" in
       arm64)  PKG="cy360-agent-${{AGENT_VERSION}}-arm64.pkg" ;;
       *)      err "Unsupported architecture: ${{ARCH}}" ;;
     esac
-    TMP=$(download_and_install "${{PKG}}")
+    TMP=$(download_pkg "${{PKG}}")
+    xattr -rc "${{TMP}}" 2>/dev/null || true
     info "Installing (PKG) ..."
-    echo "WAZUH_MANAGER='${{WAZUH_MANAGER}}'" | sudo tee /tmp/wazuh_envs > /dev/null
-    sudo installer -pkg "${{TMP}}" -target / || err "macOS installer failed"
-    sudo launchctl load /Library/LaunchDaemons/com.wazuh.agent.plist 2>/dev/null || true
+    printf 'WAZUH_MANAGER_HOST=%s\\nWAZUH_REGISTRATION_SERVER=%s\\n' \
+        "${{WAZUH_MANAGER}}" "${{WAZUH_MANAGER}}" > "${{TMPDIR_DL}}/wazuh_envs"
+    installer -pkg "${{TMP}}" -target / || err "macOS installer failed"
+    launchctl load /Library/LaunchDaemons/com.wazuh.agent.plist 2>/dev/null || true
     ok "CyCentra 360 Agent installed and running."
     ;;
 
@@ -4590,6 +4598,8 @@ case "${{OS}}" in
     err "Unsupported OS: ${{OS}}. Use the Windows installer (agent-installer.ps1) on Windows."
     ;;
 esac
+
+rm -f "${{TMP}}" 2>/dev/null || true
 """
 
 _INSTALLER_PS1 = """\
@@ -4668,11 +4678,11 @@ def get_agent_installer():
 
     fmt = request.args.get("format", "unix").lower()
     base_domain  = os.environ.get("BASE_DOMAIN", "").strip()
-    server_url   = f"https://cy360.{base_domain}" if base_domain else request.host_url.rstrip("/")
+    server_url   = f"https://cysiem.{base_domain}" if base_domain else request.host_url.rstrip("/")
     wazuh_manager = (
         os.environ.get("CY360_PUBLIC_IP") or
         os.environ.get("WAZUH_MANAGER_IP") or
-        (f"cy360.{base_domain}" if base_domain else request.host.split(":")[0])
+        (f"cysiem.{base_domain}" if base_domain else request.host.split(":")[0])
     )
     version      = _read_installed_version()
 
