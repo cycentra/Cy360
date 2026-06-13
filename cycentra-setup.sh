@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.44 -- 2026-06-13 23:46 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.45 -- 2026-06-13 23:53 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1170,6 +1170,33 @@ info    "Package         : ${PKG_NAME}==${PKG_VER}"
 mkdir -p /opt/cycentra
 echo "${BUNDLE_VERSION}" > /opt/cycentra/version
 success "Version file written: /opt/cycentra/version → ${BUNDLE_VERSION}"
+
+# ── Early agent-package seed ─────────────────────────────────────────────────
+# Install bundle packages NOW — before the self-copy below overwrites this
+# script.  Bash is still reading the file it originally opened here, so this
+# block is guaranteed to execute on every run regardless of inode behaviour.
+# Step 22b later re-confirms permissions; if files are already present it no-ops.
+_EARLY_PKG_DIR="/var/lib/cycentra-agent-packages"
+mkdir -p "$_EARLY_PKG_DIR"
+chmod 755 "$_EARLY_PKG_DIR"; chown www-data:www-data "$_EARLY_PKG_DIR" 2>/dev/null || true
+_early_bundle_pkgs="${BUNDLE_DIR}/agent-packages"
+if [[ -d "$_early_bundle_pkgs" ]]; then
+    _early_ver="${PKG_VER}"   # already resolved from manifest.json (e.g. "1.0.45")
+    for _bpkg in "${_early_bundle_pkgs}"/cy360-agent-*; do
+        [[ -f "$_bpkg" ]] || continue
+        _bn=$(basename "$_bpkg")
+        if [[ "$_bn" =~ ^cy360-agent-[0-9]+\.[0-9]+\.[0-9]+(.*)$ ]]; then
+            _sfx="${BASH_REMATCH[1]}"
+            [[ "$_sfx" =~ ^[._]([^.]+\.[^.]+)$ ]] && _sfx="-${BASH_REMATCH[1]}"
+            _dest="${_EARLY_PKG_DIR}/cy360-agent-${_early_ver}${_sfx}"
+            if [[ ! -f "$_dest" ]]; then
+                cp "$_bpkg" "$_dest"
+                chmod 644 "$_dest"; chown www-data:www-data "$_dest" 2>/dev/null || true
+                success "Agent pkg seeded early: $(basename "$_dest")"
+            fi
+        fi
+    done
+fi
 
 # Write RELEASE_NOTES.md for System Settings page — shipped inside the release bundle
 _RN_DEST="/opt/cycentra/RELEASE_NOTES.md"
