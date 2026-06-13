@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.41 -- 2026-06-13 21:55 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.42 -- 2026-06-13 22:10 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -3438,10 +3438,29 @@ _dl_agent_pkg() {
 
     # Rename an existing same-type package (different cy360 version, same Wazuh binary)
     # instead of re-downloading hundreds of MB on every cy360 version bump.
+    # Checks three naming variants in order:
+    #   1. Current standard:  cy360-agent-VERSION-arch.ext  (dash separator)
+    #   2. Legacy dot naming: cy360-agent-VERSION.arch.ext  (packages placed pre-standardisation)
+    #   3. Legacy underscore: cy360-agent-VERSION_arch.ext  (original Wazuh DEB convention)
     local _suffix="${dest#${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}}"
-    local _old_pkg
+    local _old_pkg=""
+
+    # 1. Dash naming (current)
     _old_pkg=$(find "$_AGENT_PKG_DIR" -maxdepth 1 \
         -name "cy360-agent-*${_suffix}" -type f 2>/dev/null | sort | tail -1 || true)
+
+    # 2. Dot naming (legacy) — "-arm64.pkg" → "*.arm64.pkg"
+    if [[ -z "$_old_pkg" && "${_suffix:0:1}" == "-" ]]; then
+        _old_pkg=$(find "$_AGENT_PKG_DIR" -maxdepth 1 \
+            -name "cy360-agent-*.${_suffix:1}" -type f 2>/dev/null | sort | tail -1 || true)
+    fi
+
+    # 3. Underscore naming (legacy DEB) — "-amd64.deb" → "*_amd64.deb"
+    if [[ -z "$_old_pkg" && "${_suffix:0:1}" == "-" ]]; then
+        _old_pkg=$(find "$_AGENT_PKG_DIR" -maxdepth 1 \
+            -name "cy360-agent-*_${_suffix:1}" -type f 2>/dev/null | sort | tail -1 || true)
+    fi
+
     if [[ -n "$_old_pkg" ]]; then
         mv "$_old_pkg" "$dest"
         chmod 644 "$dest"
