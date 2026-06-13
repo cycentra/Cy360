@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.31 -- 2026-06-12 20:30 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.32 -- 2026-06-13 18:47 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -2279,6 +2279,45 @@ NGINX_OIDC_PY
             warn "nginx reload failed after OPTIONS patch — check: nginx -t"
     fi
 
+    # ── Inject /agent-packages/ nginx location if missing (idempotent) ──────────
+    # Fresh installs already have this block from the heredoc above.
+    # Updates on existing servers need it injected into the live config.
+    if [[ -f "$_NGINX_MOD" ]] && ! grep -q '/agent-packages/' "$_NGINX_MOD" 2>/dev/null; then
+        python3 - "$_NGINX_MOD" << 'AGENT_PKG_NGINX_PY'
+import sys, re
+path = sys.argv[1]
+with open(path) as f:
+    text = f.read()
+
+block = (
+    "    # ── Agent package distribution — served directly by nginx ──\n"
+    "    location /agent-packages/ {\n"
+    "        alias /opt/cycentra/agent-packages/;\n"
+    "        autoindex off;\n"
+    "        add_header Content-Disposition \"attachment\" always;\n"
+    "        add_header X-Content-Type-Options \"nosniff\" always;\n"
+    "        add_header Cache-Control \"no-store, must-revalidate\" always;\n"
+    "    }\n"
+)
+
+# Insert before the catch-all "location /" in the cy360 server block
+anchor = "    location /     { try_files"
+if "/agent-packages/" not in text and anchor in text:
+    idx = text.find(anchor)
+    text = text[:idx] + block + text[idx:]
+    with open(path, "w") as f:
+        f.write(text)
+    print("nginx cy360: /agent-packages/ location block injected")
+else:
+    print("nginx cy360: /agent-packages/ already present or anchor not found")
+AGENT_PKG_NGINX_PY
+        nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
+            success "nginx: /agent-packages/ location block added and reloaded" || \
+            warn "nginx reload failed after agent-packages injection — check: nginx -t"
+    else
+        [[ -f "$_NGINX_MOD" ]] && success "nginx: /agent-packages/ location already configured"
+    fi
+
     # ── Ensure sites-enabled is a symlink to sites-available ─────────────────────
     # On servers where sites-enabled/cycentra-modules is a hardcopy file (not a
     # symlink), all nginx migration edits above are invisible to nginx because it
@@ -2680,6 +2719,14 @@ server {
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     add_header X-Content-Type-Options "nosniff" always;
     root /var/www/cycentra360; index index.html;
+    # ── Agent package distribution — served directly by nginx (no Flask proxy) ──
+    location /agent-packages/ {
+        alias /opt/cycentra/agent-packages/;
+        autoindex off;
+        add_header Content-Disposition "attachment" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Cache-Control "no-store, must-revalidate" always;
+    }
     location /     { try_files \$uri \$uri/ /index.html; }
     location /assets/  { expires 1y; add_header Cache-Control "public, immutable"; }
     location = /index.html { add_header Cache-Control "no-cache, no-store, must-revalidate"; }
@@ -3241,6 +3288,74 @@ fi
 mkdir -p /var/log/cycentra && touch /var/log/cycentra/auth.log
 chmod 644 /var/log/cycentra/auth.log
 
+# ── Step 22b: Agent Package Repository ───────────────────────────────────────
+# Downloads Wazuh agent packages and renames them to the cy360-agent-* scheme.
+# Runs on both fresh installs and updates. Packages are served statically by
+# nginx from /opt/cycentra/agent-packages/ at cy360.DOMAIN/agent-packages/.
+# Files are preserved across upgrades, migrations, and server reboots because
+# they live in /opt/cycentra/ (not in the app or Docker layers).
+step_header "AGENT PACKAGE REPOSITORY"
+
+_AGENT_PKG_DIR="/opt/cycentra/agent-packages"
+_CY360_VER="$(cat /opt/cycentra/version 2>/dev/null || echo "1.0.0")"
+_WAZUH_VER="${WAZUH_VERSION:-4.14.5}"
+_WAZUH_REL="${WAZUH_RELEASE:-1}"
+_WAZUH_VR="${_WAZUH_VER}-${_WAZUH_REL}"
+
+mkdir -p "$_AGENT_PKG_DIR"
+chown www-data:www-data "$_AGENT_PKG_DIR" 2>/dev/null || true
+chmod 755 "$_AGENT_PKG_DIR"
+
+_dl_agent_pkg() {
+    local url="$1" dest="$2"
+    if [[ -f "$dest" ]]; then
+        success "Agent pkg present: $(basename "$dest")"
+        return 0
+    fi
+    info "Downloading agent package: $(basename "$dest")"
+    if curl -fsSL --retry 3 --retry-delay 5 --connect-timeout 15 --max-time 300 \
+            -o "${dest}.tmp" "$url" 2>/dev/null; then
+        mv "${dest}.tmp" "$dest"
+        chmod 644 "$dest"
+        chown www-data:www-data "$dest" 2>/dev/null || true
+        success "Downloaded: $(basename "$dest")"
+    else
+        warn "Could not download $(basename "$dest") — portal will show missing package"
+        rm -f "${dest}.tmp" || true
+    fi
+}
+
+_dl_agent_pkg \
+    "https://packages.wazuh.com/4.x/yum/wazuh-agent-${_WAZUH_VR}.x86_64.rpm" \
+    "${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}-x86_64.rpm"
+
+_dl_agent_pkg \
+    "https://packages.wazuh.com/4.x/yum/wazuh-agent-${_WAZUH_VR}.aarch64.rpm" \
+    "${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}-aarch64.rpm"
+
+_dl_agent_pkg \
+    "https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_${_WAZUH_VR}_amd64.deb" \
+    "${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}-amd64.deb"
+
+_dl_agent_pkg \
+    "https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_${_WAZUH_VR}_arm64.deb" \
+    "${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}-aarch64.deb"
+
+_dl_agent_pkg \
+    "https://packages.wazuh.com/4.x/windows/wazuh-agent-${_WAZUH_VR}.msi" \
+    "${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}.msi"
+
+_dl_agent_pkg \
+    "https://packages.wazuh.com/4.x/macos/wazuh-agent-${_WAZUH_VR}.intel64.pkg" \
+    "${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}-intel64.pkg"
+
+_dl_agent_pkg \
+    "https://packages.wazuh.com/4.x/macos/wazuh-agent-${_WAZUH_VR}.arm64.pkg" \
+    "${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}-arm64.pkg"
+
+_pkg_count=$(find "$_AGENT_PKG_DIR" -maxdepth 1 -name "cy360-agent-*" | wc -l)
+success "Agent packages ready: ${_pkg_count}/7 at ${_AGENT_PKG_DIR}"
+
 # ── Step 23: Cron jobs ────────────────────────────────────────────────────────
 step_header "CRON JOBS"
 
@@ -3326,6 +3441,64 @@ if [[ "$MODE" == "full" ]]; then
     chk "Portal"  "https://cy360.${BASE_DOMAIN}"
     chk "Backend" "https://cyasm.${BASE_DOMAIN}/health"
     chk "CySIEM"  "https://cysiem.${BASE_DOMAIN}"
+fi
+
+# ── Agent package distribution validation ─────────────────────────────────────
+echo ""; info "── Agent package distribution ──"
+
+# 1. Verify NGINX config includes the agent-packages location block
+_NGINX_MOD_CHECK="/etc/nginx/sites-available/cycentra-modules"
+if [[ -f "$_NGINX_MOD_CHECK" ]]; then
+    if grep -q '/agent-packages/' "$_NGINX_MOD_CHECK" 2>/dev/null; then
+        success "NGINX: /agent-packages/ location block present"
+    else
+        warn "NGINX: /agent-packages/ location block MISSING — run update to inject it"
+        ERRORS+=("NGINX agent-packages block missing")
+    fi
+
+    # 2. nginx -t syntax check
+    if nginx -t 2>/dev/null; then
+        success "NGINX: config syntax OK"
+    else
+        warn "NGINX: config has syntax errors — run: nginx -t"
+        ERRORS+=("NGINX config syntax error")
+    fi
+else
+    warn "NGINX config not found at ${_NGINX_MOD_CHECK} — skipping NGINX validation"
+fi
+
+# 3. Verify agent packages directory and count
+_APD="/opt/cycentra/agent-packages"
+if [[ -d "$_APD" ]]; then
+    _ap_count=$(find "$_APD" -maxdepth 1 -name "cy360-agent-*" -type f 2>/dev/null | wc -l)
+    if [[ "$_ap_count" -ge 1 ]]; then
+        success "Agent packages: ${_ap_count} package(s) present at ${_APD}"
+    else
+        warn "Agent packages: directory exists but no cy360-agent-* files found — run Step 22b"
+        ERRORS+=("No agent packages found")
+    fi
+else
+    warn "Agent packages directory not found: ${_APD}"
+    ERRORS+=("Agent packages directory missing")
+fi
+
+# 4. Verify download URL reachable via HTTPS (only for full installs with SSL)
+if [[ "$MODE" == "full" ]] && [[ -n "${BASE_DOMAIN:-}" ]]; then
+    _first_pkg=$(find "$_APD" -maxdepth 1 -name "cy360-agent-*.rpm" -type f 2>/dev/null | head -1)
+    if [[ -n "$_first_pkg" ]]; then
+        _pkg_name=$(basename "$_first_pkg")
+        _pkg_url="https://cy360.${BASE_DOMAIN}/agent-packages/${_pkg_name}"
+        _http_code=$(curl -sk --max-time 10 -o /dev/null -w "%{http_code}" "$_pkg_url" 2>/dev/null || echo "000")
+        if [[ "$_http_code" == "200" ]]; then
+            success "Agent package URL reachable: ${_pkg_url} → HTTP 200"
+        else
+            warn "Agent package URL returned HTTP ${_http_code}: ${_pkg_url}"
+            warn "  Check: nginx is running, SSL cert is valid, and /agent-packages/ block is in place"
+            ERRORS+=("Agent package URL not reachable (HTTP ${_http_code})")
+        fi
+    else
+        info "No agent packages present yet — skipping URL reachability check"
+    fi
 fi
 
 # ── Step 25: Cleanup ──────────────────────────────────────────────────────────

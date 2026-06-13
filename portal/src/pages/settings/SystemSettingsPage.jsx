@@ -2908,130 +2908,232 @@ function ServerStatusTab() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Agent Installer
+// Agent Installer — Universal single-file installer
 // ════════════════════════════════════════════════════════════════════════════
 
-const AGENT_PACKAGES = [
-  { os: "Linux",   id: "linux-rpm-amd64",   label: "RPM amd64"           },
-  { os: "Linux",   id: "linux-rpm-aarch64", label: "RPM aarch64"         },
-  { os: "Linux",   id: "linux-deb-amd64",   label: "DEB amd64"           },
-  { os: "Linux",   id: "linux-deb-aarch64", label: "DEB aarch64"         },
-  { os: "Windows", id: "windows-msi",       label: "MSI 32-bit / 64-bit" },
-  { os: "MacOS",   id: "macos-intel",       label: "Intel"               },
-  { os: "MacOS",   id: "macos-arm64",       label: "Apple Silicon"       },
+const PLATFORM_MATRIX = [
+  { os: "Linux",   icon: "🐧", items: ["RPM x86_64 (amd64)", "RPM aarch64 (ARM64)", "DEB amd64", "DEB aarch64 (ARM64)"] },
+  { os: "Windows", icon: "🪟", items: ["MSI 32-bit", "MSI 64-bit"] },
+  { os: "macOS",   icon: "🍎", items: ["Intel (x86_64)", "Apple Silicon (ARM64)"] },
 ];
 
-function getInstallCmd(pkg, manager) {
-  const m = (manager || "").trim() || "x.x.x.x";
-  const cmds = {
-    "linux-rpm-amd64":
-      `curl -o wazuh-agent-4.14.5-1.x86_64.rpm https://packages.wazuh.com/4.x/yum/wazuh-agent-4.14.5-1.x86_64.rpm && \\\nsudo WAZUH_MANAGER='${m}' rpm -ihv wazuh-agent-4.14.5-1.x86_64.rpm`,
-    "linux-rpm-aarch64":
-      `curl -o wazuh-agent-4.14.5-1.aarch64.rpm https://packages.wazuh.com/4.x/yum/wazuh-agent-4.14.5-1.aarch64.rpm && \\\nsudo WAZUH_MANAGER='${m}' rpm -ihv wazuh-agent-4.14.5-1.aarch64.rpm`,
-    "linux-deb-amd64":
-      `wget https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.14.5-1_amd64.deb && \\\nsudo WAZUH_MANAGER='${m}' dpkg -i ./wazuh-agent_4.14.5-1_amd64.deb`,
-    "linux-deb-aarch64":
-      `wget https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.14.5-1_arm64.deb && \\\nsudo WAZUH_MANAGER='${m}' dpkg -i ./wazuh-agent_4.14.5-1_arm64.deb`,
-    "windows-msi":
-      `Invoke-WebRequest -Uri https://packages.wazuh.com/4.x/windows/wazuh-agent-4.14.5-1.msi -OutFile $env:tmp\\wazuh-agent;\nmsiexec.exe /i $env:tmp\\wazuh-agent /q WAZUH_MANAGER='${m}'`,
-    "macos-intel":
-      `curl -so wazuh-agent.pkg https://packages.wazuh.com/4.x/macos/wazuh-agent-4.14.5-1.intel64.pkg && \\\necho "WAZUH_MANAGER='${m}'" > /tmp/wazuh_envs && \\\nsudo installer -pkg ./wazuh-agent.pkg -target /`,
-    "macos-arm64":
-      `curl -so wazuh-agent.pkg https://packages.wazuh.com/4.x/macos/wazuh-agent-4.14.5-1.arm64.pkg && \\\necho "WAZUH_MANAGER='${m}'" > /tmp/wazuh_envs && \\\nsudo installer -pkg ./wazuh-agent.pkg -target /`,
-  };
-  return cmds[pkg] || "";
-}
-
-function getStartCmd(pkg) {
-  if (pkg.startsWith("linux-")) return "sudo systemctl daemon-reload\nsudo systemctl enable wazuh-agent\nsudo systemctl start wazuh-agent";
-  if (pkg === "windows-msi")    return "NET START Wazuh";
-  return "sudo launchctl load /Library/LaunchDaemons/com.wazuh.agent.plist";
-}
-
-function CopyableCode({ code }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div style={{ position: "relative" }}>
-      <pre style={{ background: "rgba(0,0,0,0.45)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 5, padding: "14px 16px", fontFamily: "monospace", fontSize: 12, color: "rgba(255,255,255,0.75)", whiteSpace: "pre-wrap", margin: 0, lineHeight: 1.6 }}>
-        {code}
-      </pre>
-      <button
-        onClick={() => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
-        style={{ position: "absolute", top: 8, right: 8, background: copied ? "rgba(0,229,160,0.15)" : "rgba(255,255,255,0.06)", border: `1px solid ${copied ? "rgba(0,229,160,0.4)" : "rgba(255,255,255,0.12)"}`, color: copied ? "#00e5a0" : "rgba(255,255,255,0.4)", borderRadius: 3, padding: "4px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", transition: "all 0.15s" }}>
-        {copied ? "✓ Copied" : "Copy"}
-      </button>
-    </div>
-  );
-}
-
 function AgentInstallerTab() {
-  const [pkg,      setPkg]      = useState("linux-rpm-amd64");
-  const [addrType, setAddrType] = useState("fqdn");
-  const [fqdn,     setFqdn]     = useState("");
-  const [publicIp, setPublicIp] = useState("");
+  const [pkgInfo,   setPkgInfo]   = useState(null);   // {version, server_url, packages}
+  const [loading,   setLoading]   = useState(true);
+  const [loadErr,   setLoadErr]   = useState(null);
+  const [dlMsg,     setDlMsg]     = useState(null);
 
-  const manager  = addrType === "fqdn" ? fqdn : publicIp;
-  const osGroups = [...new Set(AGENT_PACKAGES.map(p => p.os))];
+  useEffect(() => {
+    fetch(`${API_BASE}/api/system/agent-packages`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { setPkgInfo(d); setLoading(false); })
+      .catch(e => { setLoadErr(String(e)); setLoading(false); });
+  }, []);
+
+  const handleDownload = (fmt) => {
+    setDlMsg({ ok: null, text: "Preparing installer…" });
+    const url = `${API_BASE}/api/system/agent-installer?format=${fmt}`;
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fmt === "windows" ? "agent-installer.ps1" : "agent-installer.sh";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => setDlMsg({ ok: true, text: "Download started — check your downloads folder." }), 400);
+    setTimeout(() => setDlMsg(null), 4000);
+  };
+
+  const serverUrl = pkgInfo?.server_url || "—";
+  const version   = pkgInfo?.version   || "—";
+  const packages  = pkgInfo?.packages  || [];
 
   return (
-    <div style={{ maxWidth: 720 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24 }}>
+    <div style={{ maxWidth: 780 }}>
+
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
         <span style={{ fontSize: 18 }}>📦</span>
         <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
-          Deploy New Agent
+          Universal Agent Installer
         </div>
+        {!loading && version !== "—" && (
+          <span style={{ background: "rgba(0,229,160,0.08)", color: "rgba(0,229,160,0.7)", border: "1px solid rgba(0,229,160,0.2)", borderRadius: 4, padding: "2px 8px", fontSize: 10, fontFamily: "monospace" }}>
+            v{version}
+          </span>
+        )}
+      </div>
+      <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, marginBottom: 24, lineHeight: 1.7 }}>
+        Download a single installer script — it auto-detects your OS and CPU architecture,
+        connects to this CyCentra 360 server, downloads the matching agent package,
+        and registers the agent automatically. No manual configuration required.
       </div>
 
-      {/* Step 1 — Select package */}
+      {/* Server info */}
       <div style={{ ...CARD, marginBottom: 16 }}>
-        <div style={{ ...LABEL, marginBottom: 14 }}>Step 1 — Select Package to Download and Install on Your System</div>
-        {osGroups.map(os => (
-          <div key={os} style={{ marginBottom: 14 }}>
-            <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", marginBottom: 8 }}>{os}</div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {AGENT_PACKAGES.filter(p => p.os === os).map(p => (
-                <button key={p.id} onClick={() => setPkg(p.id)}
-                  style={{ background: pkg === p.id ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.03)", border: `1px solid ${pkg === p.id ? "rgba(0,229,160,0.45)" : "rgba(255,255,255,0.08)"}`, color: pkg === p.id ? "#00e5a0" : "rgba(255,255,255,0.5)", borderRadius: 4, padding: "7px 14px", fontFamily: "monospace", fontSize: 11, fontWeight: pkg === p.id ? 700 : 400, cursor: "pointer", letterSpacing: "0.5px" }}>
-                  {p.label}
-                </button>
+        <div style={{ ...LABEL, marginBottom: 10 }}>Pre-configured Server</div>
+        <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ ...LABEL, marginBottom: 3, fontSize: 9 }}>Download URL</div>
+            <code style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 12 }}>
+              {loading ? "Loading…" : `${serverUrl}/agent-packages/`}
+            </code>
+          </div>
+          <div>
+            <div style={{ ...LABEL, marginBottom: 3, fontSize: 9 }}>Agent Registration</div>
+            <code style={{ color: "#4d9eff", fontFamily: "monospace", fontSize: 12 }}>
+              {loading ? "Loading…" : serverUrl.replace(/^https?:\/\/cy360\./, "")}
+            </code>
+          </div>
+        </div>
+        {loadErr && (
+          <div style={{ color: "#ff6b6b", fontSize: 11, fontFamily: "monospace", marginTop: 10 }}>
+            ✗ Could not load server info: {loadErr}
+          </div>
+        )}
+      </div>
+
+      {/* Download buttons */}
+      <div style={{ ...CARD, marginBottom: 16 }}>
+        <div style={{ ...LABEL, marginBottom: 14 }}>Download Installer</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+
+          {/* Linux + macOS */}
+          <div style={{ background: "rgba(0,229,160,0.03)", border: "1px solid rgba(0,229,160,0.12)", borderRadius: 5, padding: "18px 20px" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+              <span style={{ fontSize: 20 }}>🐧</span>
+              <span style={{ fontSize: 16 }}>🍎</span>
+              <div style={{ color: "#00e5a0", fontSize: 10, letterSpacing: "1.5px", fontFamily: "monospace", fontWeight: 700 }}>
+                LINUX / MACOS
+              </div>
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, marginBottom: 14, lineHeight: 1.6 }}>
+              Bash script — supports RPM, DEB, and macOS PKG.
+              Run with <code style={{ color: "#00e5a0", fontFamily: "monospace" }}>sudo bash agent-installer.sh</code>
+            </div>
+            <button
+              onClick={() => handleDownload("unix")}
+              style={{ ...BTN("#00e5a0"), display: "flex", alignItems: "center", gap: 6 }}>
+              ↓ Download agent-installer.sh
+            </button>
+          </div>
+
+          {/* Windows */}
+          <div style={{ background: "rgba(77,158,255,0.03)", border: "1px solid rgba(77,158,255,0.12)", borderRadius: 5, padding: "18px 20px" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+              <span style={{ fontSize: 22 }}>🪟</span>
+              <div style={{ color: "#4d9eff", fontSize: 10, letterSpacing: "1.5px", fontFamily: "monospace", fontWeight: 700 }}>
+                WINDOWS
+              </div>
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, marginBottom: 14, lineHeight: 1.6 }}>
+              PowerShell script — supports MSI 32-bit and 64-bit.
+              Run in an elevated PowerShell session.
+            </div>
+            <button
+              onClick={() => handleDownload("windows")}
+              style={{ ...BTN("#4d9eff"), display: "flex", alignItems: "center", gap: 6 }}>
+              ↓ Download agent-installer.ps1
+            </button>
+          </div>
+        </div>
+
+        {dlMsg && (
+          <div style={{ color: dlMsg.ok === true ? "#00e5a0" : dlMsg.ok === false ? "#ff6b6b" : "#ffd93d", fontSize: 11, fontFamily: "monospace" }}>
+            {dlMsg.ok === true ? "✓" : dlMsg.ok === false ? "✗" : "⋯"} {dlMsg.text}
+          </div>
+        )}
+      </div>
+
+      {/* Quick-start guide */}
+      <div style={{ ...CARD, marginBottom: 16 }}>
+        <div style={{ ...LABEL, marginBottom: 14 }}>Quick-Start Guide</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {[
+            { step: "1", os: "Linux", icon: "🐧", cmds: [
+              "chmod +x agent-installer.sh",
+              "sudo ./agent-installer.sh",
+            ]},
+            { step: "2", os: "macOS", icon: "🍎", cmds: [
+              "chmod +x agent-installer.sh",
+              "sudo ./agent-installer.sh",
+            ]},
+            { step: "3", os: "Windows (PowerShell)", icon: "🪟", cmds: [
+              "Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force",
+              ".\\agent-installer.ps1",
+            ]},
+          ].map(({ step, os, icon, cmds }) => (
+            <div key={step} style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 4, padding: "12px 14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                <span>{icon}</span>
+                <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>{os}</span>
+              </div>
+              {cmds.map((cmd, i) => (
+                <pre key={i} style={{ background: "rgba(0,0,0,0.3)", borderRadius: 3, padding: "6px 10px", fontFamily: "monospace", fontSize: 11, color: "rgba(255,255,255,0.65)", margin: i < cmds.length - 1 ? "0 0 4px 0" : 0, overflowX: "auto" }}>{cmd}</pre>
               ))}
             </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Step 2 — Server address */}
-      <div style={{ ...CARD, marginBottom: 16 }}>
-        <div style={{ ...LABEL, marginBottom: 14 }}>Step 2 — Select Server Address</div>
-        <div style={{ display: "flex", gap: 20, marginBottom: 12 }}>
-          {[{ id: "fqdn", label: "Server FQDN" }, { id: "ip", label: "Public IP" }].map(opt => (
-            <label key={opt.id} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-              <input type="radio" name="agentAddrType" value={opt.id} checked={addrType === opt.id} onChange={() => setAddrType(opt.id)}
-                style={{ accentColor: "#00e5a0", cursor: "pointer" }} />
-              <span style={{ color: addrType === opt.id ? "#00e5a0" : "rgba(255,255,255,0.5)", fontFamily: "monospace", fontSize: 12, fontWeight: addrType === opt.id ? 700 : 400 }}>
-                {opt.label}
-              </span>
-            </label>
           ))}
         </div>
-        <input
-          value={addrType === "fqdn" ? fqdn : publicIp}
-          onChange={e => addrType === "fqdn" ? setFqdn(e.target.value) : setPublicIp(e.target.value)}
-          placeholder={addrType === "fqdn" ? "e.g. cycentra.example.com" : "e.g. 203.0.113.45"}
-          style={{ ...INPUT }}
-        />
       </div>
 
-      {/* Step 3 — Install command */}
+      {/* Platform support matrix */}
       <div style={{ ...CARD, marginBottom: 16 }}>
-        <div style={{ ...LABEL, marginBottom: 14 }}>Step 3 — Install Command</div>
-        <CopyableCode code={getInstallCmd(pkg, manager)} />
+        <div style={{ ...LABEL, marginBottom: 14 }}>Supported Platforms</div>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+          {PLATFORM_MATRIX.map(({ os, icon, items }) => (
+            <div key={os} style={{ flex: "1 1 180px", minWidth: 160 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                <span>{icon}</span>
+                <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px" }}>{os}</span>
+              </div>
+              {items.map(item => (
+                <div key={item} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                  <span style={{ color: "#00e5a0", fontSize: 10 }}>✓</span>
+                  <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace" }}>{item}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Step 4 — Start agent */}
+      {/* Available packages on server */}
       <div style={{ ...CARD }}>
-        <div style={{ ...LABEL, marginBottom: 14 }}>Step 4 — Start Agent</div>
-        <CopyableCode code={getStartCmd(pkg)} />
+        <div style={{ ...LABEL, marginBottom: 12 }}>Agent Packages on Server</div>
+        {loading ? (
+          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>Loading…</div>
+        ) : packages.length === 0 ? (
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.7 }}>
+            No packages found at <code style={{ color: "rgba(0,229,160,0.5)" }}>/opt/cycentra/agent-packages/</code>.<br/>
+            Packages are deployed automatically during installation and upgrades via <code style={{ color: "rgba(0,229,160,0.5)" }}>cycentra-setup.sh</code>.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 120px", gap: 8, color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", letterSpacing: "0.5px", textTransform: "uppercase", paddingBottom: 6, borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+              <span>Package</span><span>Size</span><span>Modified</span>
+            </div>
+            {packages.map(pkg => (
+              <div key={pkg.name} style={{ display: "grid", gridTemplateColumns: "1fr 100px 120px", gap: 8, alignItems: "center", padding: "5px 0", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+                <a href={pkg.url} style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace", textDecoration: "none" }}
+                  onMouseOver={e => e.target.style.textDecoration = "underline"}
+                  onMouseOut={e => e.target.style.textDecoration = "none"}>
+                  {pkg.name}
+                </a>
+                <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
+                  {pkg.size_bytes >= 1048576
+                    ? `${(pkg.size_bytes / 1048576).toFixed(1)} MB`
+                    : `${Math.round(pkg.size_bytes / 1024)} KB`}
+                </span>
+                <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
+                  {new Date(pkg.modified * 1000).toLocaleDateString()}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ marginTop: 12, color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", lineHeight: 1.7 }}>
+          Packages are served from <code style={{ color: "rgba(0,229,160,0.4)" }}>{serverUrl}/agent-packages/</code> via HTTPS.
+          Package versions remain synchronized with the CyCentra 360 release version.
+        </div>
       </div>
     </div>
   );
@@ -3175,10 +3277,6 @@ const COMP_TABS = [
   { id: "comp-notifications",  label: "Notifications"       },
 ];
 
-const AGENT_INSTALLER_TABS = [
-  { id: "deploy", label: "Deploy New Agent" },
-];
-
 const MODULES = [
   { id: "platform",        label: "Platform Settings",   icon: "⚙️", color: "#00e5a0" },
   { id: "comp",            label: "Security Compliance", icon: "🛡️", color: "#4d9eff" },
@@ -3190,7 +3288,7 @@ export function SystemSettingsPage() {
   const [tab, setTab]       = useState("updates");
   const [compTab, setCompTab] = useState("comp-siem");
 
-  const currentTabs = module === "platform" ? PLATFORM_TABS : module === "comp" ? COMP_TABS : AGENT_INSTALLER_TABS;
+  const currentTabs = module === "platform" ? PLATFORM_TABS : COMP_TABS;
 
   return (
     <div>
@@ -3234,28 +3332,30 @@ export function SystemSettingsPage() {
 
         {/* Right: tab content */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          {/* Tab bar */}
-          <div style={{ display: "flex", gap: 4, borderBottom: "1px solid rgba(255,255,255,0.06)", marginBottom: 24 }}>
-            {currentTabs.map(t => {
-              const active = module === "platform" ? tab === t.id : module === "comp" ? compTab === t.id : true;
-              return (
-                <button key={t.id}
-                  onClick={() => { if (module === "platform") setTab(t.id); else if (module === "comp") setCompTab(t.id); }}
-                  style={{
-                    background: "none", border: "none",
-                    borderBottom: active ? "2px solid #00e5a0" : "2px solid transparent",
-                    color: active ? "#00e5a0" : "rgba(255,255,255,0.45)",
-                    padding: "8px 18px", fontFamily: "monospace", fontSize: 12,
-                    fontWeight: active ? 700 : 400, cursor: "pointer",
-                    marginBottom: -1, letterSpacing: "0.5px",
-                  }}>
-                  {t.label}
-                </button>
-              );
-            })}
-          </div>
+          {/* Tab bar — only for platform and comp modules */}
+          {module !== "agent-installer" && (
+            <div style={{ display: "flex", gap: 4, borderBottom: "1px solid rgba(255,255,255,0.06)", marginBottom: 24 }}>
+              {currentTabs.map(t => {
+                const active = module === "platform" ? tab === t.id : compTab === t.id;
+                return (
+                  <button key={t.id}
+                    onClick={() => { if (module === "platform") setTab(t.id); else setCompTab(t.id); }}
+                    style={{
+                      background: "none", border: "none",
+                      borderBottom: active ? "2px solid #00e5a0" : "2px solid transparent",
+                      color: active ? "#00e5a0" : "rgba(255,255,255,0.45)",
+                      padding: "8px 18px", fontFamily: "monospace", fontSize: 12,
+                      fontWeight: active ? 700 : 400, cursor: "pointer",
+                      marginBottom: -1, letterSpacing: "0.5px",
+                    }}>
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
-          {/* Platform Settings tabs (unchanged) */}
+          {/* Platform Settings tabs */}
           {module === "platform" && (
             <>
               {tab === "updates"   && <UpdatesTab />}
