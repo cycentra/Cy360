@@ -4589,6 +4589,15 @@ case "${{OS}}" in
     echo "WAZUH_MANAGER='${{WAZUH_MANAGER}}'" > /tmp/wazuh_envs
     info "Installing (PKG) ..."
     installer -pkg "${{TMP}}" -target / || err "macOS installer failed"
+
+    # PKG preinstall skips agent-auth on upgrades (client.keys already exists).
+    # Always register explicitly so fresh installs and reinstalls both work.
+    AGENT_NAME="${{HOSTNAME:-$(hostname -s)}}"
+    info "Registering agent '${{AGENT_NAME}}' with ${{WAZUH_MANAGER}} ..."
+    /Library/Ossec/bin/agent-auth -m "${{WAZUH_MANAGER}}" -A "${{AGENT_NAME}}" 2>&1 \
+        || err "Agent registration failed — check port 1515 is reachable from this host"
+    /Library/Ossec/bin/wazuh-control restart 2>/dev/null || \
+        launchctl load /Library/LaunchDaemons/com.wazuh.agent.plist 2>/dev/null || true
     ok "CyCentra 360 Agent installed and running."
     ;;
 
