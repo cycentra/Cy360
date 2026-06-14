@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.50 -- 2026-06-14 12:03 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.51 -- 2026-06-14 12:16 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1728,6 +1728,24 @@ SIEMEOF
         echo "WAZUH_API_USER=wazuh-wui"              >> /opt/cycentra/.env
     fi
     success "WAZUH_API_PASSWORD propagated to /opt/cycentra/.env (benchmark engine access)"
+
+    # Auto-detect and persist the server's public IP as CY360_PUBLIC_IP.
+    # The agent installer uses this so clients connect directly to the server IP
+    # instead of the Cloudflare-proxied hostname (Wazuh ports 1514/1515 are TCP,
+    # not HTTP — Cloudflare does not proxy them).
+    _PUBLIC_IP=$(curl -fsSL --max-time 5 https://ifconfig.me 2>/dev/null || \
+                 curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || true)
+    if [[ -n "$_PUBLIC_IP" ]]; then
+        if grep -q '^CY360_PUBLIC_IP=' /opt/cycentra/.env 2>/dev/null; then
+            sed -i "s|^CY360_PUBLIC_IP=.*|CY360_PUBLIC_IP=${_PUBLIC_IP}|" /opt/cycentra/.env
+        else
+            echo "CY360_PUBLIC_IP=${_PUBLIC_IP}" >> /opt/cycentra/.env
+        fi
+        success "Server public IP detected: ${_PUBLIC_IP} → CY360_PUBLIC_IP in .env"
+    else
+        warn "Could not detect public IP — agent installer will fall back to cysiem.${BASE_DOMAIN}"
+        warn "Set CY360_PUBLIC_IP=<your-server-ip> in /opt/cycentra/.env to fix agent registration"
+    fi
 
     # Create ML model persistence directory
     mkdir -p /opt/cycentra/ml_models
