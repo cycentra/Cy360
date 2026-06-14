@@ -4548,8 +4548,20 @@ download_pkg() {{
     echo "${{dest}}"
 }}
 
+_register_agent() {{
+    local manager="$1" name="$2" auth_bin="$3" ctrl_bin="$4"
+    info "Registering agent '${{name}}' with ${{manager}} ..."
+    "${{auth_bin}}" -m "${{manager}}" -A "${{name}}" 2>&1 \
+        || err "Agent registration failed — verify port 1515 is reachable: nc -zv ${{manager}} 1515"
+    "${{ctrl_bin}}" restart 2>/dev/null || true
+}}
+
 case "${{OS}}" in
   Linux)
+    OSSEC_CONF="/var/ossec/etc/ossec.conf"
+    AUTH_BIN="/var/ossec/bin/agent-auth"
+    CTRL_BIN="/var/ossec/bin/wazuh-control"
+
     if command -v rpm &>/dev/null && (command -v yum &>/dev/null || command -v dnf &>/dev/null); then
       case "${{ARCH}}" in
         x86_64|amd64)  PKG="cy360-agent-${{AGENT_VERSION}}-x86_64.rpm" ;;
@@ -4558,7 +4570,8 @@ case "${{OS}}" in
       esac
       TMP=$(download_pkg "${{PKG}}")
       info "Installing (RPM) ..."
-      WAZUH_MANAGER="${{WAZUH_MANAGER}}" rpm -ihv "${{TMP}}" || err "RPM install failed"
+      WAZUH_MANAGER="${{WAZUH_MANAGER}}" rpm -ihv "${{TMP}}" || \
+          WAZUH_MANAGER="${{WAZUH_MANAGER}}" rpm -Uvh "${{TMP}}" || err "RPM install failed"
     elif command -v dpkg &>/dev/null; then
       case "${{ARCH}}" in
         x86_64|amd64) PKG="cy360-agent-${{AGENT_VERSION}}-amd64.deb" ;;
@@ -4571,14 +4584,23 @@ case "${{OS}}" in
     else
       err "No supported package manager found (expected rpm/yum/dnf or dpkg/apt)"
     fi
-    info "Enabling and starting agent service ..."
+
+    # Patch ossec.conf manager address — handles upgrades where postinstall skips config.
+    [[ -f "${{OSSEC_CONF}}" ]] && \
+        sed -i "s|<address>.*</address>|<address>${{WAZUH_MANAGER}}</address>|" "${{OSSEC_CONF}}" 2>/dev/null || true
+
     systemctl daemon-reload
     systemctl enable wazuh-agent
-    systemctl start wazuh-agent
+    _register_agent "${{WAZUH_MANAGER}}" "$(hostname -s)" "${{AUTH_BIN}}" "${{CTRL_BIN}}"
+    systemctl restart wazuh-agent
     ok "CyCentra 360 Agent installed and running."
     ;;
 
   Darwin)
+    OSSEC_CONF="/Library/Ossec/etc/ossec.conf"
+    AUTH_BIN="/Library/Ossec/bin/agent-auth"
+    CTRL_BIN="/Library/Ossec/bin/wazuh-control"
+
     case "${{ARCH}}" in
       x86_64) PKG="cy360-agent-${{AGENT_VERSION}}-intel64.pkg" ;;
       arm64)  PKG="cy360-agent-${{AGENT_VERSION}}-arm64.pkg" ;;
@@ -4586,18 +4608,16 @@ case "${{OS}}" in
     esac
     TMP=$(download_pkg "${{PKG}}")
     xattr -rc "${{TMP}}" 2>/dev/null || true
+    # Write wazuh_envs before PKG so preinstall picks it up on fresh installs.
     echo "WAZUH_MANAGER='${{WAZUH_MANAGER}}'" > /tmp/wazuh_envs
     info "Installing (PKG) ..."
     installer -pkg "${{TMP}}" -target / || err "macOS installer failed"
 
-    # PKG preinstall skips agent-auth on upgrades (client.keys already exists).
-    # Always register explicitly so fresh installs and reinstalls both work.
-    AGENT_NAME="${{HOSTNAME:-$(hostname -s)}}"
-    info "Registering agent '${{AGENT_NAME}}' with ${{WAZUH_MANAGER}} ..."
-    /Library/Ossec/bin/agent-auth -m "${{WAZUH_MANAGER}}" -A "${{AGENT_NAME}}" 2>&1 \
-        || err "Agent registration failed — check port 1515 is reachable from this host"
-    /Library/Ossec/bin/wazuh-control restart 2>/dev/null || \
-        launchctl load /Library/LaunchDaemons/com.wazuh.agent.plist 2>/dev/null || true
+    # Patch ossec.conf manager address — handles upgrades where PKG preinstall skips config.
+    [[ -f "${{OSSEC_CONF}}" ]] && \
+        sed -i '' "s|<address>.*</address>|<address>${{WAZUH_MANAGER}}</address>|" "${{OSSEC_CONF}}" 2>/dev/null || true
+
+    _register_agent "${{WAZUH_MANAGER}}" "${{HOSTNAME:-$(hostname -s)}}" "${{AUTH_BIN}}" "${{CTRL_BIN}}"
     ok "CyCentra 360 Agent installed and running."
     ;;
 
@@ -4647,14 +4667,32 @@ try {{
 Write-Host "  Downloaded." -ForegroundColor Green
 
 Write-Host "  Installing agent ..." -ForegroundColor Cyan
-$InstallArgs = "/i `"$TmpPath`" /q WAZUH_MANAGER=`"$WazuhManager`""
+$AgentName   = $env:COMPUTERNAME
+$InstallArgs = "/i `"$TmpPath`" /q WAZUH_MANAGER=`"$WazuhManager`" WAZUH_AGENT_NAME=`"$AgentName`""
 $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList $InstallArgs -Wait -PassThru
 if ($proc.ExitCode -ne 0) {{
     Write-Host "  Installation failed (exit code: $($proc.ExitCode))" -ForegroundColor Red
     exit 1
 }}
 
+# Re-register explicitly — MSI upgrade preserves old client.keys and skips registration.
+# agent-auth always produces a valid key whether this is a fresh install or reinstall.
+Write-Host "  Registering agent '$AgentName' with $WazuhManager ..." -ForegroundColor Cyan
+$AgentAuth = "C:\Program Files (x86)\ossec-agent\agent-auth.exe"
+if (Test-Path $AgentAuth) {{
+    $authProc = Start-Process -FilePath $AgentAuth `
+        -ArgumentList "-m `"$WazuhManager`" -A `"$AgentName`"" `
+        -Wait -PassThru -NoNewWindow
+    if ($authProc.ExitCode -ne 0) {{
+        Write-Host "  Warning: agent-auth exited $($authProc.ExitCode) — check port 1515 reachability" -ForegroundColor Yellow
+    }}
+}} else {{
+    Write-Host "  Warning: agent-auth.exe not found at $AgentAuth" -ForegroundColor Yellow
+}}
+
 Write-Host "  Starting agent service ..." -ForegroundColor Cyan
+try {{ NET STOP Wazuh 2>&1 | Out-Null }} catch {{}}
+Start-Sleep -Seconds 2
 try {{ NET START Wazuh 2>&1 | Out-Null }} catch {{}}
 
 Write-Host "  CyCentra 360 Agent installed and running." -ForegroundColor Green
