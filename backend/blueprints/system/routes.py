@@ -4586,22 +4586,9 @@ case "${{OS}}" in
     esac
     TMP=$(download_pkg "${{PKG}}")
     xattr -rc "${{TMP}}" 2>/dev/null || true
+    echo "WAZUH_MANAGER='${{WAZUH_MANAGER}}'" > /tmp/wazuh_envs
     info "Installing (PKG) ..."
     installer -pkg "${{TMP}}" -target / || err "macOS installer failed"
-
-    # Patch ossec.conf with the real manager address.
-    # The PKG installer leaves <address></address> empty; we must fill it in.
-    OSSEC_CONF="/Library/Ossec/etc/ossec.conf"
-    if [[ -f "$OSSEC_CONF" ]]; then
-        sed -i '' "s|<address>.*</address>|<address>${{WAZUH_MANAGER}}</address>|" "$OSSEC_CONF"
-        ok "Manager address set: ${{WAZUH_MANAGER}}"
-    else
-        err "ossec.conf not found — agent may not register correctly"
-    fi
-
-    # Restart agent so it connects to the manager with the new config
-    /Library/Ossec/bin/wazuh-control restart 2>/dev/null || \
-        launchctl load /Library/LaunchDaemons/com.wazuh.agent.plist 2>/dev/null || true
     ok "CyCentra 360 Agent installed and running."
     ;;
 
