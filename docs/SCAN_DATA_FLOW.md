@@ -110,6 +110,8 @@ Guest scans are **structurally isolated** — not just filtered by name.
 **How guest detection works:**  
 Any `uid` beginning with `guest_` is routed to the guest tree. The scan trigger sets `CYCENTRA_IS_GUEST=true` in the subprocess environment.
 
+> **Caveat — direct invocation fallback:** When `cycentra_scan.py` is invoked directly (bypassing the `scanner.py` API) and `CYCENTRA_OUTPUT_DIR` is not set, the guest scan falls back to `/var/log/cycentra/cy-asm/scans/guest` — a subdirectory of the internal `SCANS_DIR` tree rather than `GUEST_SCANS_DIR`. This only matters for tooling that shells out to `cycentra_scan.py` directly; all API-driven scans go through `scanner.py` which always passes `CYCENTRA_OUTPUT_DIR` explicitly. See `cycentra_scan.py` lines 1166–1172.
+
 ---
 
 ## 5. Dashboard Visibility Rules

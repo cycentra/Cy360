@@ -293,7 +293,53 @@ No changes to `requirements.txt` or `cycentra-setup.sh` pip install blocks were 
 
 ---
 
-## 6. Files Modified
+## 6. Asset Lifecycle & Advanced Integrations
+
+### 6.1 Asset State Tracking
+
+Every scanned asset is tracked through a lifecycle managed by `cycentra_scan.py`. States are persisted to `/opt/cycentra/asm_states/{uid}/asset_states.json` — one JSON file per scanner user identity.
+
+| State | Meaning |
+|---|---|
+| `new` | First time this asset has been seen for this `uid` |
+| `baseline` | Asset was present in the previous scan and is unchanged |
+| `under_review` | Manually flagged by an analyst for review |
+| `ignored` | Manually suppressed — excluded from scoring and reporting |
+| `dropped` | Was in a prior baseline but absent from the current scan |
+
+**Auto-transitions:**
+
+- First scan for a `uid` → all discovered assets enter `new`.
+- Subsequent scans → assets from the previous baseline that reappear become `baseline`; assets that disappear transition to `dropped`.
+- `under_review` and `ignored` are set only via manual analyst action; the scanner does not auto-transition out of them.
+
+**Guest scans:** Guest scan results are never written to the state store. State tracking is skipped when `CYCENTRA_IS_GUEST=true` — the `/opt/cycentra/asm_states/` tree contains only authenticated-user data.
+
+**Subdomain change tracking:** Each asset entry also tracks `first_seen`, `last_seen`, `is_new` (boolean), and `change` (describes what changed between scans — e.g. new open port, SSL cert expiry, status code change).
+
+---
+
+### 6.2 MISP IOC Lookup
+
+During deep scans, discovered domains and IPs are cross-referenced against a MISP threat intelligence instance if configured. Results are stored as `misp_hits` in the scan JSON. MISP lookups are performed inside `cycentra_scan.py` after the port/module scan phase completes.
+
+---
+
+### 6.3 CyMind Memory Storage
+
+Scan findings are stored to the CyMind `soc-episodic-memory` collection after each completed scan via `store_to_cymind_memory()` (`cycentra_scan.py` line 589). This enables CyMind AI to answer queries about historical ASM findings across multiple scan runs.
+
+Guest scans are excluded from CyMind memory storage (`CYCENTRA_IS_GUEST` check inside `store_to_cymind_memory()`). Only authenticated-user scan data is persisted to CyMind.
+
+---
+
+### 6.4 Scan Completion Email Notification
+
+When a scan completes, `_notify_by_email()` (`cycentra_scan.py` line 62) sends a notification email to the configured `SMTP_ADMIN_EMAIL` address. The email includes the target domain, scan tier, posture score, and a summary of top findings. Uses the shared `smtp_service.py` for delivery.
+
+---
+
+## 7. Files Modified
 
 | File | Type |
 |---|---|

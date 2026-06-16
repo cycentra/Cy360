@@ -533,6 +533,146 @@ User grants 3rd-party app broad permissions to mail, files, or contacts: `Mail.R
 
 ---
 
+### CR-036: WMI Command Execution
+**Window:** 30 min | **Severity:** High | **Tactics:** Execution, Lateral Movement
+
+WMI keywords (`wmic.exe`, `wmiprvse`, `win32_process create`, `wbemexec`, `invoke-wmimethod`) found in rule description or raw log — WMI lateral execution vector (T1047).
+
+---
+
+### CR-037: Pass-the-Hash / NTLM Lateral Auth
+**Window:** 30 min | **Severity:** Critical | **Tactics:** Lateral Movement, Credential Access
+
+Pass-the-hash keywords (`ntlm relay`, `ntlmrelayx`, `impacket`, `mimikatz sekurlsa::pth`) or credential dump followed by NTLM network logon (rule IDs 60106, 60122, 60137, 60204) from an anomalous source IP (T1550.002).
+
+---
+
+### CR-038: MFA Push Bombing / Fatigue
+**Window:** 30 min | **Severity:** High | **Tactics:** Credential Access, Initial Access
+
+10+ MFA push/challenge events to the same user in a 30-minute window — push bombing to wear down target into approving (T1621).
+
+---
+
+### CR-039: Session Cookie / Token Theft
+**Window:** 60 min | **Severity:** High | **Tactics:** Credential Access, Initial Access
+
+Session token theft keywords (`cookie theft`, `token replay`, `pass-the-cookie`) or same user authenticating from 3+ distinct source IPs in the window — replayed session indicator (T1539/T1528).
+
+---
+
+### CR-040: Cryptomining / Resource Hijacking
+**Window:** 30 min | **Severity:** High | **Tactics:** Impact
+
+XMRig/stratum protocol keywords or 3+ connections to known mining pool ports (3333, 4444, 9999, 14444) — cryptomining malware detected (T1496).
+
+---
+
+### CR-041: Shadow Copy / Backup Deletion
+**Window:** 15 min | **Severity:** Critical | **Tactics:** Impact, Defense Evasion
+
+`vssadmin delete shadows`, `wmic shadowcopy delete`, `bcdedit /set recoveryenabled no`, or `wbadmin delete catalog` — ransomware pre-encryption step (T1490).
+
+---
+
+### CR-042: LOLBAS Download Cradle
+**Window:** 20 min | **Severity:** High | **Tactics:** Defense Evasion, Command and Control, Execution
+
+Living-off-the-land binaries (`certutil -urlcache`, `bitsadmin /transfer`, `mshta http`, `regsvr32 /s /n /u /i:http`, `rundll32.exe javascript`) used to download remote payloads (T1218/T1105).
+
+---
+
+### CR-043: DGA / High-Entropy Domain Query
+**Window:** 30 min | **Severity:** High | **Tactics:** Command and Control
+
+DNS queries matching DGA keywords (`dga`, `domain generation`, `high entropy domain`, `suspicious dns`) or random-looking domains — DGA C2 indicator (T1568.002).
+
+---
+
+### CR-044: Automated Data Collection
+**Window:** 5 min | **Severity:** High | **Tactics:** Collection
+
+Bulk file enumeration commands (`find / -name`, `robocopy`, `tar -czf`, `compress-archive`) or 30+ FIM events on the same host in a 5-minute window — automated staging (T1119).
+
+---
+
+### CR-045: Archive / Compress Collected Data
+**Window:** 15 min | **Severity:** High | **Tactics:** Collection, Exfiltration
+
+Compression tool (`7z`, `winrar`, `zip`, `tar czf`, `compress-archive`) operating on a sensitive directory (`/etc/`, `/home/`, `C:\Users\`, `AppData`) — pre-exfil staging (T1560).
+
+---
+
+### CR-046: Phishing Attachment / Macro Execution
+**Window:** 20 min | **Severity:** Critical | **Tactics:** Initial Access, Execution
+
+Office macro signals (`vba macro`, `xlm macro`, `auto_open`, `document_open`, `winword spawned`, `office macro`) — spearphishing payload via email attachment (T1566.001).
+
+---
+
+### CR-047: Startup Folder / Autostart Persistence
+**Window:** 20 min | **Severity:** High | **Tactics:** Persistence
+
+File written to `\Start Menu\Programs\Startup\`, `/etc/init.d/`, `/etc/xdg/autostart/`, or `~/.config/autostart/` — boot persistence (T1547.001).
+
+---
+
+### CR-048: Cron / Scheduled Task Persistence (Linux)
+**Window:** 20 min | **Severity:** High | **Tactics:** Persistence, Execution
+
+`crontab -e`, `/etc/cron.d/` modification, `systemctl enable`, or systemd `.timer` unit creation — Linux persistence via scheduled task (T1053.003).
+
+---
+
+### CR-049: Access Token Manipulation
+**Window:** 20 min | **Severity:** Critical | **Tactics:** Privilege Escalation, Defense Evasion
+
+Token impersonation keywords (`seimpersonateprivilege`, `createprocesswithtoken`, `juicypotato`, `printspoofer`, `godpotato`, `token impersonation`) or `runas /netonly` — T1134 lateral privilege escalation.
+
+---
+
+### CR-050: Remote Service Creation
+**Window:** 30 min | **Severity:** Critical | **Tactics:** Lateral Movement, Persistence, Execution
+
+`sc \\`, `sc create`, `psexec \\`, `psexesvc`, or `openscmanager` — service created on a remote host via sc.exe or PsExec (T1543.003/T1021).
+
+---
+
+### CR-051: DLL Hijacking / Side-Loading
+**Window:** 20 min | **Severity:** High | **Tactics:** Defense Evasion, Persistence, Privilege Escalation
+
+Trusted process loaded DLL from non-standard or writable path (`dll hijack`, `dll sideload`, `phantom dll`, `loaded from temp`, `loaded from user directory`) — T1574.
+
+---
+
+### CR-052: Application-Layer C2 (HTTPS Long-Poll)
+**Window:** 120 min | **Severity:** Critical | **Tactics:** Command and Control
+
+C2 framework keywords (`cobalt strike`, `cs beacon`, `empire c2`, `havoc c2`, `sliver c2`, `brute ratel`, `beacon checkin`, `long-poll https`) — sustained C2 keep-alive pattern (T1071.001).
+
+---
+
+### CR-053: Credentials in Files / Registry
+**Window:** 15 min | **Severity:** High | **Tactics:** Credential Access
+
+File system or registry search for credentials (`grep -r password`, `find / -name password`, `cat /etc/shadow`, `reg query hklm\sam`) — T1552.001 credential harvesting.
+
+---
+
+### CR-054: SMB / Network Share Enumeration
+**Window:** 20 min | **Severity:** Medium | **Tactics:** Discovery, Lateral Movement
+
+Net view/share/use, SharpHound/BloodHound, PowerView (`invoke-sharefinder`, `get-netshare`), or CrackMapExec SMB — lateral movement reconnaissance (T1135/T1087).
+
+---
+
+### CR-055: DCSync / Directory Replication Attack
+**Window:** 20 min | **Severity:** Critical | **Tactics:** Credential Access, Privilege Escalation
+
+DCSync keywords (`drsuapi`, `dcsync`, `getncchanges`, `mimikatz lsadump::dcsync`, `impacket secretsdump`) or SID history injection — domain credential harvest via replication rights abuse (T1003.006).
+
+---
+
 ## 6. Risk Scoring Model
 
 **File:** `risk_scorer.py` | Composite 0–100 per entity (host, user, cloud service)

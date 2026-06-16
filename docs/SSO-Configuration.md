@@ -376,11 +376,13 @@ All `/api/sso/*` routes are served by `blueprints/sso/routes.py`. They are acces
 | `GET` | `/api/sso/status` | None (public) | Probes the IdP discovery URL; returns `{ok, issuer}` or `{ok: false, error}` |
 | `GET` | `/api/sso/redirect` | None (public) | Starts the OIDC flow; redirects the browser to the IdP |
 | `GET` | `/api/sso/callback` | None (IdP redirect) | Exchanges code, provisions user, sets session |
+| `GET` | `/api/sso/config` | Admin | Returns non-secret SSO config (provider, client_id, redirect_uri, discovery_url, etc.) — client secret is redacted |
 | `POST` | `/api/sso/configure` | Admin | Save provider settings; body: SSO config fields |
 | `POST` | `/api/sso/disable` | Admin | Disable SSO (does not delete config) |
 | `GET` | `/api/sso/pending` | Admin | List users with `approval_status = pending` |
-| `POST` | `/api/sso/approve/<email>` | Admin | Approve a pending user |
-| `POST` | `/api/sso/reject/<email>` | Admin | Reject a pending user; body: `{"reason": "…"}` |
+| `GET` or `POST` | `/api/sso/approve/<email>` | Admin | Approve a pending user; GET used for email one-click links, POST used by the Settings UI |
+| `GET` or `POST` | `/api/sso/reject/<email>` | Admin | Reject a pending user; GET used for email one-click links, POST used by the Settings UI; body (POST): `{"reason": "…"}` |
+| `POST` | `/api/sso/revoke/<email>` | Admin | Revoke an approved user back to `pending` state (re-triggers the approval workflow) |
 | `GET` | `/api/sso/smtp/config` | Admin | Get current SMTP settings (password redacted) |
 | `POST` | `/api/sso/smtp/config` | Admin | Save SMTP settings |
 | `POST` | `/api/sso/smtp/test` | Admin | Send a test email; body: `{"email": "…"}` |
