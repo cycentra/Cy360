@@ -28,8 +28,9 @@ KILL_CHAIN_MAP = {
     'Discovery':             9,
     'Lateral Movement':      10,
     'Collection':            11,
-    'Exfiltration':          12,
-    'Impact':                13,
+    'Command and Control':   12,
+    'Exfiltration':          13,
+    'Impact':                14,
 }
 
 
@@ -1053,6 +1054,668 @@ class OAuthConsentGrant(CorrelationRule):
         return None
 
 
+# =============================================================================
+# CR-036 → CR-055  — Gap-closure rules (MITRE coverage expansion)
+# =============================================================================
+
+# ── CR-036: WMI Command Execution ─────────────────────────────────────────────
+class WMIExecution(CorrelationRule):
+    """WMI used to execute commands remotely or spawn processes (T1047)."""
+    WMI_KEYWORDS = ('wmic ', 'wmic.exe', 'wmiprvse', 'winmgmt',
+                    'win32_process create', 'wmi commandlinetemplate',
+                    'wbemexec', 'invokewmimethod', 'invoke-wmimethodf')
+
+    def __init__(self):
+        super().__init__(
+            'CR-036', 'WMI Command Execution',
+            'WMI used to execute processes or commands — T1047 lateral execution vector',
+            'high', ['Execution', 'Lateral Movement'], 30
+        )
+
+    def match(self, alerts):
+        wmi = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() or k in (a.get('raw_log') or '').lower()
+                   for k in self.WMI_KEYWORDS)
+        ]
+        if wmi:
+            return {
+                'key_alert_ids': [wmi[0].get('wazuh_id')],
+                'detail': f"WMI execution on {wmi[0].get('agent_name')}: {wmi[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.85,
+            }
+        return None
+
+
+# ── CR-037: Pass-the-Hash / NTLM Relay ────────────────────────────────────────
+class PassTheHash(CorrelationRule):
+    """NTLM authentication with mismatched logon type or tool signatures (T1550.002)."""
+    PTH_KEYWORDS = ('pass-the-hash', 'pass the hash', 'ntlm relay', 'ntlmrelayx',
+                    'impacket', 'wce.exe', 'mimikatz sekurlsa::pth',
+                    'logon type 3', 'logon type: 3')
+    PTH_RULE_IDS = {60106, 60122, 60137, 60204}  # Windows logon type 3 without Kerberos
+
+    def __init__(self):
+        super().__init__(
+            'CR-037', 'Pass-the-Hash / NTLM Lateral Auth',
+            'NTLM pass-the-hash pattern — network logon without password entry (T1550.002)',
+            'critical', ['Lateral Movement', 'Credential Access'], 30
+        )
+
+    def match(self, alerts):
+        pth = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() for k in self.PTH_KEYWORDS)
+        ]
+        if pth:
+            return {
+                'key_alert_ids': [pth[0].get('wazuh_id')],
+                'detail': f"Pass-the-hash indicator on {pth[0].get('agent_name')}: {pth[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.88,
+            }
+        # Heuristic: Logon type 3 from an anomalous source arriving after a cred dump
+        ntlm_logons = [a for a in alerts if a['rule_id'] in self.PTH_RULE_IDS and a.get('src_ip')]
+        cred_dump   = [a for a in alerts if
+                       any(k in (a.get('rule_desc') or '').lower()
+                           for k in ('lsass', 'mimikatz', 'credential dump', 'ntds'))]
+        if ntlm_logons and cred_dump:
+            return {
+                'key_alert_ids': [cred_dump[0].get('wazuh_id'), ntlm_logons[0].get('wazuh_id')],
+                'detail': f"Cred dump followed by NTLM network logon from {ntlm_logons[0].get('src_ip')}",
+                'confidence': 0.80,
+            }
+        return None
+
+
+# ── CR-038: MFA Push Bombing / Fatigue ────────────────────────────────────────
+class MFAPushBombing(CorrelationRule):
+    """10+ MFA prompts to same user in short window with no failure (T1621)."""
+    MFA_PROMPT_KEYWORDS = ('mfa prompt', 'push notification', 'authenticator request',
+                           'duo push', 'mfa challenge', 'mfa request sent',
+                           'second factor required', 'otp sent', 'verification code sent')
+    MFA_SUCCESS_KEYWORDS = ('mfa approved', 'mfa accepted', 'second factor success',
+                            'authentication succeeded', 'mfa success')
+
+    def __init__(self):
+        super().__init__(
+            'CR-038', 'MFA Push Bombing / Fatigue',
+            '10+ MFA prompts to same user without failure — push bombing to wear down target (T1621)',
+            'high', ['Credential Access', 'Initial Access'], 30
+        )
+
+    def match(self, alerts):
+        mfa_prompts = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() for k in self.MFA_PROMPT_KEYWORDS)
+            and a.get('username')
+        ]
+        if not mfa_prompts:
+            return None
+        by_user: dict = {}
+        for a in mfa_prompts:
+            by_user.setdefault(a['username'], []).append(a)
+        for user, user_alerts in by_user.items():
+            if len(user_alerts) >= 10:
+                return {
+                    'key_alert_ids': [user_alerts[0].get('wazuh_id')],
+                    'detail': f"MFA push bombing: {len(user_alerts)} prompts to {user} in 30-min window",
+                    'confidence': min(len(user_alerts) / 20.0, 1.0),
+                }
+        return None
+
+
+# ── CR-039: Session Cookie / Token Theft ──────────────────────────────────────
+class SessionCookieTheft(CorrelationRule):
+    """Web session from new geo/IP immediately after login elsewhere (T1539, T1528)."""
+    COOKIE_KEYWORDS = ('cookie theft', 'session hijack', 'token replay', 'stolen token',
+                       'session_id from new ip', 'session fixation', 'pass-the-cookie')
+
+    def __init__(self):
+        super().__init__(
+            'CR-039', 'Session Cookie / Token Theft',
+            'Web session reuse from a new IP/geo without re-authentication — T1539/T1528',
+            'high', ['Credential Access', 'Initial Access'], 60
+        )
+
+    def match(self, alerts):
+        # Direct keyword match
+        cookie = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() for k in self.COOKIE_KEYWORDS)
+        ]
+        if cookie:
+            return {
+                'key_alert_ids': [cookie[0].get('wazuh_id')],
+                'detail': f"Session token theft indicator: {cookie[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.82,
+            }
+        # Heuristic: same username, login from IP-A then immediate O365/web session from IP-B
+        logins = [a for a in alerts if a['rule_id'] in {5715, 5718, 60106, 60137}
+                  and a.get('username') and a.get('src_ip')]
+        by_user: dict = {}
+        for a in logins:
+            by_user.setdefault(a['username'], []).append(a)
+        for user, user_logins in by_user.items():
+            ips = {a['src_ip'] for a in user_logins}
+            if len(ips) >= 3:  # same user, 3+ distinct source IPs
+                return {
+                    'key_alert_ids': [user_logins[0].get('wazuh_id')],
+                    'detail': f"User {user} authenticated from {len(ips)} distinct IPs in window",
+                    'confidence': 0.70,
+                }
+        return None
+
+
+# ── CR-040: Cryptomining / Resource Hijacking ─────────────────────────────────
+class CryptominingDetection(CorrelationRule):
+    """XMRig, stratum protocol, or known mining pool connections (T1496)."""
+    MINING_KEYWORDS = ('xmrig', 'stratum+tcp', 'stratum+ssl', 'cryptonight', 'monero',
+                       'mining pool', 'coinhive', 'minexmr', 'xmrpool', 'supportxmr',
+                       'nanopool', 'f2pool', 'nicehash', 'ethermine')
+    MINING_PORTS    = ('3333', '4444', '9999', '14444', '45700', '45560')
+
+    def __init__(self):
+        super().__init__(
+            'CR-040', 'Cryptomining / Resource Hijacking',
+            'XMRig or mining pool connection detected — cryptomining malware (T1496)',
+            'high', ['Impact'], 30
+        )
+
+    def match(self, alerts):
+        mining = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() or k in (a.get('raw_log') or '').lower()
+                   for k in self.MINING_KEYWORDS)
+        ]
+        if mining:
+            return {
+                'key_alert_ids': [mining[0].get('wazuh_id')],
+                'detail': f"Cryptomining on {mining[0].get('agent_name')}: {mining[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.92,
+            }
+        port_hits = [
+            a for a in alerts
+            if any(f':{p}' in (a.get('rule_desc') or '') or
+                   f'port {p}' in (a.get('rule_desc') or '').lower()
+                   for p in self.MINING_PORTS)
+        ]
+        if len(port_hits) >= 3:
+            return {
+                'key_alert_ids': [port_hits[0].get('wazuh_id')],
+                'detail': f"{len(port_hits)} connections on mining pool ports from {port_hits[0].get('agent_name')}",
+                'confidence': 0.75,
+            }
+        return None
+
+
+# ── CR-041: Shadow Copy Deletion ──────────────────────────────────────────────
+class ShadowCopyDeletion(CorrelationRule):
+    """vssadmin/wmic delete shadows — ransomware pre-encryption step (T1490)."""
+    SHADOW_KEYWORDS = ('vssadmin delete shadows', 'wmic shadowcopy delete',
+                       'delete shadows', 'bcdedit /set recoveryenabled no',
+                       'bcdedit.exe /set', 'wbadmin delete catalog',
+                       'diskshadow /s', 'deleteallshadows', 'resize shadowstorage')
+
+    def __init__(self):
+        super().__init__(
+            'CR-041', 'Shadow Copy / Backup Deletion',
+            'VSS shadow copies or backup catalog deleted — ransomware precursor (T1490)',
+            'critical', ['Impact', 'Defense Evasion'], 15
+        )
+
+    def match(self, alerts):
+        shadow = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() or k in (a.get('raw_log') or '').lower()
+                   for k in self.SHADOW_KEYWORDS)
+        ]
+        if shadow:
+            return {
+                'key_alert_ids': [shadow[0].get('wazuh_id')],
+                'detail': f"Shadow copy deletion on {shadow[0].get('agent_name')}: {shadow[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.97,
+            }
+        return None
+
+
+# ── CR-042: LOLBAS Download Cradle ────────────────────────────────────────────
+class LOLBASDownloadCradle(CorrelationRule):
+    """certutil/bitsadmin/mshta/regsvr32 used to download payloads (T1218, T1105)."""
+    LOLBAS_DOWNLOAD = ('certutil -urlcache', 'certutil.exe -urlcache',
+                       'certutil -decode', 'bitsadmin /transfer', 'bitsadmin.exe',
+                       'mshta http', 'mshta.exe http', 'regsvr32 /s /n /u /i:http',
+                       'regsvr32.exe /s', 'wscript http', 'cscript http',
+                       'rundll32.exe javascript', 'ieexec.exe', 'mavinject.exe',
+                       'installutil.exe', 'odbcconf.exe', 'xwizard.exe')
+
+    def __init__(self):
+        super().__init__(
+            'CR-042', 'LOLBAS Download Cradle',
+            'certutil/bitsadmin/mshta used to download remote payload (T1218/T1105)',
+            'high', ['Defense Evasion', 'Command and Control', 'Execution'], 20
+        )
+
+    def match(self, alerts):
+        lolbas = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() or k in (a.get('raw_log') or '').lower()
+                   for k in self.LOLBAS_DOWNLOAD)
+        ]
+        if lolbas:
+            return {
+                'key_alert_ids': [lolbas[0].get('wazuh_id')],
+                'detail': f"LOLBAS download cradle on {lolbas[0].get('agent_name')}: {lolbas[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.90,
+            }
+        return None
+
+
+# ── CR-043: DGA / High-Entropy Domain (C2) ────────────────────────────────────
+class DGADetection(CorrelationRule):
+    """Multiple queries to high-entropy domains — likely DGA malware (T1568.002)."""
+    import math
+
+    @staticmethod
+    def _entropy(s: str) -> float:
+        from math import log2
+        if not s:
+            return 0.0
+        freq = {}
+        for c in s:
+            freq[c] = freq.get(c, 0) + 1
+        n = len(s)
+        return -sum((v / n) * log2(v / n) for v in freq.values())
+
+    def __init__(self):
+        super().__init__(
+            'CR-043', 'DGA / High-Entropy Domain Query',
+            'Multiple DNS queries to high-entropy domain names — DGA C2 indicator (T1568.002)',
+            'high', ['Command and Control'], 30
+        )
+
+    def match(self, alerts):
+        dga_kw = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower()
+                   for k in ('dga', 'domain generation', 'high entropy domain',
+                              'suspicious dns', 'random domain'))
+        ]
+        if dga_kw:
+            return {
+                'key_alert_ids': [dga_kw[0].get('wazuh_id')],
+                'detail': f"DGA domain query: {dga_kw[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.80,
+            }
+        return None
+
+
+# ── CR-044: Automated Collection (Bulk File Reads) ────────────────────────────
+class AutomatedCollection(CorrelationRule):
+    """30+ FIM/file-access events in 5 minutes — bulk data staging (T1119)."""
+    COLLECTION_KEYWORDS = ('find / -name', 'find /home', 'dir /s', 'robocopy',
+                           'xcopy /s', 'cp -r', 'rsync -r', 'tar -czf',
+                           'compress-archive', 'get-childitem -recurse')
+
+    def __init__(self):
+        super().__init__(
+            'CR-044', 'Automated Data Collection',
+            'Bulk file enumeration or mass FIM events — automated staging (T1119)',
+            'high', ['Collection'], 5
+        )
+
+    def match(self, alerts):
+        collection_cmd = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() or k in (a.get('raw_log') or '').lower()
+                   for k in self.COLLECTION_KEYWORDS)
+        ]
+        if collection_cmd:
+            return {
+                'key_alert_ids': [collection_cmd[0].get('wazuh_id')],
+                'detail': f"Automated collection command on {collection_cmd[0].get('agent_name')}",
+                'confidence': 0.78,
+            }
+        fim_events = [a for a in alerts if a.get('category') == 'fim']
+        by_host: dict = {}
+        for a in fim_events:
+            by_host.setdefault(a['agent_id'], []).append(a)
+        for host, host_alerts in by_host.items():
+            if len(host_alerts) >= 30:
+                return {
+                    'key_alert_ids': [host_alerts[0].get('wazuh_id')],
+                    'detail': f"Mass file access: {len(host_alerts)} FIM events in 5 min on {host_alerts[0].get('agent_name')}",
+                    'confidence': min(len(host_alerts) / 60.0, 0.85),
+                }
+        return None
+
+
+# ── CR-045: Archive / Compress Collected Data ─────────────────────────────────
+class ArchiveCollectedData(CorrelationRule):
+    """zip/rar/7z/tar operations on sensitive directories (T1560)."""
+    ARCHIVE_TOOLS   = ('7z ', '7z.exe', 'winrar', 'rar.exe', 'zip ', 'gzip', 'tar czf',
+                       'compress-archive', 'zstd', 'bzip2', 'pack200')
+    SENSITIVE_PATHS = ('/etc/', '/home/', '/var/log/', 'c:\\users\\', 'c:\\windows\\system32',
+                       'documents', 'desktop', 'downloads', '\\appdata\\')
+
+    def __init__(self):
+        super().__init__(
+            'CR-045', 'Archive / Compress Collected Data',
+            'Compression tool operating on sensitive directory — pre-exfil staging (T1560)',
+            'high', ['Collection', 'Exfiltration'], 15
+        )
+
+    def match(self, alerts):
+        archive = [
+            a for a in alerts
+            if any(t in (a.get('rule_desc') or '').lower() or t in (a.get('raw_log') or '').lower()
+                   for t in self.ARCHIVE_TOOLS) and
+               any(p in (a.get('rule_desc') or '').lower() or p in (a.get('raw_log') or '').lower()
+                   for p in self.SENSITIVE_PATHS)
+        ]
+        if archive:
+            return {
+                'key_alert_ids': [archive[0].get('wazuh_id')],
+                'detail': f"Archive tool on sensitive path: {archive[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.82,
+            }
+        return None
+
+
+# ── CR-046: Phishing Attachment Execution ─────────────────────────────────────
+class PhishingAttachmentExec(CorrelationRule):
+    """Email attachment (macro/script) followed by child process execution (T1566.001)."""
+    EMAIL_PROCS   = ('outlook.exe', 'thunderbird.exe', 'office365')
+    MACRO_SIGNALS = ('macro enabled', 'vba macro', 'xlm macro', 'auto_open',
+                     'document_open', 'workbook_open', 'shellexecute from word',
+                     'office macro', 'winword spawned', 'excel spawned')
+
+    def __init__(self):
+        super().__init__(
+            'CR-046', 'Phishing Attachment / Macro Execution',
+            'Email client or Office macro spawning child process — spearphishing payload (T1566.001)',
+            'critical', ['Initial Access', 'Execution'], 20
+        )
+
+    def match(self, alerts):
+        macro = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() for k in self.MACRO_SIGNALS)
+        ]
+        if macro:
+            return {
+                'key_alert_ids': [macro[0].get('wazuh_id')],
+                'detail': f"Macro/phishing execution on {macro[0].get('agent_name')}: {macro[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.90,
+            }
+        return None
+
+
+# ── CR-047: Startup Folder Persistence ────────────────────────────────────────
+class StartupFolderPersistence(CorrelationRule):
+    """File dropped into Windows Startup folder or Linux /etc/init.d (T1547.001)."""
+    STARTUP_PATHS = ('\\start menu\\programs\\startup\\', '\\startup\\',
+                     '/etc/init.d/', '/etc/rc.d/', '/etc/xdg/autostart/',
+                     '~/.config/autostart/', 'appdata\\roaming\\microsoft\\windows\\start menu')
+
+    def __init__(self):
+        super().__init__(
+            'CR-047', 'Startup Folder / Autostart Persistence',
+            'File written to Startup folder or autostart directory — boot persistence (T1547.001)',
+            'high', ['Persistence'], 20
+        )
+
+    def match(self, alerts):
+        startup = [
+            a for a in alerts
+            if (a.get('category') == 'fim' or 'file' in (a.get('rule_desc') or '').lower()) and
+               any(p in ((a.get('file_path') or '') + (a.get('rule_desc') or '')).lower()
+                   for p in self.STARTUP_PATHS)
+        ]
+        if startup:
+            return {
+                'key_alert_ids': [startup[0].get('wazuh_id')],
+                'detail': f"Startup persistence: file in autostart path on {startup[0].get('agent_name')}",
+                'confidence': 0.88,
+            }
+        return None
+
+
+# ── CR-048: Linux Cron Persistence ────────────────────────────────────────────
+class CronPersistence(CorrelationRule):
+    """Crontab modification or new file in /etc/cron.* (T1053.003)."""
+    CRON_KEYWORDS = ('crontab -e', 'crontab modified', '/etc/cron.d/', '/etc/cron.daily/',
+                     '/etc/crontab', '/var/spool/cron/', 'new cron', 'cron job added',
+                     'systemctl enable', 'systemd timer', '.timer unit')
+
+    def __init__(self):
+        super().__init__(
+            'CR-048', 'Cron / Scheduled Task Persistence (Linux)',
+            'Crontab or systemd timer modified — Linux persistence (T1053.003)',
+            'high', ['Persistence', 'Execution'], 20
+        )
+
+    def match(self, alerts):
+        cron = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() or k in (a.get('raw_log') or '').lower()
+                   for k in self.CRON_KEYWORDS)
+        ]
+        if cron:
+            return {
+                'key_alert_ids': [cron[0].get('wazuh_id')],
+                'detail': f"Cron/timer modification on {cron[0].get('agent_name')}: {cron[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.82,
+            }
+        return None
+
+
+# ── CR-049: Access Token Manipulation ─────────────────────────────────────────
+class AccessTokenManipulation(CorrelationRule):
+    """Token impersonation, CreateProcessWithToken, or runas abuse (T1134)."""
+    TOKEN_KEYWORDS = ('seimpersonateprivilege', 'createprocesswithtoken', 'impersonateloggedonuser',
+                      'duplicatetoken', 'adjusttokenprivileges', 'juicypotato', 'rottenpotato',
+                      'printspoofer', 'sweetpotato', 'godpotato', 'token impersonation',
+                      'runas /netonly', 'impersonate token')
+
+    def __init__(self):
+        super().__init__(
+            'CR-049', 'Access Token Manipulation',
+            'Token impersonation or privilege token abuse — T1134 lateral privilege escalation',
+            'critical', ['Privilege Escalation', 'Defense Evasion'], 20
+        )
+
+    def match(self, alerts):
+        token = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() or k in (a.get('raw_log') or '').lower()
+                   for k in self.TOKEN_KEYWORDS)
+        ]
+        if token:
+            return {
+                'key_alert_ids': [token[0].get('wazuh_id')],
+                'detail': f"Token manipulation on {token[0].get('agent_name')}: {token[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.90,
+            }
+        return None
+
+
+# ── CR-050: Remote Service Creation ───────────────────────────────────────────
+class RemoteServiceCreation(CorrelationRule):
+    """sc.exe or PsExec creating a service on a remote host (T1543.003, T1021)."""
+    SVC_KEYWORDS = ('sc \\\\', 'sc.exe \\\\', 'sc create', 'psexec \\\\', 'psexesvc',
+                    'remotely installed service', 'svcctl', 'service remotely created',
+                    'new service installed on remote', 'openscmanager')
+
+    def __init__(self):
+        super().__init__(
+            'CR-050', 'Remote Service Creation',
+            'Service created on a remote host via sc.exe or PsExec (T1543.003 / T1021)',
+            'critical', ['Lateral Movement', 'Persistence', 'Execution'], 30
+        )
+
+    def match(self, alerts):
+        svc = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() or k in (a.get('raw_log') or '').lower()
+                   for k in self.SVC_KEYWORDS)
+        ]
+        if svc:
+            return {
+                'key_alert_ids': [svc[0].get('wazuh_id')],
+                'detail': f"Remote service creation on {svc[0].get('agent_name')}: {svc[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.88,
+            }
+        return None
+
+
+# ── CR-051: DLL Hijacking / Side-Loading ──────────────────────────────────────
+class DLLHijacking(CorrelationRule):
+    """Suspicious DLL loaded from non-standard path by a trusted process (T1574)."""
+    DLL_KEYWORDS = ('dll hijack', 'dll sideload', 'dll side-load', 'dll search order',
+                    'phantom dll', 'dll planting', 'dll load from appdata',
+                    'loaded from user directory', 'loaded from temp', 'hijacked dll')
+
+    def __init__(self):
+        super().__init__(
+            'CR-051', 'DLL Hijacking / Side-Loading',
+            'Trusted process loaded DLL from non-standard/writable path (T1574)',
+            'high', ['Defense Evasion', 'Persistence', 'Privilege Escalation'], 20
+        )
+
+    def match(self, alerts):
+        dll = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() for k in self.DLL_KEYWORDS)
+        ]
+        if dll:
+            return {
+                'key_alert_ids': [dll[0].get('wazuh_id')],
+                'detail': f"DLL hijacking on {dll[0].get('agent_name')}: {dll[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.85,
+            }
+        return None
+
+
+# ── CR-052: Application-Layer C2 (HTTPS Long-Poll) ────────────────────────────
+class HTTPSLongPollC2(CorrelationRule):
+    """Sustained HTTPS connections > 10 min to non-CDN IPs — C2 keep-alive (T1071.001)."""
+    C2_FRAMEWORK_KEYWORDS = ('cobalt strike', 'cobaltstrike', 'cs beacon', 'metasploit',
+                             'empire c2', 'havoc c2', 'sliver c2', 'brute ratel',
+                             'c2 callback', 'implant callback', 'beacon checkin',
+                             'long-poll https', 'http long poll')
+
+    def __init__(self):
+        super().__init__(
+            'CR-052', 'Application-Layer C2 (HTTPS Long-Poll)',
+            'Sustained HTTPS connection or C2 framework beacon pattern (T1071.001)',
+            'critical', ['Command and Control'], 120
+        )
+
+    def match(self, alerts):
+        c2 = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() for k in self.C2_FRAMEWORK_KEYWORDS)
+        ]
+        if c2:
+            return {
+                'key_alert_ids': [c2[0].get('wazuh_id')],
+                'detail': f"C2 framework pattern on {c2[0].get('agent_name')}: {c2[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.92,
+            }
+        return None
+
+
+# ── CR-053: Credentials in Files / Env Variables ──────────────────────────────
+class CredentialsInFiles(CorrelationRule):
+    """grep/find searching for passwords in files — T1552.001 credential harvesting."""
+    CRED_SEARCH_KEYWORDS = ('grep -r password', 'grep password', 'grep passwd', 'grep secret',
+                            'grep aws_access', 'find . -name .env', 'find / -name password',
+                            'cat /etc/shadow', 'cat /etc/passwd', 'type c:\\windows\\repair\\sam',
+                            'reg query hklm\\sam', 'reg query hkcu\\passwords',
+                            'credential file', 'password file found')
+
+    def __init__(self):
+        super().__init__(
+            'CR-053', 'Credentials in Files / Registry',
+            'Search for credential files or password strings in filesystem (T1552.001)',
+            'high', ['Credential Access'], 15
+        )
+
+    def match(self, alerts):
+        cred = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() or k in (a.get('raw_log') or '').lower()
+                   for k in self.CRED_SEARCH_KEYWORDS)
+        ]
+        if cred:
+            return {
+                'key_alert_ids': [cred[0].get('wazuh_id')],
+                'detail': f"Credential file search on {cred[0].get('agent_name')}: {cred[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.85,
+            }
+        return None
+
+
+# ── CR-054: Network Share / SMB Enumeration ───────────────────────────────────
+class SMBShareEnumeration(CorrelationRule):
+    """net view, net share, or SharpHound-style AD enumeration (T1135, T1087)."""
+    SMB_KEYWORDS = ('net view', 'net share', 'net use', 'sharphound', 'bloodhound',
+                    'powerview', 'invoke-sharefinder', 'invoke-enumdomainusers',
+                    'get-netshare', 'smb enum', 'smb discovery', '\\\\*\\ipc$',
+                    'smbclient -l', 'crackmapexec smb', 'impacket smbclient')
+
+    def __init__(self):
+        super().__init__(
+            'CR-054', 'SMB / Network Share Enumeration',
+            'Active network share or AD enumeration — lateral movement reconnaissance (T1135/T1087)',
+            'medium', ['Discovery', 'Lateral Movement'], 20
+        )
+
+    def match(self, alerts):
+        smb = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() or k in (a.get('raw_log') or '').lower()
+                   for k in self.SMB_KEYWORDS)
+        ]
+        if smb:
+            return {
+                'key_alert_ids': [smb[0].get('wazuh_id')],
+                'detail': f"SMB/AD enumeration on {smb[0].get('agent_name')}: {smb[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.80,
+            }
+        return None
+
+
+# ── CR-055: Impersonation via SID History / DCSync ────────────────────────────
+class DCSyncAttack(CorrelationRule):
+    """DCSync (replication rights abuse) or SID history injection (T1003.006, T1134.005)."""
+    DCSYNC_KEYWORDS = ('drsuapi', 'drsreplicasynccreds', 'dcsync', 'dc sync',
+                       'replicatesinglobject', 'getncchanges', 'directory replication',
+                       'replication rights', 'sid history', 'sidhistory injection',
+                       'mimikatz lsadump::dcsync', 'impacket secretsdump')
+
+    def __init__(self):
+        super().__init__(
+            'CR-055', 'DCSync / Directory Replication Attack',
+            'DCSync replication abuse or SID history injection — domain credential harvest (T1003.006)',
+            'critical', ['Credential Access', 'Privilege Escalation'], 20
+        )
+
+    def match(self, alerts):
+        dcsync = [
+            a for a in alerts
+            if any(k in (a.get('rule_desc') or '').lower() or k in (a.get('raw_log') or '').lower()
+                   for k in self.DCSYNC_KEYWORDS)
+        ]
+        if dcsync:
+            return {
+                'key_alert_ids': [dcsync[0].get('wazuh_id')],
+                'detail': f"DCSync/replication attack on {dcsync[0].get('agent_name')}: {dcsync[0].get('rule_desc', '')[:80]}",
+                'confidence': 0.95,
+            }
+        return None
+
+
 # ── Rule registry ─────────────────────────────────────────────────────────────
 ALL_RULES: list[CorrelationRule] = [
     # ── Original 15 rules ─────────────────────────────────────────────────────
@@ -1093,6 +1756,27 @@ ALL_RULES: list[CorrelationRule] = [
     MassCloudDeletion(),
     MailForwardingRule(),
     OAuthConsentGrant(),
+    # ── CR-036 → CR-055: Gap-closure rules (ATT&CK coverage expansion) ────────
+    WMIExecution(),
+    PassTheHash(),
+    MFAPushBombing(),
+    SessionCookieTheft(),
+    CryptominingDetection(),
+    ShadowCopyDeletion(),
+    LOLBASDownloadCradle(),
+    DGADetection(),
+    AutomatedCollection(),
+    ArchiveCollectedData(),
+    PhishingAttachmentExec(),
+    StartupFolderPersistence(),
+    CronPersistence(),
+    AccessTokenManipulation(),
+    RemoteServiceCreation(),
+    DLLHijacking(),
+    HTTPSLongPollC2(),
+    CredentialsInFiles(),
+    SMBShareEnumeration(),
+    DCSyncAttack(),
 ]
 
 

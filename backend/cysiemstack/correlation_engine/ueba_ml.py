@@ -1,10 +1,20 @@
 """
 ueba_ml.py
-ML-backed UEBA layer — runs in shadow mode alongside the rule engine.
+ML-backed UEBA layer — IsolationForest per-user anomaly detection.
 Uses Isolation Forest (sklearn) for unsupervised anomaly detection.
 
-Shadow mode (default): detects anomalies but does NOT affect risk scores or alerts.
-Set UEBA_ML_SHADOW_MODE=false only after validating ML detections for ≥1 week.
+Deployment modes (set via UEBA_ML_SHADOW_MODE env var in cysiemstack.env):
+  true  (default) — shadow mode: detects and LOGS anomalies only. No risk score impact.
+                    Use this for at least 7 days to validate detection quality.
+  false           — live mode: detected anomalies create UEBAAnomaly records and
+                    contribute 15 pts to the incident risk score (advisory weight).
+
+Promotion steps:
+  1. Run in shadow mode for ≥7 days.
+  2. Review logs for 'ml_shadow_anomaly' entries: grep UEBA_ML_SHADOW_MODE cysiemstack.log
+  3. Tune UEBA_ML_CONTAMINATION if FP rate is high (lower value = fewer anomalies).
+  4. Set UEBA_ML_SHADOW_MODE=false in /opt/cycentra/cysiemstack.env and restart.
+  5. Monitor 'ml_behavioural' anomaly type in UEBA dashboard for 2 weeks.
 
 Models are retrained weekly from historical alert data.
 Stored in /app/ml_models/ inside the container (persisted via Docker volume).
@@ -24,10 +34,21 @@ from config import get_settings
 log = structlog.get_logger()
 settings = get_settings()
 
+# UEBA_ML_SHADOW_MODE: set to 'false' in cysiemstack.env to promote to live.
+# Default is 'true' (shadow / validation mode).
 SHADOW_MODE    = os.getenv('UEBA_ML_SHADOW_MODE', 'true').lower() == 'true'
 MIN_TRAIN_DAYS = int(os.getenv('UEBA_ML_MIN_TRAIN_DAYS', '7'))
 MODEL_DIR      = Path(settings.ueba_ml_model_dir)
 CONTAMINATION  = float(os.getenv('UEBA_ML_CONTAMINATION', '0.05'))
+
+# Log shadow mode state at startup so operators can confirm current config
+if SHADOW_MODE:
+    log.warning('ueba_ml_shadow_mode',
+                msg='ML UEBA is in SHADOW MODE — anomalies logged but NOT scored. '
+                    'Set UEBA_ML_SHADOW_MODE=false to promote to live detection.')
+else:
+    log.info('ueba_ml_live_mode',
+             msg='ML UEBA is in LIVE MODE — behavioural anomalies will affect risk scores.')
 
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -127,7 +148,14 @@ async def ml_analyse_alert(
     )
 
     if SHADOW_MODE:
-        log.info('ml_shadow_anomaly', username=username, score=score, incident_id=incident_id)
+        log.info('ml_shadow_anomaly',
+                 username=username,
+                 score=round(score, 4),
+                 incident_id=incident_id,
+                 hour=alert.get('timestamp', datetime.now()).hour,
+                 agent=alert.get('agent_name', alert.get('agent_id')),
+                 rule_id=alert.get('rule_id'),
+                 hint='Set UEBA_ML_SHADOW_MODE=false in cysiemstack.env to promote to live mode')
         return []  # Shadow mode: log but don't create anomaly records
 
     # Live mode: create anomaly record with lower risk contribution than rule detectors

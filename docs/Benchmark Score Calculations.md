@@ -1,12 +1,15 @@
 # CyCentra 360 — Benchmark Intelligence Engine: Score Calculations Reference
 
-**Version:** v2 — Gap Patch (June 2026)  
+**Version:** v3 (June 2026)  
 **Applies to:** `backend/blueprints/benchmark/routes.py`
 
 | Revision | Date | Changes |
 |----------|------|---------|
 | v1 Post-Accuracy-Fix | May 2026 | Data isolation fix; ext_benchmark overlap guard |
-| **v2 Gap Patch** | **June 2026** | **Dimension 2 (SIEM) extended: UEBA anomalies, kill chain depth, no-agents coverage penalty** |
+| v2 Gap Patch | June 2026 | Dimension 2 (SIEM) extended: UEBA anomalies, kill chain depth, no-agents coverage penalty |
+| **v3** | **June 2026** | **Grading scale aligned with routes.py; CSPI thresholds: A+ ≥ 90, A ≥ 80, B ≥ 70, C ≥ 55** |
+
+> **Grading scale note:** This document describes the **CSPI (Benchmark) grading scale**: A+ ≥ 90, A ≥ 80, B ≥ 70, C ≥ 55. The ASM posture score in `posture_score.py` uses the same thresholds. Any older references to A+ ≥ 85 / A ≥ 75 are superseded by this v3 update.
 
 ---
 

@@ -1,0 +1,21 @@
+id: HT-011
+name: "Pass-the-Hash Lateral Movement Chain (48h window)"
+description: >
+  Hunts for the classic PtH lateral chain: credential dump event followed by
+  NTLM network logons (Logon Type 3) from the same source to 3+ different
+  targets within 48 hours. Impacket, Mimikatz sekurlsa::pth, and CrackMapExec
+  all leave distinct log signatures this rule captures.
+mitre: ["T1550.002", "T1003", "T1021.002"]
+window_hours: 48
+conditions:
+  - category: credential_access
+    rule_desc_contains: "lsass|mimikatz|credential dump|wce.exe|pwdump|ntds"
+    min_count: 1
+    same_field: agent_id
+  - category: authentication
+    rule_desc_contains: "logon type 3|network logon|ntlm authentication"
+    min_count: 3
+    same_field: src_ip
+severity: critical
+confidence: 0.88
+frameworks: [nis2, dora, iso27001, soc2, nist_csf, pci_dss]

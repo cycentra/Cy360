@@ -153,7 +153,11 @@ AddonModulesSection (rendered separately — not catalog items)
 
 ---
 
-## Part 2 — Extension Plan: Agent Install Packages
+## Part 2 — Extension Plan: Agent Install Packages *(Planned — Not Yet Implemented)*
+
+> **Status:** The features described in Part 2 are a planned extension. None of the routes, components, or catalog files listed below currently exist in the codebase. Do not treat this section as current documentation — it is a design specification for future implementation.
+
+
 
 Add a new `agents` catalog on cycentra.com served under the **same token gate** as the marketplace, and a new **"Agent Packages" tab** inside `MarketplacePage.jsx`. No new token, no new auth concept — the existing session + `MARKETPLACE_CATALOG_TOKEN` covers everything.
 

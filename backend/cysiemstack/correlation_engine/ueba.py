@@ -35,6 +35,12 @@ RISK_CONTRIBUTIONS = {
     'suspicious_process':       65,
     'repeated_privesc_attempt': 50,
     'c2_beaconing':             60,
+    # Gap-closure detectors
+    'mfa_fatigue':              70,
+    'data_staging':             55,
+    'wmi_execution':            50,
+    'token_theft':              65,
+    'crypto_miner':             60,
 }
 
 DORMANT_THRESHOLD_DAYS = 90  # dormant account rebirth threshold
@@ -282,6 +288,77 @@ async def analyse_alert(
                 f"{username} made {recent_privesc_attempts} privilege escalation attempts in 2h window",
                 incident_id, [alert.get('wazuh_id')],
             ))
+
+    # ── 13. MFA fatigue / push bombing ───────────────────────────────────────
+    MFA_PROMPT_RULES = {'mfa prompt', 'push notification', 'mfa challenge',
+                        'duo push', 'authenticator request', 'otp sent'}
+    if any(k in (alert.get('rule_desc') or '').lower() for k in MFA_PROMPT_RULES):
+        recent_mfa_prompts = sum(
+            1 for a in recent_alerts
+            if a.get('username') == username and
+            any(k in (a.get('rule_desc') or '').lower() for k in MFA_PROMPT_RULES)
+        )
+        if recent_mfa_prompts >= 8:
+            anomalies.append(await _record_anomaly(
+                db, username, 'mfa_fatigue',
+                f"MFA fatigue: {recent_mfa_prompts + 1} prompts to {username} without success — push bombing pattern",
+                incident_id, [alert.get('wazuh_id')],
+            ))
+
+    # ── 14. Data staging (mass file ops + archive tool) ───────────────────────
+    ARCHIVE_SIGNALS = ('7z ', 'zip ', 'rar ', 'tar czf', 'compress-archive',
+                       'gzip', 'bzip2', 'zstd', 'winrar')
+    if any(k in (alert.get('rule_desc') or '').lower() or k in (alert.get('raw_log') or '').lower()
+           for k in ARCHIVE_SIGNALS):
+        recent_fim = sum(1 for a in recent_alerts if a.get('category') == 'fim')
+        if recent_fim >= 10:
+            anomalies.append(await _record_anomaly(
+                db, username, 'data_staging',
+                f"Data staging by {username}: archive tool with {recent_fim} preceding file-system changes",
+                incident_id, [alert.get('wazuh_id')],
+            ))
+
+    # ── 15. WMI-based execution ───────────────────────────────────────────────
+    WMI_SIGNALS = ('wmic ', 'wmiprvse', 'win32_process create', 'wbemexec',
+                   'invoke-wmimethod', 'wmi commandline')
+    if any(k in (alert.get('rule_desc') or '').lower() or k in (alert.get('raw_log') or '').lower()
+           for k in WMI_SIGNALS):
+        anomalies.append(await _record_anomaly(
+            db, username, 'wmi_execution',
+            f"WMI process execution by {username} on {alert.get('agent_name')} — possible lateral execution",
+            incident_id, [alert.get('wazuh_id')],
+        ))
+
+    # ── 16. Session token / cookie theft indicator ────────────────────────────
+    TOKEN_SIGNALS = ('cookie theft', 'session hijack', 'token replay', 'stolen token',
+                     'pass-the-cookie', 'session from new ip', 'session fixation')
+    if any(k in (alert.get('rule_desc') or '').lower() for k in TOKEN_SIGNALS):
+        anomalies.append(await _record_anomaly(
+            db, username, 'token_theft',
+            f"Session token theft indicator for {username}: {(alert.get('rule_desc') or '')[:80]}",
+            incident_id, [alert.get('wazuh_id')],
+        ))
+    # Heuristic: same user, 3+ distinct src_ip auth events in 2h
+    if rule_id in AUTH_SUCCESS_IDS:
+        distinct_ips = {a.get('src_ip') for a in recent_alerts
+                        if a.get('username') == username and a.get('src_ip')}
+        if len(distinct_ips) >= 3:
+            anomalies.append(await _record_anomaly(
+                db, username, 'token_theft',
+                f"Token theft heuristic: {username} authenticated from {len(distinct_ips)} IPs in 2h window",
+                incident_id, [alert.get('wazuh_id')],
+            ))
+
+    # ── 17. Cryptominer process / connection ──────────────────────────────────
+    MINER_SIGNALS = ('xmrig', 'stratum+tcp', 'stratum+ssl', 'cryptonight', 'minexmr',
+                     'xmrpool', 'nanopool', 'f2pool', 'nicehash', 'coinhive', 'mining pool')
+    if any(k in (alert.get('rule_desc') or '').lower() or k in (alert.get('raw_log') or '').lower()
+           for k in MINER_SIGNALS):
+        anomalies.append(await _record_anomaly(
+            db, username, 'crypto_miner',
+            f"Cryptomining activity on {alert.get('agent_name')} under {username}: {(alert.get('rule_desc') or '')[:80]}",
+            incident_id, [alert.get('wazuh_id')],
+        ))
 
     # ── Update baseline ────────────────────────────────────────────────────────
     await _update_baseline(baseline, alert, recent_alerts)

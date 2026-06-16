@@ -1,0 +1,18 @@
+id: HT-009
+name: "Slow / Low-Volume Cloud Storage Exfiltration (30-day window)"
+description: >
+  Detects repeated connections to cloud storage or file-sharing services
+  (Mega, Dropbox, WeTransfer, GoFile, OneDrive) spread across 30 days at
+  low frequency — deliberate slow exfiltration to avoid bandwidth-based
+  anomaly detection. Fewer than 3 events per day but persistent across weeks
+  is the key indicator.
+mitre: ["T1567.002", "T1048.003"]
+window_hours: 720
+conditions:
+  - category: network
+    rule_desc_contains: "mega.nz|dropbox.com|wetransfer.com|gofile.io|transfer.sh|anonfiles|mediafire|filebin.net|onedrive.live|drive.google.com"
+    min_count: 10
+    same_field: agent_id
+severity: medium
+confidence: 0.72
+frameworks: [nis2, dora, iso27001, soc2, pci_dss]

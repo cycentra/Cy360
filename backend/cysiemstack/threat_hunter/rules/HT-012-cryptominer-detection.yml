@@ -1,0 +1,18 @@
+id: HT-012
+name: "Cryptominer / Resource Hijacking Detection (24h window)"
+description: >
+  Detects cryptomining malware by hunting for XMRig, stratum protocol
+  connections, known mining pool hostnames, or suspicious high-port outbound
+  connections (3333, 4444, 9999, 14444) combined with process-level indicators.
+  Cryptominers typically evade hourly rules by keeping connections persistent
+  rather than bursty.
+mitre: ["T1496"]
+window_hours: 24
+conditions:
+  - category: network
+    rule_desc_contains: "xmrig|stratum|cryptonight|minexmr|xmrpool|nanopool|nicehash|coinhive|mining pool"
+    min_count: 1
+    same_field: agent_id
+severity: high
+confidence: 0.90
+frameworks: [nis2, iso27001, soc2, nist_csf]

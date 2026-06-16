@@ -1,0 +1,18 @@
+id: HT-007
+name: "WMI Event Subscription Persistence (7-day window)"
+description: >
+  Detects WMI event subscription persistence artefacts (__EventFilter,
+  __EventConsumer, __FilterToConsumerBinding) or wmic.exe spawning child
+  processes, spread across 7 days. WMI subscriptions are commonly used
+  by APT actors because they survive reboots and are invisible to
+  standard autoruns tooling.
+mitre: ["T1047", "T1546.003"]
+window_hours: 168
+conditions:
+  - category: system
+    rule_desc_contains: "wmiprvse|wmic|__EventFilter|__EventConsumer|WMI subscription|MOF file"
+    min_count: 2
+    same_field: agent_id
+severity: high
+confidence: 0.82
+frameworks: [nis2, iso27001, nist_csf, pci_dss]

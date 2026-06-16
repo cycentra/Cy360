@@ -16,12 +16,14 @@ These are completely independent — jobs from one system never appear in the ot
 
 ### What it runs
 
-| Job type | Description |
-|----------|-------------|
-| `asm_scan` | **Continuous Sync** — triggers `cycentra_scan.py` for a domain on a repeating interval or cron schedule |
-| `asm_wordlist` | Refreshes the ASM subdomain wordlist from threat-intel feeds |
-| `docker_maintenance` | Prunes stopped containers, unused images/volumes, build cache |
-| `backup` | Snapshots configs, env files, license and DB to `/opt/cycentra/backups/` |
+| Job type | Description | Created via |
+|----------|-------------|-------------|
+| `asm_scan` | **Continuous Sync** — triggers `cycentra_scan.py` for a domain on a repeating interval or cron schedule | `POST /api/scheduler/jobs` or Portal → Scan Operations |
+| `asm_wordlist` | Refreshes the ASM subdomain wordlist from threat-intel feeds | Auto-created alongside `asm_scan` jobs |
+| `docker_maintenance` | Prunes stopped containers, unused images/volumes, build cache | `PUT /api/system/schedules` only (Portal → System → Scheduled Tasks) |
+| `backup` | Snapshots configs, env files, license and DB to `/opt/cycentra/backups/` | `PUT /api/system/schedules` only (Portal → System → Scheduled Tasks) |
+
+> **Note:** `POST /api/scheduler/jobs` accepts only `asm_scan` as the job type. `docker_maintenance` and `backup` jobs are managed exclusively through `PUT /api/system/schedules` (System routes), which writes them to the user crontab — not to the APScheduler in-process queue.
 
 ### How it works
 

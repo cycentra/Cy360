@@ -1,0 +1,17 @@
+id: HT-008
+name: "Living-off-the-Land Binary Abuse Pattern (7-day window)"
+description: >
+  Detects a pattern of LOLBin abuse across 7 days — certutil, bitsadmin,
+  mshta, regsvr32, or rundll32 used to download or execute remote content.
+  Low-and-slow LOLBAS campaigns are frequently missed by single-event rules
+  because each individual event appears legitimate in isolation.
+mitre: ["T1218", "T1105", "T1059.001"]
+window_hours: 168
+conditions:
+  - category: execution
+    rule_desc_contains: "certutil.*urlcache|bitsadmin.*transfer|mshta.*http|regsvr32.*http|rundll32.*javascript|installutil|mavinject|odbcconf"
+    min_count: 3
+    same_field: agent_id
+severity: high
+confidence: 0.80
+frameworks: [nis2, iso27001, nist_csf, soc2]

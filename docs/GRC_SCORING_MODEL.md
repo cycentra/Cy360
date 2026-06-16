@@ -17,6 +17,7 @@ The CyCentra 360 GRC engine computes a posture score (0–100) for each complian
 | `nist_csf` | NIST CSF 2.0 | 26 | US |
 | `pci_dss` | PCI DSS v4 | 30 | Global |
 | `gdpr` | GDPR | 30 | EU |
+| `eu_ai_act` | EU AI Act | 30 | EU |
 
 ---
 
@@ -66,13 +67,15 @@ alert_penalty = min(40, Σ(critical × 8) + Σ(high × 4) + Σ(medium × 1))
 ### Step 3 — Final Score
 
 ```
-if (questions have been answered):
+if q_answered > 0:
     final_score = max(0, q_score − alert_penalty)
-else:
-    final_score = max(0, 100 − alert_penalty)   ← clean-start baseline
+elif q_total > 0:      ← templates seeded but none answered
+    final_score = 0.0
+else:                  ← no templates seeded (framework not yet configured)
+    final_score = max(0, 100 − alert_penalty)
 ```
 
-**Zero-questions baseline:** When no assessment questions have been answered, the system assumes a 100% questionnaire baseline. This represents a "clean start" — the framework posture is unknown, so only the live alert signal penalizes the score. This is intentional: a framework with no assessment data and no relevant alerts shows 100%, prompting you to complete the assessment rather than hiding behind a false 0%.
+**Zero-answers baseline:** When questionnaire templates exist but no questions have been answered (`q_total > 0, q_answered = 0`), the score is **0%** regardless of alert penalties. This signals that the assessment is incomplete and requires attention. The 100% fallback only applies when templates have not been seeded at all (i.e., the framework is not yet configured in the system).
 
 ---
 

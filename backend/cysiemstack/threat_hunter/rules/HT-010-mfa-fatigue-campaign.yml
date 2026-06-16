@@ -1,0 +1,18 @@
+id: HT-010
+name: "MFA Fatigue / Push Bombing Campaign (7-day window)"
+description: >
+  Detects sustained MFA push bombing campaigns targeting the same user over
+  7 days. Attackers repeatedly trigger MFA prompts hoping the user
+  accidentally approves one. This hunt looks for 20+ MFA prompts to the
+  same username with no accompanying auth failure storm — distinguishing it
+  from standard brute force.
+mitre: ["T1621"]
+window_hours: 168
+conditions:
+  - category: authentication
+    rule_desc_contains: "MFA prompt|push notification|Duo push|authenticator request|OTP sent|second factor required"
+    min_count: 20
+    same_field: username
+severity: high
+confidence: 0.85
+frameworks: [nis2, dora, iso27001, soc2, nist_csf, pci_dss]

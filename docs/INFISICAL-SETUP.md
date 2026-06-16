@@ -272,7 +272,7 @@ EOF
 | `HIMDS JWT obtained successfully` | Arc MSI is healthy |
 | `POST /api/v1/auth/oidc-auth/login HTTP/1.1" 200` | OIDC auth succeeded |
 | `POST /api/v1/auth/oidc-auth/login HTTP/1.1" 403` | Bound Subject mismatch — recheck `sub` |
-| `ImportError: No module named 'infisical_sdk'` | Run `pip install infisical-sdk` |
+| `infisical-python not installed` | Run `pip install infisical-python>=2.0.0` |
 | `INFISICAL_PROJECT_ID not set` | Missing env var in `.env` |
 | Secret lines showing `404` | Secret not uploaded to Infisical yet |
 | Secret lines showing `200` | Secret found and loaded |
@@ -293,12 +293,12 @@ on the server.
 
 - **Symptom:** No secrets loaded; no error in Flask logs beyond a WARNING
 - **Root cause:** `requirements.txt` listed `infisicalsdk>=1.0.0`. The correct PyPI package
-  name is `infisical-sdk` (with a hyphen). `infisicalsdk` does not exist on PyPI, so
+  name is `infisical-python` (v2.x). `infisicalsdk` does not exist on PyPI, so
   `pip install` on a fresh server installs nothing. The `except ImportError` block in
   `kv_secrets.py` silently returns 0 — the entire backend is skipped with only a WARNING.
 - **Why it wasn't caught earlier:** The SDK had been manually installed on CY360-DEV before
   the requirements.txt was written, masking the typo at runtime.
-- **Fix:** `backend/requirements.txt` — `infisicalsdk` → `infisical-sdk` (v1.2.68)
+- **Fix:** `backend/requirements.txt` — `infisicalsdk` → `infisical-python>=2.0.0`
 
 ---
 

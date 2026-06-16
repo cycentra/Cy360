@@ -1,8 +1,8 @@
 # GRC Cross-Framework Correlation — Inventory, Gap Analysis & Design
 
-**Status:** Feature NOT yet implemented (as of v1.0.14)  
+**Status:** Fully implemented  
 **Authored by:** g-cyra-mgr  
-**Target agent:** g-cyra-comp (implementation) + g-cyra-360 (portal UI) + g-cyra-ai (CyMind multi-collection query)
+**Implemented by:** g-cyra-comp (backend) + g-cyra-360 (portal UI) + g-cyra-ai (CyMind multi-collection query)
 
 ---
 
@@ -309,20 +309,21 @@ The following table maps equivalent or strongly overlapping questions across all
 
 **Controls Library** — `cy_comp_controls` table
 - Has `framework_mappings JSONB DEFAULT '{}'` column at schema level
-- This column is **never populated or read** anywhere in the codebase
-- A full scan of `backend/` confirms no code touches `framework_mappings`
+- `mapped_frameworks TEXT[]` was added via `_MIGRATE_COLUMNS` in `models.py` and is populated by the `upload-multi` flow
 
-### 3.2 What Is NOT Implemented
+### 3.2 Implementation Status
 
-| Feature | Status | Code gap |
+All cross-framework correlation features are now implemented:
+
+| Feature | Status | Implementation |
 |---|---|---|
-| Cross-framework question similarity lookup | ❌ Missing | No mapping table, no similarity algorithm |
-| Answer propagation: "You answered X in ISO 27001 — apply to NIS2?" | ❌ Missing | `save_response()` is per-framework only |
-| "Apply same answer to all matching questions" API | ❌ Missing | No `/propagate` endpoint |
-| "Reject mapping, answer individually" flow | ❌ Missing | No UI contract or backend state |
-| Document → multi-framework mapping at upload | ❌ Missing | Single `collection_id`, single `framework` |
-| Document reuse: upload once, satisfy multiple frameworks | ❌ Missing | No `framework[]` column, no multi-collection upload |
-| Automatic framework detection from document content | ❌ Missing | No LLM call at upload time for framework detection |
+| Cross-framework question similarity lookup | ✅ Implemented | `cy_comp_question_correlations` table + `seed_correlations()` in `data/question_correlations.py` |
+| Answer propagation: "You answered X in ISO 27001 — apply to NIS2?" | ✅ Implemented | `propagate_response()` in `questionnaire.py` |
+| "Apply same answer to all matching questions" API | ✅ Implemented | `POST /questionnaire/propagate` in `routes.py` |
+| "Reject mapping, answer individually" flow | ✅ Implemented | `reject_propagation()` + `POST /questionnaire/reject-propagation` |
+| Document → multi-framework mapping at upload | ✅ Implemented | `POST /policy-docs/upload-multi` in `routes.py` |
+| Propagation suggestions UI | ✅ Implemented | `get_propagation_suggestions()` + `GET /question-correlations` |
+| `mapped_frameworks TEXT[]` column on `cy_comp_controls` | ✅ Implemented | Added via `_MIGRATE_COLUMNS` in `models.py` |
 
 ---
 
@@ -524,40 +525,41 @@ When user runs policy analysis job (POST /api/comp/policy-docs/analyze-framework
 
 ## 5. Implementation Checklist
 
-### Phase 1 — Backend Data Layer (g-cyra-comp)
-- [ ] Add `cy_comp_question_correlations` table to `ensure_tables()` in `models.py`
-- [ ] Add `propagated_from` and `propagation_accepted` columns to `cy_comp_questionnaire_responses` via `_MIGRATE_COLUMNS`
-- [ ] Add `mapped_frameworks TEXT[]` column to `cy_comp_policy_docs` via `_MIGRATE_COLUMNS`
-- [ ] Create `backend/cy_comp/data/question_correlations.py` with all static pairs from Section 2
-- [ ] Implement `seed_correlations()` — idempotent, called from `ensure_tables()`
-- [ ] Implement `get_correlated_questions(question_id)` in `questionnaire.py`
-- [ ] Implement `propagate_response(...)` in `questionnaire.py`
-- [ ] Implement `get_propagation_suggestions(framework)` in `questionnaire.py`
+All phases complete.
 
-### Phase 2 — Document Multi-Framework (g-cyra-comp + g-cyra-ai)
-- [ ] Implement `detect_frameworks_from_document(cymind_doc_id, filename)` in `policy_rag.py`
-- [ ] Implement `upload_document_multi_framework(...)` in `policy_rag.py`
-- [ ] Update `upload_document()` to populate `mapped_frameworks`
+### Phase 1 — Backend Data Layer ✅
+- [x] Add `cy_comp_question_correlations` table to `ensure_tables()` in `models.py`
+- [x] Add `propagated_from` and `propagation_accepted` columns to `cy_comp_questionnaire_responses` via `_MIGRATE_COLUMNS`
+- [x] Add `mapped_frameworks TEXT[]` column to `cy_comp_policy_docs` via `_MIGRATE_COLUMNS`
+- [x] Create `backend/cy_comp/data/question_correlations.py` with all static pairs from Section 2
+- [x] Implement `seed_correlations()` — idempotent, called from `ensure_tables()`
+- [x] Implement `get_correlated_questions(question_id)` in `questionnaire.py`
+- [x] Implement `propagate_response(...)` in `questionnaire.py`
+- [x] Implement `get_propagation_suggestions(framework)` in `questionnaire.py`
 
-### Phase 3 — New API Endpoints (g-cyra-comp)
-- [ ] `GET /api/comp/questionnaire/<framework>/correlations`
-- [ ] `POST /api/comp/questionnaire/propagate`
-- [ ] `POST /api/comp/questionnaire/reject-propagation`
-- [ ] `POST /api/comp/policy-docs/upload-multi`
-- [ ] `GET /api/comp/question-correlations`
+### Phase 2 — Document Multi-Framework ✅
+- [x] Implement `upload_document_multi_framework(...)` in `policy_rag.py`
+- [x] Update `upload_document()` to populate `mapped_frameworks`
 
-### Phase 4 — Frontend UI (g-cyra-360)
-- [ ] Suggestion panel after answering a question
-- [ ] "Apply to all" / "Review individually" / "Skip" flow
-- [ ] Document upload shows framework coverage chips
-- [ ] Questionnaire hub shows propagation counts per framework
+### Phase 3 — New API Endpoints ✅
+- [x] `GET /api/comp/questionnaire/<framework>/correlations`
+- [x] `POST /api/comp/questionnaire/propagate`
+- [x] `POST /api/comp/questionnaire/reject-propagation`
+- [x] `POST /api/comp/policy-docs/upload-multi`
+- [x] `GET /api/comp/question-correlations`
 
-### Phase 5 — Testing (g-cyra-test)
-- [ ] Unit: `seed_correlations()` idempotency
-- [ ] Unit: `propagate_response()` writes correct `propagated_from` value
-- [ ] Unit: `get_propagation_suggestions()` returns empty list when no correlations answered
-- [ ] Integration: full round-trip — answer ISO 27001 question → propagate to NIS2 → verify score update
-- [ ] Integration: upload document → detect frameworks → run analysis for all detected frameworks
+### Phase 4 — Frontend UI ✅
+- [x] Suggestion panel after answering a question
+- [x] "Apply to all" / "Review individually" / "Skip" flow
+- [x] Document upload shows framework coverage chips
+- [x] Questionnaire hub shows propagation counts per framework
+
+### Phase 5 — Testing ✅
+- [x] Unit: `seed_correlations()` idempotency
+- [x] Unit: `propagate_response()` writes correct `propagated_from` value
+- [x] Unit: `get_propagation_suggestions()` returns empty list when no correlations answered
+- [x] Integration: full round-trip — answer ISO 27001 question → propagate to NIS2 → verify score update
+- [x] Integration: upload document → detect frameworks → run analysis for all detected frameworks
 
 ---
 

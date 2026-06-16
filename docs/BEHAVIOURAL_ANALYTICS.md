@@ -10,15 +10,15 @@ The CySIEM behavioural analytics stack operates across three layers:
 
 | Layer | Engine | File |
 |-------|--------|------|
-| UEBA Rule-Based | 12 user-behaviour detectors + 3 host-behaviour detectors | `ueba.py` |
+| UEBA Rule-Based | 17 detectors (12 user-behaviour + 3 host-behaviour + 5 gap-closure) | `ueba.py` |
 | UEBA ML-Based | Unsupervised IsolationForest per-user (shadow mode by default) | `ueba_ml.py` |
-| Temporal Correlation | 35 MITRE ATT&CK-aligned correlation rules | `correlator.py` |
+| Temporal Correlation | 55 MITRE ATT&CK-aligned correlation rules | `correlator.py` |
 
-All three layers feed into the risk scorer (`risk_scorer.py`), which produces a 0–100 composite score per entity. The auto-close and ticket logic (`iris_connector.py`) then acts on that score.
+All three layers feed into the risk scorer (`risk_scorer.py`), which produces a 0–100 composite score per entity. The auto-close and case logic (`ingestor.py`, band logic at lines 262–346) then acts on that score.
 
 ---
 
-## 2. UEBA Behavioural Rules — User-Based (12 detectors)
+## 2. UEBA Behavioural Rules — User-Based (12 detectors + 5 gap-closure detectors)
 
 Each detector runs on every alert that has a `username` field. Baselines per user are maintained in the `ueba_baselines` table and updated incrementally (EWMA) on every alert.
 
@@ -28,15 +28,21 @@ Each detector runs on every alert that has a `username` field. Baselines per use
 |---|---|
 | `suspicious_process` | 65 |
 | `impossible_travel` | 60 |
-| `concurrent_session` | 50 |
+| `c2_beaconing` | 60 |
+| `mfa_fatigue` | 70 |
+| `token_theft` | 65 |
 | `svc_account_interactive` | 55 |
 | `dormant_account_login` | 55 |
+| `concurrent_session` | 50 |
 | `repeated_privesc_attempt` | 50 |
 | `multi_host_burst` | 45 |
 | `activity_volume_spike` | 45 |
+| `data_staging` | 55 |
 | `high_auth_fail_rate` | 40 |
 | `privilege_escalation` | 40 |
 | `off_hours_login` | 35 |
+| `wmi_execution` | 50 |
+| `crypto_miner` | 60 |
 | `new_agent_access` | 25 |
 
 ---
@@ -161,6 +167,56 @@ Each detector runs on every alert that has a `username` field. Baselines per use
 
 ---
 
+### UEBA-U-13: MFA Fatigue / Push Bombing
+
+**Trigger:** ≥10 MFA push/challenge events (rule IDs in the MFA-push category) for the same user within a 5-minute window, combined with at least one successful authentication that follows.
+
+**Logic:** Attackers bombard a user with MFA push notifications until they approve one out of frustration. The combination of mass push events + eventual success is the distinguishing signal from a misconfigured app.
+
+**Risk:** 70 pts
+
+---
+
+### UEBA-U-14: Data Staging Behaviour
+
+**Trigger:** ≥3 file-read or archive-creation events (FIM category, keywords: zip, tar, archive, compress, exfil) on the same host from the same user within a 30-minute window.
+
+**Logic:** Pre-exfiltration staging — collecting and compressing data before transfer. High signal when combined with outbound network activity.
+
+**Risk:** 55 pts
+
+---
+
+### UEBA-U-15: WMI Remote Execution
+
+**Trigger:** A WMI execution event (rule IDs matching wmi, wmiexec, wbemcons) associated with a named user where the target host differs from the source.
+
+**Logic:** WMI is a common lateral movement and remote execution technique. Legitimate admin use is rare on most endpoints.
+
+**Risk:** 50 pts
+
+---
+
+### UEBA-U-16: Session Token Theft Indicators
+
+**Trigger:** A successful authentication for a user from a new IP/agent combination where the session has no preceding authentication step (token replay pattern) AND the originating IP is not in the user's known IP baseline.
+
+**Logic:** Stolen session tokens allow authentication without password re-entry. A new-location session with no auth event immediately preceding it is characteristic of token replay.
+
+**Risk:** 65 pts
+
+---
+
+### UEBA-U-17: Cryptominer Process Detection
+
+**Trigger:** A process name or command line matching known mining software (xmrig, minerd, cgminer, bfgminer, nbminer, lolminer, teamredminer, t-rex) is detected in a process-monitoring alert.
+
+**Logic:** Cryptominers are a direct indicator of resource abuse and often a secondary payload after initial compromise.
+
+**Risk:** 60 pts
+
+---
+
 ## 3. UEBA Behavioural Rules — Host-Based (3 detectors)
 
 These run when an alert has NO `username` (e.g. network events, system-level events from agents). The host entity identifier is `host:<agent_id>`.
@@ -191,7 +247,7 @@ These run when an alert has NO `username` (e.g. network events, system-level eve
 
 **Logic:** Malware C2 beacons call home at precise intervals. The CV filter separates legitimate polling applications (which have irregular timing) from beacon traffic (which is tightly scheduled).
 
-**Risk:** Inherits the `c2_beaconing` type — see risk table addition needed (currently not in `RISK_CONTRIBUTIONS` dict; defaults to 20 pts — **identified gap**).
+**Risk:** 60 pts (`c2_beaconing` entry in `RISK_CONTRIBUTIONS` dict at `ueba.py:37`).
 
 ---
 
@@ -228,7 +284,7 @@ When `UEBA_ML_SHADOW_MODE=false`, a detected anomaly creates a `UEBAAnomaly` rec
 
 ---
 
-## 5. Temporal Correlation Rules (35 rules)
+## 5. Temporal Correlation Rules (55 rules)
 
 Each rule has a **time window** — only alerts within that window relative to the newest alert are considered. Rules fire once per incident (deduplicated by `rule_id`). When a rule fires it may escalate incident severity.
 
@@ -507,13 +563,13 @@ Computed by `compute_fp_score()` in `risk_scorer.py`:
 
 ## 7. Auto-Status Logic (Current State)
 
-**File:** `iris_connector.py` → `advance_incident_status()`
+**File:** `ingestor.py` (band logic at lines 262–346)
 
 | FP Score Band | Action |
 |---|---|
-| ≥ `fpThreshold` (UI slider) | Auto-closed — no ticket, audit entry: `auto_close` |
+| ≥ `fpThreshold` (UI slider) | Auto-closed — no case, audit entry: `auto_close` |
 | 40 – < `fpThreshold` | Stays `investigating` |
-| < 40 + enrichment complete | Advanced to `in_review` + IRIS ticket (if severity high/critical + ≥3 alerts) |
+| < 40 + enrichment complete | Advanced to `in_review` + native CyCase opened (if severity high/critical + ≥3 alerts) |
 
 The threshold is read live from `ai_settings.json` on every alert — slider changes take effect immediately without restart.
 
@@ -530,39 +586,19 @@ Analyst verdicts (`true_positive` / `false_positive` / `benign`) are stored in `
 
 ---
 
-## 9. Identified Gaps
+## 9. Resolved Gaps
 
-### GAP-1: No AI Recommendation in the Incident View
+The following gaps previously documented in this section have been closed:
 
-The system computes an `llm_summary` and `llm_remediation` (stored on the `Incident` model) but these are currently only included in the IRIS ticket description (`iris_connector.py:create_iris_case`). **The portal incident detail view does not surface the AI-generated remediation steps as actionable analyst guidance.** There is no "What to do next" panel driven by the LLM output.
-
-**Impact:** Analysts who handle incidents outside of IRIS never see the AI-generated recommendations.
-
----
-
-### GAP-2: Auto-Close Is Purely Threshold-Based — No Pattern Memory
-
-The current FP auto-close mechanism uses a continuous score (`fp_probability`) against a static threshold slider. It has no memory of "this specific type of alert content was closed as FP by analysts N times." 
-
-Every occurrence of a known-benign event (e.g. the cycentra-setup.sh sudo command below) must exceed the global FP threshold to be dismissed — there is no per-pattern auto-suppression based on repeat analyst closures.
-
-**Canonical example of a known-benign incident that analysts close every time:**
-```
-root : PWD=/usr/local/lib/python3.12/dist-packages ;
-       USER=root ;
-       COMMAND=/opt/cycentra/cycentra-setup.sh --update
-```
-This fires a sudo/privilege-escalation rule (UEBA-U-06 and possibly CR-002), generates a UEBA anomaly, and gets routed to `in_review`. An analyst closes it. It fires again next update. The analyst closes it again. The system never learns.
+| Gap | Resolution |
+|---|---|
+| GAP-1: AI recommendations not shown in portal incident view | `llm_summary` and `llm_remediation` are now surfaced in the portal incident detail panel |
+| GAP-2: Auto-close threshold-based only, no pattern memory | `fp_pattern_store.py` implemented — see Section 10 |
+| GAP-3: `c2_beaconing` not in `RISK_CONTRIBUTIONS` dict | Added at 60 pts (`ueba.py:37`) |
 
 ---
 
-### GAP-3: c2_beaconing Risk Contribution Not in RISK_CONTRIBUTIONS Dict
-
-`ueba.py` creates `UEBAAnomaly` records with `anomaly_type='c2_beaconing'` from the host path but `RISK_CONTRIBUTIONS` does not have an entry for it. It defaults to 20 pts (the `dict.get` default). This should be explicitly defined at ~60 pts given the severity of the detection.
-
----
-
-## 10. Proposed: ML-Based Repeat FP Auto-Close
+## 10. ML-Based Repeat FP Auto-Close *(Implemented)*
 
 ### Concept
 
@@ -675,4 +711,4 @@ These are already fully generated by the backend — this is a portal-only chang
 
 ---
 
-_Document covers: `ueba.py`, `ueba_ml.py`, `correlator.py`, `risk_scorer.py`, `feedback_store.py`, `iris_connector.py`, `ingestor.py`, `models.py`_
+_Document covers: `ueba.py`, `ueba_ml.py`, `correlator.py`, `risk_scorer.py`, `feedback_store.py`, `fp_pattern_store.py`, `ingestor.py`, `models.py`_

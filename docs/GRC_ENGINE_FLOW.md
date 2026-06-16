@@ -19,8 +19,8 @@ The GRC (Governance, Risk & Compliance) engine in CyCentra 360 is a multi-layer 
 | Source | Location | Description |
 |--------|----------|-------------|
 | Framework standards (ISO 27001, NIS2, DORA, SOC 2, NIST CSF, PCI DSS) | `cy_comp_policy_docs` (doc_type='framework') | Admin-uploaded via **System Settings → Security Compliance → Framework Documents**. Each framework has a dedicated CyMind RAG collection (`framework-{id}`). Locked base docs cannot be deleted. |
-| Questionnaire templates | `cy_comp_questionnaire_templates` | Seeded from code at startup (`questionnaire.py → seed_templates()`). 16–20 controls-level questions per framework covering all major control domains. Idempotent — safe to re-run. |
-| Framework control mappings | `FRAMEWORK_CONTROL_COUNTS` in `compliance.py` | Canonical question/control count per framework used as the scoring denominator (`nis2=20, dora=19, iso27001=19, soc2=16, nist_csf=17, pci_dss=17`). |
+| Questionnaire templates | `cy_comp_questionnaire_templates` | Seeded from code at startup (`questionnaire.py → seed_templates()`). 26–45 controls-level questions per framework covering all major control domains. Idempotent — safe to re-run. |
+| Framework control mappings | `FRAMEWORK_CONTROL_COUNTS` in `compliance.py` | Canonical question/control count per framework used as the scoring denominator (`nis2=28, dora=28, iso27001=45, soc2=28, nist_csf=26, pci_dss=30, gdpr=30, eu_ai_act=30`). |
 
 ### 1.2 Customer Policy Documents
 
@@ -151,14 +151,16 @@ q_fail    = answered questions with auto_score = 0 (gap/fail)
 
 alert_penalty = min(40, critical_alerts*8 + high_alerts*4 + medium_alerts*1)
 
-if questionnaire has been started:
+if q_answered > 0:
     q_score = (q_pass + q_partial*0.5) / q_total * 100
     final_score = max(0, q_score - alert_penalty)
-else:
+elif q_total > 0:      ← templates seeded but none answered
+    final_score = 0.0
+else:                  ← no templates seeded at all (framework not configured)
     final_score = max(0, 100 - alert_penalty)
 ```
 
-**Key invariant:** `q_total` is always the questionnaire question count (16–20 per framework) — never the alert count. This ensures the score reflects control coverage, not alert volume.
+**Key invariant:** `q_total` is always the questionnaire question count (26–45 per framework) — never the alert count. This ensures the score reflects control coverage, not alert volume.
 
 ### 4.2 Score History
 

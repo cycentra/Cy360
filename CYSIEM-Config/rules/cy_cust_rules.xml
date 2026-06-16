@@ -1,9 +1,348 @@
 <group name="cycentra_rules,">
- <rule id="100050" level="3">
+
+  <!-- ── ORIGINAL RULE: CyAI block action ───────────────────────────────── -->
+  <rule id="100050" level="3">
     <decoded_as>json</decoded_as>
     <field name="llm_model">^CyAI$</field>
     <field name="ai_action">^block$</field>
     <description>IP $(srcip) Blocked on Agent $(agent_id). $(ai_outcome)</description>
     <options>no_log</options>
   </rule>
+
+  <!-- ================================================================== -->
+  <!-- CREDENTIAL ACCESS (TA0006)                                          -->
+  <!-- ================================================================== -->
+
+  <!-- T1003 — LSASS / Credential Dumping -->
+  <rule id="100100" level="15">
+    <if_sid>0</if_sid>
+    <match>lsass.exe|sekurlsa|mimikatz|wce.exe|pwdump|procdump|sharpdump</match>
+    <description>Credential dumping tool detected: $(process_name) — T1003</description>
+    <mitre><id>T1003</id></mitre>
+    <group>credential_access,critical,</group>
+  </rule>
+
+  <!-- T1110.003 — Password Spraying -->
+  <rule id="100101" level="12" frequency="20" timeframe="60">
+    <if_matched_sid>5710,5711,5716,18102</if_matched_sid>
+    <same_field>srcip</same_field>
+    <different_field>username</different_field>
+    <description>Password spraying from $(srcip): multiple accounts targeted — T1110.003</description>
+    <mitre><id>T1110.003</id></mitre>
+    <group>credential_access,brute_force,</group>
+  </rule>
+
+  <!-- T1558 — Kerberoasting -->
+  <rule id="100102" level="14">
+    <if_sid>0</if_sid>
+    <match>kerberoast|Rubeus|GetUserSPNs|TGS-REP|rc4-hmac encryption|0x17 encryption</match>
+    <description>Kerberoasting activity detected — T1558.003</description>
+    <mitre><id>T1558.003</id></mitre>
+    <group>credential_access,kerberos,</group>
+  </rule>
+
+  <!-- T1552.001 — Credentials in Files -->
+  <rule id="100103" level="11">
+    <if_sid>0</if_sid>
+    <match>grep.*password|grep.*passwd|grep.*secret|cat /etc/shadow|type.*SAM|reg query.*password|find.*\.env</match>
+    <description>Credential file search detected on $(agent.name) — T1552.001</description>
+    <mitre><id>T1552.001</id></mitre>
+    <group>credential_access,</group>
+  </rule>
+
+  <!-- T1003.006 — DCSync Attack -->
+  <rule id="100104" level="15">
+    <if_sid>0</if_sid>
+    <match>drsuapi|GetNCChanges|DsReplicaSync|secretsdump|dcsync|lsadump::dcsync</match>
+    <description>DCSync replication attack detected — domain credential harvest T1003.006</description>
+    <mitre><id>T1003.006</id></mitre>
+    <group>credential_access,critical,active_response,</group>
+  </rule>
+
+  <!-- ================================================================== -->
+  <!-- DEFENSE EVASION (TA0005)                                           -->
+  <!-- ================================================================== -->
+
+  <!-- T1047 — WMI Execution -->
+  <rule id="100200" level="12">
+    <if_sid>0</if_sid>
+    <match>wmiprvse.exe|wmic.exe|Win32_Process create|WBEMExec|Invoke-WmiMethod</match>
+    <description>WMI process execution detected on $(agent.name) — T1047</description>
+    <mitre><id>T1047</id></mitre>
+    <group>execution,lateral_movement,</group>
+  </rule>
+
+  <!-- T1218 — LOLBAS / System Binary Proxy Execution -->
+  <rule id="100201" level="13">
+    <if_sid>0</if_sid>
+    <match>certutil.*-urlcache|certutil.*-decode|bitsadmin.*/transfer|mshta.*http|regsvr32.*/s.*http|rundll32.*javascript|installutil.exe|mavinject.exe|odbcconf.exe</match>
+    <description>LOLBAS download cradle detected: $(command) — T1218/T1105</description>
+    <mitre><id>T1218</id></mitre>
+    <group>defense_evasion,execution,lolbas,</group>
+  </rule>
+
+  <!-- T1562.001 — Security Tool Disabled (Windows Defender) -->
+  <rule id="100202" level="14">
+    <if_sid>0</if_sid>
+    <match>Set-MpPreference.*DisableRealtimeMonitoring|Add-MpPreference.*ExclusionPath|WinDefend.*stopped|tamper protection disabled|Real-time protection disabled</match>
+    <description>Windows Defender or AV disabled on $(agent.name) — T1562.001</description>
+    <mitre><id>T1562.001</id></mitre>
+    <group>defense_evasion,critical,active_response,</group>
+  </rule>
+
+  <!-- T1490 — Shadow Copy Deletion -->
+  <rule id="100203" level="15">
+    <if_sid>0</if_sid>
+    <match>vssadmin.*delete shadows|wmic.*shadowcopy.*delete|bcdedit.*/set.*recoveryenabled.*no|wbadmin.*delete.*catalog|diskshadow.*deleteallshadows</match>
+    <description>Shadow copy deletion detected — ransomware precursor T1490</description>
+    <mitre><id>T1490</id></mitre>
+    <group>defense_evasion,impact,critical,active_response,</group>
+  </rule>
+
+  <!-- T1574 — DLL Hijacking -->
+  <rule id="100204" level="12">
+    <if_sid>0</if_sid>
+    <match>dll hijack|dll sideload|dll search order hijack|phantom dll|dll from AppData|dll from Temp</match>
+    <description>DLL hijacking indicator on $(agent.name) — T1574</description>
+    <mitre><id>T1574</id></mitre>
+    <group>defense_evasion,persistence,</group>
+  </rule>
+
+  <!-- ================================================================== -->
+  <!-- EXECUTION (TA0002)                                                 -->
+  <!-- ================================================================== -->
+
+  <!-- T1059.001 — PowerShell Obfuscated/Encoded -->
+  <rule id="100300" level="13">
+    <if_sid>0</if_sid>
+    <match>-EncodedCommand|-enc .*==|FromBase64String|Invoke-Expression|IEX\(|downloadstring|bypass.*-w.*hidden</match>
+    <description>Obfuscated PowerShell command execution on $(agent.name) — T1059.001</description>
+    <mitre><id>T1059.001</id></mitre>
+    <group>execution,defense_evasion,</group>
+  </rule>
+
+  <!-- T1546.003 — WMI Event Subscription Persistence -->
+  <rule id="100301" level="13">
+    <if_sid>0</if_sid>
+    <match>__EventFilter|__EventConsumer|__FilterToConsumerBinding|WMI persistence|MOF file|wmi subscription</match>
+    <description>WMI event subscription persistence detected on $(agent.name) — T1546.003</description>
+    <mitre><id>T1546.003</id></mitre>
+    <group>persistence,execution,</group>
+  </rule>
+
+  <!-- T1059.005 — Office Macro Execution -->
+  <rule id="100302" level="12">
+    <if_sid>0</if_sid>
+    <match>macro enabled|VBA macro|Auto_Open|Document_Open|Workbook_Open|Office macro.*spawned|shell from winword|shell from excel</match>
+    <description>Office macro or VBA script execution on $(agent.name) — T1566.001/T1059.005</description>
+    <mitre><id>T1059.005</id></mitre>
+    <group>execution,initial_access,phishing,</group>
+  </rule>
+
+  <!-- ================================================================== -->
+  <!-- LATERAL MOVEMENT (TA0008)                                          -->
+  <!-- ================================================================== -->
+
+  <!-- T1550.002 — Pass-the-Hash -->
+  <rule id="100400" level="14">
+    <if_sid>0</if_sid>
+    <match>pass-the-hash|pass the hash|ntlmrelayx|impacket.*smb|wce.exe.*-w|sekurlsa::pth</match>
+    <description>Pass-the-Hash attack indicator on $(agent.name) — T1550.002</description>
+    <mitre><id>T1550.002</id></mitre>
+    <group>lateral_movement,credential_access,critical,active_response,</group>
+  </rule>
+
+  <!-- T1021.003 — DCOM Lateral Movement -->
+  <rule id="100401" level="12">
+    <if_sid>0</if_sid>
+    <match>DCOM lateral|MMC20.Application|ShellWindows|ShellBrowserWindow|remote DCOM|impacket.*dcomexec</match>
+    <description>DCOM lateral movement detected — T1021.003</description>
+    <mitre><id>T1021.003</id></mitre>
+    <group>lateral_movement,execution,</group>
+  </rule>
+
+  <!-- T1543.003 — Remote Service Creation -->
+  <rule id="100402" level="13">
+    <if_sid>0</if_sid>
+    <match>sc \\\\|sc.exe \\\\|sc create.*\\\\|psexec \\\\|PSEXESVC|OpenSCManager.*remote|service.*remotely.*installed</match>
+    <description>Remote service creation via sc.exe or PsExec — T1543.003</description>
+    <mitre><id>T1543.003</id></mitre>
+    <group>lateral_movement,persistence,execution,critical,</group>
+  </rule>
+
+  <!-- ================================================================== -->
+  <!-- PERSISTENCE (TA0003)                                               -->
+  <!-- ================================================================== -->
+
+  <!-- T1547.001 — Startup Folder Persistence -->
+  <rule id="100500" level="12">
+    <if_sid>550,554</if_sid>
+    <field name="file_path">\Start Menu\Programs\Startup|\Startup\|/etc/xdg/autostart/|~/.config/autostart/</field>
+    <description>File written to Startup/autostart folder on $(agent.name) — T1547.001</description>
+    <mitre><id>T1547.001</id></mitre>
+    <group>persistence,fim,</group>
+  </rule>
+
+  <!-- T1053.003 — Cron Persistence (Linux) -->
+  <rule id="100501" level="11">
+    <if_sid>550,554</if_sid>
+    <field name="file_path">/etc/cron|/var/spool/cron|/etc/crontab</field>
+    <description>Crontab modified on $(agent.name) — persistence T1053.003</description>
+    <mitre><id>T1053.003</id></mitre>
+    <group>persistence,fim,</group>
+  </rule>
+
+  <!-- T1543.001 — Launch Agent / Daemon Persistence (macOS/Linux) -->
+  <rule id="100502" level="11">
+    <if_sid>550,554</if_sid>
+    <field name="file_path">/Library/LaunchAgents|/Library/LaunchDaemons|/etc/systemd/system/</field>
+    <description>LaunchAgent/Daemon or systemd unit added on $(agent.name) — T1543.001</description>
+    <mitre><id>T1543.001</id></mitre>
+    <group>persistence,fim,</group>
+  </rule>
+
+  <!-- ================================================================== -->
+  <!-- COMMAND AND CONTROL (TA0011)                                       -->
+  <!-- ================================================================== -->
+
+  <!-- T1496 — Cryptomining / Resource Hijacking -->
+  <rule id="100600" level="13">
+    <if_sid>0</if_sid>
+    <match>xmrig|stratum+tcp|stratum+ssl|cryptonight|monero.*pool|coinhive|minexmr|xmrpool|nanopool|nicehash.*miner</match>
+    <description>Cryptomining malware detected on $(agent.name) — T1496</description>
+    <mitre><id>T1496</id></mitre>
+    <group>impact,c2,cryptomining,active_response,</group>
+  </rule>
+
+  <!-- T1071.001 — C2 over HTTPS (known framework signatures) -->
+  <rule id="100601" level="14">
+    <if_sid>0</if_sid>
+    <match>cobalt strike|cs beacon|metasploit.*https|empire c2|sliver c2|havoc.*beacon|brute ratel|beacon.*checkin|implant.*callback</match>
+    <description>C2 framework beacon detected on $(agent.name) — T1071.001</description>
+    <mitre><id>T1071.001</id></mitre>
+    <group>command_and_control,critical,active_response,</group>
+  </rule>
+
+  <!-- T1568.002 — DGA Domain (high-entropy DNS) -->
+  <rule id="100602" level="11">
+    <if_sid>82200,82201,82202</if_sid>
+    <match>dga|high entropy domain|domain generation algorithm|random subdomain|suspicious dns</match>
+    <description>DGA/high-entropy domain query from $(agent.name) — T1568.002</description>
+    <mitre><id>T1568.002</id></mitre>
+    <group>command_and_control,dns,</group>
+  </rule>
+
+  <!-- ================================================================== -->
+  <!-- COLLECTION (TA0009)                                                -->
+  <!-- ================================================================== -->
+
+  <!-- T1119 — Automated Collection (bulk file ops) -->
+  <rule id="100700" level="11">
+    <if_sid>0</if_sid>
+    <match>find / -name|dir /s /b|robocopy.*recurse|Get-ChildItem.*Recurse|cp -r.*home|rsync.*-r|xcopy /s</match>
+    <description>Automated data collection command on $(agent.name) — T1119</description>
+    <mitre><id>T1119</id></mitre>
+    <group>collection,</group>
+  </rule>
+
+  <!-- T1560 — Archive Collected Data -->
+  <rule id="100701" level="12">
+    <if_sid>0</if_sid>
+    <match>7z.exe.*\Users|winrar.*\Documents|zip.*\home|tar.*czf.*/etc|Compress-Archive.*\Users</match>
+    <description>Archive tool compressing sensitive directory on $(agent.name) — T1560</description>
+    <mitre><id>T1560</id></mitre>
+    <group>collection,exfiltration,</group>
+  </rule>
+
+  <!-- T1539 — Session Cookie Theft / T1528 — Steal Application Access Token -->
+  <rule id="100702" level="13">
+    <if_sid>0</if_sid>
+    <match>cookie theft|session hijack|token replay|pass-the-cookie|stolen token|session from new ip|chrome.*cookies.*copy|firefox.*cookies.*copy</match>
+    <description>Session cookie or access token theft indicator — T1539/T1528</description>
+    <mitre><id>T1539</id></mitre>
+    <group>credential_access,collection,</group>
+  </rule>
+
+  <!-- ================================================================== -->
+  <!-- PRIVILEGE ESCALATION (TA0004)                                      -->
+  <!-- ================================================================== -->
+
+  <!-- T1134 — Access Token Manipulation -->
+  <rule id="100800" level="14">
+    <if_sid>0</if_sid>
+    <match>SeImpersonatePrivilege|CreateProcessWithToken|ImpersonateLoggedOnUser|JuicyPotato|RottenPotato|PrintSpoofer|SweetPotato|GodPotato|token impersonation</match>
+    <description>Access token manipulation / privilege escalation via impersonation on $(agent.name) — T1134</description>
+    <mitre><id>T1134</id></mitre>
+    <group>privilege_escalation,defense_evasion,critical,active_response,</group>
+  </rule>
+
+  <!-- T1621 — MFA Push Bombing -->
+  <rule id="100801" level="12" frequency="10" timeframe="1800">
+    <if_matched_sid>0</if_matched_sid>
+    <match>MFA prompt|push notification sent|Duo push|authenticator request|OTP sent|second factor required</match>
+    <same_field>username</same_field>
+    <description>MFA push bombing: 10+ prompts to $(username) — T1621</description>
+    <mitre><id>T1621</id></mitre>
+    <group>credential_access,initial_access,mfa_fatigue,</group>
+  </rule>
+
+  <!-- ================================================================== -->
+  <!-- DISCOVERY (TA0007)                                                 -->
+  <!-- ================================================================== -->
+
+  <!-- T1135 — SMB / Network Share Discovery -->
+  <rule id="100900" level="10">
+    <if_sid>0</if_sid>
+    <match>net view|net share|SharpHound|BloodHound|PowerView|Invoke-ShareFinder|smbclient -L|crackmapexec smb|Invoke-EnumDomainUsers</match>
+    <description>SMB / AD enumeration detected on $(agent.name) — T1135/T1087</description>
+    <mitre><id>T1135</id></mitre>
+    <group>discovery,lateral_movement,</group>
+  </rule>
+
+  <!-- T1046 — Network Service Discovery (nmap/masscan) -->
+  <rule id="100901" level="10">
+    <if_sid>0</if_sid>
+    <match>nmap -sV|nmap -sS|masscan|unicornscan|zmap.*internal|Invoke-PortScan|Test-NetConnection.*loop</match>
+    <description>Internal network scanning tool executed on $(agent.name) — T1046</description>
+    <mitre><id>T1046</id></mitre>
+    <group>discovery,reconnaissance,</group>
+  </rule>
+
+  <!-- ================================================================== -->
+  <!-- ACTIVE RESPONSE TRIGGERS                                           -->
+  <!-- ── Rules in 'active_response' group fire firewall-drop on match ── -->
+  <!-- ================================================================== -->
+
+  <!-- Fire active-response for C2 beacon confirmed -->
+  <rule id="100950" level="15">
+    <if_sid>100601</if_sid>
+    <description>ACTIVE RESPONSE: C2 beacon confirmed — blocking source IP $(srcip)</description>
+    <mitre><id>T1071.001</id></mitre>
+    <group>active_response,</group>
+  </rule>
+
+  <!-- Fire active-response for DCSync attack -->
+  <rule id="100951" level="15">
+    <if_sid>100104</if_sid>
+    <description>ACTIVE RESPONSE: DCSync attack detected — blocking source IP $(srcip)</description>
+    <mitre><id>T1003.006</id></mitre>
+    <group>active_response,</group>
+  </rule>
+
+  <!-- Fire active-response for Pass-the-Hash -->
+  <rule id="100952" level="15">
+    <if_sid>100400</if_sid>
+    <description>ACTIVE RESPONSE: Pass-the-Hash detected — blocking source IP $(srcip)</description>
+    <mitre><id>T1550.002</id></mitre>
+    <group>active_response,</group>
+  </rule>
+
+  <!-- Fire active-response for cryptominer -->
+  <rule id="100953" level="15">
+    <if_sid>100600</if_sid>
+    <description>ACTIVE RESPONSE: Cryptominer detected — blocking outbound connection from $(agent.name)</description>
+    <mitre><id>T1496</id></mitre>
+    <group>active_response,</group>
+  </rule>
+
 </group>

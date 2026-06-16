@@ -51,7 +51,7 @@ The raw SSL/TLS module result, email security module result, and DNS module resu
 ### Standard scan may show different findings than Deep scan for the same domain
 
 The posture score for a Standard scan of a given domain should typically be HIGHER than a Deep scan of the same domain (all else equal), because:
-1. Standard runs 7 modules; Deep runs 11 modules + AI enrichment
+1. Standard runs 6 profile modules (+ vuln_scanner); Deep runs 10 profile modules (+ vuln_scanner + nuclei + AI enrichment)
 2. Each additional module can only ADD findings, never remove them
 3. More findings → more posture score deductions
 
