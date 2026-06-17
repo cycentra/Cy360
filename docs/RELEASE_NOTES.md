@@ -1,3 +1,35 @@
+## v1.0.55 -- 2026-06-17
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.55 -- 2026-06-17
+
+### Bug Fixes
+
+  - **SIEM — Severity inflation (critical):** `grouper.py._score_to_severity()` had thresholds (`>=10/7/4`) that were misaligned with the actual logarithmic score range (4.1–8.2) produced by `normaliser._level_to_score()`. The `>=10` critical branch was permanently unreachable — every level-10+ alert landed in `high`. Thresholds corrected to `>=8.2 critical / >=7.6 high / >=6.0 medium` — aligned with Wazuh's own level conventions. Expected impact: ~40% of current `high` incidents reclassify as `medium` at creation.
+  - **SIEM — `normaliser.py` docstring:** Fixed incorrect score examples in `_level_to_score` comment (claimed `level 12→10.0, level 15→13.0`; actual values are `7.6` and `8.2`). Misleading comment caused engineers to believe the broken thresholds were correct.
+
+### Improvements
+
+  - **SIEM — CR-004 (Web→FIM) time ordering:** `WebToFIM` correlation rule now requires the FIM event to occur **after** the earliest web attack timestamp. Previously, any co-occurring FIM event (e.g. a cron-triggered deployment) fired the rule.
+  - **SIEM — CR-009 (Data Exfiltration) time ordering:** `DataExfiltration` rule now requires the network transfer event to occur **after** the earliest FIM event. Eliminates false positives from background OS update network events co-occurring with file writes.
+  - **SIEM — CR-018 (Dormant Account Rebirth) corroborating context:** Rule no longer fires for every new user's first login. Now requires at least one corroborating signal: off-hours login, external source IP, or a preceding auth failure from the same user. Confidence raised from 0.65 → 0.72. Eliminates false positives from new employee onboarding and first-time Wazuh agent registrations.
+  - **UEBA — Privilege escalation noise reduction:** `UEBA-U-06` (privilege_escalation) no longer fires on every sudo event. Now gated on corroborating context: service/daemon account, off-hours execution (outside 07:00–19:00), or an auth failure preceding the sudo in the same session. Reduces ~70% of routine admin sudo noise.
+  - **UEBA — Token theft heuristic threshold:** Raised distinct-IP threshold from 3 to 5 for the token-theft heuristic path. Mobile users and split-tunnel VPN users routinely authenticate from 3–4 IPs without credential compromise.
+  - **UEBA ML — Expanded feature vector (8→14 features):** Added cyclic sin/cos time encoding (avoids 23→0 discontinuity), is_weekend, recent_privesc count, recent_fim count, and has_mitre_tag. Raw `hour` feature replaced by `sin/cos(hour)` pair.
+  - **UEBA ML — Model version stamping:** `MODEL_FEATURE_VERSION=2` constant introduced. Saved models carry this version; a mismatch causes the stale model to be discarded and re-trained on the next weekly cycle, preventing crashes on feature vector changes.
+  - **UEBA ML — FP exclusion from training:** `retrain_all_models()` now excludes alerts from analyst-confirmed false-positive incidents (`status=false_positive` or `status=closed` with a `false_positive_reason`) from the training set. Training on FP events previously taught the model that noisy activity was "normal".
+  - **SIEM — FP probability severity cap:** `ingestor.py` now downgrades incident severity by one band when `fp_probability >= 75.0` (critical→high, high→medium, medium→low). FP probability was previously computed and stored on the incident but had zero effect on severity. Analysts see appropriately ranked incidents when enrichment already indicates likely noise.
+  - **Wazuh rules — Discovery rules level reduction:** Rules 100900 (SMB/AD enumeration, T1135) and 100901 (network scanning, T1046) lowered from level 10 to level 9. At level 9 score is 6.84 → medium; at level 10 score was 7.1 → high. Pure reconnaissance tool detections no longer flood the high-severity queue before exploitation is confirmed.
+  - **Docs — `docs/SIEM_SEVERITY_TUNING.md` (new):** Comprehensive reference for the full severity pipeline: scoring math, threshold tables, custom rule level guidelines, environment variables, and tuning instructions.
+  - **Docs — `docs/BEHAVIOURAL_ANALYTICS.md`:** Updated UEBA-U-06, UEBA-U-16, CR-004, CR-009, CR-018 descriptions to reflect new logic. ML section updated with 14-feature vector table, cyclic encoding rationale, FP exclusion note, and model versioning. Section 7 updated with FP severity cap documentation.
+
+---
+
 ## v1.0.54 -- 2026-06-16
 
 ### Improvements

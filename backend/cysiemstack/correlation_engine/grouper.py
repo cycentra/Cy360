@@ -25,12 +25,28 @@ settings = get_settings()
 # ── Severity mapping ───────────────────────────────────────────────────────────
 
 def _score_to_severity(alerts: list) -> str:
+    """Map alert base_score to incident severity using Wazuh level conventions.
+
+    _level_to_score() in normaliser.py maps Wazuh rule levels to these ranges:
+      level  3 →  4.1   level  7 →  6.2   level 10 →  7.1   level 12 →  7.6
+      level 13 →  7.8   level 14 →  8.0   level 15 →  8.2   (max)
+
+    Threshold rationale:
+      ≥ 8.2  critical  — level 15 only (Wazuh critical: DCSync, shadow copy delete, cred dump)
+      ≥ 7.6  high      — level 12-14 (Wazuh high: LOLBAS, PtH, AV-disabled, encoded PS)
+      ≥ 6.0  medium    — level 7-11 (Wazuh medium: recon, WMI, password spray, custom rules)
+      else   low       — level 3-6 (Wazuh low: informational auth events)
+
+    Previously the thresholds were >=10/7/4 which placed the >=10 branch
+    unreachable (max possible score is 8.24) and promoted ALL level-10+ alerts
+    to "high" at creation — the root cause of near-universal High incidents.
+    """
     max_score = max((float(a.get('base_score', 0)) for a in alerts), default=0)
-    if max_score >= 10:
+    if max_score >= 8.2:
         return 'critical'
-    if max_score >= 7:
+    if max_score >= 7.6:
         return 'high'
-    if max_score >= 4:
+    if max_score >= 6.0:
         return 'medium'
     return 'low'
 

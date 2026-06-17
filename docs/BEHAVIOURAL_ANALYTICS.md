@@ -1,6 +1,6 @@
 # CySIEM Behavioural Analytics — Full Reference
 
-_Last updated: 2026-05-20 | Source: `backend/cysiemstack/correlation_engine/`_
+_Last updated: 2026-06-17 | Source: `backend/cysiemstack/correlation_engine/`_
 
 ---
 
@@ -99,9 +99,12 @@ Each detector runs on every alert that has a `username` field. Baselines per use
 
 ### UEBA-U-06: Privilege Escalation
 
-**Trigger:** Any alert with a privilege-escalation rule ID (5400, 5402, 5501, 18101, 18104) is associated with a named user.
+**Trigger:** Alert with a privilege-escalation rule ID (5400, 5402, 5501, 18101, 18104) AND at least one of these corroborating conditions:
+  - Username matches a service/daemon account pattern (`svc_`, `svc-`, `daemon`, `service`, `system`, `_svc`, `-svc`, `admin`)
+  - Login occurs outside 07:00–19:00 (off-hours)
+  - An auth failure for the same user exists in the 2-hour recent context
 
-**Logic:** Every sudo/su event is flagged unconditionally when tied to a user identity. Feeds directly into kill-chain tracking.
+**Logic:** Plain sudo during business hours by an interactive user is normal admin activity. Gating on corroborating context removes ~70% of noise from routine privilege use while preserving signal for attacker-pattern escalation (off-hours root, service-account compromise, escalation after failed login). Feeds directly into kill-chain tracking.
 
 **Risk:** 40 pts
 
@@ -199,9 +202,11 @@ Each detector runs on every alert that has a `username` field. Baselines per use
 
 ### UEBA-U-16: Session Token Theft Indicators
 
-**Trigger:** A successful authentication for a user from a new IP/agent combination where the session has no preceding authentication step (token replay pattern) AND the originating IP is not in the user's known IP baseline.
+**Trigger (keyword path):** Alert description matches known token-theft keywords: `cookie theft`, `session hijack`, `token replay`, `stolen token`, `pass-the-cookie`, `session from new ip`, `session fixation`.
 
-**Logic:** Stolen session tokens allow authentication without password re-entry. A new-location session with no auth event immediately preceding it is characteristic of token replay.
+**Trigger (heuristic path):** Same user authenticates successfully from **5 or more** distinct source IPs in a 2-hour window (raised from 3 to 5 — mobile users and split-tunnel VPN users regularly authenticate from 3–4 IPs without credential compromise).
+
+**Logic:** Stolen session tokens allow authentication without password re-entry. The heuristic detects replayed tokens across multiple source locations, but only above a threshold that suppresses normal multi-device / multi-network patterns.
 
 **Risk:** 65 pts
 
@@ -257,22 +262,35 @@ These run when an alert has NO `username` (e.g. network events, system-level eve
 
 **Status:** Shadow mode by default (`UEBA_ML_SHADOW_MODE=true`). In shadow mode, anomalies are logged but do not create `UEBAAnomaly` records or affect risk scores.
 
-### Feature Vector (8 dimensions per alert)
+### Feature Vector (14 dimensions per alert, `MODEL_FEATURE_VERSION=2`)
 
 | # | Feature | Description |
 |---|---------|-------------|
-| 1 | `hour` | Hour of day (0–23) |
-| 2 | `rule_level` | Wazuh rule severity level |
-| 3 | `base_score` | Alert base risk score |
-| 4 | `recent_fails` | Count of auth failures (rule IDs 5710, 5711, 5716) in 2-hour window |
-| 5 | `recent_agents` | Count of unique agents in the 2-hour window |
-| 6 | `recent_count` | Total events in the 2-hour window |
-| 7 | `has_src_ip` | Binary: 1 if alert has an external `src_ip` |
-| 8 | `is_success_login` | Binary: 1 if rule ID is 5715 or 5718 |
+| 0 | `sin_hour` | `sin(hour × 2π/24)` — cyclic time encoding, avoids 23→0 discontinuity |
+| 1 | `cos_hour` | `cos(hour × 2π/24)` — cyclic time pair |
+| 2 | `is_weekend` | 1 if Saturday or Sunday |
+| 3 | `rule_level` | Wazuh rule severity level |
+| 4 | `base_score` | Normalised risk score (4.1–8.2 range) |
+| 5 | `recent_fails` | Auth failure count in 2-hour window (rule IDs 5710, 5711, 5716) |
+| 6 | `recent_agents` | Unique host count in 2-hour window |
+| 7 | `recent_count` | Total event count in 2-hour window |
+| 8 | `has_src_ip` | Binary: 1 if alert has an external public `src_ip` |
+| 9 | `is_success_login` | Binary: 1 if rule ID is 5715 or 5718 |
+| 10 | `recent_privesc` | Privilege escalation event count in 2-hour window |
+| 11 | `recent_fim` | FIM (file-change) event count in 2-hour window |
+| 12 | `has_mitre_tag` | Binary: 1 if alert carries a MITRE ATT&CK technique ID |
+| 13 | `is_off_hours` | Binary: 1 if hour outside 07:00–19:00 |
+
+**Why cyclic encoding?** A linear `hour` feature (0–23) treats 23:00 and 00:00 as maximally different (distance = 23) when they are temporally adjacent (distance = 1). Sin/cos encoding preserves correct temporal distance for the IsolationForest.
+
+### Model Versioning
+
+Models are saved as `{'version': MODEL_FEATURE_VERSION, 'model': IsolationForest}`. On load, if the saved version does not match the constant in `ueba_ml.py`, the stale model is discarded and re-queued for the next weekly retraining cycle. This prevents crashes when features are added.
 
 ### Training
 
 - Per-user IsolationForest model trained weekly from last 7 days of data
+- **FP exclusion:** alerts from analyst-confirmed false-positive incidents (`status=false_positive` OR `status=closed` AND `false_positive_reason IS NOT NULL`) are excluded from the training set — training on FP events would teach the model that noisy/benign activity is "normal", suppressing future anomaly detection
 - Minimum 30 alerts required to train; minimum 20 valid feature vectors to fit
 - `contamination=0.05` (expects ~5% of traffic to be anomalous)
 - `n_estimators=100`, `random_state=42`
@@ -312,7 +330,7 @@ Auth + PrivEsc + FIM/Malware all on the same host. Confidence: 1.0.
 ### CR-004: Web Exploit → File Modification
 **Window:** 30 min | **Severity:** High | **Tactics:** Initial Access, Persistence
 
-Web attack alert (keywords: attack, exploit, traversal, injection, rce, shell) followed by a FIM event on the same agent.
+Web attack alert (keywords: attack, exploit, traversal, injection, rce, shell) AND a FIM event on the same agent, where the FIM event timestamp is **strictly after** the earliest web attack timestamp. Concurrent FIM (e.g. cron-triggered deployments) no longer fires the rule.
 
 ---
 
@@ -347,7 +365,7 @@ Category `scan` alert followed by an alert with exploit/attack/injection/overflo
 ### CR-009: Data Exfiltration Indicators
 **Window:** 60 min | **Severity:** High | **Tactics:** Exfiltration
 
-FIM activity + network transfer keywords (outbound, upload, curl, wget, scp, rsync).
+FIM activity + network transfer keywords (outbound, upload, curl, wget, scp, rsync), where the network transfer timestamp is **strictly after** the earliest FIM event timestamp. Background system-update network events co-occurring with FIM no longer trigger this rule.
 
 ---
 
@@ -410,7 +428,12 @@ Mass FIM (≥30 changes) OR FIM alerts with ransomware file extensions (.encrypt
 ### CR-018: Dormant Account Rebirth
 **Window:** 60 min | **Severity:** High | **Tactics:** Initial Access, Persistence
 
-Login for a username with no prior activity in the current observation window (uses window-scoped data). Confidence: 0.65.
+Login for a username with no prior activity in the observation window AND at least one of these corroborating signals:
+- Off-hours login (outside 07:00–19:00)
+- External source IP (public IP — indicates login from outside the network)
+- Auth failure for the same user precedes the login (attempt before success)
+
+Confidence: 0.72 (raised from 0.65). Without corroborating context the rule silently skips — new employees and first-time Wazuh agent registrations have no history and would otherwise fire unconditionally.
 
 ---
 
@@ -701,9 +724,24 @@ Computed by `compute_fp_score()` in `risk_scorer.py`:
 
 ---
 
-## 7. Auto-Status Logic (Current State)
+## 7. Auto-Status Logic and Severity Cap (Current State)
 
-**File:** `ingestor.py` (band logic at lines 262–346)
+**File:** `ingestor.py`
+
+### FP-Based Severity Soft Cap (applied before status band logic)
+
+When `fp_probability ≥ 75`, the incident severity is downgraded by one band before the status logic runs:
+
+| FP Score | Current Severity | After Cap |
+|---|---|---|
+| ≥ 75 | critical | high |
+| ≥ 75 | high | medium |
+| ≥ 75 | medium | low |
+| ≥ 75 | low | (unchanged) |
+
+This prevents high-confidence-FP alerts from holding the `high` or `critical` slot in analyst queues when the enrichment pipeline already determined they are likely noise. The cap does **not** auto-close — that remains the FP threshold slider's responsibility.
+
+### Status Band Logic (band logic at lines ~280–360)
 
 | FP Score Band | Action |
 |---|---|

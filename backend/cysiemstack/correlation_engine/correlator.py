@@ -149,8 +149,14 @@ class WebToFIM(CorrelationRule):
                    for k in ('attack', 'exploit', 'traversal', 'injection', 'rce', 'shell'))]
         fim = [a for a in alerts if a.get('category') == 'fim']
         if web and fim:
+            earliest_web_ts = min(a['timestamp'] for a in web)
+            # FIM change must occur AFTER the web attack — a co-occurring cron-triggered
+            # file write would otherwise fire this rule on every deployment.
+            post_attack_fim = [f for f in fim if f['timestamp'] > earliest_web_ts]
+            if not post_attack_fim:
+                return None
             return {
-                'key_alert_ids': [web[0].get('wazuh_id'), fim[0].get('wazuh_id')],
+                'key_alert_ids': [web[0].get('wazuh_id'), post_attack_fim[0].get('wazuh_id')],
                 'detail': f"Web attack then FIM change on {web[0].get('agent_name')}",
                 'confidence': 0.80,
             }
@@ -268,8 +274,14 @@ class DataExfiltration(CorrelationRule):
                any(k in (a.get('rule_desc') or '').lower()
                    for k in ('outbound', 'transfer', 'upload', 'curl', 'wget', 'scp', 'rsync'))]
         if fim and net:
+            earliest_fim_ts = min(a['timestamp'] for a in fim)
+            # Network transfer must occur AFTER file access — a background system-update
+            # network event would otherwise fire this rule alongside any FIM activity.
+            post_fim_net = [n for n in net if n['timestamp'] > earliest_fim_ts]
+            if not post_fim_net:
+                return None
             return {
-                'key_alert_ids': [fim[0].get('wazuh_id'), net[0].get('wazuh_id')],
+                'key_alert_ids': [fim[0].get('wazuh_id'), post_fim_net[0].get('wazuh_id')],
                 'detail': f"FIM activity + network transfer on {fim[0].get('agent_name')}",
                 'confidence': 0.80,
             }
@@ -510,6 +522,9 @@ class DormantAccountRebirth(CorrelationRule):
             'high', ['Initial Access', 'Persistence'], 60
         )
 
+    # Auth failure rule IDs used for corroborating context check
+    _AUTH_FAIL_IDS = frozenset({5710, 5711, 5716, 5719, 5720, 2502})
+
     def match(self, alerts):
         logins = [a for a in alerts if a['rule_id'] in (5715, 5718, 60106, 60137) and a.get('username')]
         if not logins:
@@ -522,10 +537,25 @@ class DormantAccountRebirth(CorrelationRule):
                 prior_alerts = [a for a in alerts if a.get('username') == uname
                                 and a.get('wazuh_id') != login.get('wazuh_id')]
                 if not prior_alerts:
+                    # A first-time login from a new employee or a fresh agent has no
+                    # alert history either. Require at least one corroborating signal
+                    # before treating this as a dormant-account rebirth:
+                    #   • off-hours login (outside 07:00–19:00)
+                    #   • external src_ip (already filtered to public IPs by normaliser)
+                    #   • preceded by an auth failure from the same user
+                    login_hour = login['timestamp'].hour
+                    is_off_hours = not (7 <= login_hour <= 19)
+                    has_external_ip = bool(login.get('src_ip'))
+                    preceded_by_fail = any(
+                        a.get('username') == uname and a['rule_id'] in self._AUTH_FAIL_IDS
+                        for a in alerts
+                    )
+                    if not (is_off_hours or has_external_ip or preceded_by_fail):
+                        continue
                     return {
                         'key_alert_ids': [login.get('wazuh_id')],
                         'detail': f"Account {uname} logged in with no prior activity in observation window",
-                        'confidence': 0.65,
+                        'confidence': 0.72,
                     }
         return None
 

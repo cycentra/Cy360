@@ -196,11 +196,21 @@ async def analyse_alert(
 
     # ── 6. Privilege escalation ────────────────────────────────────────────────
     if rule_id in PRIVESC_IDS:
-        anomalies.append(await _record_anomaly(
-            db, username, 'privilege_escalation',
-            f"Privilege escalation (rule {rule_id}) by {username} on {alert.get('agent_name')}",
-            incident_id, [alert.get('wazuh_id')],
-        ))
+        # Plain sudo during business hours by a regular user is normal admin
+        # activity — flagging every sudo creates high noise with no signal value.
+        # Only record an anomaly when at least one corroborating context is present:
+        #   • service/daemon account (should never sudo interactively)
+        #   • off-hours execution (outside 07:00–19:00 local time)
+        #   • preceded by an auth failure in this session (escalation after failed login)
+        is_service_acct   = any(p in username.lower() for p in SERVICE_PATTERNS)
+        is_off_hours      = not (7 <= ts.hour <= 19)
+        preceded_by_fail  = any(a['rule_id'] in AUTH_FAIL_IDS for a in recent_alerts)
+        if is_service_acct or is_off_hours or preceded_by_fail:
+            anomalies.append(await _record_anomaly(
+                db, username, 'privilege_escalation',
+                f"Privilege escalation (rule {rule_id}) by {username} on {alert.get('agent_name')}",
+                incident_id, [alert.get('wazuh_id')],
+            ))
 
     # ── 7. Impossible travel ───────────────────────────────────────────────────
     if rule_id in AUTH_SUCCESS_IDS and recent_alerts:
@@ -338,11 +348,14 @@ async def analyse_alert(
             f"Session token theft indicator for {username}: {(alert.get('rule_desc') or '')[:80]}",
             incident_id, [alert.get('wazuh_id')],
         ))
-    # Heuristic: same user, 3+ distinct src_ip auth events in 2h
+    # Heuristic: same user, 5+ distinct src_ip auth events in 2h.
+    # Threshold raised from 3 → 5: mobile users or VPN split-tunnel users
+    # regularly authenticate from 3-4 IPs (phone, laptop, home, VPN egress)
+    # without any credential compromise.
     if rule_id in AUTH_SUCCESS_IDS:
         distinct_ips = {a.get('src_ip') for a in recent_alerts
                         if a.get('username') == username and a.get('src_ip')}
-        if len(distinct_ips) >= 3:
+        if len(distinct_ips) >= 5:
             anomalies.append(await _record_anomaly(
                 db, username, 'token_theft',
                 f"Token theft heuristic: {username} authenticated from {len(distinct_ips)} IPs in 2h window",

@@ -291,7 +291,10 @@
   <!-- ================================================================== -->
 
   <!-- T1135 — SMB / Network Share Discovery -->
-  <rule id="100900" level="10">
+  <!-- level 9: pure reconnaissance — score 6.84 → medium under new grouper thresholds.
+       Previously level 10 (score 7.1) which promoted these to "high", flooding the
+       queue with recon tool detections before any exploitation was confirmed. -->
+  <rule id="100900" level="9">
     <if_sid>0</if_sid>
     <match>net view|net share|SharpHound|BloodHound|PowerView|Invoke-ShareFinder|smbclient -L|crackmapexec smb|Invoke-EnumDomainUsers</match>
     <description>SMB / AD enumeration detected on $(agent.name) — T1135/T1087</description>
@@ -300,7 +303,10 @@
   </rule>
 
   <!-- T1046 — Network Service Discovery (nmap/masscan) -->
-  <rule id="100901" level="10">
+  <!-- level 9: pure reconnaissance — score 6.84 → medium under new grouper thresholds.
+       Previously level 10 (score 7.1) which promoted these to "high", flooding the
+       queue with recon tool detections before any exploitation was confirmed. -->
+  <rule id="100901" level="9">
     <if_sid>0</if_sid>
     <match>nmap -sV|nmap -sS|masscan|unicornscan|zmap.*internal|Invoke-PortScan|Test-NetConnection.*loop</match>
     <description>Internal network scanning tool executed on $(agent.name) — T1046</description>

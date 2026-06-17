@@ -244,6 +244,23 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                                      incident.misp_enrichment or {})
             incident.fp_probability = fp_score
 
+            # Soft severity cap: when FP probability is ≥ 75 the incident is more
+            # likely noise than signal — drop one severity band so analysts do not
+            # triage it before genuine high-confidence threats.
+            # This does NOT auto-close (that happens below at fp_threshold); it only
+            # reduces the displayed severity to reflect analytic confidence.
+            if fp_score >= 75.0:
+                _sev_order = ['low', 'medium', 'high', 'critical']
+                cur_idx = _sev_order.index(incident.severity or 'low')
+                if cur_idx > 0:
+                    old_sev = incident.severity
+                    incident.severity = _sev_order[cur_idx - 1]
+                    log.info('severity_downgraded_by_fp',
+                             incident_id=incident.id,
+                             fp_score=fp_score,
+                             from_severity=old_sev,
+                             to_severity=incident.severity)
+
             # 6b. CySOAR trigger (after AI enrichment, before case decision)
             soar_actions = await cysoar_trigger(db, incident)
             if soar_actions:

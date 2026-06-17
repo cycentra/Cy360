@@ -66,7 +66,12 @@ SUPPRESSED_DESC_FRAGMENTS: tuple[str, ...] = (
 
 # Map Wazuh rule levels (0-15) to base score (used in risk scoring)
 def _level_to_score(level: int) -> float:
-    """Logarithmic mapping: level 3→1.0, level 7→5.0, level 12→10.0, level 15→13.0"""
+    """Logarithmic mapping: level 3→4.1, level 7→6.2, level 12→7.6, level 15→8.2 (max)
+
+    Formula: min(15.0, log(level+1, base=1.4))
+    The compressed range 4.1–8.2 means grouper.py thresholds must use values
+    within this range — see SIEM_SEVERITY_TUNING.md for the full threshold table.
+    """
     if level <= 0:
         return 0.0
     return round(min(15.0, math.log(level + 1, 1.4)), 1)
