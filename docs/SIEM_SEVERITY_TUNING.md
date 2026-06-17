@@ -124,7 +124,22 @@ The FP probability is computed from:
 
 ### Threshold
 
-`75.0` is a conservative default. Lowering it (e.g. to `60.0`) will cap more incidents; raising it (e.g. to `90.0`) reduces the cap's effect. The value is hardcoded — change it in `ingestor.py` if needed (or expose it via `ai_settings.json` for operator control).
+The auto-close threshold is read from `ai_settings.json` under `system.fpThreshold` (default 90.0 if absent). The current production value is **80.0**.
+
+**Why 80 and not 75:** The FP scorer returns exactly `70.0` for non-correlated low/medium incidents: `avg_conf = 0.30` (default when no correlation rules have fired) → `base = (1 - 0.30) × 100 = 70.0` → tier-3 floor at 30 → fp = 70.0. A threshold of ≤ 70 auto-closes all of these incidents, leaving zero visibility. A threshold of 75 leaves only 5 points of margin; 80 creates a clear band where non-correlated incidents (fp=70) stay visible as "investigating" while genuine noise (fp ≥ 80) is auto-closed.
+
+**FP band summary with threshold = 80:**
+
+| fp_probability | Band | Status | Case? |
+|---|---|---|---|
+| ≥ 80 | Band 1 | auto-closed | No |
+| 40–79.9 | Band 2 | investigating | No |
+| < 40 | Band 3 | in_review | Yes (if high/critical + ≥3 alerts) |
+
+To change the threshold, update `ai_settings.json` on the server — no engine restart required (the value is read dynamically on each alert):
+```json
+"system": { "fpThreshold": 80 }
+```
 
 ---
 

@@ -80,8 +80,16 @@ async def _get_next_id(db: AsyncSession) -> str:
     suffix and incrementing it.  Using COUNT(*) is incorrect when IDs have
     gaps (e.g. after engine restarts that replay alerts) — the count falls
     below the real max, causing duplicate-PK IntegrityErrors on every INSERT.
+
+    The advisory lock serializes concurrent callers: with Semaphore(6) allowing
+    six alert tasks to run at once, without the lock all six can read the same
+    MAX and then attempt to INSERT the same next ID → UniqueViolationError.
+    pg_advisory_xact_lock blocks until the holder's transaction commits/rolls
+    back, at which point the next waiter reads the updated MAX safely.
     """
     prefix = settings.incident_id_prefix
+    # Transaction-level advisory lock — released automatically on commit/rollback.
+    await db.execute(text("SELECT pg_advisory_xact_lock(20260617)"))
     result = await db.execute(
         text(
             "SELECT COALESCE(MAX(CAST(SPLIT_PART(id, '-', 2) AS INTEGER)), 0) "

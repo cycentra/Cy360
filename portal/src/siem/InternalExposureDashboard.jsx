@@ -603,17 +603,15 @@ function UebaAnomalyChart({ uebaUsers, totalUebaAlerts = 0 }) {
 function AiDispositionWidget({ incidents }) {
   const total = incidents.length;
 
-  // Unified lifecycle state mapping
+  // Engine auto-closes: status=closed with false_positive_reason set (fp_probability on 0–100 scale)
   const aiClosed = incidents.filter(i =>
-    i.status === "false_positive" && i.fp_probability != null && i.fp_probability >= 0.7
+    i.status === "closed" && i.false_positive_reason != null
   );
   const manuallyResolved = incidents.filter(i => i.status === "resolved");
   const manuallyClosed = incidents.filter(i =>
-    i.status === "closed" && !(i.fp_probability != null && i.fp_probability >= 0.7)
+    i.status === "closed" && i.false_positive_reason == null
   );
-  const falsePositiveManual = incidents.filter(i =>
-    i.status === "false_positive" && !(i.fp_probability != null && i.fp_probability >= 0.7)
-  );
+  const falsePositiveManual = incidents.filter(i => i.status === "false_positive");
   const stillOpen = incidents.filter(i =>
     i.status === "open" || i.status === "investigating" || i.status === "in_review" || i.status === "held"
   );
@@ -631,7 +629,7 @@ function AiDispositionWidget({ incidents }) {
   const ticketPct = total > 0 ? Math.round((ticketCount / total) * 100) : 0;
 
   const rows = [
-    { label: "AI Auto-Closed (FP)",     value: aiCount,         color: "#00e5a0", pct: aiPct,                                                                              sub: "AI confidence ≥ 70%"        },
+    { label: "AI Auto-Closed (FP)",     value: aiCount,         color: "#00e5a0", pct: aiPct,                                                                              sub: "Engine auto-closed (FP ≥ 80%)"  },
     { label: "Manually Resolved",       value: manResolvedCount, color: "#4d9eff", pct: totalClosed > 0 ? Math.round((manResolvedCount / totalClosed) * 100) : 0,         sub: "Analyst confirmed resolved" },
     { label: "Manually Closed",         value: manClosedCount,  color: "#888",    pct: totalClosed > 0 ? Math.round((manClosedCount / totalClosed) * 100) : 0,           sub: "Analyst closed"             },
     { label: "False Positive (Manual)", value: fpManualCount,   color: "#888",    pct: totalClosed > 0 ? Math.round((fpManualCount / totalClosed) * 100) : 0,            sub: "Analyst marked FP"          },
@@ -910,10 +908,10 @@ export function InternalExposureDashboard({ setActiveTab }) {
   const openInc       = stats?.open_incidents  || 0;
   const critHighInc   = incidents.filter(i => i.severity === "critical" || i.severity === "high").length;
   const highRiskEnt   = riskScores.filter(e => (e.score || 0) >= 50).length;
-  const aiAutoClose   = incidents.filter(i =>
-    (i.status === "false_positive" || i.status === "closed") && i.fp_probability != null && i.fp_probability >= 0.7
-  ).length;
-  const casesOpen = incidents.filter(i => i.case_opened_at).length;
+  // Use the stats endpoint's ai_auto_closed count (reliable — not limited by the 200-row incident sample)
+  const aiAutoClose   = stats?.ai_auto_closed ?? 0;
+  // Use caseMetrics.open_cases when available; fall back to incident-list count
+  const casesOpen = caseMetrics?.open_cases ?? incidents.filter(i => i.case_opened_at).length;
 
   return (
     <div>
@@ -965,7 +963,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
         <KpiCard label="Open / Active"   value={openInc}       accent="#ff3b3b"  icon="🔥" sub="Requires attention" />
         <KpiCard label="Critical & High" value={critHighInc}   accent="#ff8c00"  icon="⚡" sub="High-severity incidents" />
         <KpiCard label="High-Risk Entities" value={highRiskEnt} accent="#b06eff" icon="🎯" sub="Score ≥ 50" />
-        <KpiCard label="AI Auto-Closed"  value={aiAutoClose}   accent="#00e5a0"  icon="🤖" sub="FP ≥ 70% confidence" />
+        <KpiCard label="AI Auto-Closed"  value={aiAutoClose}   accent="#00e5a0"  icon="🤖" sub="Engine FP auto-close" />
         <KpiCard label="Cases Open"  value={casesOpen} accent="#b06eff"  icon="🗂️" sub="Active case investigations" />
       </div>
 

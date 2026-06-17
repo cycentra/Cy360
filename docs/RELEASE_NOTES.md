@@ -1,8 +1,31 @@
-## v1.0.56 -- 2026-06-17
+## v1.0.57 -- 2026-06-17
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.58 -- 2026-06-17
+
+### Bug Fixes
+
+  - **Dashboard — "AI Auto-Closed" KPI always showed 0:** The KPI counted `closed` incidents from the 200-row incident list sample. Since closed incidents have old `last_seen` timestamps they never appear in the top 200 most-recently-active incidents. Fixed to use `stats.ai_auto_closed` from the `/stats` endpoint — a direct DB count not subject to the page-size limit. Now shows 4,624 correctly.
+  - **Dashboard — AI Disposition widget wrong categories:** The "AI Auto-Closed" row in the breakdown panel filtered for `status === "false_positive"`. The engine sets `status = "closed"` (not `false_positive`) for automated FP closes, with `false_positive_reason` populated. Fixed to `status === "closed" && false_positive_reason != null`. Also removed the stale `fp_probability >= 0.7` scale-mismatch check (fp is 0–100, not 0–1).
+  - **Dashboard — "Cases Open" KPI counted from incident sample:** `incidents.filter(i => i.case_opened_at).length` only searched the 200-incident list. Fixed to use `caseMetrics.open_cases` from the `/api/cases/metrics` endpoint, which counts cases directly from the DB.
+  - **Engine `/stats` endpoint — `open_incidents` excluded `in_review` and `held`:** Only counted `open + investigating`. Fixed to include `in_review` and `held` — all statuses that require analyst attention.
+  - **Engine `/stats` endpoint — no `ai_auto_closed` field:** Added: counts `status=closed` incidents where `false_positive_reason IS NOT NULL`.
+  - **Engine `_incident_to_dict` — missing `false_positive_reason`:** Field not included in serialized incident response. Added — enables the frontend to distinguish engine auto-closes from analyst-closed incidents.
+
+---
+
+## v1.0.57 -- 2026-06-17
+
+### Bug Fixes (critical — zero-incident production outage)
+
+  - **SIEM — All incidents auto-closed (zero visibility):** `ai_settings.json` had `system.fpThreshold = 70`. The FP scorer returns exactly `70.0` for non-correlated low/medium severity incidents (avg_conf default = 0.30 → base = 70.0; tier-3 floor = 30.0). Because `fp_score >= fpThreshold` triggers Band 1 auto-close, every incident without a correlation rule was being immediately closed — 8,437 incidents incorrectly closed. `fpThreshold` raised to 80. Migration 14 added to recover incidents closed by the wrong threshold within the last 7 days (identified by `false_positive_reason LIKE 'Auto-closed: FP probability 70.0%'`).
+  - **SIEM — Incident ID race condition (305,250 errors):** `_get_next_id()` in `grouper.py` used `SELECT MAX(...)` which is not atomic under concurrent processing. With `_PROCESS_SEM = asyncio.Semaphore(6)`, 6 alert tasks could simultaneously read the same MAX value and all attempt to `INSERT` the same next ID → `UniqueViolationError` on every concurrent new-incident creation. Each failure caused `db.rollback()` → alert discarded silently. Fixed by adding `pg_advisory_xact_lock(20260617)` before the MAX query — a transaction-level lock that blocks concurrent callers until the holder commits.
+  - **Engine — Startup migrations crashed at Migration 12 (all migrations skipped):** Migration 12 in `main.py` used three `execute()` calls each containing multiple semicolon-separated SQL statements. `asyncpg` rejects multi-statement prepared statements with `PostgresSyntaxError`. Because all migrations share a single `try/except`, the crash at Migration 12 silently skipped Migrations 13 and 14 on every engine restart since the code was deployed. Each DDL statement now has its own `execute()` call. `DROP COLUMN` statements updated to use `CASCADE` to handle dependent indexes.
 
 ---
 
