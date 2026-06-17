@@ -71,10 +71,18 @@ async def _get_recent_user_alerts(db, username: str, cutoff: datetime) -> list[d
     )
     rows = [
         {
-            'rule_id':  a.rule_id,
-            'agent_id': a.agent_id,
-            'timestamp': a.timestamp,
-            'src_ip':   str(a.src_ip) if a.src_ip else None,
+            'rule_id':    a.rule_id,
+            'agent_id':   a.agent_id,
+            'timestamp':  a.timestamp,
+            'src_ip':     str(a.src_ip) if a.src_ip else None,
+            # username and category are required by ueba.py detectors:
+            #   token_theft heuristic filters distinct_ips by username
+            #   data_staging, activity_volume_spike count category='fim' events
+            #   ueba_ml._feature_vector computes recent_fim from category
+            'username':   a.username,
+            'category':   a.category,
+            'rule_level': a.rule_level,
+            'mitre_id':   a.mitre_id,
         }
         for a in result.scalars().all()
     ]

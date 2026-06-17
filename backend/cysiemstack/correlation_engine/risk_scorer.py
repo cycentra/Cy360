@@ -152,7 +152,14 @@ def compute_fp_score(
     if tier == 1:
         base = min(base, 20.0)
     elif tier == 3:
-        base = max(base, 40.0)
+        # Tier-3 (dev/low) assets have a slightly elevated FP floor — they are
+        # less likely to be targeted and less likely to warrant immediate action.
+        # Floor is 30, NOT 40: a floor of 40 would keep every tier-3 incident
+        # permanently in Band 2 (fp >= 40 → investigating) and prevent Band 3
+        # (fp < 40 → in_review + case) from ever triggering — since most assets
+        # have no explicit tier (DEFAULT_ASSET_TIER=3), this blocked all auto
+        # case creation.
+        base = max(base, 30.0)
 
     return round(max(0.0, min(100.0, base)), 1)
 

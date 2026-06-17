@@ -1,8 +1,18 @@
-## v1.0.55 -- 2026-06-17
+## v1.0.56 -- 2026-06-17
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.56 -- 2026-06-17
+
+### Bug Fixes
+
+  - **SIEM — Cases never auto-opened (critical):** `compute_fp_score()` in `risk_scorer.py` floored all incidents with unknown/tier-3 assets at `fp_probability = 40.0`. Case auto-opening requires `fp_score < 40` (Band 3). Since `DEFAULT_ASSET_TIER = 3` and no assets have explicit tier assignments, every incident was permanently clamped to fp=40 → Band 2 (investigating) → cases never opened. Tier-3 floor lowered from 40.0 → 30.0.
+  - **SIEM — Existing incidents not retroactively re-severitied after v1.0.55 threshold change:** Startup Migration 13 added to `main.py`. On engine restart, all open/investigating/in_review incidents with no correlation rules are re-evaluated against the new scoring thresholds (>=8.2 critical / >=7.6 high / >=6.0 medium) using the max `base_score` from constituent alerts. Rule-escalated incidents are left untouched.
+  - **UEBA — Context dict missing `category` and `username` fields:** `_get_recent_user_alerts()` in `ingestor.py` returned rows with only `rule_id`, `agent_id`, `timestamp`, `src_ip`. Missing fields caused: (1) token-theft IP heuristic always returned 0 distinct IPs (username check always False); (2) data-staging and activity-volume-spike detectors counted 0 FIM events in context; (3) ML `recent_fim` feature always 0 during inference. Added `username`, `category`, `rule_level`, `mitre_id` to context rows.
 
 ---
 

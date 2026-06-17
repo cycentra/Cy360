@@ -480,6 +480,47 @@ async def lifespan(app: FastAPI):
             """))
             log.info("migration_12_cycases_tables_complete")
 
+            # Migration 13: Retroactive incident severity recalculation.
+            #
+            # grouper.py previously used thresholds >=10/7/4 to map base_score
+            # to severity. The critical (>=10) branch was unreachable (max score
+            # is 8.24), and the high (>=7) branch fired for ALL level-10+ alerts
+            # (score 7.1+), creating near-universal High incidents.
+            #
+            # Corrected thresholds (v1.0.55):
+            #   >= 8.2 → critical  (level 15)
+            #   >= 7.6 → high      (level 12-14)
+            #   >= 6.0 → medium    (level 7-11)
+            #   else   → low       (level 3-6)
+            #
+            # This migration applies the new mapping to open incidents that have
+            # NOT been escalated by correlation rules (correlated_rules is empty).
+            # Rule-escalated incidents are left alone — the rule may have
+            # legitimately promoted a medium alert to critical (e.g. CR-003).
+            await _db.execute(_text("""
+                UPDATE incidents i
+                SET severity   = derived.new_sev,
+                    updated_at = NOW()
+                FROM (
+                    SELECT
+                        a.incident_id,
+                        CASE
+                            WHEN MAX(a.base_score) >= 8.2 THEN 'critical'
+                            WHEN MAX(a.base_score) >= 7.6 THEN 'high'
+                            WHEN MAX(a.base_score) >= 6.0 THEN 'medium'
+                            ELSE 'low'
+                        END AS new_sev
+                    FROM alerts a
+                    WHERE a.incident_id IS NOT NULL
+                    GROUP BY a.incident_id
+                ) derived
+                WHERE i.id = derived.incident_id
+                  AND i.status IN ('open', 'investigating', 'in_review')
+                  AND i.severity != derived.new_sev
+                  AND (i.correlated_rules IS NULL OR i.correlated_rules = '[]'::jsonb)
+            """))
+            log.info("migration_13_incident_severity_recalc_complete")
+
             await _db.commit()
             log.info("all_startup_migrations_complete")
     except Exception as _e:
