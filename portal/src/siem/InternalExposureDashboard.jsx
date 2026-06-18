@@ -256,10 +256,12 @@ function IncidentStatePanel({ statusCounts, total, loading, offline, onViewAll }
 // Widget: Severity Donut
 // ─────────────────────────────────────────────────────────────────────────────
 
-function SeverityDonut({ incidents }) {
-  const counts = { critical: 0, high: 0, medium: 0, low: 0 };
-  incidents.forEach(inc => { const s = (inc.severity || "low").toLowerCase(); if (counts[s] != null) counts[s]++; });
-  const total    = Object.values(counts).reduce((a, b) => a + b, 0) || 1;
+function SeverityDonut({ incidents, severityCounts, totalOpen }) {
+  // Prefer server-side aggregated counts (covers all 4000+ active incidents, not just the 200-row sample).
+  const counts = severityCounts
+    ? { critical: severityCounts.critical || 0, high: severityCounts.high || 0, medium: severityCounts.medium || 0, low: severityCounts.low || 0 }
+    : (() => { const c = { critical: 0, high: 0, medium: 0, low: 0 }; incidents.forEach(inc => { const s = (inc.severity || "low").toLowerCase(); if (c[s] != null) c[s]++; }); return c; })();
+  const total    = totalOpen || Object.values(counts).reduce((a, b) => a + b, 0) || 1;
   const colors   = ["#ff3b3b", "#ff8c00", "#f5c518", "#00e5a0"];
   const keys     = ["critical", "high", "medium", "low"];
   let cumulative = 0;
@@ -277,7 +279,7 @@ function SeverityDonut({ incidents }) {
     return { d, color: colors[i], key: k, count: counts[k] };
   });
 
-  const totalIncidents = Object.values(counts).reduce((a, b) => a + b, 0);
+  const totalIncidents = totalOpen || Object.values(counts).reduce((a, b) => a + b, 0);
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
@@ -600,28 +602,17 @@ function UebaAnomalyChart({ uebaUsers, totalUebaAlerts = 0 }) {
 // Widget: AI Disposition (auto-closed vs manual, ticket rate)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function AiDispositionWidget({ incidents }) {
-  const total = incidents.length;
-
-  // Engine auto-closes: status=closed with false_positive_reason set (fp_probability on 0–100 scale)
-  const aiClosed = incidents.filter(i =>
-    i.status === "closed" && i.false_positive_reason != null
-  );
-  const manuallyResolved = incidents.filter(i => i.status === "resolved");
-  const manuallyClosed = incidents.filter(i =>
-    i.status === "closed" && i.false_positive_reason == null
-  );
-  const falsePositiveManual = incidents.filter(i => i.status === "false_positive");
-  const stillOpen = incidents.filter(i =>
-    i.status === "open" || i.status === "investigating" || i.status === "in_review" || i.status === "held"
-  );
-  const casesOpen  = incidents.filter(i => i.case_opened_at);
-
-  const aiCount          = aiClosed.length;
-  const manResolvedCount = manuallyResolved.length;
-  const manClosedCount   = manuallyClosed.length;
-  const fpManualCount    = falsePositiveManual.length;
-  const ticketCount      = casesOpen.length;
+function AiDispositionWidget({ incidents, stats, caseMetrics }) {
+  // All counts derived from server-side stats — not the 200-incident sample.
+  // The sample only holds the 200 most-recently-active incidents (last_seen DESC);
+  // closed incidents have old timestamps and are invisible in it.
+  const aiCount          = stats?.ai_auto_closed ?? 0;
+  const manClosedCount   = stats?.closed_analyst ?? Math.max(0, (stats?.status_counts?.closed || 0) - aiCount);
+  const manResolvedCount = stats?.status_counts?.resolved || 0;
+  const fpManualCount    = stats?.status_counts?.false_positive || 0;
+  const stillOpenCount   = stats?.open_incidents || 0;
+  const ticketCount      = caseMetrics?.open_cases ?? incidents.filter(i => i.case_opened_at).length;
+  const total            = stats?.total_incidents || incidents.length;
   const totalClosed      = aiCount + manResolvedCount + manClosedCount + fpManualCount;
   const manualTotalCount = manResolvedCount + manClosedCount + fpManualCount;
   const aiPct     = totalClosed > 0 ? Math.round((aiCount / totalClosed) * 100) : 0;
@@ -629,11 +620,11 @@ function AiDispositionWidget({ incidents }) {
   const ticketPct = total > 0 ? Math.round((ticketCount / total) * 100) : 0;
 
   const rows = [
-    { label: "AI Auto-Closed (FP)",     value: aiCount,         color: "#00e5a0", pct: aiPct,                                                                              sub: "Engine auto-closed (FP ≥ 80%)"  },
-    { label: "Manually Resolved",       value: manResolvedCount, color: "#4d9eff", pct: totalClosed > 0 ? Math.round((manResolvedCount / totalClosed) * 100) : 0,         sub: "Analyst confirmed resolved" },
-    { label: "Manually Closed",         value: manClosedCount,  color: "#888",    pct: totalClosed > 0 ? Math.round((manClosedCount / totalClosed) * 100) : 0,           sub: "Analyst closed"             },
-    { label: "False Positive (Manual)", value: fpManualCount,   color: "#888",    pct: totalClosed > 0 ? Math.round((fpManualCount / totalClosed) * 100) : 0,            sub: "Analyst marked FP"          },
-    { label: "Still Open / Active",     value: stillOpen.length, color: "#ff8c00", pct: total > 0 ? Math.round((stillOpen.length / total) * 100) : 0,                    sub: "Requires attention"         },
+    { label: "AI Auto-Closed (FP)",     value: aiCount,          color: "#00e5a0", pct: aiPct,                                                                               sub: "Engine auto-closed (FP ≥ 80%)"  },
+    { label: "Manually Resolved",       value: manResolvedCount, color: "#4d9eff", pct: totalClosed > 0 ? Math.round((manResolvedCount / totalClosed) * 100) : 0,          sub: "Analyst confirmed resolved" },
+    { label: "Manually Closed",         value: manClosedCount,   color: "#888",    pct: totalClosed > 0 ? Math.round((manClosedCount / totalClosed) * 100) : 0,            sub: "Analyst closed"             },
+    { label: "False Positive (Manual)", value: fpManualCount,    color: "#888",    pct: totalClosed > 0 ? Math.round((fpManualCount / totalClosed) * 100) : 0,             sub: "Analyst marked FP"          },
+    { label: "Still Open / Active",     value: stillOpenCount,   color: "#ff8c00", pct: total > 0 ? Math.round((stillOpenCount / total) * 100) : 0,                        sub: "Requires attention"         },
   ];
 
   return (
@@ -699,12 +690,11 @@ const KC_NAMES = [
 ];
 const KC_COLORS = ["#4d9eff", "#b36bff", "#ff8c00", "#ff3b3b", "#ff3b3b", "#ff3b3b", "#ff3b3b"];
 
-function KillChainFunnel({ incidents }) {
-  const counts = Array(7).fill(0);
-  incidents.forEach(i => {
-    const stage = i.kill_chain_stage;
-    if (stage != null && stage >= 0 && stage < 7) counts[stage]++;
-  });
+function KillChainFunnel({ incidents, killChainCounts }) {
+  // Prefer server-side aggregated counts (not limited to 200-incident sample).
+  const counts = killChainCounts
+    ? Array(7).fill(0).map((_, i) => killChainCounts[i] || 0)
+    : (() => { const c = Array(7).fill(0); incidents.forEach(i => { const s = i.kill_chain_stage; if (s != null && s >= 0 && s < 7) c[s]++; }); return c; })();
   const maxCount = Math.max(...counts, 1);
 
   return (
@@ -906,7 +896,9 @@ export function InternalExposureDashboard({ setActiveTab }) {
   const statusCounts  = stats?.status_counts || {};
   const totalInc      = stats?.total_incidents || 0;
   const openInc       = stats?.open_incidents  || 0;
-  const critHighInc   = incidents.filter(i => i.severity === "critical" || i.severity === "high").length;
+  // Use server-side severity breakdown so this isn't limited to 200 incidents
+  const _sevOpen    = stats?.severity_counts_open || {};
+  const critHighInc = (_sevOpen.critical || 0) + (_sevOpen.high || 0);
   const highRiskEnt   = riskScores.filter(e => (e.score || 0) >= 50).length;
   // Use the stats endpoint's ai_auto_closed count (reliable — not limited by the 200-row incident sample)
   const aiAutoClose   = stats?.ai_auto_closed ?? 0;
@@ -1079,7 +1071,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
         <Panel title="Severity Distribution" accent="#ff3b3b">
           {loading  ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
           : offline ? <OfflineMsg />
-          : <SeverityDonut incidents={incidents} />}
+          : <SeverityDonut incidents={incidents} severityCounts={stats?.severity_counts_open} totalOpen={openInc} />}
         </Panel>
 
         <Panel title="Incident Categories" accent="#b06eff">
@@ -1130,7 +1122,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
           badge={aiAutoClose > 0 ? `${aiAutoClose} AI RESOLVED` : null}>
           {loading  ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
           : offline ? <OfflineMsg />
-          : <AiDispositionWidget incidents={incidents} />}
+          : <AiDispositionWidget incidents={incidents} stats={stats} caseMetrics={caseMetrics} />}
         </Panel>
 
         <Panel title="UEBA Anomaly Distribution"
@@ -1149,7 +1141,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
         <Panel title="Kill Chain Stage Distribution" accent="#ff3b3b">
           {loading  ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
           : offline ? <OfflineMsg />
-          : <KillChainFunnel incidents={incidents} />}
+          : <KillChainFunnel incidents={incidents} killChainCounts={stats?.kill_chain_counts} />}
         </Panel>
 
         <Panel title="Top Risky Entities"

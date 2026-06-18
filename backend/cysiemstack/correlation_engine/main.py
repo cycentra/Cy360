@@ -36,7 +36,7 @@ import redis.asyncio as aioredis
 from fastapi import BackgroundTasks, FastAPI, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, delete
+from sqlalchemy import select, func, desc, asc, delete, case as sql_case
 from pydantic import BaseModel
 
 from config import get_settings
@@ -892,16 +892,39 @@ async def stats(db: AsyncSession = Depends(get_db)):
             Incident.false_positive_reason.isnot(None),
         )
     )).scalar() or 0
+
+    # Severity breakdown for open/active incidents — drives the dashboard SeverityDonut and critHighInc KPI.
+    # Using a single GROUP BY query avoids N round-trips.
+    _sev_rows = (await db.execute(
+        select(Incident.severity, func.count().label("cnt"))
+        .where(Incident.status.in_(["open", "investigating", "in_review", "held"]))
+        .group_by(Incident.severity)
+    )).all()
+    severity_counts_open: dict[str, int] = {row[0]: row[1] for row in _sev_rows if row[0]}
+
+    # Kill chain stage distribution across all incidents — drives the KillChainFunnel widget.
+    _kc_rows = (await db.execute(
+        select(Incident.kill_chain_stage, func.count().label("cnt"))
+        .where(Incident.kill_chain_stage.isnot(None))
+        .group_by(Incident.kill_chain_stage)
+    )).all()
+    kill_chain_counts: dict[int, int] = {row[0]: row[1] for row in _kc_rows}
+
     return {
-        "total_alerts":     total_alerts,
-        "total_incidents":  total_incidents,
-        "open_incidents":   open_incidents,
-        "ai_auto_closed":   ai_auto_closed,
-        "status_counts":    status_counts,
-        "ws_clients":       len(manager.active),
-        "uptime_seconds":   int(uptime),
+        "total_alerts":        total_alerts,
+        "total_incidents":     total_incidents,
+        "open_incidents":      open_incidents,
+        "ai_auto_closed":      ai_auto_closed,
+        "closed_analyst":      max(0, status_counts.get("closed", 0) - ai_auto_closed),
+        "status_counts":       status_counts,
+        "severity_counts_open": severity_counts_open,
+        "kill_chain_counts":   kill_chain_counts,
+        "ws_clients":          len(manager.active),
+        "uptime_seconds":      int(uptime),
     }
 
+
+_ACTIVE_STATUSES = ["open", "investigating", "in_review", "held"]
 
 @app.get("/incidents")
 async def list_incidents(
@@ -910,18 +933,44 @@ async def list_incidents(
     user:     Optional[str] = None,
     agent:    Optional[str] = None,
     src_ip:   Optional[str] = None,
-    limit: int = Query(50, le=200),
+    sort_by:  str = "last_seen",
+    sort_dir: str = "desc",
+    limit: int = Query(50, le=1000),
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
 ):
     filters = []
-    if status:   filters.append(Incident.status   == status)
+    # "active" is a frontend shorthand for all statuses that need analyst attention.
+    # Normalize "in-review" (legacy hyphen variant) → "in_review".
+    if status == "active":
+        filters.append(Incident.status.in_(_ACTIVE_STATUSES))
+    elif status:
+        filters.append(Incident.status == status.replace("-", "_"))
     if severity: filters.append(Incident.severity == severity)
     if user:     filters.append(func.array_to_string(Incident.affected_users,  ',').ilike(f'%{user}%'))
     if agent:    filters.append(func.array_to_string(Incident.affected_agents, ',').ilike(f'%{agent}%'))
     if src_ip:   filters.append(func.array_to_string(Incident.src_ips,         ',').ilike(f'%{src_ip}%'))
 
-    q = select(Incident).order_by(desc(Incident.last_seen))
+    # Build sort expression — severity uses a CASE to get the correct critical>high>medium>low order.
+    _sev_order = sql_case(
+        (Incident.severity == "critical", 0),
+        (Incident.severity == "high",     1),
+        (Incident.severity == "medium",   2),
+        (Incident.severity == "low",      3),
+        else_=4,
+    )
+    _SORT_MAP = {
+        "last_seen":   Incident.last_seen,
+        "first_seen":  Incident.first_seen,
+        "alert_count": Incident.alert_count,
+        "risk_score":  Incident.risk_score,
+        "status":      Incident.status,
+        "severity":    _sev_order,
+    }
+    sort_col = _SORT_MAP.get(sort_by, Incident.last_seen)
+    order_clause = asc(sort_col) if sort_dir == "asc" else desc(sort_col)
+
+    q = select(Incident).order_by(order_clause)
     if filters:
         q = q.where(*filters)
 

@@ -1361,29 +1361,27 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
   const wsDebounce  = useRef(null); // timer ref for WS-triggered refetch debounce
 
   const fetchIncidents = useCallback(async () => {
-    let merged;
-    if (filters.status === "active") {
-      // Fetch all non-terminal statuses explicitly — avoids the engine's
-      // last_seen-sorted default burying active incidents behind 500+ closed ones.
-      const active = [];
-      let anyOffline = false;
-      for (const s of ["investigating", "open", "in_review", "held"]) {
-        const d = await siemFetch(siemApi.getIncidents({ severity: filters.severity, status: s, limit: 200 }));
-        if (d._offline || d._error) { anyOffline = true; continue; }
-        const rows = d.incidents || [];
-        const existing = new Set(active.map(i => i.id));
-        active.push(...rows.filter(i => !existing.has(i.id)));
-      }
-      if (anyOffline && active.length === 0) { setLoading(false); return; }
-      merged = { incidents: active, total: active.length };
-    } else {
-      merged = await siemFetch(siemApi.getIncidents({ ...filters, limit: 500 }));
-      if (merged._offline || merged._error) { setLoading(false); return; }
-    }
-    setIncidents(merged.incidents || []);
-    setTotal(merged.total || 0);
+    setLoading(true);
+    // Map frontend sort fields to backend sort_by values. Fields not in this map
+    // fall back to last_seen on the server; the client then re-sorts the current page.
+    const SERVER_SORTABLE = { severity: "severity", last_seen: "last_seen", alerts: "alert_count", risk_score: "risk_score", status: "status" };
+    const apiParams = {
+      limit:    pageSize,
+      offset:   (currentPage - 1) * pageSize,
+      sort_by:  SERVER_SORTABLE[sortField] || "last_seen",
+      sort_dir: sortDir,
+    };
+    // "active" is the server's multi-status shorthand (open + investigating + in_review + held).
+    // Normalize legacy hyphen variant "in-review" → "in_review" for single-status filters.
+    if (filters.status) apiParams.status = filters.status.replace("-", "_");
+    if (filters.severity) apiParams.severity = filters.severity;
+
+    const d = await siemFetch(siemApi.getIncidents(apiParams));
+    if (d._offline || d._error) { setLoading(false); return; }
+    setIncidents(d.incidents || []);
+    setTotal(d.total || 0);
     setLoading(false);
-  }, [filters]);
+  }, [filters, currentPage, pageSize, sortField, sortDir]);
 
   const loadFpPatterns = async () => {
     setFpPatternsLoading(true);
@@ -1501,8 +1499,10 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
     return sortDir === "asc" ? cmp : -cmp;
   });
 
-  const totalPages = Math.max(1, Math.ceil(sortedIncidents.length / pageSize));
-  const pagedIncidents = sortedIncidents.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  // Server already returns exactly one page; totalPages drives the pagination controls using the full API total.
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  // Client-side sort applies to the current page only (server handles sort for the mapped fields above).
+  const pagedIncidents = sortedIncidents;
 
   // ── Chart data (derived from the main incidents list) ─────────────────────
   const severityData = [
@@ -1970,7 +1970,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
                 padding: "10px 16px", borderTop: "1px solid rgba(255,255,255,0.06)",
                 background: "rgba(255,255,255,0.01)" }}>
                 <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace" }}>
-                  {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, sortedIncidents.length)} of {sortedIncidents.length}
+                  {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, total)} of {total}
                 </span>
                 <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                   <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}
