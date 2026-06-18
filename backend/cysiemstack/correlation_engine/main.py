@@ -1439,13 +1439,20 @@ async def analyse_incident(incident_id: str, db: AsyncSession = Depends(get_db))
         raise HTTPException(status_code=404, detail="Incident not found")
 
     from llm_enricher import enrich_incident as llm_enrich_incident
-    result = await llm_enrich_incident(db, inc, on_demand=True)
+    try:
+        result = await llm_enrich_incident(db, inc, on_demand=True)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"LLM enrichment failed: {exc}. Check AI settings in the portal.",
+        )
     await db.commit()
 
     if not result:
-        raise HTTPException(status_code=503,
-                            detail="LLM enrichment failed or is disabled. "
-                                   "Check AI settings in the portal.")
+        raise HTTPException(
+            status_code=503,
+            detail="No alerts are linked to this incident — nothing to analyse.",
+        )
     return {
         "ok":               True,
         "llm_summary":      inc.llm_summary,

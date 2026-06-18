@@ -226,4 +226,6 @@ async def enrich_incident(db: AsyncSession, incident: Incident, on_demand: bool 
 
     except Exception as e:
         log.warning('llm_enrichment_failed', incident_id=incident.id, error=str(e))
+        if on_demand:
+            raise  # Surface real error to the analyst — don't swallow on-demand failures
         return {}

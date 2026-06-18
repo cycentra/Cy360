@@ -1,3 +1,19 @@
+## v1.0.59 -- 2026-06-18
+
+### Improvements
+
+  - chore(docs): weekly architecture review 2026-06-18
+
+---
+
+## v1.0.59 -- 2026-06-19
+
+### Bug Fixes
+
+  - **SIEM — "Request AI Analysis" button always failed with generic error:** On-demand LLM enrichment (`POST /incidents/{id}/analyse`) always returned HTTP 503 "LLM enrichment failed or is disabled. Check AI settings in the portal." regardless of the real cause. Root cause: `llm_enricher.enrich_incident()` caught all `call_llm()` exceptions and returned `{}` silently — correct graceful degradation for automated background enrichment but wrong for analyst-triggered on-demand calls. Fixed by re-raising the exception when `on_demand=True` and wrapping the call in `analyse_incident()` to include the real error (e.g. "CyMind returned HTTP 401: Invalid API key" or "Connection refused to Ollama") in the 503 detail. Analysts now see actionable diagnostics instead of a generic message. Also improved the no-alerts fallback message: "No alerts are linked to this incident — nothing to analyse."
+
+---
+
 ## v1.0.58 -- 2026-06-18
 
 ### Improvements
