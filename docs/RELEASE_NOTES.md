@@ -1,8 +1,76 @@
-## v1.0.67 -- 2026-06-19
+## v1.0.68 -- 2026-06-19
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.67 -- 2026-06-19
+
+### New Feature — Role-Based Page Access Control (RBAC)
+
+Admins can now define custom roles with fine-grained page-level access control. Users assigned
+a restricted role only see the pages their role permits — restricted pages are completely hidden
+from the sidebar.
+
+#### Backend — `backend/blueprints/rbac/manager.py`
+
+New `cy_roles` PostgreSQL table stores role page permissions. Five built-in roles are seeded
+on first run (`ON CONFLICT DO NOTHING` so custom edits persist across restarts):
+
+| Role | Default Page Access |
+|------|---------------------|
+| `admin` | Unrestricted (all pages) |
+| `analyst` | 19 pages (all except platform admin) |
+| `viewer` | 8 pages (dashboard, assets, vulns, SIEM, compliance, marketplace) |
+| `cysoar` | 3 pages (dashboard, SIEM incidents, marketplace) |
+| `cyiris` | 2 pages (dashboard, marketplace) |
+
+New public function `get_user_allowed_pages(email)` — returns `None` (unrestricted) or a list
+of allowed page IDs for a given user, based on their assigned role.
+
+New API routes (admin-only except `my-permissions`):
+- `GET  /api/rbac/roles` — list all roles with their page permissions
+- `POST /api/rbac/roles` — create or update a role's page permissions; `admin` always stored as unrestricted
+- `DELETE /api/rbac/roles/<role_name>` — delete a custom role (built-in roles return 400)
+- `GET  /api/rbac/my-permissions` — returns `{"allowed_pages": [...] | null}` for the current session user
+
+Dynamic role validation: user assignment (`POST /api/rbac/users`) now queries `cy_roles` so
+custom roles are accepted without code changes.
+
+#### Frontend — Page Filtering
+
+- **`portal/src/hooks/useAppState.js`**: Added `allowedPages` state (`null` = unrestricted).
+  Fetches `/api/rbac/my-permissions` on login; updates when the authenticated user changes.
+- **`portal/src/sidebar/Sidebar.jsx`**: Added `isPageAllowed()` helper. Sidebar sections and
+  items not in `allowedPages` are completely hidden. Entire sections are removed if all their
+  items are restricted.
+- **`portal/src/App.jsx`**: Added redirect `useEffect` — if the current tab is not in
+  `allowedPages`, automatically redirects to the first allowed page on login.
+
+#### Frontend — Settings > Role Management
+
+New **Role Management** section (🎭) added under Settings > User Management:
+
+- Role list table with **Configure** and **Delete** buttons (built-in roles cannot be deleted)
+- **Configure panel**: per-page checkboxes grouped by sidebar section; admin shown as read-only
+  unrestricted
+- **Create Role** form: slug-validated name (lowercase, no spaces), page picker, Save button
+- `availableRoles` in the User Management tab now fetches from `/api/rbac/roles` so custom
+  roles appear in the role assignment dropdown immediately after creation
+
+### Bug Fix — React Hooks Violation (Black Page on Login)
+
+**Root cause:** The `useEffect` for the allowed-page redirect was placed after the
+`if (!authReady) return null` and `if (!user) return <LoginPage />` early returns in
+`App.jsx`. React's Rules of Hooks require all hooks to be called unconditionally before any
+return statement. This caused a blank/black page for all users after the RBAC frontend code
+was deployed.
+
+**Fix:** Moved the `useEffect` to before the early returns in `App.jsx`. The built bundle
+correctly reflects this — Vite/Rollup emits it as a comma-operator expression
+`if(u.useEffect(...),[w]),!a)return null` ensuring the hook registers before the early exit.
 
 ---
 

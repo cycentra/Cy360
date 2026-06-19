@@ -237,19 +237,19 @@ export default function App() {
   const [showCyMind,       setShowCyMind]       = useState(false);
   const [casesIncidentId,  setCasesIncidentId]  = useState(null);
 
-  if (!authReady) return null;
-  if (!user) return <LoginPage />;
-
-  const canUseCyMind = user?.role === "analyst" || user?.role === "admin";
-
-  // Redirect to first allowed page if current tab is restricted after permissions load
+  // Must be before early returns — hooks cannot be called conditionally
   useEffect(() => {
-    if (!allowedPages) return; // null = unrestricted, nothing to enforce
+    if (!allowedPages) return; // null = unrestricted (admin), nothing to enforce
     if (!allowedPages.includes(activeTab)) {
       const fallback = allowedPages.length > 0 ? allowedPages[0] : "dashboard";
       setActiveTab(fallback);
     }
   }, [allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!authReady) return null;
+  if (!user) return <LoginPage />;
+
+  const canUseCyMind = user?.role === "analyst" || user?.role === "admin";
 
   const handleLogout = () => {
     clearSSOToken();
