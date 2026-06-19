@@ -4988,3 +4988,35 @@ def list_agent_packages():
         "pkg_dir":      str(_AGENT_PKG_DIR),
         "packages":     packages,
     }))
+
+
+@system_bp.route("/api/system/agent-packages/prune", methods=["DELETE"])
+def prune_agent_packages():
+    """Delete all but the 3 most-recent agent packages from disk."""
+    if not session.get("user_email"):
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+
+    if not _AGENT_PKG_DIR.exists():
+        return add_cors_headers(jsonify({"ok": True, "deleted": []}))
+
+    all_pkgs = sorted(
+        [f for f in _AGENT_PKG_DIR.iterdir() if f.is_file() and not f.name.startswith(".")],
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+    to_delete = all_pkgs[3:]
+    deleted = []
+    errors = []
+    for f in to_delete:
+        try:
+            f.unlink()
+            deleted.append(f.name)
+        except Exception as e:
+            errors.append({"file": f.name, "error": str(e)})
+
+    return add_cors_headers(jsonify({"ok": not errors, "deleted": deleted, "errors": errors}))
+
+
+@system_bp.route("/api/system/agent-packages/prune", methods=["OPTIONS"])
+def prune_agent_packages_options():
+    return add_cors_headers(make_response("", 204))

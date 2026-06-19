@@ -38,7 +38,7 @@ const SvgGear  = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" str
  *   INTERNAL EXPOSURE    — Active Incidents · Entity Risk · Behavioral Analytics
  *   OPERATIONS           — Audit Trail · Active module launch links (CySIEM always, addons when enabled)
  *   MARKETPLACE          — Marketplace (integrations, playbooks, platform extensions)
- *   PLATFORM CONFIGURATION — System Settings
+ *   PLATFORM CONFIGURATION — Settings, Extensions, Audit Trail
  *
  * @param {object} opts
  * @param {object} opts.installedModules - current installedModules state
@@ -93,14 +93,14 @@ export function buildNavSections({ installedModules = {}, data = null }) {
     {
       section: "PLATFORM CONFIGURATION",
       items: [
-        { id: "system-settings",      label: "Settings",              icon: SvgGear,  accent: "#00e5a0" },
-        { id: "platform-extensions",  label: "Platform Extensions",   icon: SvgMods,  accent: "#b06eff" },
+        { id: "system-settings",      label: "Settings",    icon: SvgGear,  accent: "#00e5a0" },
+        { id: "platform-extensions",  label: "Extensions",  icon: SvgMods,  accent: "#b06eff" },
+        { id: "audit-trail",          label: "Audit Trail", icon: SvgAudit, accent: "#b06eff" },
       ],
     },
     {
       section: "OPERATIONS",
       items: [
-        { id: "audit-trail", label: "Audit Trail", icon: SvgAudit, accent: "#b06eff" },
         ...addonInstalled.map(([id]) => {
           const mod = PLATFORM_MODULES[id];
           return {
