@@ -57,6 +57,7 @@ import CaseDetailPage        from './pages/cases/CaseDetailPage.jsx';
 import { HostIntelligencePage } from './pages/HostIntelligencePage.jsx';
 import { SiemUebaPage }       from './siem/SiemUebaPage';
 import { InternalExposureDashboard } from './siem/InternalExposureDashboard';
+import { ThreatHuntingPage }         from './siem/ThreatHuntingPage';
 
 import { LoginPage }         from './pages/login/LoginPage.jsx';
 import { ScanPage }          from './pages/scan/ScanPage.jsx';
@@ -355,6 +356,7 @@ export default function App() {
             {activeTab==="siem-risk"        && <HostIntelligencePage/>}
             {activeTab==="siem-ueba"        && <SiemUebaPage/>}
             {activeTab==="internal-dashboard" && <InternalExposureDashboard setActiveTab={setActiveTab}/>}
+            {activeTab==="threat-hunting"   && <ThreatHuntingPage setActiveTab={setActiveTab}/>}
             {activeTab==="host-inventory"   && <HostIntelligencePage/>}
             {activeTab==="marketplace"    && <MarketplacePage user={user} installedModules={installedModules} onInstall={handleInstallModule} onUninstall={handleUninstallModule}/>}
             {activeTab==="benchmark"            && <BenchmarkPage />}

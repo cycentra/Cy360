@@ -150,6 +150,24 @@ export const siemApi = {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     return new WebSocket(`${proto}://${location.host}/api/siem/ws/live`);
   },
+
+  /** List all active threat hunt rules with finding counts. */
+  getThreatHuntRules: () => _get("/threat-hunting/rules"),
+
+  /**
+   * Paginated threat hunt finding list (hunt_finding incidents).
+   * @param {{ status?: string, severity?: string, limit?: number, offset?: number }} params
+   */
+  getThreatHuntFindings: (params = {}) => _get("/threat-hunting/findings", params),
+
+  /** Aggregate hunt summary: rules_total, findings_open, findings_critical_high, etc. */
+  getThreatHuntSummary: () => _get("/threat-hunting/summary"),
+
+  /** Trigger an on-demand threat hunt run. Admin role required. */
+  runThreatHunt: () => _post("/threat-hunting/run", {}),
+
+  /** Request CyMind AI analysis of current hunt findings. */
+  analyzeThreatHunt: () => _post("/threat-hunting/analyze", {}),
 };
 
 /**

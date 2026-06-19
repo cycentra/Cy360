@@ -1,3 +1,44 @@
+## v1.0.66 -- 2026-06-19
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.66 -- 2026-06-19
+
+### Enhancement — Threat Hunting UI + AI Analysis (Internal Exposure)
+
+**New page:** Threat Hunting is now surfaced as a first-class page under the Internal Exposure section in the sidebar (🎯 icon). The backend threat hunting engine (`cysiemstack/threat_hunter/hunter.py`) was already operational with 12 YAML hunt rules running every 6 hours — this release connects it to the UI.
+
+#### New UI — `portal/src/siem/ThreatHuntingPage.jsx`
+- 5-card KPI row: Total Rules · Active Findings · Critical/High · New (24h) · Rules Firing
+- **Hunt Rules table:** all 12 YAML rules with severity badges, MITRE ATT&CK technique tags, window hours, and live open-findings count
+- **CyMind AI Analysis panel:** "Analyze Findings" button sends current hunt state to CyMind and displays AI-generated threat narrative with recommended actions
+- **Active Hunt Findings table:** all open `hunt_finding` incidents with entity, severity, MITRE IDs, rule name, first-seen timestamp, expandable llm_summary
+- "Run Hunt Now" button for on-demand hunts
+- Auto-refreshes every 60 seconds
+
+#### Internal Attack Posture Dashboard — hunt summary widget added
+- New "Threat Hunt Activity" panel added to `InternalExposureDashboard.jsx` (Row 5)
+- Shows: Active Findings, Critical/High, Rules Firing, New (24h) at a glance
+- "View All" navigates to the Threat Hunting page
+
+#### New backend endpoints — `backend/siem_proxy.py`
+- `GET /api/siem/threat-hunting/summary` — hunt statistics for the dashboard widget
+- `POST /api/siem/threat-hunting/analyze` — sends hunt findings + rule state to CyMind; returns AI analysis text, model name, and counts analyzed
+
+#### Compliance feed
+- `hunt_finding` incidents were already flowing through `cy_comp/services/siem_bridge.py` compliance enrichment (MITRE-based mapping). No changes required — hunt findings appear in `comp-findings` automatically.
+
+#### Navigation
+- `portal/src/sidebar/navConfig.jsx`: "Threat Hunting" added to INTERNAL EXPOSURE section
+- `portal/src/App.jsx`: `activeTab==="threat-hunting"` route added
+- `portal/src/siem/siemApi.js`: 5 new API helper methods added
+
+---
+
 ## v1.0.65 -- 2026-06-19
 
 ### Improvements

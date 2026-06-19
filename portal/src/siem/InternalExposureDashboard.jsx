@@ -852,6 +852,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
   const [lastRefresh,  setLastRefresh]  = useState(null);
   const [postureScore, setPostureScore] = useState(null);
   const [caseMetrics,  setCaseMetrics]  = useState(null);
+  const [huntSummary,  setHuntSummary]  = useState(null);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -882,6 +883,9 @@ export function InternalExposureDashboard({ setActiveTab }) {
       .then(r => r.ok ? r.json() : null)
       .then(d => d && setCaseMetrics(d))
       .catch(() => {});
+    // Hunt summary (best-effort — widget degrades gracefully if hunt engine not deployed)
+    const hs = await siemFetch(siemApi.getThreatHuntSummary()).catch(() => null);
+    setHuntSummary(hs && !hs._offline && !hs._error ? hs : null);
     setLoading(false);
     setLastRefresh(new Date());
   }, []);
@@ -1152,6 +1156,50 @@ export function InternalExposureDashboard({ setActiveTab }) {
           : <TopRiskyEntities riskScores={riskScores} onView={() => setActiveTab?.("siem-risk")} />}
         </Panel>
 
+      </div>
+
+      {/* ── Row 5: Threat Hunt Summary ── */}
+      <div style={{ marginBottom: 14 }}>
+        <Panel
+          title="Threat Hunt Activity"
+          accent="#ff8c00"
+          badge={huntSummary?.findings_open > 0 ? `${huntSummary.findings_open} OPEN` : null}
+          onViewAll={() => setActiveTab?.("threat-hunting")}
+        >
+          {!huntSummary ? (
+            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace", padding: "8px 0" }}>
+              {loading ? "Loading…" : "Hunt engine offline"}
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 28, flexWrap: "wrap", alignItems: "flex-start" }}>
+              {[
+                { label: "Active Findings",  value: huntSummary.findings_open            ?? 0, color: huntSummary.findings_open > 0 ? "#ff3b3b" : "#00e5a0" },
+                { label: "Critical / High",  value: huntSummary.findings_critical_high   ?? 0, color: huntSummary.findings_critical_high > 0 ? "#ff3b3b" : "rgba(255,255,255,0.35)" },
+                { label: "Rules Firing",     value: huntSummary.rules_with_open_findings ?? 0, color: "#4d9eff" },
+                { label: "New (24h)",        value: huntSummary.findings_last_24h        ?? 0, color: huntSummary.findings_last_24h > 0 ? "#ff8c00" : "rgba(255,255,255,0.35)" },
+              ].map(({ label, value, color }) => (
+                <div key={label} style={{ textAlign: "center", minWidth: 70 }}>
+                  <div style={{ color, fontSize: 26, fontWeight: 800, fontFamily: "'Space Mono',monospace", lineHeight: 1 }}>
+                    {value}
+                  </div>
+                  <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, letterSpacing: "1px", marginTop: 4, textTransform: "uppercase", fontFamily: "monospace" }}>
+                    {label}
+                  </div>
+                </div>
+              ))}
+              <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", justifyContent: "center", gap: 4 }}>
+                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>
+                  {huntSummary.rules_total ?? "—"} rules loaded · runs every 6h
+                </div>
+                {huntSummary.top_rules?.slice(0, 2).map(r => (
+                  <div key={r.id || r.name} style={{ color: "rgba(255,140,0,0.7)", fontSize: 9, fontFamily: "monospace" }}>
+                    ▲ {r.name} ({r.open_findings} open)
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </Panel>
       </div>
 
       {/* ── Footer note ── */}

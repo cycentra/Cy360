@@ -2353,6 +2353,183 @@ def siem_threat_hunt_run():
         return jsonify({"error": str(exc)}), 500
 
 
+@siem_bp.route("/threat-hunting/summary", methods=["GET"])
+@require_siem_auth
+def siem_threat_hunt_summary():
+    """Aggregate stats for the Threat Hunting dashboard tile."""
+    try:
+        import psycopg2.extras
+        from datetime import timedelta
+
+        rules = _sync_hunt_rules()
+
+        conn = _corr_conn()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # Total hunt_finding incidents (any status)
+                cur.execute("""
+                    SELECT COUNT(*) AS total
+                    FROM incidents
+                    WHERE incident_type = 'hunt_finding'
+                """)
+                findings_total = cur.fetchone()["total"] or 0
+
+                # Open hunt_finding incidents
+                cur.execute("""
+                    SELECT COUNT(*) AS open
+                    FROM incidents
+                    WHERE incident_type = 'hunt_finding'
+                      AND status NOT IN ('closed', 'false_positive')
+                """)
+                findings_open = cur.fetchone()["open"] or 0
+
+                # Critical + high open hunt_finding incidents
+                cur.execute("""
+                    SELECT COUNT(*) AS crit_high
+                    FROM incidents
+                    WHERE incident_type = 'hunt_finding'
+                      AND status NOT IN ('closed', 'false_positive')
+                      AND severity IN ('critical', 'high')
+                """)
+                findings_critical_high = cur.fetchone()["crit_high"] or 0
+
+                # Open hunt_finding incidents created in last 24 h
+                cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+                cur.execute("""
+                    SELECT COUNT(*) AS last_24h
+                    FROM incidents
+                    WHERE incident_type = 'hunt_finding'
+                      AND status NOT IN ('closed', 'false_positive')
+                      AND first_seen >= %s
+                """, [cutoff])
+                findings_last_24h = cur.fetchone()["last_24h"] or 0
+        finally:
+            conn.close()
+
+        rules_with_open = sum(1 for r in rules if (r.get("open_findings") or 0) > 0)
+        top_rules = sorted(
+            [r for r in rules if (r.get("open_findings") or 0) > 0],
+            key=lambda r: r.get("open_findings", 0),
+            reverse=True,
+        )[:5]
+
+        return jsonify({
+            "rules_total":             len(rules),
+            "rules_with_open_findings": rules_with_open,
+            "findings_total":          int(findings_total),
+            "findings_open":           int(findings_open),
+            "findings_critical_high":  int(findings_critical_high),
+            "findings_last_24h":       int(findings_last_24h),
+            "top_rules": [
+                {
+                    "id":           r.get("id"),
+                    "name":         r.get("name"),
+                    "open_findings": r.get("open_findings", 0),
+                    "severity":     r.get("severity"),
+                }
+                for r in top_rules
+            ],
+        })
+    except Exception as exc:
+        _logger.exception("siem_threat_hunt_summary error")
+        return jsonify({"error": str(exc)}), 500
+
+
+@siem_bp.route("/threat-hunting/analyze", methods=["POST"])
+@require_siem_auth
+def siem_threat_hunt_analyze():
+    """Call CyMind to produce a natural-language analysis of current hunt state."""
+    try:
+        import psycopg2.extras
+        from cy_comp.services.policy_rag import get_cymind_api_key, get_cymind_url
+
+        rules = _sync_hunt_rules()
+
+        # Fetch the 10 most-recent open hunt_finding incidents
+        conn = _corr_conn()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT id, severity, llm_summary, mitre_ids,
+                           correlated_rules, first_seen
+                    FROM incidents
+                    WHERE incident_type = 'hunt_finding'
+                      AND status NOT IN ('closed', 'false_positive')
+                    ORDER BY first_seen DESC
+                    LIMIT 10
+                """)
+                recent_findings = cur.fetchall()
+        finally:
+            conn.close()
+
+        # Build prompt context
+        rules_summary_lines = []
+        for r in rules:
+            firing = "FIRING" if (r.get("open_findings") or 0) > 0 else "quiet"
+            rules_summary_lines.append(
+                f"  - [{r.get('id')}] {r.get('name')}: {firing} "
+                f"({r.get('open_findings', 0)} open / {r.get('total_findings', 0)} total)"
+            )
+        rules_block = "\n".join(rules_summary_lines) or "  (no rules loaded)"
+
+        findings_lines = []
+        for f in recent_findings:
+            rule_name = ""
+            cr = f.get("correlated_rules")
+            if cr and isinstance(cr, list) and len(cr) > 0:
+                rule_name = cr[0].get("rule_name", "") if isinstance(cr[0], dict) else ""
+            mitre = ", ".join(f.get("mitre_ids") or []) or "N/A"
+            findings_lines.append(
+                f"  - [{f.get('severity','?').upper()}] {f.get('llm_summary') or 'No summary'} "
+                f"| MITRE: {mitre} | Rule: {rule_name} | first_seen: {_iso(f.get('first_seen'))}"
+            )
+        findings_block = "\n".join(findings_lines) or "  (no open findings)"
+
+        prompt = (
+            "You are a threat hunting analyst reviewing active hunt rule results for "
+            "a CyCentra 360 SIEM deployment. Provide a concise, actionable analysis "
+            "covering: (1) which hunt rules are producing the most noise, "
+            "(2) MITRE ATT&CK technique patterns in the findings, "
+            "(3) recommended triage priorities, and (4) any potential false positive patterns.\n\n"
+            f"## Active Hunt Rules ({len(rules)} total)\n{rules_block}\n\n"
+            f"## Recent Open Findings (up to 10)\n{findings_block}\n\n"
+            "Respond in plain prose, under 400 words."
+        )
+
+        # Call CyMind
+        cymind_url = get_cymind_url()
+        api_key    = get_cymind_api_key()
+
+        if not cymind_url or not api_key:
+            return jsonify({"analysis": None, "error": "CyMind not configured"}), 200
+
+        chat_resp = _req.post(
+            f"{cymind_url}/api/v1/chat",
+            json={"message": prompt, "stream": False},
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type":  "application/json",
+            },
+            timeout=60,
+        )
+        chat_resp.raise_for_status()
+        data = chat_resp.json()
+
+        return jsonify({
+            "analysis":         data.get("content", ""),
+            "model":            data.get("model_used", ""),
+            "rules_analyzed":   len(rules),
+            "findings_analyzed": len(recent_findings),
+        })
+
+    except _req.exceptions.RequestException as exc:
+        _logger.warning("siem_threat_hunt_analyze: CyMind request failed: %s", exc)
+        return jsonify({"analysis": None, "error": f"CyMind request failed: {exc}"}), 200
+    except Exception as exc:
+        _logger.exception("siem_threat_hunt_analyze error")
+        return jsonify({"error": str(exc)}), 500
+
+
 @siem_bp.route("/posture/internal", methods=["GET"])
 @require_siem_auth
 def siem_internal_posture():
