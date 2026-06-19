@@ -177,7 +177,7 @@
   <!-- T1547.001 — Startup Folder Persistence -->
   <rule id="100500" level="12">
     <if_sid>550,554</if_sid>
-    <field name="file_path">\Start Menu\Programs\Startup|\Startup\|/etc/xdg/autostart/|~/.config/autostart/</field>
+    <match>Programs/Startup|\\Startup\\|/etc/xdg/autostart|/.config/autostart</match>
     <description>File written to Startup/autostart folder on $(agent.name) — T1547.001</description>
     <mitre><id>T1547.001</id></mitre>
     <group>persistence,fim,</group>
@@ -186,7 +186,7 @@
   <!-- T1053.003 — Cron Persistence (Linux) -->
   <rule id="100501" level="11">
     <if_sid>550,554</if_sid>
-    <field name="file_path">/etc/cron|/var/spool/cron|/etc/crontab</field>
+    <match>/etc/cron|/var/spool/cron|/etc/crontab</match>
     <description>Crontab modified on $(agent.name) — persistence T1053.003</description>
     <mitre><id>T1053.003</id></mitre>
     <group>persistence,fim,</group>
@@ -195,7 +195,7 @@
   <!-- T1543.001 — Launch Agent / Daemon Persistence (macOS/Linux) -->
   <rule id="100502" level="11">
     <if_sid>550,554</if_sid>
-    <field name="file_path">/Library/LaunchAgents|/Library/LaunchDaemons|/etc/systemd/system/</field>
+    <match>/Library/LaunchAgents|/Library/LaunchDaemons|/etc/systemd/system</match>
     <description>LaunchAgent/Daemon or systemd unit added on $(agent.name) — T1543.001</description>
     <mitre><id>T1543.001</id></mitre>
     <group>persistence,fim,</group>
