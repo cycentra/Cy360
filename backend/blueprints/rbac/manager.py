@@ -31,6 +31,7 @@ API routes:
 
 import json
 import logging
+import re
 from contextlib import contextmanager
 
 from flask import Blueprint, request, jsonify, session, make_response
@@ -41,6 +42,27 @@ from core.helpers import auth_event, add_cors_headers
 log = logging.getLogger(__name__)
 
 rbac_bp = Blueprint("rbac", __name__)
+
+# ── Role page-permission defaults ─────────────────────────────────────────────
+# None = unrestricted (admin only).  Used during bootstrap and as a DB fallback.
+_DEFAULT_ROLE_PAGES: dict = {
+    "admin":   None,  # full access — never restrict
+    "analyst": [
+        "benchmark", "dashboard", "assets", "vulns", "scan",
+        "internal-dashboard", "host-inventory", "siem-incidents",
+        "siem-ueba", "threat-hunting", "cases",
+        "comp-dashboard", "comp-assessment", "comp-findings",
+        "comp-risks", "comp-reports",
+        "marketplace", "platform-extensions", "audit-trail",
+    ],
+    "viewer": [
+        "benchmark", "dashboard", "assets", "vulns",
+        "siem-incidents", "comp-dashboard", "comp-findings", "marketplace",
+    ],
+    "cysoar": ["dashboard", "siem-incidents", "marketplace"],
+    "cyiris": ["dashboard", "marketplace"],
+}
+_BUILTIN_ROLES: frozenset = frozenset(_DEFAULT_ROLE_PAGES.keys())
 
 # ── DDL ───────────────────────────────────────────────────────────────────────
 
@@ -74,6 +96,17 @@ _MIGRATE_COLUMNS = [
     "ALTER TABLE cy_users ADD COLUMN IF NOT EXISTS approval_resolved_at   TIMESTAMPTZ;",
     "ALTER TABLE cy_users ADD COLUMN IF NOT EXISTS rejection_reason       TEXT;",
 ]
+
+_CREATE_ROLES_TABLE = """
+CREATE TABLE IF NOT EXISTS cy_roles (
+    role_name        TEXT PRIMARY KEY,
+    display_name     TEXT,
+    is_builtin       BOOLEAN NOT NULL DEFAULT FALSE,
+    page_permissions TEXT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
 
 _UPSERT_USER = """
 INSERT INTO cy_users (email, role, auth_type, password_hash, name, apps, updated_at)
@@ -129,8 +162,23 @@ def _bootstrap_admin(cur) -> None:
     log.info("Bootstrap: cyadmin@cycentra.com ensured in cy_users")
 
 
+def _bootstrap_roles(cur) -> None:
+    """Ensure built-in roles exist in cy_roles. ON CONFLICT DO NOTHING so custom edits persist."""
+    _DISPLAY = {
+        "admin": "Administrator", "analyst": "Analyst", "viewer": "Viewer",
+        "cysoar": "CySOAR User",  "cyiris":  "CyIRIS User",
+    }
+    for role_name, pages in _DEFAULT_ROLE_PAGES.items():
+        cur.execute("""
+            INSERT INTO cy_roles (role_name, display_name, is_builtin, page_permissions)
+            VALUES (%s, %s, TRUE, %s) ON CONFLICT (role_name) DO NOTHING;
+        """, (role_name, _DISPLAY.get(role_name, role_name.capitalize()),
+               json.dumps(pages) if pages is not None else None))
+    log.info("Bootstrap: built-in roles ensured in cy_roles")
+
+
 def _ensure_table() -> None:
-    """Create cy_users if missing, run column migrations, and guarantee the default admin."""
+    """Create cy_users + cy_roles if missing, run column migrations, and guarantee defaults."""
     global _db_ready
     if _db_ready:
         return
@@ -138,6 +186,7 @@ def _ensure_table() -> None:
         with _db() as conn:
             cur = conn.cursor()
             cur.execute(_CREATE_TABLE)
+            cur.execute(_CREATE_ROLES_TABLE)
             # Idempotent column additions for existing deployments
             for stmt in _MIGRATE_COLUMNS:
                 try:
@@ -145,8 +194,9 @@ def _ensure_table() -> None:
                 except Exception as m_exc:
                     log.debug("Migration stmt skipped (%s): %s", stmt[:60], m_exc)
             _bootstrap_admin(cur)
+            _bootstrap_roles(cur)
         _db_ready = True
-        log.info("cy_users table ready (CYCENTRA_DB_URL=%s)", CYCENTRA_DB_URL)
+        log.info("cy_users + cy_roles tables ready (CYCENTRA_DB_URL=%s)", CYCENTRA_DB_URL)
     except Exception as exc:
         log.error("cy_users table init failed — local auth unavailable: %s", exc)
 
@@ -236,6 +286,87 @@ def _delete_user(email: str) -> None:
         cur.execute("DELETE FROM cy_users WHERE email = %s;", (email,))
 
 
+# ── Role DB helpers ───────────────────────────────────────────────────────────
+
+def _get_all_roles() -> list:
+    """Return all rows from cy_roles as a list of dicts."""
+    _ensure_table()
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT role_name, display_name, is_builtin, page_permissions "
+            "FROM cy_roles ORDER BY is_builtin DESC, role_name;"
+        )
+        rows = cur.fetchall()
+    result = []
+    for role_name, display_name, is_builtin, pages_json in rows:
+        pages = None
+        if pages_json:
+            try:
+                pages = json.loads(pages_json)
+            except Exception:
+                pass
+        result.append({
+            "role_name":        role_name,
+            "display_name":     display_name or role_name,
+            "is_builtin":       bool(is_builtin),
+            "page_permissions": pages,
+        })
+    return result
+
+
+def _get_role_pages(role_name: str):
+    """Return page_permissions list for a role, or None for unrestricted. Falls back to defaults."""
+    try:
+        _ensure_table()
+        with _db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT page_permissions FROM cy_roles WHERE role_name = %s;", (role_name,))
+            row = cur.fetchone()
+        if row is None:
+            return _DEFAULT_ROLE_PAGES.get(role_name, _DEFAULT_ROLE_PAGES["viewer"])
+        return json.loads(row[0]) if row[0] is not None else None
+    except Exception as exc:
+        log.error("_get_role_pages failed for %s: %s", role_name, exc)
+        return _DEFAULT_ROLE_PAGES.get(role_name, _DEFAULT_ROLE_PAGES["viewer"])
+
+
+def _upsert_role(role_name: str, display_name: str, page_permissions, is_builtin: bool = False) -> None:
+    """Insert or update a role in cy_roles."""
+    _ensure_table()
+    pages_json = json.dumps(page_permissions) if page_permissions is not None else None
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO cy_roles (role_name, display_name, is_builtin, page_permissions, updated_at)
+            VALUES (%s, %s, %s, %s, NOW())
+            ON CONFLICT (role_name) DO UPDATE SET
+                display_name     = EXCLUDED.display_name,
+                page_permissions = EXCLUDED.page_permissions,
+                updated_at       = NOW();
+        """, (role_name, display_name, is_builtin, pages_json))
+
+
+def _delete_custom_role(role_name: str) -> None:
+    """Delete a non-built-in role from cy_roles."""
+    _ensure_table()
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM cy_roles WHERE role_name = %s AND is_builtin = FALSE;", (role_name,))
+
+
+def _get_all_role_names() -> set:
+    """Return set of all valid role names (built-in + custom) from cy_roles."""
+    try:
+        _ensure_table()
+        with _db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT role_name FROM cy_roles;")
+            return {r[0] for r in cur.fetchall()}
+    except Exception:
+        return set(_BUILTIN_ROLES)
+
+
 # ── Public functions (imported by other blueprints) ───────────────────────────
 
 def get_user_role(email: str) -> str:
@@ -274,6 +405,16 @@ def user_can_access_client(email: str, client_id: str) -> bool:
     return False
 
 
+def get_user_allowed_pages(email: str):
+    """Return list of allowed page IDs for this user's role, or None for unrestricted (admin)."""
+    try:
+        role = get_user_role(email)
+        return _get_role_pages(role)
+    except Exception as exc:
+        log.error("get_user_allowed_pages failed for %s: %s", email, exc)
+        return _DEFAULT_ROLE_PAGES.get("viewer")
+
+
 # ── API routes ────────────────────────────────────────────────────────────────
 
 @rbac_bp.route("/api/rbac/users", methods=["GET", "POST"])
@@ -299,7 +440,7 @@ def rbac_users():
     name          = data.get("name")
     apps          = data.get("apps")
 
-    if not email or role not in VALID_ROLES:
+    if not email or role not in _get_all_role_names():
         return jsonify({"error": "email and valid role required"}), 400
 
     # If setting a local account password via API, hash it
@@ -393,3 +534,88 @@ def rbac_reset_password(email):
     auth_event("rbac_password_reset", caller, "", "success",
                f"password reset for local user {email}", request.remote_addr)
     return jsonify({"status": "ok", "email": email})
+
+
+# ── Role management routes ────────────────────────────────────────────────────
+
+@rbac_bp.route("/api/rbac/roles", methods=["GET", "POST"])
+def rbac_roles():
+    """List all roles (GET) or create / update a role (POST). Admin-only."""
+    caller = session.get("user_email")
+    if not caller:
+        return jsonify({"error": "Not authenticated"}), 401
+    if get_user_role(caller) != "admin":
+        auth_event("rbac_denied", caller, "", "failure",
+                   f"{request.method} /api/rbac/roles", request.remote_addr)
+        return jsonify({"error": "Admin access required"}), 403
+
+    if request.method == "GET":
+        try:
+            return jsonify(_get_all_roles())
+        except Exception as exc:
+            log.error("Failed to list roles: %s", exc)
+            return jsonify({"error": "Database error"}), 500
+
+    data             = request.get_json() or {}
+    role_name        = (data.get("role_name") or "").strip().lower()
+    display_name     = (data.get("display_name") or "").strip()
+    page_permissions = data.get("page_permissions")  # list[str] | None
+
+    if not role_name or not re.match(r'^[a-z0-9][a-z0-9_-]*$', role_name):
+        return jsonify({"error": "role_name must start with alphanumeric and use only a-z 0-9 _ -"}), 400
+
+    is_builtin = role_name in _BUILTIN_ROLES
+    if role_name == "admin":
+        page_permissions = None  # admin is always unrestricted
+
+    try:
+        _upsert_role(role_name, display_name or role_name, page_permissions, is_builtin)
+    except Exception as exc:
+        log.error("Failed to upsert role %s: %s", role_name, exc)
+        return jsonify({"error": "Database error"}), 500
+
+    auth_event("rbac_role_updated", caller, "", "success",
+               f"upserted role={role_name}", request.remote_addr)
+    return jsonify({"status": "ok", "role_name": role_name})
+
+
+@rbac_bp.route("/api/rbac/roles/<role_name>", methods=["DELETE"])
+def rbac_delete_role(role_name):
+    """Delete a custom (non-built-in) role. Admin-only."""
+    caller = session.get("user_email")
+    if not caller:
+        return jsonify({"error": "Not authenticated"}), 401
+    if get_user_role(caller) != "admin":
+        auth_event("rbac_denied", caller, "", "failure",
+                   f"DELETE /api/rbac/roles/{role_name}", request.remote_addr)
+        return jsonify({"error": "Admin access required"}), 403
+    if role_name in _BUILTIN_ROLES:
+        return jsonify({"error": "Built-in roles cannot be deleted"}), 400
+
+    try:
+        _delete_custom_role(role_name)
+    except Exception as exc:
+        log.error("Failed to delete role %s: %s", role_name, exc)
+        return jsonify({"error": "Database error"}), 500
+
+    auth_event("rbac_role_deleted", caller, "", "success",
+               f"deleted role={role_name}", request.remote_addr)
+    return jsonify({"status": "deleted", "role_name": role_name})
+
+
+@rbac_bp.route("/api/rbac/my-permissions", methods=["GET"])
+def rbac_my_permissions():
+    """Return the list of allowed page IDs for the current session user.
+
+    Response: {"allowed_pages": ["dashboard", ...] | null}
+    null means unrestricted (admin role).
+    """
+    email = session.get("user_email")
+    if not email:
+        return jsonify({"error": "Not authenticated"}), 401
+    try:
+        pages = get_user_allowed_pages(email)
+        return jsonify({"allowed_pages": pages})
+    except Exception as exc:
+        log.error("rbac_my_permissions failed for %s: %s", email, exc)
+        return jsonify({"error": "Server error"}), 500

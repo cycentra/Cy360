@@ -5,7 +5,7 @@
  * v4.4: Adds ScanHistoryDropdown in topbar for timeline selection (last 15 scans).
  */
 
-import { useState, Component } from "react";
+import { useState, useEffect, Component } from "react";
 import { clearNonEssentialCache } from './core/auth.js';
 
 // ── Error Boundary — prevents any page render crash from blanking the whole app ─
@@ -227,6 +227,7 @@ export default function App() {
     user, authReady, data, assets, activeTab, selectedAsset, showImport,
     installedModules, stats, scanTime,
     scanHistory, selectedScanId, historyLoading,
+    allowedPages,
     setActiveTab, setSelectedAsset, setShowImport,
     handleImport, handleStatusChange, handleInstallModule,
     handleUninstallModule, handleScanComplete,
@@ -240,6 +241,15 @@ export default function App() {
   if (!user) return <LoginPage />;
 
   const canUseCyMind = user?.role === "analyst" || user?.role === "admin";
+
+  // Redirect to first allowed page if current tab is restricted after permissions load
+  useEffect(() => {
+    if (!allowedPages) return; // null = unrestricted, nothing to enforce
+    if (!allowedPages.includes(activeTab)) {
+      const fallback = allowedPages.length > 0 ? allowedPages[0] : "dashboard";
+      setActiveTab(fallback);
+    }
+  }, [allowedPages]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleLogout = () => {
     clearSSOToken();
@@ -338,6 +348,7 @@ export default function App() {
           data={data}
           scanTime={scanTime}
           user={user}
+          allowedPages={allowedPages}
         />
 
         {/* Page content */}

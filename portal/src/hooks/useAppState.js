@@ -37,6 +37,7 @@ export function useAppState() {
   const [scanHistory,    setScanHistory]    = useState([]);
   const [selectedScanId, setSelectedScanId] = useState(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [allowedPages,   setAllowedPages]   = useState(null); // null = unrestricted
 
   // Persist active tab across refreshes
   function setActiveTab(tab) {
@@ -97,6 +98,15 @@ export function useAppState() {
       try { localStorage.removeItem("cycentra_modules"); } catch {}
     }
   }, []);
+
+  // ── Fetch page permissions when user is known ────────────────────────────────
+  useEffect(() => {
+    if (!user) { setAllowedPages(null); return; }
+    fetch(`${CYSCAN_URL}/api/rbac/my-permissions`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && "allowed_pages" in d) setAllowedPages(d.allowed_pages); })
+      .catch(() => {}); // keep null (unrestricted) on network failure
+  }, [user]);
 
   // ── Auto-load latest scan + history on login ─────────────────────────────────
   useEffect(() => {
@@ -243,6 +253,7 @@ export function useAppState() {
     user, authReady, data, assets, activeTab, selectedAsset, showImport,
     installedModules, aiConfig, stats, scanTime,
     scanHistory, selectedScanId, historyLoading,
+    allowedPages,
     // Setters
     setUser, setData, setAssets, setActiveTab,
     setSelectedAsset, setShowImport,

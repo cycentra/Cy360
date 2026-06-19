@@ -551,7 +551,31 @@ function EnvConfigTab() {
 // TAB 5 — User Management (admin only)
 // ════════════════════════════════════════════════════════════════════════════
 
-const VALID_ROLES = ["admin", "analyst", "viewer", "cysoar"];
+const VALID_ROLES = ["admin", "analyst", "viewer", "cysoar"]; // fallback
+
+// All navigable pages — mirrors navConfig.jsx IDs. Used for role page permissions.
+const ALL_PAGES = [
+  { id: "benchmark",           label: "Posture Benchmark",       section: "SECURITY POSTURE" },
+  { id: "dashboard",           label: "External Attack Posture", section: "EXTERNAL EXPOSURE" },
+  { id: "assets",              label: "Asset Inventory",         section: "EXTERNAL EXPOSURE" },
+  { id: "vulns",               label: "Vulnerabilities",         section: "EXTERNAL EXPOSURE" },
+  { id: "scan",                label: "Scan Operations",         section: "EXTERNAL EXPOSURE" },
+  { id: "internal-dashboard",  label: "Internal Attack Posture", section: "INTERNAL EXPOSURE" },
+  { id: "host-inventory",      label: "Host Intelligence",       section: "INTERNAL EXPOSURE" },
+  { id: "siem-incidents",      label: "Active Incidents",        section: "INTERNAL EXPOSURE" },
+  { id: "siem-ueba",           label: "Behavioral Analytics",    section: "INTERNAL EXPOSURE" },
+  { id: "threat-hunting",      label: "Threat Hunting",          section: "INTERNAL EXPOSURE" },
+  { id: "cases",               label: "Case Management",         section: "INTERNAL EXPOSURE" },
+  { id: "comp-dashboard",      label: "GRC Posture",             section: "SECURITY COMPLIANCE" },
+  { id: "comp-assessment",     label: "Assessments",             section: "SECURITY COMPLIANCE" },
+  { id: "comp-findings",       label: "Findings & Alerts",       section: "SECURITY COMPLIANCE" },
+  { id: "comp-risks",          label: "Risk Management",         section: "SECURITY COMPLIANCE" },
+  { id: "comp-reports",        label: "Reports",                 section: "SECURITY COMPLIANCE" },
+  { id: "marketplace",         label: "Marketplace",             section: "MARKETPLACE" },
+  { id: "system-settings",     label: "Settings",                section: "PLATFORM CONFIG" },
+  { id: "platform-extensions", label: "Extensions",              section: "PLATFORM CONFIG" },
+  { id: "audit-trail",         label: "Audit Trail",             section: "PLATFORM CONFIG" },
+];
 const ROLE_APPS_MAP = {
   admin:   ["cy360", "cysiem", "cysoar", "cyasm"],
   analyst: ["cy360", "cysiem", "cysoar", "cyasm"],
@@ -585,6 +609,7 @@ function UserManagementTab() {
   const [approving,    setApproving]    = useState(null); // email being approved
   const [rejectFor,    setRejectFor]    = useState(null); // email open for rejection
   const [rejectReason, setRejectReason] = useState("");
+  const [availableRoles, setAvailableRoles] = useState(VALID_ROLES);
 
   const showMsg = (ok, text) => {
     setMsg({ ok, text });
@@ -609,14 +634,16 @@ function UserManagementTab() {
     const role = saved?.role || "viewer";
     setAuthRole(role);
     if (role === "admin") {
-      fetch(`${CYSCAN_URL}/api/rbac/users`, { credentials: "include" })
-        .then(r => {
-          if (!r.ok) throw new Error(`Server returned ${r.status} — check backend logs`);
-          return r.json();
-        })
-        .then(d => {
-          if (d && d.error) throw new Error(d.error);
-          setUsers(d || {});
+      Promise.all([
+        fetch(`${CYSCAN_URL}/api/rbac/users`, { credentials: "include" })
+          .then(r => { if (!r.ok) throw new Error(`Server returned ${r.status} — check backend logs`); return r.json(); }),
+        fetch(`${CYSCAN_URL}/api/rbac/roles`, { credentials: "include" })
+          .then(r => r.ok ? r.json() : null).catch(() => null),
+      ])
+        .then(([userData, rolesData]) => {
+          if (userData && userData.error) throw new Error(userData.error);
+          setUsers(userData || {});
+          if (Array.isArray(rolesData)) setAvailableRoles(rolesData.map(r => r.role_name));
         })
         .catch(e => setAuthErr(String(e)))
         .finally(() => setLoading(false));
@@ -759,7 +786,7 @@ function UserManagementTab() {
   const approvedCount = allEntries.filter(([, e]) => (e.approval_status || "approved") === "approved").length;
   const localCount    = allEntries.filter(([, e]) => e.auth_type === "local").length;
   const ssoCount      = allEntries.filter(([, e]) => e.auth_type !== "local").length;
-  const roleCounts    = VALID_ROLES.reduce((acc, r) => {
+  const roleCounts    = availableRoles.reduce((acc, r) => {
     acc[r] = allEntries.filter(([, e]) => e.role === r).length;
     return acc;
   }, {});
@@ -811,7 +838,7 @@ function UserManagementTab() {
           { label: "SSO",             value: ssoCount,      color: "#4d9eff" },
           { label: "Local",           value: localCount,    color: "#00e5a0" },
           { label: "Pending approval",value: pendingCount,  color: pendingCount > 0 ? "#ffa500" : "rgba(255,255,255,0.3)" },
-          ...VALID_ROLES.filter(r => roleCounts[r] > 0).map(r => ({ label: r, value: roleCounts[r], color: "rgba(255,255,255,0.62)" })),
+          ...availableRoles.filter(r => roleCounts[r] > 0).map(r => ({ label: r, value: roleCounts[r], color: "rgba(255,255,255,0.62)" })),
         ].map(stat => (
           <div key={stat.label} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 6, padding: "8px 14px", display: "flex", flexDirection: "column", alignItems: "center", minWidth: 80 }}>
             <span style={{ color: stat.color, fontSize: 20, fontWeight: 700, fontFamily: "monospace" }}>{stat.value}</span>
@@ -895,7 +922,7 @@ function UserManagementTab() {
                   disabled={isPending}
                   style={{ ...INPUT, padding: "4px 8px", fontSize: 11, width: "100%", opacity: isPending ? 0.45 : 1 }}
                 >
-                  {VALID_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                  {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
                 </select>
                 {/* Actions */}
                 <div style={{ display: "flex", gap: 4, flexWrap: "nowrap", alignItems: "center" }}>
@@ -1009,7 +1036,7 @@ function UserManagementTab() {
             style={{ ...INPUT, flex: 1, minWidth: 220 }}
           />
           <select value={newRole} onChange={e => setNewRole(e.target.value)} style={{ ...INPUT, width: "auto", padding: "8px 12px", flex: "0 0 auto" }}>
-            {VALID_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+            {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
           </select>
           <select value={newAuthType} onChange={e => { setNewAuthType(e.target.value); setNewPassword(""); }} style={{ ...INPUT, width: "auto", padding: "8px 12px", flex: "0 0 auto" }}>
             <option value="sso">SSO</option>
@@ -1036,6 +1063,373 @@ function UserManagementTab() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Role Management (admin only)
+// ════════════════════════════════════════════════════════════════════════════
+
+// Groups ALL_PAGES by section for the page-permission checkbox UI
+function _groupPagesBySection(pages) {
+  return pages.reduce((acc, p) => {
+    (acc[p.section] = acc[p.section] || []).push(p);
+    return acc;
+  }, {});
+}
+
+const PAGE_CHIP_STYLE = (allowed) => ({
+  display: "flex", alignItems: "center", gap: 6, cursor: "pointer", userSelect: "none",
+  background: allowed ? "rgba(0,229,160,0.08)" : "rgba(255,255,255,0.03)",
+  border: `1px solid ${allowed ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.07)"}`,
+  borderRadius: 4, padding: "5px 10px",
+});
+
+function PagePermissionEditor({ pages, onChange, readOnly = false }) {
+  const grouped = _groupPagesBySection(ALL_PAGES);
+  return (
+    <div>
+      {Object.entries(grouped).map(([section, sectionPages]) => (
+        <div key={section} style={{ marginBottom: 14 }}>
+          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1.5px", marginBottom: 6 }}>
+            {section}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {sectionPages.map(page => {
+              const allowed = pages !== null && pages.has(page.id);
+              return (
+                <label key={page.id} style={PAGE_CHIP_STYLE(allowed)}>
+                  <input
+                    type="checkbox"
+                    checked={allowed}
+                    disabled={readOnly}
+                    onChange={() => { if (!readOnly) onChange(page.id); }}
+                    style={{ accentColor: "#00e5a0", cursor: readOnly ? "default" : "pointer" }}
+                  />
+                  <span style={{ color: allowed ? "#00e5a0" : "rgba(255,255,255,0.45)", fontFamily: "monospace", fontSize: 11 }}>
+                    {page.label}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RoleManagementSection() {
+  const [authRole,       setAuthRole]       = useState(null);
+  const [roles,          setRoles]          = useState([]);
+  const [loading,        setLoading]        = useState(true);
+  const [msg,            setMsg]            = useState(null);
+  const [editRole,       setEditRole]       = useState(null);   // role object being configured
+  const [editPages,      setEditPages]      = useState(null);   // Set<string> | null (null=all)
+  const [saving,         setSaving]         = useState(false);
+  const [showCreate,     setShowCreate]     = useState(false);
+  const [createName,     setCreateName]     = useState("");
+  const [createDisplay,  setCreateDisplay]  = useState("");
+  const [createPages,    setCreatePages]    = useState(new Set());
+  const [creating,       setCreating]       = useState(false);
+  const [deleteConfirm,  setDeleteConfirm]  = useState(null);
+
+  const showMsg = (ok, text) => {
+    setMsg({ ok, text });
+    setTimeout(() => setMsg(null), 5000);
+  };
+
+  const reloadRoles = () =>
+    fetch(`${CYSCAN_URL}/api/rbac/roles`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { if (Array.isArray(d)) setRoles(d); })
+      .catch(() => {});
+
+  useEffect(() => {
+    const saved = getSavedUser();
+    const role  = saved?.role || "viewer";
+    setAuthRole(role);
+    if (role === "admin") {
+      reloadRoles().finally(() => setLoading(false));
+    } else {
+      setLoading(false);
+    }
+  }, []);
+
+  const handleStartEdit = (role) => {
+    setShowCreate(false);
+    setDeleteConfirm(null);
+    setEditRole(role);
+    setEditPages(
+      role.page_permissions === null
+        ? null  // admin: unrestricted, shown as read-only
+        : new Set(role.page_permissions || [])
+    );
+  };
+
+  const toggleEditPage = (pageId) => {
+    if (editPages === null) return;
+    setEditPages(prev => {
+      const next = new Set(prev);
+      next.has(pageId) ? next.delete(pageId) : next.add(pageId);
+      return next;
+    });
+  };
+
+  const handleSaveEdit = async () => {
+    setSaving(true);
+    const perms = editRole.role_name === "admin"
+      ? null
+      : (editPages === null ? null : Array.from(editPages));
+    const r = await fetch(`${CYSCAN_URL}/api/rbac/roles`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        role_name:        editRole.role_name,
+        display_name:     editRole.display_name,
+        page_permissions: perms,
+      }),
+    });
+    setSaving(false);
+    if (r.ok) {
+      showMsg(true, `Saved permissions for "${editRole.display_name}"`);
+      setEditRole(null);
+      reloadRoles();
+    } else {
+      const d = await r.json().catch(() => ({}));
+      showMsg(false, d.error || "Save failed");
+    }
+  };
+
+  const handleCreate = async () => {
+    if (!createName.trim()) return;
+    setCreating(true);
+    const r = await fetch(`${CYSCAN_URL}/api/rbac/roles`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        role_name:        createName.trim(),
+        display_name:     createDisplay.trim() || createName.trim(),
+        page_permissions: Array.from(createPages),
+      }),
+    });
+    setCreating(false);
+    if (r.ok) {
+      showMsg(true, `Created role "${createName}"`);
+      setShowCreate(false);
+      setCreateName(""); setCreateDisplay(""); setCreatePages(new Set());
+      reloadRoles();
+    } else {
+      const d = await r.json().catch(() => ({}));
+      showMsg(false, d.error || "Create failed");
+    }
+  };
+
+  const handleDelete = async (roleName) => {
+    const r = await fetch(`${CYSCAN_URL}/api/rbac/roles/${encodeURIComponent(roleName)}`, {
+      method: "DELETE", credentials: "include",
+    });
+    if (r.ok) {
+      showMsg(true, `Deleted role "${roleName}"`);
+      setDeleteConfirm(null);
+      if (editRole?.role_name === roleName) setEditRole(null);
+      reloadRoles();
+    } else {
+      const d = await r.json().catch(() => ({}));
+      showMsg(false, d.error || "Delete failed");
+    }
+  };
+
+  if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
+
+  if (authRole !== "admin") {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 10, color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>
+        🔒 Admin access required to manage roles.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ maxWidth: 900 }}>
+
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
+          Roles &amp; Page Access
+        </div>
+        <span style={{ color: "rgba(255,255,255,0.25)", fontFamily: "monospace", fontSize: 11, flex: 1 }}>
+          Define which pages each role can access. Hidden pages are completely invisible to the role.
+        </span>
+        {!showCreate && !editRole && (
+          <button
+            onClick={() => { setShowCreate(true); setDeleteConfirm(null); }}
+            style={{ background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.4)", color: "#00e5a0", borderRadius: 4, padding: "4px 12px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700, letterSpacing: "0.8px" }}
+          >+ CREATE ROLE</button>
+        )}
+      </div>
+
+      {msg && (
+        <div style={{ color: msg.ok ? "#00e5a0" : "#ff3b3b", fontSize: 12, fontFamily: "monospace", marginBottom: 14 }}>
+          {msg.ok ? "✓" : "✗"} {msg.text}
+        </div>
+      )}
+
+      {/* Role list table */}
+      <div style={{ ...CARD, padding: 0, overflow: "hidden", marginBottom: 20 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "130px minmax(0,1fr) 90px 100px 170px", gap: 0, padding: "8px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)" }}>
+          {["Role Name", "Display Name", "Type", "Page Access", "Actions"].map(h => (
+            <span key={h} style={{ ...LABEL, marginBottom: 0, fontSize: 9 }}>{h}</span>
+          ))}
+        </div>
+
+        {roles.length === 0 ? (
+          <div style={{ padding: "20px 16px", color: "rgba(255,255,255,0.2)", fontFamily: "monospace", fontSize: 12 }}>No roles found.</div>
+        ) : roles.map(role => (
+          <div key={role.role_name} style={{
+            display: "grid", gridTemplateColumns: "130px minmax(0,1fr) 90px 100px 170px",
+            padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", alignItems: "center",
+            background: editRole?.role_name === role.role_name ? "rgba(0,229,160,0.03)" : "transparent",
+          }}>
+            <span style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 11, fontWeight: 700 }}>{role.role_name}</span>
+            <span style={{ color: "rgba(255,255,255,0.55)", fontFamily: "monospace", fontSize: 11, paddingRight: 8 }}>{role.display_name}</span>
+            <span>
+              <span style={{
+                fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "0.5px",
+                padding: "2px 6px", borderRadius: 3,
+                background: role.is_builtin ? "rgba(77,158,255,0.1)" : "rgba(176,110,255,0.1)",
+                color:      role.is_builtin ? "#4d9eff" : "#b06eff",
+                border: `1px solid ${role.is_builtin ? "rgba(77,158,255,0.3)" : "rgba(176,110,255,0.3)"}`,
+              }}>
+                {role.is_builtin ? "BUILT-IN" : "CUSTOM"}
+              </span>
+            </span>
+            <span style={{ fontFamily: "monospace", fontSize: 11 }}>
+              {role.page_permissions === null
+                ? <span style={{ color: "#00e5a0", fontSize: 9, fontWeight: 700 }}>ALL PAGES</span>
+                : <span style={{ color: "rgba(255,255,255,0.4)" }}>{role.page_permissions.length} pages</span>
+              }
+            </span>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button
+                onClick={() => editRole?.role_name === role.role_name ? setEditRole(null) : handleStartEdit(role)}
+                style={{ background: editRole?.role_name === role.role_name ? "rgba(0,229,160,0.18)" : "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.35)", color: "#00e5a0", borderRadius: 3, padding: "4px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700 }}
+              >
+                {editRole?.role_name === role.role_name ? "✕ CLOSE" : "CONFIGURE"}
+              </button>
+              {!role.is_builtin && (
+                deleteConfirm === role.role_name ? (
+                  <button
+                    onClick={() => handleDelete(role.role_name)}
+                    style={{ background: "rgba(255,59,59,0.15)", border: "1px solid rgba(255,59,59,0.5)", color: "#ff6b6b", borderRadius: 3, padding: "4px 8px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700 }}
+                  >CONFIRM</button>
+                ) : (
+                  <button
+                    onClick={() => { setDeleteConfirm(role.role_name); }}
+                    style={{ background: "rgba(255,59,59,0.06)", border: "1px solid rgba(255,59,59,0.25)", color: "#ff6b6b", borderRadius: 3, padding: "4px 8px", fontSize: 10, fontFamily: "monospace", cursor: "pointer" }}
+                  >DELETE</button>
+                )
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Configure panel */}
+      {editRole && (
+        <div style={{ ...CARD, marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 16 }}>
+            <span style={{ color: "#00e5a0", fontFamily: "monospace", fontWeight: 700, fontSize: 12, letterSpacing: "1px" }}>
+              CONFIGURE: {editRole.role_name.toUpperCase()}
+            </span>
+            {editRole.role_name !== "admin" && (
+              <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+                <button
+                  onClick={() => setEditPages(new Set(ALL_PAGES.map(p => p.id)))}
+                  style={{ background: "none", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.4)", borderRadius: 3, padding: "3px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer" }}
+                >Select All</button>
+                <button
+                  onClick={() => setEditPages(new Set())}
+                  style={{ background: "none", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.4)", borderRadius: 3, padding: "3px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer" }}
+                >Clear All</button>
+              </div>
+            )}
+          </div>
+
+          {editRole.role_name === "admin" ? (
+            <div style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 12, padding: "10px 0", opacity: 0.8 }}>
+              ✓ Administrator role has unrestricted access to all pages and cannot be restricted.
+            </div>
+          ) : (
+            <PagePermissionEditor pages={editPages} onChange={toggleEditPage} />
+          )}
+
+          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <button
+              onClick={handleSaveEdit}
+              disabled={saving}
+              style={{ background: "rgba(0,229,160,0.1)", border: "1px solid rgba(0,229,160,0.35)", color: "#00e5a0", borderRadius: 3, padding: "8px 20px", fontFamily: "monospace", fontSize: 12, fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", opacity: saving ? 0.6 : 1 }}
+            >{saving ? "Saving…" : "Save Changes"}</button>
+            <button
+              onClick={() => setEditRole(null)}
+              style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.35)", borderRadius: 3, padding: "8px 16px", fontFamily: "monospace", fontSize: 12, cursor: "pointer" }}
+            >Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Create role panel */}
+      {showCreate && !editRole && (
+        <div style={{ ...CARD, marginBottom: 20 }}>
+          <div style={{ ...LABEL, marginBottom: 14 }}>New Role</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+            <input
+              placeholder="role-slug (lowercase, a-z 0-9 - _)"
+              value={createName}
+              onChange={e => setCreateName(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ""))}
+              style={{ ...INPUT, flex: "0 0 240px" }}
+            />
+            <input
+              placeholder="Display Name (e.g. Security Analyst)"
+              value={createDisplay}
+              onChange={e => setCreateDisplay(e.target.value)}
+              style={{ ...INPUT, flex: 1, minWidth: 180 }}
+            />
+          </div>
+          <div style={{ ...LABEL, marginBottom: 10 }}>Page Access</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <button
+              onClick={() => setCreatePages(new Set(ALL_PAGES.map(p => p.id)))}
+              style={{ background: "none", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.4)", borderRadius: 3, padding: "3px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer" }}
+            >Select All</button>
+            <button
+              onClick={() => setCreatePages(new Set())}
+              style={{ background: "none", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.4)", borderRadius: 3, padding: "3px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer" }}
+            >Clear All</button>
+          </div>
+          <PagePermissionEditor
+            pages={createPages}
+            onChange={pageId => setCreatePages(prev => {
+              const next = new Set(prev);
+              next.has(pageId) ? next.delete(pageId) : next.add(pageId);
+              return next;
+            })}
+          />
+          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <button
+              onClick={handleCreate}
+              disabled={creating || !createName.trim()}
+              style={{ background: "rgba(0,229,160,0.1)", border: "1px solid rgba(0,229,160,0.35)", color: "#00e5a0", borderRadius: 3, padding: "8px 20px", fontFamily: "monospace", fontSize: 12, fontWeight: 700, cursor: creating || !createName.trim() ? "not-allowed" : "pointer", opacity: creating || !createName.trim() ? 0.5 : 1 }}
+            >{creating ? "Creating…" : "Create Role"}</button>
+            <button
+              onClick={() => { setShowCreate(false); setCreateName(""); setCreateDisplay(""); setCreatePages(new Set()); }}
+              style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.35)", borderRadius: 3, padding: "8px 16px", fontFamily: "monospace", fontSize: 12, cursor: "pointer" }}
+            >Cancel</button>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
@@ -3421,8 +3815,11 @@ export function SystemSettingsPage() {
               {tab === "scheduler" && <SchedulerTab />}
               {tab === "users"     && (
                 <>
-                  <CollapsibleSection icon="👤" title="User Management">
+                  <CollapsibleSection icon="👤" title="User Management" initialOpen={true}>
                     <UserManagementTab />
+                  </CollapsibleSection>
+                  <CollapsibleSection icon="🎭" title="Role Management">
+                    <RoleManagementSection />
                   </CollapsibleSection>
                   <SSOTab />
                 </>

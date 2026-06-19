@@ -6,9 +6,13 @@
 
 import { buildNavSections } from './navConfig.jsx';
 
-export function Sidebar({ activeTab, setActiveTab, installedModules, data, scanTime }) {
+export function Sidebar({ activeTab, setActiveTab, installedModules, data, scanTime, allowedPages }) {
   const sections = buildNavSections({ installedModules, data });
 
+  const isPageAllowed = (itemId) => {
+    if (!allowedPages) return true; // null = unrestricted (admin)
+    return allowedPages.includes(itemId);
+  };
 
   return (
     <div style={{
@@ -18,7 +22,10 @@ export function Sidebar({ activeTab, setActiveTab, installedModules, data, scanT
     }}>
       {/* Nav items */}
       <div style={{ flex: 1, overflowY: "auto", padding: "12px 8px" }}>
-        {sections.map(sec => (
+        {sections.map(sec => {
+          const visibleItems = sec.items.filter(item => isPageAllowed(item.id));
+          if (visibleItems.length === 0) return null;
+          return (
           <div key={sec.section} style={{ marginBottom: 20 }}>
             <div style={{
               color: "rgba(255,255,255,0.2)", fontSize: 9,
@@ -28,7 +35,7 @@ export function Sidebar({ activeTab, setActiveTab, installedModules, data, scanT
               {sec.section}
             </div>
 
-            {sec.items.map(item => {
+            {visibleItems.map(item => {
               const active = activeTab === item.id;
               const accent = item.accent || "#00e5a0";
 
@@ -89,7 +96,8 @@ export function Sidebar({ activeTab, setActiveTab, installedModules, data, scanT
               );
             })}
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Footer — last scan info */}
