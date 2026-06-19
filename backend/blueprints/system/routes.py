@@ -4557,12 +4557,11 @@ _register_agent() {{
     if [[ $_auth_rc -ne 0 ]]; then
         if echo "${{_auth_out}}" | grep -qi "Duplicate agent"; then
             ok "Agent '${{name}}' is already registered on the manager — upgrade detected."
-            ok "Existing agent key preserved. Restarting agent to load new binaries."
+            ok "Existing agent key preserved. Agent will be restarted after configuration."
         else
             err "Agent registration failed — check: (1) port 1515 reachable from this host: nc -zv ${{manager}} 1515 | (2) agent name conflicts on manager | (3) manager logs: tail -f /var/ossec/logs/ossec.log"
         fi
     fi
-    "${{ctrl_bin}}" restart 2>/dev/null || true
 }}
 
 case "${{OS}}" in
@@ -4599,9 +4598,9 @@ case "${{OS}}" in
         sed -i "s|<address>.*</address>|<address>${{WAZUH_MANAGER}}</address>|" "${{OSSEC_CONF}}" 2>/dev/null || true
 
     systemctl daemon-reload
-    systemctl enable wazuh-agent
+    systemctl enable cy360-agent 2>/dev/null || systemctl enable wazuh-agent 2>/dev/null || true
     _register_agent "${{WAZUH_MANAGER}}" "$(hostname -s)" "${{AUTH_BIN}}" "${{CTRL_BIN}}"
-    systemctl restart wazuh-agent
+    systemctl restart cy360-agent 2>/dev/null || systemctl restart wazuh-agent 2>/dev/null || true
     ok "CyCentra 360 Agent installed and running."
 
     # ── auditd: kernel-level telemetry ──────────────────────────────────────
@@ -4625,14 +4624,14 @@ case "${{OS}}" in
 # Privilege escalation
 -a always,exit -F arch=b64 -S setuid -S setgid -S setreuid -S setregid -k cy360_privesc
 -a always,exit -F arch=b64 -S ptrace -k cy360_privesc
-# Fileless malware / process injection syscalls (feeds Wazuh rule 101001)
+# Fileless malware / process injection syscalls
 -a always,exit -F arch=b64 -S memfd_create -k cy360_exec
 -a always,exit -F arch=b64 -S process_vm_writev -k cy360_privesc
 -a always,exit -F arch=b64 -S process_vm_readv -k cy360_privesc
-# Wazuh self-defense — monitor for tampering
--w /var/ossec/ -p wxa -k cy360_wazuh_tamper
--w /var/ossec/etc/ossec.conf -p wa -k cy360_wazuh_tamper
--w /var/ossec/bin/ -p xa -k cy360_wazuh_tamper
+# CyCentra agent self-defense — monitor for tampering
+-w /var/ossec/ -p wxa -k cy360_agent_tamper
+-w /var/ossec/etc/ossec.conf -p wa -k cy360_agent_tamper
+-w /var/ossec/bin/ -p xa -k cy360_agent_tamper
 AUDITEOF
     ok "Audit rules written to ${{AUDIT_RULES_FILE}}"
 
@@ -4660,7 +4659,7 @@ AUDITEOF
 OSSECEOF
         ok "auditd localfile reader added to ossec.conf"
     fi
-    systemctl restart wazuh-agent 2>/dev/null || true
+    systemctl restart cy360-agent 2>/dev/null || systemctl restart wazuh-agent 2>/dev/null || true
     ok "auditd kernel telemetry configured."
     ;;
 
@@ -4686,7 +4685,6 @@ OSSECEOF
         sed -i '' "s|<address>.*</address>|<address>${{WAZUH_MANAGER}}</address>|" "${{OSSEC_CONF}}" 2>/dev/null || true
 
     _register_agent "${{WAZUH_MANAGER}}" "${{HOSTNAME:-$(hostname -s)}}" "${{AUTH_BIN}}" "${{CTRL_BIN}}"
-    ok "CyCentra 360 Agent installed and running."
 
     # ── Apple Unified Logging (ULS) telemetry ───────────────────────────────
     if [[ -f "${{OSSEC_CONF}}" ]] && ! grep -qF "<log_format>macos</log_format>" "${{OSSEC_CONF}}"; then
@@ -4710,14 +4708,23 @@ OSSECEOF
 MACEOF
         ok "Apple ULS data stream added to ossec.conf"
     fi
+
+    # Single restart after all config is applied (avoids double-restart on upgrades)
     "${{CTRL_BIN}}" restart 2>/dev/null || true
+    ok "CyCentra 360 Agent installed and running."
 
     echo ""
     echo "  ──────────────────────────────────────────────────────────────────"
-    echo "  IMPORTANT: macOS Full Disk Access required"
+    echo "  ACTION REQUIRED: macOS Full Disk Access"
+    echo "  The CyCentra agent requires Full Disk Access to collect logs."
     echo "  Go to: System Settings > Privacy & Security > Full Disk Access"
-    echo "  Add and enable: /Library/Ossec/bin/wazuh-agentd"
-    echo "  Without FDA, the wazuh-agentd binary cannot read protected logs."
+    echo "  Add and enable both of the following binaries:"
+    echo "    /Library/Ossec/bin/wazuh-agentd"
+    echo "    /Library/Ossec/bin/wazuh-logcollector"
+    echo ""
+    echo "  NOTE: wazuh-logcollector will not start until FDA is granted."
+    echo "  After granting FDA, restart the agent:"
+    echo "    sudo /Library/Ossec/bin/wazuh-control restart"
     echo "  ──────────────────────────────────────────────────────────────────"
     echo ""
     ok "Apple ULS telemetry configured."

@@ -1,3 +1,11 @@
+## v1.0.62 -- 2026-06-19
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
 ## v1.0.61 -- 2026-06-19
 
 ### Bug Fixes
@@ -12,6 +20,8 @@
 ### Bug Fixes
 
   - **Agent Installer — misleading "check port 1515" error on macOS upgrade:** When reinstalling or upgrading the agent on a Mac where the agent was already registered, `agent-auth` correctly rejected the duplicate name (`Duplicate agent name: mac.home`) but the installer surfaced this as a generic port-1515 reachability error and aborted — leaving the agent installed but not restarted, and all post-install steps (Apple ULS telemetry, Full Disk Access notice) skipped. Root cause: `_register_agent()` piped `agent-auth` output directly to `err()` on any non-zero exit without inspecting the actual error message. Fixed to capture the `agent-auth` output, detect the `Duplicate agent` string, treat it as a known upgrade case (existing `client.keys` is preserved by the PKG installer — no re-registration needed), print a clear success message, and continue to restart the agent so new binaries are loaded. Any other failure still shows an actionable error pointing to port reachability, name conflicts, and manager logs.
+  - **Agent Installer macOS — `wazuh-logcollector` did not start (double restart + missing FDA guidance):** On macOS upgrades the agent was restarted twice — once inside `_register_agent()` before ULS config was applied, and again after. The premature first restart left a stale PID file, causing the second restart to print `wazuh-logcollector: Process not used by Wazuh, removing` and fail to launch the log collector. Fixed by removing the restart from `_register_agent()` — a single restart now fires after all configuration is applied. The Full Disk Access notice now explicitly lists both `wazuh-agentd` and `wazuh-logcollector` as required FDA entries, with a clear note that the log collector will not start until FDA is granted and the agent is restarted manually.
+  - **Agent Installer — Wazuh branding replaced with CyCentra in all user-facing output and audit rules:** Replaced `Wazuh self-defense` comment with `CyCentra agent self-defense`; renamed audit keys from `cy360_wazuh_tamper` to `cy360_agent_tamper`; updated Full Disk Access notice copy to reference the CyCentra agent.
 
 ---
 
