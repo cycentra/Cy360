@@ -254,20 +254,30 @@ def _misp_request(misp_url: str, api_key: str, payload: dict) -> dict:
         f"{misp_url}/attributes/restSearch",
         data=data,
         headers={
-            "Authorization": api_key,
-            "Content-Type":  "application/json",
-            "Accept":        "application/json",
+            "Authorization":    api_key,
+            "Content-Type":     "application/json",
+            "Accept":           "application/json",
+            "User-Agent":       "CyCentra360-MISP-Sync/1.0 (compatible; Python-urllib)",
+            "Accept-Language":  "en-US,en;q=0.9",
+            "Accept-Encoding":  "gzip, deflate, br",
+            "Connection":       "keep-alive",
         },
         method="POST",
     )
-    # Disable SSL cert verification only if explicitly opted-out (default: verify)
-    ctx = None
+    # Build SSL context: prefer certifi CA bundle (Wazuh's bundled OpenSSL has stale roots).
+    # Set MISP_VERIFY_SSL=0 to disable verification for self-signed MISP certs.
+    import ssl
     if os.environ.get("MISP_VERIFY_SSL", "1") == "0":
-        import ssl
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         log.warning("SSL certificate verification disabled (MISP_VERIFY_SSL=0)")
+    else:
+        try:
+            import certifi
+            ctx = ssl.create_default_context(cafile=certifi.where())
+        except ImportError:
+            ctx = ssl.create_default_context()  # fall back to default (may miss intermediates)
 
     try:
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT, context=ctx) as resp:
