@@ -4594,6 +4594,65 @@ case "${{OS}}" in
     _register_agent "${{WAZUH_MANAGER}}" "$(hostname -s)" "${{AUTH_BIN}}" "${{CTRL_BIN}}"
     systemctl restart wazuh-agent
     ok "CyCentra 360 Agent installed and running."
+
+    # ── auditd: kernel-level telemetry ──────────────────────────────────────
+    info "Installing auditd for kernel telemetry ..."
+    if command -v apt-get &>/dev/null; then
+        apt-get install -y auditd audispd-plugins 2>/dev/null || true
+    elif command -v yum &>/dev/null; then
+        yum install -y audit 2>/dev/null || true
+    elif command -v dnf &>/dev/null; then
+        dnf install -y audit 2>/dev/null || true
+    fi
+
+    AUDIT_RULES_DIR="/etc/audit/rules.d"
+    AUDIT_RULES_FILE="${{AUDIT_RULES_DIR}}/cy360-baseline.rules"
+    mkdir -p "${{AUDIT_RULES_DIR}}"
+    cat > "${{AUDIT_RULES_FILE}}" <<'AUDITEOF'
+## CyCentra 360 — Baseline Audit Rules
+# Process execution
+-a always,exit -F arch=b64 -S execve -k cy360_exec
+-a always,exit -F arch=b32 -S execve -k cy360_exec
+# Privilege escalation
+-a always,exit -F arch=b64 -S setuid -S setgid -S setreuid -S setregid -k cy360_privesc
+-a always,exit -F arch=b64 -S ptrace -k cy360_privesc
+# Fileless malware / process injection syscalls (feeds Wazuh rule 101001)
+-a always,exit -F arch=b64 -S memfd_create -k cy360_exec
+-a always,exit -F arch=b64 -S process_vm_writev -k cy360_privesc
+-a always,exit -F arch=b64 -S process_vm_readv -k cy360_privesc
+# Wazuh self-defense — monitor for tampering
+-w /var/ossec/ -p wxa -k cy360_wazuh_tamper
+-w /var/ossec/etc/ossec.conf -p wa -k cy360_wazuh_tamper
+-w /var/ossec/bin/ -p xa -k cy360_wazuh_tamper
+AUDITEOF
+    ok "Audit rules written to ${{AUDIT_RULES_FILE}}"
+
+    if command -v augenrules &>/dev/null; then
+        augenrules --load 2>/dev/null || true
+    elif command -v auditctl &>/dev/null; then
+        auditctl -R "${{AUDIT_RULES_FILE}}" 2>/dev/null || true
+    fi
+
+    systemctl enable auditd 2>/dev/null || true
+    systemctl restart auditd 2>/dev/null || true
+
+    # Append auditd localfile reader to ossec.conf (idempotent)
+    if [[ -f "${{OSSEC_CONF}}" ]] && ! grep -q "audit/audit.log" "${{OSSEC_CONF}}"; then
+        sed -i 's|</ossec_config>||' "${{OSSEC_CONF}}"
+        cat >> "${{OSSEC_CONF}}" <<'OSSECEOF'
+
+  <!-- CyCentra 360: auditd kernel telemetry -->
+  <localfile>
+    <log_format>audit</log_format>
+    <location>/var/log/audit/audit.log</location>
+  </localfile>
+
+</ossec_config>
+OSSECEOF
+        ok "auditd localfile reader added to ossec.conf"
+    fi
+    systemctl restart wazuh-agent 2>/dev/null || true
+    ok "auditd kernel telemetry configured."
     ;;
 
   Darwin)
@@ -4619,6 +4678,40 @@ case "${{OS}}" in
 
     _register_agent "${{WAZUH_MANAGER}}" "${{HOSTNAME:-$(hostname -s)}}" "${{AUTH_BIN}}" "${{CTRL_BIN}}"
     ok "CyCentra 360 Agent installed and running."
+
+    # ── Apple Unified Logging (ULS) telemetry ───────────────────────────────
+    if [[ -f "${{OSSEC_CONF}}" ]] && ! grep -qF "<log_format>macos</log_format>" "${{OSSEC_CONF}}"; then
+        sed -i '' 's|</ossec_config>||' "${{OSSEC_CONF}}"
+        cat >> "${{OSSEC_CONF}}" <<'MACEOF'
+
+  <!-- CyCentra 360: Apple Unified Logging System (ULS) telemetry -->
+  <localfile>
+    <log_format>macos</log_format>
+    <query type="activity" level="debug">
+      <![CDATA[
+        process == "sudo"
+        OR process == "sshd"
+        OR process == "SecurityAgent"
+        OR process == "com.apple.securityd"
+      ]]>
+    </query>
+  </localfile>
+
+</ossec_config>
+MACEOF
+        ok "Apple ULS data stream added to ossec.conf"
+    fi
+    "${{CTRL_BIN}}" restart 2>/dev/null || true
+
+    echo ""
+    echo "  ──────────────────────────────────────────────────────────────────"
+    echo "  IMPORTANT: macOS Full Disk Access required"
+    echo "  Go to: System Settings > Privacy & Security > Full Disk Access"
+    echo "  Add and enable: /Library/Ossec/bin/wazuh-agentd"
+    echo "  Without FDA, the wazuh-agentd binary cannot read protected logs."
+    echo "  ──────────────────────────────────────────────────────────────────"
+    echo ""
+    ok "Apple ULS telemetry configured."
     ;;
 
   *)
@@ -4696,6 +4789,95 @@ Start-Sleep -Seconds 2
 try {{ NET START Wazuh 2>&1 | Out-Null }} catch {{}}
 
 Write-Host "  CyCentra 360 Agent installed and running." -ForegroundColor Green
+
+# ── Sysmon: kernel-level telemetry ──────────────────────────────────────────
+Write-Host "  Setting up Sysmon for kernel telemetry ..." -ForegroundColor Cyan
+
+$StagingDir = "C:\CyCentra\Sysmon"
+if (-not (Test-Path $StagingDir)) {{
+    New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
+}}
+
+$SysmonUrl    = "https://live.sysinternals.com/Sysmon64.exe"
+$SysmonExe    = "$StagingDir\sysmon64.exe"
+$SysmonConfig = "$StagingDir\sysmon-config.xml"
+$OssecConf    = "C:\Program Files (x86)\ossec-agent\ossec.conf"
+
+# Download Sysmon64 from Sysinternals
+try {{
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $SysmonUrl -OutFile $SysmonExe -UseBasicParsing
+    Write-Host "  sysmon64.exe downloaded." -ForegroundColor Green
+}} catch {{
+    Write-Host "  Warning: Could not download Sysmon64 — $($_.Exception.Message)" -ForegroundColor Yellow
+}}
+
+# Write hardened sysmon-config.xml to staging directory
+$SysmonConfigContent = @'
+<Sysmon schemaversion="4.90">
+  <HashAlgorithms>SHA256,IMPHASH</HashAlgorithms>
+  <EventFiltering>
+    <ProcessCreate onmatch="exclude"/>
+    <NetworkConnect onmatch="exclude">
+      <Image condition="is">C:\Windows\System32\svchost.exe</Image>
+    </NetworkConnect>
+    <DriverLoad onmatch="exclude"/>
+    <ImageLoad onmatch="exclude"/>
+    <ProcessAccess onmatch="exclude"/>
+    <FileCreateTime onmatch="exclude"/>
+    <RawAccessRead onmatch="exclude"/>
+    <RegistryEvent onmatch="exclude"/>
+    <PipeEvent onmatch="exclude"/>
+    <WmiEvent onmatch="exclude"/>
+    <DnsQuery onmatch="exclude"/>
+    <FileDelete onmatch="exclude"/>
+  </EventFiltering>
+</Sysmon>
+'@
+$SysmonConfigContent | Set-Content -Path $SysmonConfig -Encoding UTF8
+
+# Install Sysmon silently with EULA accepted
+if (Test-Path $SysmonExe) {{
+    $sysmonProc = Start-Process -FilePath $SysmonExe `
+        -ArgumentList "-i `"$SysmonConfig`" -accepteula -s" `
+        -Wait -PassThru -NoNewWindow
+    if ($sysmonProc.ExitCode -eq 0) {{
+        Write-Host "  Sysmon installed successfully." -ForegroundColor Green
+    }} else {{
+        Write-Host "  Warning: Sysmon install exited $($sysmonProc.ExitCode)" -ForegroundColor Yellow
+    }}
+}} else {{
+    Write-Host "  Warning: sysmon64.exe not found at $SysmonExe — skipping install." -ForegroundColor Yellow
+}}
+
+# Append Sysmon event channel reader to ossec.conf (idempotent)
+if (Test-Path $OssecConf) {{
+    $confContent = Get-Content $OssecConf -Raw
+    if ($confContent -notmatch "Sysmon/Operational") {{
+        $sysmonBlock = @'
+
+  <!-- CyCentra 360: Sysmon kernel telemetry -->
+  <localfile>
+    <log_format>eventchannel</log_format>
+    <location>Microsoft-Windows-Sysmon/Operational</location>
+  </localfile>
+
+'@
+        $confContent = $confContent -replace "</ossec_config>", "$sysmonBlock</ossec_config>"
+        Set-Content -Path $OssecConf -Value $confContent -Encoding UTF8
+        Write-Host "  Sysmon eventchannel reader added to ossec.conf" -ForegroundColor Green
+    }} else {{
+        Write-Host "  Sysmon eventchannel already present in ossec.conf — skipping." -ForegroundColor Cyan
+    }}
+    try {{ NET STOP WazuhSvc 2>&1 | Out-Null }} catch {{}}
+    try {{ NET STOP Wazuh 2>&1 | Out-Null }} catch {{}}
+    Start-Sleep -Seconds 2
+    try {{ NET START WazuhSvc 2>&1 | Out-Null }} catch {{}}
+    try {{ NET START Wazuh 2>&1 | Out-Null }} catch {{}}
+}} else {{
+    Write-Host "  Warning: ossec.conf not found at $OssecConf — Sysmon channel not registered." -ForegroundColor Yellow
+}}
+Write-Host "  Sysmon kernel telemetry configured." -ForegroundColor Green
 """
 
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.59 -- 2026-06-18 23:02 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.60 -- 2026-06-19 13:12 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -3251,6 +3251,17 @@ if [[ -d "/var/ossec" ]]; then
         success "custom-llm.py deployed"
     fi
 
+    # ── Active-response: isolate-host.sh (XDR host isolation) ────────────────
+    if [[ -f "$CONFIG_SRC/active-response/isolate-host.sh" ]]; then
+        mkdir -p /var/ossec/active-response/bin
+        cp "$CONFIG_SRC/active-response/isolate-host.sh" /var/ossec/active-response/bin/
+        chmod 750 /var/ossec/active-response/bin/isolate-host.sh
+        chown root:wazuh /var/ossec/active-response/bin/isolate-host.sh
+        success "isolate-host.sh deployed to active-response/bin"
+    else
+        warn "isolate-host.sh not in CYSIEM-Config/active-response — skipping"
+    fi
+
     if [[ -f "$CONFIG_SRC/conf/ossec.conf" ]]; then
         if [[ "$MODE" == "update" && -f "/var/ossec/etc/ossec.conf" ]]; then
             # --update: preserve the live ossec.conf so custom integrations
@@ -3269,6 +3280,70 @@ if [[ -d "/var/ossec" ]]; then
             chmod 660 /var/ossec/etc/ossec.conf
             success "ossec.conf deployed"
         fi
+    fi
+
+    # ── MISP blacklist stub + idempotent ossec.conf patching ─────────────────
+    # On fresh install the deployed template already contains these blocks.
+    # On --update the live ossec.conf is preserved; we patch it in place.
+
+    # 1. Create MISP global blacklist CDB stub if absent
+    MISP_LIST_PATH="/var/ossec/etc/lists/misp_global_blacklist"
+    if [[ ! -f "$MISP_LIST_PATH" ]]; then
+        mkdir -p "$(dirname "$MISP_LIST_PATH")"
+        touch "$MISP_LIST_PATH"
+        chown root:wazuh "$MISP_LIST_PATH"
+        chmod 660 "$MISP_LIST_PATH"
+        info "MISP blacklist stub created at $MISP_LIST_PATH — populate via MISP feed sync"
+    fi
+
+    # 2. Patch live ossec.conf (each block guarded by grep — safe to re-run)
+    _OSSEC_LIVE="/var/ossec/etc/ossec.conf"
+    if [[ -f "$_OSSEC_LIVE" ]]; then
+
+        # 2a. MISP CDB list entry
+        if ! grep -q "misp_global_blacklist" "$_OSSEC_LIVE"; then
+            sed -i 's|<list>etc/lists/malicious-ioc/malicious-domains</list>|<list>etc/lists/malicious-ioc/malicious-domains</list>\n    <list>etc/lists/misp_global_blacklist</list>|' "$_OSSEC_LIVE"
+            info "misp_global_blacklist CDB entry injected into ossec.conf"
+        fi
+
+        # 2b. isolate-host command block
+        if ! grep -q "isolate-host" "$_OSSEC_LIVE"; then
+            sed -i 's|<!-- Active response -->|<!-- Active response -->\n\n  <!-- CyCentra 360 XDR: host isolation command -->\n  <command>\n    <name>isolate-host<\/name>\n    <executable>isolate-host.sh<\/executable>\n    <timeout_allowed>yes<\/timeout_allowed>\n  <\/command>|' "$_OSSEC_LIVE"
+            info "isolate-host command block injected into ossec.conf"
+        fi
+
+        # 2c. isolate-host active-response blocks (python3 for clean multi-line insert)
+        if ! grep -qF '<rules_id>101000,101001</rules_id>' "$_OSSEC_LIVE"; then
+            python3 - "$_OSSEC_LIVE" << 'PYEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    content = f.read()
+AR_BLOCK = (
+    "\n  <!-- CyCentra 360 XDR: local isolation — anti-tamper and memory anomalies -->\n"
+    "  <active-response>\n"
+    "    <command>isolate-host</command>\n"
+    "    <location>local</location>\n"
+    "    <rules_id>101000,101001</rules_id>\n"
+    "    <timeout>600</timeout>\n"
+    "    <disabled>no</disabled>\n"
+    "  </active-response>\n\n"
+    "  <!-- CyCentra 360 XDR: global isolation — absolute MISP threat intel match -->\n"
+    "  <active-response>\n"
+    "    <command>isolate-host</command>\n"
+    "    <location>all</location>\n"
+    "    <rules_id>101002,101003</rules_id>\n"
+    "    <timeout>3600</timeout>\n"
+    "    <disabled>no</disabled>\n"
+    "  </active-response>\n\n"
+)
+content = content.replace('<!-- Log analysis -->', AR_BLOCK + '<!-- Log analysis -->', 1)
+with open(path, 'w') as f:
+    f.write(content)
+PYEOF
+            info "isolate-host active-response blocks injected into ossec.conf"
+        fi
+
     fi
 
     # ── Agent configuration (shared/default/agent.conf) ──────────────────────
@@ -3336,6 +3411,32 @@ GEOCRON
         fi
     else
         warn "MAXMIND_KEY not set — GeoLite2 DB skipped (GeoIP enrichment disabled)"
+    fi
+
+    # ── MISP sync script deployment ───────────────────────────────────────────
+    MISP_SYNC_SRC="$CONFIG_SRC/lists/sync_misp_cache.py"
+    MISP_SYNC_DEST="/var/ossec/etc/lists/sync_misp_cache.py"
+    MISP_CRON="/etc/cron.d/cycentra-misp-sync"
+    if [[ -f "$MISP_SYNC_SRC" ]]; then
+        cp "$MISP_SYNC_SRC" "$MISP_SYNC_DEST"
+        chmod 750 "$MISP_SYNC_DEST"
+        chown root:wazuh "$MISP_SYNC_DEST"
+        success "sync_misp_cache.py deployed to $MISP_SYNC_DEST"
+    else
+        warn "sync_misp_cache.py not in CYSIEM-Config/lists — skipping MISP sync deploy"
+    fi
+    # Install hourly cron (idempotent — overwrites same file each run)
+    if [[ -f "$MISP_SYNC_DEST" ]]; then
+        cat > "$MISP_CRON" << 'MISPCRON'
+# CyCentra 360 — MISP threat intel hourly sync
+# Fetches IOCs from MISP and compiles the Wazuh CDB blacklist.
+# Logs to /var/ossec/logs/misp_sync.log
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+0 * * * * root /var/ossec/framework/python/bin/python3 /var/ossec/etc/lists/sync_misp_cache.py >> /var/ossec/logs/misp_sync.log 2>&1
+MISPCRON
+        chmod 644 "$MISP_CRON"
+        success "MISP sync cron installed → $MISP_CRON (runs every hour)"
     fi
 
     # ── Reload Wazuh after config/decoder/agent changes ───────────────────────

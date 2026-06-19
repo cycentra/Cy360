@@ -352,3 +352,56 @@
   </rule>
 
 </group>
+
+<group name="cycentra_kernel,">
+
+  <!-- ================================================================== -->
+  <!-- KERNEL TELEMETRY — auditd / Sysmon / Apple ULS                     -->
+  <!-- CyCentra 360 XDR rules — IDs 101000–101003                         -->
+  <!-- ================================================================== -->
+
+  <!-- Auditd: Wazuh agent self-defense / XDR anti-tamper detection
+       Key cy360_wazuh_tamper written by CyCentra 360 agent installer.
+       Active-response: local isolation (timeout 600s) — rule 101000,101001 -->
+  <rule id="101000" level="14">
+    <if_group>audit</if_group>
+    <field name="audit.key">^cy360_wazuh_tamper$|^xdr_tampering$</field>
+    <description>XDR anti-tamper: Wazuh agent binary or config accessed/modified on $(agent.name) — T1562.001</description>
+    <mitre><id>T1562.001</id></mitre>
+    <group>xdr_kernel_isolate,kernel_telemetry,</group>
+  </rule>
+
+  <!-- Auditd: fileless malware / process injection via memory syscalls
+       Matches: memfd_create, process_vm_writev, process_vm_readv, ptrace
+       Active-response: local isolation (timeout 600s) — rule 101000,101001 -->
+  <rule id="101001" level="13">
+    <if_group>audit</if_group>
+    <match>memfd_create|process_vm_writev|process_vm_readv|ptrace</match>
+    <description>Fileless malware or process injection syscall detected on $(agent.name) — T1055/T1620</description>
+    <mitre><id>T1055</id></mitre>
+    <group>xdr_kernel_isolate,kernel_telemetry,</group>
+  </rule>
+
+  <!-- MISP global blacklist CDB lookup — destination IP (address_match_key supports CIDR)
+       Requires: /var/ossec/etc/lists/misp_global_blacklist populated via MISP feed sync.
+       Active-response: global isolation (all agents, timeout 3600s) — rules 101002,101003 -->
+  <rule id="101002" level="14">
+    <if_sid>0</if_sid>
+    <list field="dstip" lookup="address_match_key">etc/lists/misp_global_blacklist</list>
+    <description>MISP threat intel absolute match: outbound connection to blacklisted IP $(dstip) on $(agent.name)</description>
+    <mitre><id>T1071</id></mitre>
+    <group>threat_intel,kernel_telemetry,</group>
+  </rule>
+
+  <!-- MISP global blacklist CDB lookup — process SHA256 hash
+       Matches: data.win.eventdata.hashes (Sysmon EventID 1) on Windows endpoints.
+       Active-response: global isolation (all agents, timeout 3600s) — rules 101002,101003 -->
+  <rule id="101003" level="14">
+    <if_sid>0</if_sid>
+    <list field="data.win.eventdata.hashes" lookup="match_key">etc/lists/misp_global_blacklist</list>
+    <description>MISP threat intel absolute match: process hash in global blacklist on $(agent.name)</description>
+    <mitre><id>T1204</id></mitre>
+    <group>threat_intel,kernel_telemetry,</group>
+  </rule>
+
+</group>
