@@ -1,8 +1,17 @@
+## v1.0.61 -- 2026-06-19
+
+### Bug Fixes
+
+  - misp-sync): use certifi CA bundle + proper User-Agent for MISP HTTPS
+  - replace invalid <field name="file_path"> with <match> in FIM persistence rules
+
+---
+
 ## v1.0.60 -- 2026-06-19
 
-### Improvements
+### Bug Fixes
 
-  - Stability and performance improvements.
+  - **Agent Installer — misleading "check port 1515" error on macOS upgrade:** When reinstalling or upgrading the agent on a Mac where the agent was already registered, `agent-auth` correctly rejected the duplicate name (`Duplicate agent name: mac.home`) but the installer surfaced this as a generic port-1515 reachability error and aborted — leaving the agent installed but not restarted, and all post-install steps (Apple ULS telemetry, Full Disk Access notice) skipped. Root cause: `_register_agent()` piped `agent-auth` output directly to `err()` on any non-zero exit without inspecting the actual error message. Fixed to capture the `agent-auth` output, detect the `Duplicate agent` string, treat it as a known upgrade case (existing `client.keys` is preserved by the PKG installer — no re-registration needed), print a clear success message, and continue to restart the agent so new binaries are loaded. Any other failure still shows an actionable error pointing to port reachability, name conflicts, and manager logs.
 
 ---
 

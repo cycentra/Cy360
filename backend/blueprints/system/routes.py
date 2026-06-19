@@ -4551,8 +4551,17 @@ download_pkg() {{
 _register_agent() {{
     local manager="$1" name="$2" auth_bin="$3" ctrl_bin="$4"
     info "Registering agent '${{name}}' with ${{manager}} ..."
-    "${{auth_bin}}" -m "${{manager}}" -A "${{name}}" 2>&1 \
-        || err "Agent registration failed — verify port 1515 is reachable: nc -zv ${{manager}} 1515"
+    local _auth_out _auth_rc=0
+    _auth_out=$("${{auth_bin}}" -m "${{manager}}" -A "${{name}}" 2>&1) || _auth_rc=$?
+    echo "${{_auth_out}}"
+    if [[ $_auth_rc -ne 0 ]]; then
+        if echo "${{_auth_out}}" | grep -qi "Duplicate agent"; then
+            ok "Agent '${{name}}' is already registered on the manager — upgrade detected."
+            ok "Existing agent key preserved. Restarting agent to load new binaries."
+        else
+            err "Agent registration failed — check: (1) port 1515 reachable from this host: nc -zv ${{manager}} 1515 | (2) agent name conflicts on manager | (3) manager logs: tail -f /var/ossec/logs/ossec.log"
+        fi
+    fi
     "${{ctrl_bin}}" restart 2>/dev/null || true
 }}
 
