@@ -36,7 +36,7 @@ Where for each enabled dimension $i$:
 | 1 | External Attack Surface (ASM) | 20% | ASM scan JSON | Always available after first scan |
 | 2 | Internal Detection Posture (SIEM) | 20% | Correlation engine `/stats`, `/risk-scores`, `/ueba/users` + correlation DB (kill chain) | Available when CySIEM is running |
 | 3 | Compliance Coverage | 20% | `cy_compliance_controls` PostgreSQL table | Requires CyComp module |
-| 4 | Vulnerability Management | 20% | Wazuh API (vuln detector + SCA + CyIRIS MTTR) | Requires Wazuh + WAZUH_API_PASSWORD |
+| 4 | Vulnerability Management | 20% | Wazuh API (vuln detector + SCA + CyCases MTTR) | Requires Wazuh + WAZUH_API_PASSWORD |
 | 5 | Threat Intelligence | 15% | MISP API (feeds + IOC count + actionable ratio) | Requires MISP configured in System Settings |
 | 6 | CIS / NIST Alignment | 5% (disabled by default) | Weighted proxy of Compliance + ASM | Only scores when one source dimension is disabled |
 
@@ -201,7 +201,7 @@ Score returns `null`. This dimension is **excluded from the CSPI composite** rat
 
 ## Dimension 4: Vulnerability Management
 
-**Source:** Wazuh API (primary) → CyIRIS database (MTTR sub-score)  
+**Source:** Wazuh API (primary) → CyCases database (MTTR sub-score)  
 **Credential:** `WAZUH_API_PASSWORD` resolved from `/opt/cycentra/.env` then `/opt/cycentra/cysiemstack.env`
 
 ### Sub-scores and weights
@@ -210,9 +210,9 @@ Score returns `null`. This dimension is **excluded from the CSPI composite** rat
 |-----------|--------|--------------------|
 | Wazuh vuln detector | `/vulnerability/{agent_id}?status=Active` | 40% |
 | Wazuh SCA policy pass rate | `/sca/{agent_id}` | 35% |
-| CyIRIS MTTR (remediation speed) | `incidents` table — closed_at, first_seen | 25% |
+| CyCases MTTR (remediation speed) | `incidents` table — closed_at, first_seen | 25% |
 
-The sub-scores are blended with re-normalisation when some are unavailable (e.g. IRIS not configured).
+The sub-scores are blended with re-normalisation when some are unavailable.
 
 ### Wazuh Vulnerability Sub-score (40%)
 
@@ -238,7 +238,7 @@ score = (total_pass_checks / (pass + fail + error)) * 100
 
 Point-in-time configuration compliance — always reflects current agent state.
 
-### CyIRIS MTTR Sub-score (25%)
+### CyCases MTTR Sub-score (25%)
 
 ```
 Queries incidents closed in the last 90 days.
@@ -317,7 +317,7 @@ Each active, scored dimension reads from a strictly separate data source:
 | ASM | ASM scan JSON (external surface) | None |
 | SIEM | Correlation engine `/stats`, `/risk-scores`, `/ueba/users` + correlation DB (kill chain) | None |
 | Compliance | `cy_compliance_controls` DB table | None |
-| Vuln | Wazuh API + CyIRIS incidents DB (MTTR only — closed incidents) | None |
+| Vuln | Wazuh API + CyCases incidents DB (MTTR only — closed incidents) | None |
 | Threat Intel | MISP API | None |
 | ext_benchmark | Suppressed when ASM + Compliance both active | Would share with ASM + Compliance |
 
@@ -369,7 +369,7 @@ Any dimension whose underlying data is older than **48 hours** contributes at **
 | `WAZUH_API_URL` | Vulnerability Management | Both env files |
 | `MISP_URL` / `MISP_API_KEY` | Threat Intelligence | `ai_settings.json` or `cysiemstack.env` |
 | `CYCENTRA_DB_URL` | Compliance (CyComp) | `/opt/cycentra/.env` |
-| `CORRELATION_DB_URL` | Vuln MTTR (CyIRIS) | `/opt/cycentra/.env` |
+| `CORRELATION_DB_URL` | Vuln MTTR (CyCases) | `/opt/cycentra/.env` |
 | `SIEM_ENGINE_URL` | SIEM Posture | `/opt/cycentra/.env` (default: `http://127.0.0.1:8100`) |
 
 ---
@@ -404,7 +404,7 @@ Prior to v2, the Internal Detection Posture score used only four signals derived
 
 | Phase | Planned improvement |
 |-------|-------------------|
-| **v1 (May 2026)** | Wazuh API (active CVEs only) + CyIRIS MTTR + MISP direct + CyComp DB; data isolation fix |
+| **v1 (May 2026)** | Wazuh API (active CVEs only) + CyCases MTTR + MISP direct + CyComp DB; data isolation fix |
 | **v2 (June 2026)** | SIEM gap patch: UEBA anomalies + kill chain depth + coverage baseline |
 | **Phase 3** | FP auto-close rate; TI feed freshness; multi-source TI; live cohort pool |
 | **Phase 4** | Bundle CIS Controls v8 JSON; nightly NVD/MITRE sync for ext_benchmark |

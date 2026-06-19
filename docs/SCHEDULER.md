@@ -166,12 +166,12 @@ MaxMind GeoIP refresh?
 
 ## Known Issues Fixed
 
-### v1.0.414 — CLOUD_IRIS_URL duplicate in `.env` (May 2026)
+### v1.0.414 — Duplicate env var entries in `.env` (May 2026)
 
-**Symptom:** `/opt/cycentra/.env` contained `CLOUD_IRIS_URL=http://127.0.0.1:4433` twice (lines 67 and 93).
+**Symptom:** `/opt/cycentra/.env` contained duplicate entries when modules were reinstalled.
 
-**Root cause:** `blueprints/platform/routes.py` used append-if-missing logic for `CLOUD_IRIS_URL`. When CyIRIS was installed or the activation flow ran more than once, a second entry was appended.
+**Root cause:** `blueprints/platform/routes.py` used append-if-missing logic. When a module was installed or the activation flow ran more than once, a second entry was appended.
 
 **Fix applied (platform/routes.py):** Changed to strip-all-then-append-one using `re.sub()` — idempotent across any number of reinstalls.
 
-**Fix applied (cycentra-setup.sh `--update`):** Added a dedup step in the `.env` patch section that detects and collapses multiple `CLOUD_IRIS_URL` entries down to one (keeping the last value).
+**Fix applied (cycentra-setup.sh `--update`):** Added a dedup step in the `.env` patch section that detects and collapses duplicate entries (keeping the last value).

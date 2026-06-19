@@ -85,7 +85,7 @@ if ($ct_fail = 1) { return 403; }
     "icon":             "emoji",
     "color":            "#hex",
     "description":      "...",
-    "modules_required": ["CySIEM", "CySOAR", "CyIRIS"],
+    "modules_required": ["CySIEM", "CySOAR"],
     "estimated_time":   "~N min",
     "tags":             ["lowercase"],
     "config_type":      "o365 | gcloud | github | null",

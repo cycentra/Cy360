@@ -291,7 +291,7 @@ https://auth.cycentra.com/realms/cycentra/.well-known/openid-configuration
 
 ### CyCentra 360 IdP (OIDC for internal tools)
 
-CyCentra 360 itself acts as an OIDC identity provider (via `blueprints/oidc/provider.py`). This is used so that CyIRIS, CySOAR, and CySIEM can trust the portal's sessions without their own OAuth apps.
+CyCentra 360 itself acts as an OIDC identity provider (via `blueprints/oidc/provider.py`). This is used so that CySOAR, CySIEM, and other connected tools can trust the portal's sessions without their own OAuth apps.
 
 To configure another CyCentra 360 instance (or another tool) to log in via a CyCentra OIDC provider:
 

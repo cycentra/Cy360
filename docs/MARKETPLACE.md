@@ -183,7 +183,7 @@ Share the token only with trusted contributors. It is separate from `CYADMIN_TOK
 | `vendor` | | Defaults to `"CyCentra"` if omitted |
 | `icon` | | Emoji or short string shown in the card |
 | `color` | | Hex accent color for the card border |
-| `modules_required` | | Array of CyCentra module names the item depends on (`"CySIEM"`, `"CyIRIS"`, `"CySOAR"`) |
+| `modules_required` | | Array of CyCentra module names the item depends on (`"CySIEM"`, `"CySOAR"`) |
 | `estimated_time` | | Rough config/deploy estimate shown in the card |
 | `tags` | | Lowercase strings used by the search filter |
 | `config_type` | | `"o365"` or `"gcloud"` — opens the dedicated config modal on install. Omit for items needing no guided setup. |

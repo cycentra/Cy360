@@ -96,7 +96,7 @@ CyCentra 360 is a cybersecurity platform that processes significant quantities o
 - **Gap:** Data subjects (employees being profiled) receive no notification. The system escalates incident severity based on these profiles without a mandatory human review step.
 - **Remediation:**
   1. Add a `ueba_profiling_notice_shown` platform configuration flag and surface a disclosure notice during initial setup.
-  2. Implement a human-review gate in `iris_connector.py` for any incident escalation where `ueba_flags` is non-empty.
+  2. Implement a human-review gate in `cases_bp` for any incident escalation where `ueba_flags` is non-empty.
   3. Add `GET /api/ueba/profile/<username>` (admin-gated) returning an exportable profile for DSAR responses.
   4. Document profiling activity and lawful basis in the ROPA.
 - **Priority:** Critical
@@ -203,7 +203,7 @@ CyCentra 360 is a cybersecurity platform that processes significant quantities o
 
 **PASS-S-1: RBAC with 5 Defined Roles and Principle of Least Privilege**
 - **TSC:** CC5.2, CC6.3
-- **Evidence:** `blueprints/rbac/manager.py` enforces 5 roles (`admin`, `analyst`, `viewer`, `cyiris`, `cysoar`) with a strict privilege hierarchy. Every `/api/` route checks `session.get("user_email")` → 401 and `get_user_role()` → 403. `ROLE_APPS` in `core/config.py` constrains which application modules each role can access. Privilege escalation is blocked — a `viewer` cannot invoke analyst-tier endpoints.
+- **Evidence:** `blueprints/rbac/manager.py` enforces roles (`admin`, `analyst`, `viewer`, `cysoar`) with a strict privilege hierarchy. Every `/api/` route checks `session.get("user_email")` → 401 and `get_user_role()` → 403. `ROLE_APPS` in `core/config.py` constrains which application modules each role can access. Privilege escalation is blocked — a `viewer` cannot invoke analyst-tier endpoints.
 - **Status:** PASS
 
 ---
@@ -349,7 +349,7 @@ CyCentra 360 is a cybersecurity platform that processes significant quantities o
 
 **GAP-S-7: No Formal Incident Response Plan**
 - **Requirement:** SOC 2 CC2.3, CC7.3, CC7.4
-- **Current state:** The platform has technical incident detection (SIEM, UEBA, correlation rules) and CyIRIS integration. However, no documented incident response plan (IRP) defines roles, escalation procedures, customer notification SLAs, or post-incident review requirements.
+- **Current state:** The platform has technical incident detection (SIEM, UEBA, correlation rules) and CyCases case management. However, no documented incident response plan (IRP) defines roles, escalation procedures, customer notification SLAs, or post-incident review requirements.
 - **Remediation:**
   1. Create `docs/INCIDENT_RESPONSE_PLAN.md` defining: detection, triage, containment, eradication, recovery, and post-mortem procedures.
   2. Include a GDPR Article 33/34 data breach notification procedure (72-hour supervisory authority notification).
@@ -491,7 +491,7 @@ CyCentra 360 is a cybersecurity platform that processes significant quantities o
 
 **GAP-A-4: No Human Override Gate for Automated Severity Escalation**
 - **Requirement:** EU AI Act Article 14 (human oversight)
-- **Current state:** In `cysiemstack/correlation_engine/correlator.py`, when a correlation rule fires, `incident.severity` is directly updated to the rule's severity level. This automatic escalation can trigger downstream automated actions — SOAR playbooks (`cysoar_connector.py`), CyIRIS case creation (`iris_connector.py`), and LLM enrichment — all without any analyst approval gate when UEBA flags are set.
+- **Current state:** In `cysiemstack/correlation_engine/correlator.py`, when a correlation rule fires, `incident.severity` is directly updated to the rule's severity level. This automatic escalation can trigger downstream automated actions — SOAR playbooks (`cysoar_connector.py`), CyCases case creation (`cases_bp`), and LLM enrichment — all without any analyst approval gate when UEBA flags are set.
 - **Gap:** For incidents involving UEBA anomalies on named users, the automated severity escalation chain can proceed without a human in the loop, potentially triggering automated responses affecting the individual. Article 14 requires that humans can intervene, override, and stop AI systems.
 - **Remediation:**
   1. Add a `requires_human_review` flag to `Incident`. Set it to `True` when `incident.ueba_flags` is non-empty and escalated severity is `high` or `critical`.
