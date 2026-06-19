@@ -1,8 +1,37 @@
-## v1.0.70 -- 2026-06-19
+## v1.0.71 -- 2026-06-19
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.70 -- 2026-06-20
+
+### Changes — RBAC Refinements
+
+#### Removed built-in role `cyiris`
+The `cyiris` role has been retired. CyIRIS access is governed by OIDC client scopes rather
+than a portal role. Existing users assigned `cyiris` should be reassigned to `viewer` or a
+custom role. Built-in role set is now: `admin`, `analyst`, `viewer`, `cysoar`.
+
+- `backend/blueprints/rbac/manager.py`: Removed from `_DEFAULT_ROLE_PAGES` and
+  `_bootstrap_roles`. `DELETE FROM cy_roles WHERE role_name = 'cyiris'` applied on server.
+
+#### Fix — User Management refresh button not working
+`reloadUsers()` only fetched `/api/rbac/users` and had no loading feedback, leaving
+`availableRoles` stale after creating a new role in the Role Management section.
+
+- `portal/src/pages/settings/SystemSettingsPage.jsx`: `reloadUsers` now fetches users
+  and roles in parallel. Added `refreshing` state — button shows "↻ REFRESHING…" and
+  is disabled while in flight.
+
+#### Fix — Duplicate "User Management" title when section is expanded
+Opening the User Management collapsible showed the section header and the inner component
+header both displaying "👤 User Management".
+
+- Removed the redundant icon + label from the inner `UserManagementTab` header. The
+  ↻ REFRESH button is now in a slim right-aligned row at the top of the panel.
 
 ---
 

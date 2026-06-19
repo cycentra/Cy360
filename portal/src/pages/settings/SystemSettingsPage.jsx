@@ -610,24 +610,30 @@ function UserManagementTab() {
   const [rejectFor,    setRejectFor]    = useState(null); // email open for rejection
   const [rejectReason, setRejectReason] = useState("");
   const [availableRoles, setAvailableRoles] = useState(VALID_ROLES);
+  const [refreshing,     setRefreshing]     = useState(false);
 
   const showMsg = (ok, text) => {
     setMsg({ ok, text });
     setTimeout(() => setMsg(null), 5000);
   };
 
-  const reloadUsers = () =>
-    fetch(`${CYSCAN_URL}/api/rbac/users`, { credentials: "include" })
-      .then(r => {
-        if (!r.ok) throw new Error(`Server returned ${r.status}`);
-        return r.json();
-      })
-      .then(d => {
-        if (d && d.error) throw new Error(d.error);
-        setUsers(d || {});
+  const reloadUsers = () => {
+    setRefreshing(true);
+    return Promise.all([
+      fetch(`${CYSCAN_URL}/api/rbac/users`, { credentials: "include" })
+        .then(r => { if (!r.ok) throw new Error(`Server returned ${r.status}`); return r.json(); }),
+      fetch(`${CYSCAN_URL}/api/rbac/roles`, { credentials: "include" })
+        .then(r => r.ok ? r.json() : null).catch(() => null),
+    ])
+      .then(([userData, rolesData]) => {
+        if (userData && userData.error) throw new Error(userData.error);
+        setUsers(userData || {});
+        if (Array.isArray(rolesData)) setAvailableRoles(rolesData.map(r => r.role_name));
         setAuthErr(null);
       })
-      .catch(e => setAuthErr(String(e)));
+      .catch(e => setAuthErr(String(e)))
+      .finally(() => setRefreshing(false));
+  };
 
   useEffect(() => {
     const saved = getSavedUser();
@@ -812,14 +818,14 @@ function UserManagementTab() {
 
   return (
     <div style={{ maxWidth: 900 }}>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-        <span style={{ fontSize: 18 }}>👤</span>
-        <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
-          User Management
-        </div>
-        <button onClick={reloadUsers} style={{ marginLeft: "auto", background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.4)", color: "#00e5a0", borderRadius: 4, padding: "4px 12px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", fontWeight: 700, letterSpacing: "0.8px" }}>
-          ↻ REFRESH
+      {/* Refresh button row */}
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
+        <button
+          onClick={reloadUsers}
+          disabled={refreshing}
+          style={{ background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.4)", color: "#00e5a0", borderRadius: 4, padding: "4px 12px", fontSize: 10, fontFamily: "monospace", cursor: refreshing ? "default" : "pointer", fontWeight: 700, letterSpacing: "0.8px", opacity: refreshing ? 0.6 : 1 }}
+        >
+          {refreshing ? "↻ REFRESHING…" : "↻ REFRESH"}
         </button>
       </div>
 

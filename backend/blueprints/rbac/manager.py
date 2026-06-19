@@ -60,7 +60,6 @@ _DEFAULT_ROLE_PAGES: dict = {
         "siem-incidents", "comp-dashboard", "comp-findings", "marketplace",
     ],
     "cysoar": ["dashboard", "siem-incidents", "marketplace"],
-    "cyiris": ["dashboard", "marketplace"],
 }
 _BUILTIN_ROLES: frozenset = frozenset(_DEFAULT_ROLE_PAGES.keys())
 
@@ -166,7 +165,7 @@ def _bootstrap_roles(cur) -> None:
     """Ensure built-in roles exist in cy_roles. ON CONFLICT DO NOTHING so custom edits persist."""
     _DISPLAY = {
         "admin": "Administrator", "analyst": "Analyst", "viewer": "Viewer",
-        "cysoar": "CySOAR User",  "cyiris":  "CyIRIS User",
+        "cysoar": "CySOAR User",
     }
     for role_name, pages in _DEFAULT_ROLE_PAGES.items():
         cur.execute("""
