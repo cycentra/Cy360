@@ -2912,9 +2912,9 @@ function ServerStatusTab() {
 // ════════════════════════════════════════════════════════════════════════════
 
 const PLATFORM_MATRIX = [
-  { os: "Linux",   icon: "🐧", items: ["RPM x86_64 (amd64)", "RPM aarch64 (ARM64)", "DEB amd64", "DEB aarch64 (ARM64)"] },
-  { os: "Windows", icon: "🪟", items: ["MSI 32-bit", "MSI 64-bit"] },
-  { os: "macOS",   icon: "🍎", items: ["Intel (x86_64)", "Apple Silicon (ARM64)"] },
+  { os: "Linux",   icon: <span style={{ fontSize: 16 }}>🐧</span>, items: ["RPM x86_64 (amd64)", "RPM aarch64 (ARM64)", "DEB amd64", "DEB aarch64 (ARM64)"] },
+  { os: "Windows", icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 88" width="16" height="16"><path fill="#f25022" d="M0 0h42v42H0z"/><path fill="#7fba00" d="M46 0h42v42H46z"/><path fill="#00a4ef" d="M0 46h42v42H0z"/><path fill="#ffb900" d="M46 46h42v42H46z"/></svg>, items: ["MSI 32-bit", "MSI 64-bit"] },
+  { os: "macOS",   icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 814 1000" width="15" height="15" fill="rgba(255,255,255,0.7)"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76 0-103.7 40.8-165.9 40.8s-105-37.6-162.2-103c-82.5-95-166.3-243.7-166.3-384.3 0-179.6 116.5-274.7 230.8-274.7 62 0 113.4 40.8 150.7 40.8 35.7 0 92-43.2 161.2-43.2 25.8 0 108.2 2.6 168.9 80.2zm-198.5-160.8c31.1-36.9 53.1-88.1 53.1-139.3 0-7.1-.6-14.3-1.9-20.1-50.6 1.9-110.8 33.7-147.1 75.8-28.5 32.4-55.1 83.6-55.1 135.5 0 7.8 1.3 15.6 1.9 18.1 3.2.6 8.4 1.3 13.6 1.3 45.4 0 102.5-30.4 135.5-71.3z"/></svg>, items: ["Intel (x86_64)", "Apple Silicon (ARM64)"] },
 ];
 
 function AgentInstallerTab() {
@@ -2950,6 +2950,20 @@ function AgentInstallerTab() {
   const wazuhManager = pkgInfo?.wazuh_manager || "—";
   const version      = pkgInfo?.version       || "—";
   const packages     = pkgInfo?.packages      || [];
+
+  const versionGroups = (() => {
+    if (!pkgList.length) return [];
+    const map = {};
+    pkgList.forEach(pkg => {
+      const v = pkg.name.match(/(\d+\.\d+\.\d+(?:\.\d+)?)/)?.[1] || "unknown";
+      if (!map[v]) map[v] = { version: v, pkgs: [], maxModified: 0 };
+      map[v].pkgs.push(pkg);
+      if (pkg.modified > map[v].maxModified) map[v].maxModified = pkg.modified;
+    });
+    return Object.values(map).sort((a, b) => b.maxModified - a.maxModified);
+  })();
+  const displayGroups  = versionGroups.slice(0, 3);
+  const olderGroupCount = Math.max(0, versionGroups.length - 3);
 
   return (
     <div style={{ maxWidth: 780 }}>
@@ -3057,11 +3071,11 @@ function AgentInstallerTab() {
               "chmod +x agent-installer.sh",
               "sudo ./agent-installer.sh",
             ]},
-            { step: "2", os: "macOS", icon: "🍎", cmds: [
+            { step: "2", os: "macOS", icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 814 1000" width="14" height="14" fill="rgba(255,255,255,0.7)"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76 0-103.7 40.8-165.9 40.8s-105-37.6-162.2-103c-82.5-95-166.3-243.7-166.3-384.3 0-179.6 116.5-274.7 230.8-274.7 62 0 113.4 40.8 150.7 40.8 35.7 0 92-43.2 161.2-43.2 25.8 0 108.2 2.6 168.9 80.2zm-198.5-160.8c31.1-36.9 53.1-88.1 53.1-139.3 0-7.1-.6-14.3-1.9-20.1-50.6 1.9-110.8 33.7-147.1 75.8-28.5 32.4-55.1 83.6-55.1 135.5 0 7.8 1.3 15.6 1.9 18.1 3.2.6 8.4 1.3 13.6 1.3 45.4 0 102.5-30.4 135.5-71.3z"/></svg>, cmds: [
               "chmod +x agent-installer.sh",
               "sudo ./agent-installer.sh",
             ]},
-            { step: "3", os: "Windows (PowerShell)", icon: "🪟", cmds: [
+            { step: "3", os: "Windows (PowerShell)", icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 88" width="14" height="14"><path fill="#f25022" d="M0 0h42v42H0z"/><path fill="#7fba00" d="M46 0h42v42H46z"/><path fill="#00a4ef" d="M0 46h42v42H0z"/><path fill="#ffb900" d="M46 46h42v42H46z"/></svg>, cmds: [
               "Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force",
               ".\\agent-installer.ps1",
             ]},
@@ -3111,29 +3125,36 @@ function AgentInstallerTab() {
             Packages are deployed automatically during installation and upgrades via <code style={{ color: "rgba(0,229,160,0.5)" }}>cycentra-setup.sh</code>.
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 120px", gap: 8, color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", letterSpacing: "0.5px", textTransform: "uppercase", paddingBottom: 6, borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
               <span>Package</span><span>Size</span><span>Modified</span>
             </div>
-            {[...pkgList].sort((a, b) => b.modified - a.modified).slice(0, 3).map(pkg => (
-              <div key={pkg.name} style={{ display: "grid", gridTemplateColumns: "1fr 100px 120px", gap: 8, alignItems: "center", padding: "5px 0", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
-                <a href={pkg.url} style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace", textDecoration: "none" }}
-                  onMouseOver={e => e.target.style.textDecoration = "underline"}
-                  onMouseOut={e => e.target.style.textDecoration = "none"}>
-                  {pkg.name}
-                </a>
-                <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
-                  {pkg.size_bytes >= 1048576
-                    ? `${(pkg.size_bytes / 1048576).toFixed(1)} MB`
-                    : `${Math.round(pkg.size_bytes / 1024)} KB`}
-                </span>
-                <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
-                  {new Date(pkg.modified * 1000).toLocaleDateString()}
-                </span>
+            {displayGroups.map(({ version: ver, pkgs }) => (
+              <div key={ver}>
+                <div style={{ color: "rgba(0,229,160,0.55)", fontSize: 9, fontFamily: "monospace", letterSpacing: "0.5px", textTransform: "uppercase", marginBottom: 4 }}>
+                  v{ver}
+                </div>
+                {pkgs.map(pkg => (
+                  <div key={pkg.name} style={{ display: "grid", gridTemplateColumns: "1fr 100px 120px", gap: 8, alignItems: "center", padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+                    <a href={pkg.url} style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace", textDecoration: "none" }}
+                      onMouseOver={e => e.target.style.textDecoration = "underline"}
+                      onMouseOut={e => e.target.style.textDecoration = "none"}>
+                      {pkg.name}
+                    </a>
+                    <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
+                      {pkg.size_bytes >= 1048576
+                        ? `${(pkg.size_bytes / 1048576).toFixed(1)} MB`
+                        : `${Math.round(pkg.size_bytes / 1024)} KB`}
+                    </span>
+                    <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, fontFamily: "monospace" }}>
+                      {new Date(pkg.modified * 1000).toLocaleDateString()}
+                    </span>
+                  </div>
+                ))}
               </div>
             ))}
-            {pkgList.length > 3 && (
-              <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
+            {olderGroupCount > 0 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <button
                   disabled={pruning}
                   onClick={async () => {
@@ -3143,8 +3164,9 @@ function AgentInstallerTab() {
                       const r = await fetch(`${API_BASE}/api/system/agent-packages/prune`, { method: "DELETE", credentials: "include" });
                       const d = await r.json();
                       if (d.ok) {
-                        setPruneMsg({ ok: true, text: `Deleted ${d.deleted.length} older package(s).` });
-                        setPkgList(prev => [...prev].sort((a, b) => b.modified - a.modified).slice(0, 3));
+                        setPruneMsg({ ok: true, text: `Deleted ${d.deleted.length} package(s) from ${olderGroupCount} older version(s).` });
+                        const keep = new Set(displayGroups.flatMap(g => g.pkgs.map(p => p.name)));
+                        setPkgList(prev => prev.filter(p => keep.has(p.name)));
                       } else {
                         setPruneMsg({ ok: false, text: `Errors: ${d.errors.map(e => e.file).join(", ")}` });
                       }
@@ -3155,7 +3177,7 @@ function AgentInstallerTab() {
                     }
                   }}
                   style={{ background: "rgba(255,107,107,0.1)", border: "1px solid rgba(255,107,107,0.3)", color: "#ff6b6b", borderRadius: 4, padding: "5px 12px", fontSize: 11, fontFamily: "monospace", cursor: pruning ? "default" : "pointer" }}>
-                  {pruning ? "Deleting…" : `Delete ${pkgList.length - 3} older version(s)`}
+                  {pruning ? "Deleting…" : `Delete ${olderGroupCount} older version(s)`}
                 </button>
                 {pruneMsg && (
                   <span style={{ fontSize: 11, fontFamily: "monospace", color: pruneMsg.ok ? "#00e5a0" : "#ff6b6b" }}>

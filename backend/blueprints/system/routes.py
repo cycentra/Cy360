@@ -4992,21 +4992,30 @@ def list_agent_packages():
 
 @system_bp.route("/api/system/agent-packages/prune", methods=["DELETE"])
 def prune_agent_packages():
-    """Delete all but the 3 most-recent agent packages from disk."""
+    """Delete all packages from version groups older than the 3 most-recent versions."""
     if not session.get("user_email"):
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
     if not _AGENT_PKG_DIR.exists():
         return add_cors_headers(jsonify({"ok": True, "deleted": []}))
 
-    all_pkgs = sorted(
-        [f for f in _AGENT_PKG_DIR.iterdir() if f.is_file() and not f.name.startswith(".")],
-        key=lambda f: f.stat().st_mtime,
-        reverse=True,
-    )
-    to_delete = all_pkgs[3:]
-    deleted = []
-    errors = []
+    all_pkgs = [f for f in _AGENT_PKG_DIR.iterdir() if f.is_file() and not f.name.startswith(".")]
+
+    by_version = {}
+    for f in all_pkgs:
+        m = re.search(r"(\d+\.\d+\.\d+(?:\.\d+)?)", f.name)
+        v = m.group(1) if m else "unknown"
+        if v not in by_version:
+            by_version[v] = {"files": [], "max_mtime": 0}
+        by_version[v]["files"].append(f)
+        mtime = f.stat().st_mtime
+        if mtime > by_version[v]["max_mtime"]:
+            by_version[v]["max_mtime"] = mtime
+
+    sorted_versions = sorted(by_version.items(), key=lambda kv: kv[1]["max_mtime"], reverse=True)
+    to_delete = [f for _, grp in sorted_versions[3:] for f in grp["files"]]
+
+    deleted, errors = [], []
     for f in to_delete:
         try:
             f.unlink()
