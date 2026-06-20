@@ -204,6 +204,12 @@ SSO_AUTO_PROVISION   = os.environ.get("SSO_AUTO_PROVISION",   "true").lower() ==
 SSO_REQUIRE_APPROVAL = os.environ.get("SSO_REQUIRE_APPROVAL", "false").lower() == "true"
 SSO_ALLOWED_DOMAINS  = os.environ.get("SSO_ALLOWED_DOMAINS",  "")        # comma-separated
 
+# ── Integration health monitoring ─────────────────────────────────────────────
+# Interval between background health checks (seconds). Default: 5 minutes.
+INTEGRATION_HEALTH_INTERVAL = int(os.environ.get("INTEGRATION_HEALTH_INTERVAL", "300"))
+# Minutes without log events before an integration is considered "degraded".
+INTEGRATION_HEALTH_INGEST_WINDOW = int(os.environ.get("INTEGRATION_HEALTH_INGEST_WINDOW", "15"))
+
 # ── CORS allowed origins ───────────────────────────────────────────────────────
 CORS_ALLOWED_ORIGINS = {
     FRONTEND_URL,

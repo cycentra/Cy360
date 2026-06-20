@@ -292,6 +292,10 @@ def _add_to_apscheduler(sched, job: dict) -> None:
             "include_subdomains": bool(params.get("include_subdomains", True)),
             "actor_uid":          params.get("actor_uid", "scheduler"),
         }
+    elif jtype == "integration_health":
+        from blueprints.integrations.health import run_all_checks as _run_health
+        fn        = _run_health
+        fn_kwargs = {}
     elif jtype in ("docker_maintenance", "backup", "asm_wordlist"):
         command  = params.get("command") or ""
         log_path = params.get("log", f"/opt/cycentra/{jtype}.log")
@@ -380,6 +384,23 @@ def init_scheduler(app) -> None:
         register_compliance_scheduler(_scheduler)
     except Exception as _comp_exc:
         log.warning("scheduler: compliance enrichment job registration failed: %s", _comp_exc)
+
+    # ── Integration health monitor (always on, interval from env/config) ───────
+    try:
+        from blueprints.integrations.health import run_all_checks as _health_check
+        from apscheduler.triggers.interval import IntervalTrigger as _IT
+        _health_interval = int(os.environ.get("INTEGRATION_HEALTH_INTERVAL", "300"))
+        _scheduler.add_job(
+            _health_check,
+            trigger=_IT(seconds=_health_interval),
+            id="integration_health_monitor",
+            name="Integration Health Monitor",
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+        log.info("scheduler: integration health monitor registered (every %ds)", _health_interval)
+    except Exception as _health_exc:
+        log.warning("scheduler: integration health monitor registration failed: %s", _health_exc)
 
     _scheduler.start()
     log.info("scheduler: started with %d jobs", len(_scheduler.get_jobs()))

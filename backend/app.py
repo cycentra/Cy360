@@ -36,7 +36,8 @@ from blueprints.audit.routes       import audit_bp
 from blueprints.sso.routes         import sso_bp
 from blueprints.benchmark.routes   import benchmark_bp
 from blueprints.comp.routes        import comp_bp
-from blueprints.cases.routes       import cases_bp
+from blueprints.cases.routes          import cases_bp
+from blueprints.integrations.routes   import integrations_bp
 
 # siem_proxy.py lives at backend root — import as-is (already a Blueprint)
 from siem_proxy import siem_bp
@@ -54,7 +55,7 @@ def create_app() -> Flask:
     app.config.update(COOKIE_SETTINGS)
 
     # Register all blueprints
-    for bp in (auth_bp, oidc_bp, rbac_bp, platform_bp, asm_bp, siem_bp, system_bp, backup_bp, scheduler_bp, marketplace_bp, audit_bp, sso_bp, benchmark_bp, comp_bp, cases_bp):
+    for bp in (auth_bp, oidc_bp, rbac_bp, platform_bp, asm_bp, siem_bp, system_bp, backup_bp, scheduler_bp, marketplace_bp, audit_bp, sso_bp, benchmark_bp, comp_bp, cases_bp, integrations_bp):
         app.register_blueprint(bp)
 
     # Ensure GRC compliance tables exist on startup

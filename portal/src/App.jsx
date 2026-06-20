@@ -80,6 +80,7 @@ import { ComplianceFindingsPage }   from './pages/compliance/ComplianceFindingsP
 import { ComplianceReportsPage }    from './pages/compliance/ComplianceReportsPage.jsx';
 import { PolicyDocumentsPage }      from './pages/compliance/PolicyDocumentsPage.jsx';
 import { ComplianceAssessmentPage } from './pages/compliance/ComplianceAssessmentPage.jsx';
+import IntegrationHealthPage from './pages/integrations/index.jsx';
 
 // ── Scan History Dropdown ─────────────────────────────────────────────────────
 
@@ -384,6 +385,12 @@ export default function App() {
             {activeTab==="comp-appetite"    && <RiskAppetitePage/>}
             {activeTab==="comp-reports"     && <ComplianceReportsPage/>}
             {activeTab==="comp-policy"      && <PolicyDocumentsPage/>}
+
+            {/* ── Integration Health ──────────────────────────────────── */}
+            {activeTab==="integration-health" && <IntegrationHealthPage onNavigate={(tab, opts) => {
+              if (tab === "cases" && opts?.incidentId) { setCasesIncidentId(opts.incidentId); setActiveTab("cases-detail"); }
+              else setActiveTab(tab);
+            }} />}
 
           </div>
           </PageErrorBoundary>

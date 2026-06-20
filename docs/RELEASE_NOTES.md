@@ -1,3 +1,86 @@
+## v1.0.73 -- 2026-06-20
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.73 -- 2026-06-20
+
+### New Feature — Integration Health Monitoring with Auto-Incident Creation
+
+CyCentra 360 now continuously monitors the health of all configured integrations
+and automatically raises an incident and opens a CyCase when an integration goes
+down, fails authentication, or stops ingesting events.
+
+#### Integrations monitored
+| Integration | Check type | Trigger |
+|-------------|-----------|---------|
+| Wazuh SIEM | API auth + alert ingest gap | No alerts for > 15 min, or manager unreachable |
+| CySIEM Correlation Engine | `/health` endpoint | Non-200 response or connection failure |
+| CyMind AI | `/api/v1/health` | Unreachable (only when integration is enabled) |
+| MISP Threat Intelligence | `getPyMISPVersion` API | HTTP failure or auth error (only when not disabled) |
+| CySOAR Automation | Node-RED root URL | Non-5xx check fails (only when module is installed) |
+| Office 365 / GCP / AWS / GitHub | Alert ingest gap | No matching alerts in last 15 minutes |
+| Custom marketplace integrations | `health_config` in catalog item | Ingest gap or HTTP endpoint check |
+
+#### Auto-incident and case creation
+- When any integration is unhealthy, a synthetic incident is created with
+  `categories = integration_health` and a stable ID (`INTEG-xxxxxxxx`).
+- A CyCase is automatically opened on the incident (`case_type: operational`).
+- The incident is automatically resolved — with a system comment — when the
+  integration recovers on the next health check cycle.
+- All checks are idempotent: only one open incident per integration at any time.
+
+#### Background health check scheduler
+- Runs every **5 minutes** automatically (configurable via `INTEGRATION_HEALTH_INTERVAL` env var).
+- Also triggerable on-demand via `POST /api/integrations/health/check` (analyst+).
+
+#### Extensible marketplace support
+New integrations added via the marketplace are automatically monitored if their
+catalog item declares a `health_config` block:
+```json
+{
+  "health_config": {
+    "type": "ingest_gap",
+    "rule_groups": ["my-custom-source"],
+    "display_name": "My Integration"
+  }
+}
+```
+Or for HTTP-endpoint integrations:
+```json
+{
+  "health_config": {
+    "type": "http",
+    "endpoint_url": "https://my-service.internal/health"
+  }
+}
+```
+
+#### New portal page
+**Integration Health** is available under Platform Configuration → Integration Health.
+Displays live status cards per integration with error details, ingest gap duration,
+consecutive failure count, and a direct link to the open incident when unhealthy.
+A **Check Now** button triggers an immediate check cycle.
+
+**New env vars:**
+- `INTEGRATION_HEALTH_INTERVAL` — seconds between checks (default: `300`)
+- `INTEGRATION_HEALTH_INGEST_WINDOW` — minutes without events before "degraded" (default: `15`)
+
+**Files changed:**
+- `backend/blueprints/integrations/health.py` (new)
+- `backend/blueprints/integrations/routes.py` (new)
+- `backend/blueprints/integrations/__init__.py` (new)
+- `backend/core/config.py` — added `INTEGRATION_HEALTH_INTERVAL`, `INTEGRATION_HEALTH_INGEST_WINDOW`
+- `backend/blueprints/scheduler/routes.py` — added `integration_health` job type + auto-registration
+- `backend/app.py` — registered `integrations_bp`
+- `portal/src/pages/integrations/index.jsx` (new)
+- `portal/src/sidebar/navConfig.jsx` — added Integration Health nav entry
+
+---
+
 ## v1.0.72 -- 2026-06-20
 
 ### Improvements

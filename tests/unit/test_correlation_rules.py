@@ -1,5 +1,5 @@
 """
-Suite 06 — Correlation Rule Tests (CR-001 → CR-055)
+Suite 06 — Correlation Rule Tests (CR-001 → CR-056)
 
 Tests every rule in ALL_RULES for:
   • Registry integrity  (IDs, uniqueness, format, severity, tactics)
@@ -45,7 +45,7 @@ from correlator import (  # noqa: E402
     ArchiveCollectedData, PhishingAttachmentExec, StartupFolderPersistence,
     CronPersistence, AccessTokenManipulation, RemoteServiceCreation,
     DLLHijacking, HTTPSLongPollC2, CredentialsInFiles,
-    SMBShareEnumeration, DCSyncAttack,
+    SMBShareEnumeration, DCSyncAttack, HighResourceUtilization,
 )
 
 # ---------------------------------------------------------------------------
@@ -89,7 +89,7 @@ class TestRuleRegistry:
     """ALL_RULES list structure and metadata invariants."""
 
     def test_min_rule_count(self):
-        assert len(ALL_RULES) >= 55, f"Expected ≥55 rules, got {len(ALL_RULES)}"
+        assert len(ALL_RULES) >= 56, f"Expected ≥56 rules, got {len(ALL_RULES)}"
 
     def test_all_ids_start_with_cr(self):
         bad = [r.rule_id for r in ALL_RULES if not r.rule_id.startswith('CR-')]
@@ -1287,3 +1287,76 @@ class TestCR055_DCSync:
     def test_positive_confidence_very_high(self):
         r = self.rule.match([_a(rule_desc='dcsync attack getncchanges')])
         assert r['confidence'] == 0.95
+
+
+class TestCR056_HighResourceUtilization:
+    rule = HighResourceUtilization()
+
+    def test_positive_cpu_rule_id(self):
+        """Alert with Wazuh rule_id 101004 (high_cpu) fires CR-056 with 2+ hits."""
+        alerts = [
+            _a(rule_id='101004', rule_desc='CyCentra 360: High CPU utilization 94% on web01'),
+            _a(rule_id='101004', rule_desc='CyCentra 360: High CPU utilization 96% on web01'),
+        ]
+        assert self.rule.match(alerts) is not None
+
+    def test_positive_disk_rule_id(self):
+        """Alert with Wazuh rule_id 101005 (high_disk) fires with 2+ hits."""
+        alerts = [
+            _a(rule_id='101005', rule_desc='CyCentra 360: High disk utilization 87% on db01'),
+            _a(rule_id='101005', rule_desc='CyCentra 360: High disk utilization 89% on db01'),
+        ]
+        assert self.rule.match(alerts) is not None
+
+    def test_positive_memory_keyword(self):
+        """Keyword 'high memory utilization' in rule_desc fires the rule."""
+        alerts = [
+            _a(rule_desc='CyCentra 360: High memory utilization 92% on app01'),
+            _a(rule_desc='CyCentra 360: High memory utilization 95% on app01'),
+        ]
+        assert self.rule.match(alerts) is not None
+
+    def test_positive_mixed_resource_types(self):
+        """CPU + Disk alerts together fire the rule and label both types in detail."""
+        alerts = [
+            _a(rule_id='101004', rule_desc='CyCentra 360: High CPU utilization 93% on host1'),
+            _a(rule_id='101005', rule_desc='CyCentra 360: High disk utilization 88% on host1'),
+        ]
+        result = self.rule.match(alerts)
+        assert result is not None
+        assert 'CPU' in result['detail']
+        assert 'Disk' in result['detail']
+
+    def test_positive_sustained_rule_id(self):
+        """Sustained breach rule_id 101007 (level 10 aggregator) fires with 2+ hits."""
+        alerts = [
+            _a(rule_id='101007', rule_desc='CyCentra 360: Sustained resource utilization breach on host1'),
+            _a(rule_id='101007', rule_desc='CyCentra 360: Sustained resource utilization breach on host1'),
+        ]
+        assert self.rule.match(alerts) is not None
+
+    def test_negative_single_alert(self):
+        """Only 1 resource alert — not enough to fire (threshold is 2+)."""
+        assert self.rule.match([
+            _a(rule_id='101004', rule_desc='CyCentra 360: High CPU utilization 91% on host1'),
+        ]) is None
+
+    def test_negative_no_resource_keywords(self):
+        """Unrelated alerts — no resource rule IDs or keywords — no match."""
+        assert self.rule.match([
+            _a(rule_desc='SSH login failed for user root'),
+            _a(rule_desc='Failed password for invalid user admin'),
+        ]) is None
+
+    def test_result_contract(self):
+        """Result dict has key_alert_ids, detail, confidence."""
+        alerts = [
+            _a(wazuh_id='w100', rule_id='101004', rule_desc='CyCentra 360: High CPU utilization 94% on host1'),
+            _a(wazuh_id='w101', rule_id='101006', rule_desc='CyCentra 360: High memory utilization 91% on host1'),
+        ]
+        r = self.rule.match(alerts)
+        assert r is not None
+        assert 'key_alert_ids' in r
+        assert 'detail' in r
+        assert 'confidence' in r
+        assert r['confidence'] == 0.80
