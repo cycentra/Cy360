@@ -1746,6 +1746,50 @@ class DCSyncAttack(CorrelationRule):
         return None
 
 
+
+# ── CR-056: Sustained Resource Utilization Breach ─────────────────────────────
+class HighResourceUtilization(CorrelationRule):
+    """CPU, disk, or memory threshold breach reported by cy360_resource_check (T1496, T1499)."""
+    RESOURCE_RULE_IDS  = frozenset({'101004', '101005', '101006', '101007'})
+    RESOURCE_KEYWORDS  = (
+        'high cpu utilization', 'high disk utilization', 'high memory utilization',
+        'cycentra 360: high cpu', 'cycentra 360: high disk', 'cycentra 360: high memory',
+        'sustained resource utilization', 'resource threshold',
+    )
+
+    def __init__(self):
+        super().__init__(
+            'CR-056', 'Sustained Resource Utilization Breach',
+            'CPU, disk, or memory utilization repeatedly exceeds thresholds — '
+            'potential DoS, cryptomining, ransomware encryption load, or runaway process (T1496/T1499)',
+            'medium', ['Impact'], 5
+        )
+
+    def match(self, alerts):
+        hits = [
+            a for a in alerts
+            if (str(a.get('rule_id', '')) in self.RESOURCE_RULE_IDS or
+                any(k in (a.get('rule_desc') or '').lower() for k in self.RESOURCE_KEYWORDS))
+        ]
+        if len(hits) < 2:
+            return None
+        agent  = hits[0].get('agent_name', 'unknown')
+        types  = set()
+        for a in hits:
+            desc = (a.get('rule_desc') or '').lower()
+            if 'cpu'    in desc: types.add('CPU')
+            if 'disk'   in desc: types.add('Disk')
+            if 'memory' in desc: types.add('Memory')
+        resource_label = '/'.join(sorted(types)) or 'Resource'
+        return {
+            'key_alert_ids': [a.get('wazuh_id') for a in hits[:3]],
+            'detail': (
+                f"{resource_label} utilization threshold breached {len(hits)}x on {agent}"
+            ),
+            'confidence': 0.80,
+        }
+
+
 # ── Rule registry ─────────────────────────────────────────────────────────────
 ALL_RULES: list[CorrelationRule] = [
     # ── Original 15 rules ─────────────────────────────────────────────────────
@@ -1807,6 +1851,7 @@ ALL_RULES: list[CorrelationRule] = [
     CredentialsInFiles(),
     SMBShareEnumeration(),
     DCSyncAttack(),
+    HighResourceUtilization(),
 ]
 
 

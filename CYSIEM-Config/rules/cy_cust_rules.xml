@@ -404,4 +404,43 @@
     <group>threat_intel,kernel_telemetry,</group>
   </rule>
 
+  <!-- ================================================================== -->
+  <!-- RESOURCE UTILIZATION MONITORING — IDs 101004–101007                -->
+  <!-- CyCentra 360 — cy360_resource_check agent script                   -->
+  <!-- ================================================================== -->
+
+  <!-- CPU threshold breach (>90%) -->
+  <rule id="101004" level="7">
+    <decoded_as>cy360-resource-check-json</decoded_as>
+    <field name="event">^high_cpu$</field>
+    <description>CyCentra 360: High CPU utilization $(cpu_percent)% on $(agent.name) — threshold $(threshold)%</description>
+    <group>resource_monitor,high_cpu,</group>
+  </rule>
+
+  <!-- Disk threshold breach (>85%) -->
+  <rule id="101005" level="7">
+    <decoded_as>cy360-resource-check-json</decoded_as>
+    <field name="event">^high_disk$</field>
+    <description>CyCentra 360: High disk utilization $(disk_percent)% on $(agent.name) — threshold $(threshold)%</description>
+    <group>resource_monitor,high_disk,</group>
+  </rule>
+
+  <!-- Memory threshold breach (>90%) -->
+  <rule id="101006" level="7">
+    <decoded_as>cy360-resource-check-json</decoded_as>
+    <field name="event">^high_memory$</field>
+    <description>CyCentra 360: High memory utilization $(mem_percent)% on $(agent.name) — threshold $(threshold)%</description>
+    <group>resource_monitor,high_memory,</group>
+  </rule>
+
+  <!-- Sustained breach: same agent hits 3+ threshold events within 10 min -->
+  <rule id="101007" level="10">
+    <if_sid>101004,101005,101006</if_sid>
+    <same_field>agent.name</same_field>
+    <timeframe>600</timeframe>
+    <frequency>3</frequency>
+    <description>CyCentra 360: Sustained resource utilization breach on $(agent.name) — 3+ threshold events in 10 minutes</description>
+    <group>resource_monitor,sustained_breach,</group>
+  </rule>
+
 </group>

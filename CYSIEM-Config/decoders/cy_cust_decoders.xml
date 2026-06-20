@@ -12,3 +12,13 @@
   <prematch>{"timestamp"</prematch>
   <plugin_decoder>JSON_Decoder</plugin_decoder>
 </decoder>
+
+<!-- CyCentra 360: Resource utilization monitor (cy360_resource_check) -->
+<decoder name="cy360-resource-check">
+  <prematch>ossec: output: 'cy360-resource-check':</prematch>
+</decoder>
+
+<decoder name="cy360-resource-check-json">
+  <parent>cy360-resource-check</parent>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>

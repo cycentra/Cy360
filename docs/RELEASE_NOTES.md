@@ -1,3 +1,59 @@
+## v1.0.72 -- 2026-06-20
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.72 -- 2026-06-20
+
+### New Feature — CPU / Memory / Disk Threshold Alerting
+
+CyCentra 360 agents now actively monitor host resource utilization and generate
+SIEM alerts and correlated incidents when thresholds are exceeded.
+
+#### Agent-side collection (all platforms)
+A lightweight monitoring script (`cy360_resource_check`) runs every 5 minutes on
+every enrolled agent via Wazuh's shared agent configuration. It emits structured
+JSON events only when a threshold is crossed — no noise when systems are healthy.
+
+| Metric | Threshold | Event name |
+|--------|-----------|------------|
+| CPU utilization | > 90% | `high_cpu` |
+| Memory utilization | > 90% | `high_memory` |
+| Disk utilization (root/C:) | > 85% | `high_disk` |
+
+- **Linux**: reads `/proc/stat` and `/proc/meminfo` — zero dependencies, runs on any kernel.
+- **macOS**: reads `top -l` and `vm_stat`.
+- **Windows**: uses `Get-Counter`, `Get-CimInstance Win32_OperatingSystem`, `Get-PSDrive`.
+
+Scripts deployed to agents via Wazuh shared config (`/var/ossec/etc/shared/default/`),
+automatically pushed to all enrolled endpoints on next agent sync.
+
+#### Wazuh alert rules (IDs 101004–101007)
+- **101004** (level 7): High CPU — fires when `high_cpu` event received from agent
+- **101005** (level 7): High disk — fires when `high_disk` event received
+- **101006** (level 7): High memory — fires when `high_memory` event received
+- **101007** (level 10): Sustained breach — triggers when the same agent fires 3+ resource
+  alerts within 10 minutes; escalates to a higher-severity incident
+
+#### Correlation rule CR-056: Sustained Resource Utilization Breach
+New correlation rule added to the CySIEM engine. Fires when 2+ resource threshold
+alerts originate from the same host within a single incident window. Severity: Medium.
+Linked to MITRE ATT&CK T1496 (Resource Hijacking) and T1499 (Endpoint Denial of Service).
+
+**Files changed:**
+- `CYSIEM-Config/agent_config/cy360_resource_check.sh` (new)
+- `CYSIEM-Config/agent_config/cy360_resource_check.ps1` (new)
+- `CYSIEM-Config/agent_config/agent.conf` — added 3 OS-scoped `<agent_config>` blocks
+- `CYSIEM-Config/decoders/cy_cust_decoders.xml` — added `cy360-resource-check` decoder pair
+- `CYSIEM-Config/rules/cy_cust_rules.xml` — added rules 101004–101007
+- `backend/cysiemstack/correlation_engine/correlator.py` — added CR-056 class + registered in ALL_RULES
+- `cycentra-setup.sh` — added script deploy step to `--update` flow
+
+---
+
 ## v1.0.71 -- 2026-06-19
 
 ### Improvements

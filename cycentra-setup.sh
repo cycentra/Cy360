@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.71 -- 2026-06-19 23:36 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.72 -- 2026-06-20 10:51 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -3361,6 +3361,18 @@ PYEOF
         success "agent.conf deployed to shared/default (pushed to enrolled agents via remoted)"
     else
         warn "agent_config/agent.conf not in CYSIEM-Config bundle — skipping"
+    fi
+
+    # ── Deploy cy360 resource monitoring scripts to Wazuh shared folder ──────────
+    info "Deploying resource monitoring scripts to Wazuh shared config..."
+    WAZUH_SHARED="/var/ossec/etc/shared/default"
+    if [ -d "$WAZUH_SHARED" ]; then
+        cp -f "$CONFIG_SRC/agent_config/cy360_resource_check.sh"  "$WAZUH_SHARED/cy360_resource_check.sh"
+        cp -f "$CONFIG_SRC/agent_config/cy360_resource_check.ps1" "$WAZUH_SHARED/cy360_resource_check.ps1"
+        chmod 755 "$WAZUH_SHARED/cy360_resource_check.sh"
+        success "Resource monitoring scripts deployed to $WAZUH_SHARED"
+    else
+        warn "Wazuh shared dir not found at $WAZUH_SHARED — skipping resource script deploy"
     fi
 
     # ── 19.1 geoip2 Python library ────────────────────────────────────────────
