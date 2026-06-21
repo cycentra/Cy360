@@ -231,6 +231,38 @@ def _sync_misp_to_siem_env(misp: dict) -> None:
 
 
 
+def _sync_ti_to_siem_env(ti: dict) -> None:
+    """Write TI API keys from ai_settings.json into cysiemstack.env so the
+    correlation engine picks them up without a manual env edit."""
+    env_path = Path(_ENV_FILE_MAP["cysiemstack"])
+    if not env_path.parent.exists():
+        return
+    updates = {
+        "VT_API_KEY":        ti.get("vtApiKey", ""),
+        "ABUSEIPDB_API_KEY": ti.get("abuseipdbApiKey", ""),
+        "GREYNOISE_API_KEY": ti.get("greynoiseApiKey", ""),
+    }
+    try:
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
+    except Exception:
+        lines = []
+    result, seen = [], set()
+    for line in lines:
+        key = line.split("=", 1)[0].strip()
+        if key in updates:
+            result.append(f'{key}={updates[key]}')
+            seen.add(key)
+        else:
+            result.append(line)
+    for k, v in updates.items():
+        if k not in seen:
+            result.append(f'{k}={v}')
+    try:
+        env_path.write_text("\n".join(result) + "\n")
+    except Exception:
+        pass
+
+
 @system_bp.route("/api/ai/settings", methods=["OPTIONS"])
 def ai_settings_options():
     return add_cors_headers(make_response('', 204))
@@ -248,6 +280,10 @@ def ai_settings_get():
                 data["cymind_memory"]["apiKey"] = "••••••••"
             if "misp" in data and data["misp"].get("apiKey"):
                 data["misp"]["apiKey"] = "••••••••"
+            ti = data.get("threat_intel", {})
+            for key_field in ("vtApiKey", "abuseipdbApiKey", "greynoiseApiKey"):
+                if ti.get(key_field):
+                    ti[key_field] = "••••••••"
             return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -258,7 +294,7 @@ def ai_settings_get():
 def ai_settings_post():
     data = request.get_json() or {}
     # Only accept known top-level keys to prevent arbitrary data storage
-    allowed = {"provider", "fields", "prompts", "cymind_memory", "misp", "system"}
+    allowed = {"provider", "fields", "prompts", "cymind_memory", "misp", "system", "threat_intel"}
     payload = {k: v for k, v in data.items() if k in allowed}
     if not payload:
         return jsonify({"error": "No valid settings provided"}), 400
@@ -295,12 +331,22 @@ def ai_settings_post():
             existing_misp_key = existing.get("misp", {}).get("apiKey", "")
             if existing_misp_key:
                 payload.setdefault("misp", {})["apiKey"] = existing_misp_key
+        # Same guard for TI API keys
+        for ti_field in ("vtApiKey", "abuseipdbApiKey", "greynoiseApiKey"):
+            incoming_ti_key = payload.get("threat_intel", {}).get(ti_field, "")
+            if not incoming_ti_key or incoming_ti_key == _MASK:
+                existing_ti_key = existing.get("threat_intel", {}).get(ti_field, "")
+                if existing_ti_key:
+                    payload.setdefault("threat_intel", {})[ti_field] = existing_ti_key
         existing.update(payload)
         AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         AI_SETTINGS_FILE.write_text(json.dumps(existing, indent=2))
         # Sync MISP settings into cysiemstack.env
         if "misp" in existing:
             _sync_misp_to_siem_env(existing["misp"])
+        # Sync TI API keys into cysiemstack.env
+        if "threat_intel" in existing:
+            _sync_ti_to_siem_env(existing["threat_intel"])
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -356,6 +402,91 @@ def misp_test():
         return jsonify({"ok": False, "error": f"SSL error — {e}"}), 400
     except http_requests.exceptions.ConnectionError:
         return jsonify({"ok": False, "error": "Cannot reach MISP server — check URL and network"}), 400
+    except http_requests.exceptions.Timeout:
+        return jsonify({"ok": False, "error": "Connection timed out"}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ── TI source connectivity test ───────────────────────────────────────────────
+
+@system_bp.route("/api/system/ti/test", methods=["OPTIONS"])
+def ti_test_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/system/ti/test", methods=["POST"])
+def ti_test():
+    """Test connectivity to VirusTotal, AbuseIPDB, or GreyNoise using stored or provided key."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    _MASK = "•" * 8
+    data   = request.get_json() or {}
+    source = data.get("source", "")   # "virustotal" | "abuseipdb" | "greynoise"
+
+    def _resolve_key(field: str) -> str:
+        key = data.get("apiKey", "")
+        if not key or key == _MASK:
+            try:
+                stored = json.loads(AI_SETTINGS_FILE.read_text()) if AI_SETTINGS_FILE.exists() else {}
+                key = stored.get("threat_intel", {}).get(field, "")
+            except Exception:
+                key = ""
+        return key
+
+    try:
+        if source == "virustotal":
+            api_key = _resolve_key("vtApiKey")
+            if not api_key:
+                return jsonify({"ok": False, "error": "VirusTotal API key not configured"}), 400
+            resp = http_requests.get(
+                "https://www.virustotal.com/api/v3/ip_addresses/8.8.8.8",
+                headers={"x-apikey": api_key},
+                timeout=8,
+            )
+            if resp.status_code == 401:
+                return jsonify({"ok": False, "error": "Invalid API key (401)"}), 400
+            if resp.ok:
+                return jsonify({"ok": True, "message": "VirusTotal API key is valid"})
+            return jsonify({"ok": False, "error": f"VirusTotal returned HTTP {resp.status_code}"}), 400
+
+        elif source == "abuseipdb":
+            api_key = _resolve_key("abuseipdbApiKey")
+            if not api_key:
+                return jsonify({"ok": False, "error": "AbuseIPDB API key not configured"}), 400
+            resp = http_requests.get(
+                "https://api.abuseipdb.com/api/v2/check",
+                headers={"Key": api_key, "Accept": "application/json"},
+                params={"ipAddress": "8.8.8.8", "maxAgeInDays": 1},
+                timeout=8,
+            )
+            if resp.status_code == 401:
+                return jsonify({"ok": False, "error": "Invalid API key (401)"}), 400
+            if resp.ok:
+                return jsonify({"ok": True, "message": "AbuseIPDB API key is valid"})
+            return jsonify({"ok": False, "error": f"AbuseIPDB returned HTTP {resp.status_code}"}), 400
+
+        elif source == "greynoise":
+            api_key = _resolve_key("greynoiseApiKey")
+            if not api_key:
+                return jsonify({"ok": False, "error": "GreyNoise API key not configured"}), 400
+            resp = http_requests.get(
+                "https://api.greynoise.io/v3/community/8.8.8.8",
+                headers={"key": api_key},
+                timeout=8,
+            )
+            if resp.status_code == 401:
+                return jsonify({"ok": False, "error": "Invalid API key (401)"}), 400
+            if resp.ok:
+                return jsonify({"ok": True, "message": "GreyNoise API key is valid"})
+            return jsonify({"ok": False, "error": f"GreyNoise returned HTTP {resp.status_code}"}), 400
+
+        else:
+            return jsonify({"ok": False, "error": "Unknown source — use virustotal, abuseipdb, or greynoise"}), 400
+
+    except http_requests.exceptions.ConnectionError:
+        return jsonify({"ok": False, "error": "Cannot reach TI service — check internet connectivity"}), 400
     except http_requests.exceptions.Timeout:
         return jsonify({"ok": False, "error": "Connection timed out"}), 400
     except Exception as e:

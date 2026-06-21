@@ -671,6 +671,7 @@ def _incident_to_dict(i: Incident) -> dict:
         "false_positive_reason":  i.false_positive_reason,
         "asset_tier":             i.asset_tier,
         "soar_actions":           i.soar_actions or [],
+        "ti_reputation":          i.ti_reputation,
     }
 
 

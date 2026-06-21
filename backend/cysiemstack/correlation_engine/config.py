@@ -99,6 +99,13 @@ class Settings(BaseSettings):
     # Leave empty to use the system default CA store.
     tls_ca_bundle: str = ""
 
+    # ── External Threat Intelligence APIs (Phase 1) ───────────────────────────
+    # Written by _sync_ti_to_siem_env() in system/routes.py when the portal
+    # saves TI settings.  Leave empty to disable the respective source.
+    vt_api_key:        str = ""   # VirusTotal v3
+    abuseipdb_api_key: str = ""   # AbuseIPDB v2
+    greynoise_api_key: str = ""   # GreyNoise Community/Enterprise
+
     @model_validator(mode='after')
     def _bridge_cloud_misp_creds(self) -> 'Settings':
         """Bridge CLOUD_MISP_URL / CLOUD_MISP_API_KEY (injected by ENGINE_KV_MAP

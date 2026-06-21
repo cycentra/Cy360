@@ -102,6 +102,8 @@ class Incident(Base):
     asset_tier       = Column(Integer, nullable=True)
     # soar_actions: list of action objects returned by CySOAR/Node-RED
     soar_actions     = Column(JSONB, default=list)
+    # ti_reputation: unified threat-intel verdict from VT + AbuseIPDB + GreyNoise + MISP
+    ti_reputation    = Column(JSONB, nullable=True)
 
     __table_args__ = (
         # Speed up the common WHERE/ORDER BY patterns used by GET /incidents
@@ -320,6 +322,12 @@ async def init_db():
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            # Phase 1 migration: add ti_reputation column to existing incidents table
+            await conn.execute(
+                __import__("sqlalchemy").text(
+                    "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS ti_reputation JSONB"
+                )
+            )
     except Exception as exc:
         import logging
         logging.getLogger("cysiemstack").critical(

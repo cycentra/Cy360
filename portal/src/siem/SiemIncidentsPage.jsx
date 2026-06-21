@@ -537,6 +537,95 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
           </>
         )}
 
+        {/* Unified TI reputation panel (Phase 1) */}
+        {inc.ti_reputation && (
+          <>
+            <SectionLabel>🌐 THREAT INTELLIGENCE REPUTATION</SectionLabel>
+            {(() => {
+              const ti = inc.ti_reputation;
+              const verdictColor = {
+                malicious:  "#ff3b3b",
+                suspicious: "#f5c518",
+                benign:     "#00e5a0",
+                unknown:    "#888",
+              }[ti.verdict] || "#888";
+              return (
+                <div style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${verdictColor}33`,
+                  borderRadius: 4, padding: "12px 14px" }}>
+                  {/* Verdict row */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+                    <span style={{
+                      background: `${verdictColor}18`, border: `1px solid ${verdictColor}44`,
+                      color: verdictColor, fontSize: 11, fontWeight: 700, padding: "3px 10px",
+                      borderRadius: 12, fontFamily: "monospace", letterSpacing: "0.06em",
+                    }}>
+                      {(ti.verdict || "unknown").toUpperCase()}
+                    </span>
+                    {/* Confidence bar */}
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginBottom: 3 }}>
+                        TI Confidence: {ti.confidence ?? 0}%
+                      </div>
+                      <div style={{ height: 4, background: "rgba(255,255,255,0.08)", borderRadius: 2, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${ti.confidence ?? 0}%`,
+                          background: verdictColor, borderRadius: 2, transition: "width 0.4s" }} />
+                      </div>
+                    </div>
+                  </div>
+                  {/* Sources used */}
+                  {(ti.sources_used || []).length > 0 && (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                      {ti.sources_used.map(s => (
+                        <span key={s} style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10,
+                          background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.5)",
+                          fontFamily: "monospace" }}>
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {/* IOC hits from external sources */}
+                  {(ti.ioc_hits || []).length > 0 && (
+                    <div style={{ marginTop: 6 }}>
+                      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginBottom: 4,
+                        textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                        External IOC Matches
+                      </div>
+                      {ti.ioc_hits.map((hit, i) => (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8,
+                          marginBottom: 4, fontSize: 12 }}>
+                          <span style={{ fontFamily: "monospace", color: "rgba(255,255,255,0.75)" }}>
+                            {hit.ioc}
+                          </span>
+                          <span style={{ fontSize: 10, color: "rgba(255,255,255,0.35)" }}>
+                            [{hit.type}]
+                          </span>
+                          <span style={{ fontSize: 10, fontWeight: 700,
+                            color: { malicious: "#ff3b3b", suspicious: "#f5c518", benign: "#00e5a0", unknown: "#888" }[hit.verdict] || "#888" }}>
+                            {(hit.verdict || "unknown").toUpperCase()}
+                          </span>
+                          {(hit.sources || []).map(s => (
+                            <span key={s.source} style={{ fontSize: 9, padding: "1px 5px", borderRadius: 6,
+                              background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.4)",
+                              fontFamily: "monospace" }}>
+                              {s.source}
+                            </span>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {ti.checked_at && (
+                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.2)", marginTop: 8 }}>
+                      Checked: {new Date(ti.checked_at).toLocaleString()}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </>
+        )}
+
         {/* Case management */}
         {inc.case_opened_at ? (
           <>
@@ -1904,6 +1993,19 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
                       fontSize: 9, fontFamily: "monospace", padding: "1px 5px",
                       borderRadius: 2, fontWeight: 700 }}>
                       🔴 IOC
+                    </span>
+                  )}
+                  {inc.ti_reputation?.verdict && inc.ti_reputation.verdict !== "unknown" && (
+                    <span
+                      title={`TI: ${inc.ti_reputation.verdict} (${inc.ti_reputation.confidence ?? 0}% confidence) · ${(inc.ti_reputation.sources_used || []).join(", ")}`}
+                      style={{
+                        background: {malicious:"rgba(255,59,59,0.12)",suspicious:"rgba(245,197,24,0.12)",benign:"rgba(0,229,160,0.1)"}[inc.ti_reputation.verdict] || "rgba(255,255,255,0.06)",
+                        color: {malicious:"#ff6b6b",suspicious:"#f5c518",benign:"#00e5a0"}[inc.ti_reputation.verdict] || "#888",
+                        border: `1px solid ${{malicious:"rgba(255,59,59,0.3)",suspicious:"rgba(245,197,24,0.3)",benign:"rgba(0,229,160,0.25)"}[inc.ti_reputation.verdict] || "rgba(255,255,255,0.1)"}`,
+                        fontSize: 9, fontFamily: "monospace", padding: "1px 5px",
+                        borderRadius: 2, fontWeight: 700,
+                      }}>
+                      🌐 {inc.ti_reputation.confidence ?? 0}%
                     </span>
                   )}
                   {inc.case_opened_at && (

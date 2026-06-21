@@ -2686,6 +2686,131 @@ function BackupTab() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// ── Threat Intelligence Settings Tab (Phase 1) ───────────────────────────────
+
+function ThreatIntelTab() {
+  const _MASK = "●".repeat(8);
+  const [ti, setTi]       = useState({ vtApiKey: "", abuseipdbApiKey: "", greynoiseApiKey: "" });
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [testState, setTestState] = useState({});   // { [source]: "testing"|"ok"|"fail"|msg }
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/ai/settings`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.threat_intel) setTi(d.threat_intel); })
+      .catch(() => {});
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/ai/settings`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threat_intel: ti }),
+      });
+      if (r.ok) { setSaved(true); setTimeout(() => setSaved(false), 2500); }
+    } finally { setSaving(false); }
+  };
+
+  const testSource = async (source) => {
+    setTestState(s => ({ ...s, [source]: "testing" }));
+    const keyMap = { virustotal: "vtApiKey", abuseipdb: "abuseipdbApiKey", greynoise: "greynoiseApiKey" };
+    try {
+      const r = await fetch(`${API_BASE}/api/system/ti/test`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source, apiKey: ti[keyMap[source]] || _MASK }),
+      });
+      const d = await r.json();
+      setTestState(s => ({ ...s, [source]: d.ok ? "ok" : "fail", [`${source}_msg`]: d.message || d.error || "" }));
+    } catch {
+      setTestState(s => ({ ...s, [source]: "fail", [`${source}_msg`]: "Cannot reach backend" }));
+    }
+  };
+
+  const sources = [
+    {
+      id:          "virustotal",
+      label:       "VirusTotal",
+      key:         "vtApiKey",
+      placeholder: "VT API Key (v3)",
+      desc:        "Reputation for IPs, domains, and file hashes. Free tier: 4 requests/min.",
+      docs:        "https://developers.virustotal.com/reference/overview",
+    },
+    {
+      id:          "abuseipdb",
+      label:       "AbuseIPDB",
+      key:         "abuseipdbApiKey",
+      placeholder: "AbuseIPDB v2 API Key",
+      desc:        "IP abuse confidence score. Free tier: 1000 checks/day.",
+      docs:        "https://www.abuseipdb.com/api",
+    },
+    {
+      id:          "greynoise",
+      label:       "GreyNoise",
+      key:         "greynoiseApiKey",
+      placeholder: "GreyNoise API Key",
+      desc:        "Identifies benign internet scanners (riot) and malicious actors. Community tier available.",
+      docs:        "https://docs.greynoise.io/",
+    },
+  ];
+
+  return (
+    <div>
+      <div style={{ ...LABEL, marginBottom: 6 }}>External Threat Intelligence Sources</div>
+      <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, marginBottom: 24 }}>
+        Configure API keys for external TI sources. When set, these enrich every new incident
+        with multi-source reputation data visible in the Incidents drawer.
+        Keys are stored in <code style={{ color: "rgba(0,229,160,0.6)" }}>/opt/cycentra/ai_settings.json</code> and
+        synced to <code style={{ color: "rgba(0,229,160,0.6)" }}>cysiemstack.env</code> automatically.
+      </div>
+
+      {sources.map(src => {
+        const ts = testState[src.id];
+        const msg = testState[`${src.id}_msg`] || "";
+        return (
+          <div key={src.id} style={{ ...CARD, marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 13, color: "#fff", marginBottom: 3 }}>{src.label}</div>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{src.desc}</div>
+              </div>
+              {ts === "ok"   && <span style={{ fontSize: 11, color: "#00e5a0" }}>✓ Connected</span>}
+              {ts === "fail" && <span style={{ fontSize: 11, color: "#ff6b6b" }}>✗ {msg}</span>}
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                type="password"
+                value={ti[src.key] || ""}
+                onChange={e => setTi(s => ({ ...s, [src.key]: e.target.value }))}
+                placeholder={src.placeholder}
+                style={{ ...INPUT, flex: 1 }}
+              />
+              <button
+                onClick={() => testSource(src.id)}
+                disabled={ts === "testing"}
+                style={{ ...BTN(), whiteSpace: "nowrap", opacity: ts === "testing" ? 0.6 : 1 }}>
+                {ts === "testing" ? "Testing…" : "Test"}
+              </button>
+            </div>
+          </div>
+        );
+      })}
+
+      <button onClick={handleSave} disabled={saving} style={{ ...BTN(), marginTop: 8 }}>
+        {saving ? "Saving…" : saved ? "✓ Saved" : "Save TI Settings"}
+      </button>
+      <div style={{ fontSize: 11, color: "rgba(255,255,255,0.25)", marginTop: 10 }}>
+        Changes take effect on the next incident enrichment cycle (no restart required).
+        The correlation engine reloads settings per-enrichment.
+      </div>
+    </div>
+  );
+}
+
+
 // TAB 3 wrapper — Integrations (CyMind)
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -3719,13 +3844,14 @@ function SiemAutomationTab() {
 // ── Two-column Settings layout ────────────────────────────────────────────────
 
 const PLATFORM_TABS = [
-  { id: "updates",    label: "Updates & Version" },
-  { id: "env",        label: "Environment Config" },
-  { id: "scheduler",  label: "Scheduler" },
-  { id: "users",      label: "Users & Auth" },
-  { id: "backup",     label: "Backup & Restore" },
-  { id: "server",     label: "Server Status" },
-  { id: "automation", label: "SIEM Automation" },
+  { id: "updates",     label: "Updates & Version" },
+  { id: "env",         label: "Environment Config" },
+  { id: "scheduler",   label: "Scheduler" },
+  { id: "users",       label: "Users & Auth" },
+  { id: "backup",      label: "Backup & Restore" },
+  { id: "server",      label: "Server Status" },
+  { id: "automation",  label: "SIEM Automation" },
+  { id: "threat-intel", label: "Threat Intel" },
 ];
 
 const COMP_TABS = [
@@ -3832,7 +3958,8 @@ export function SystemSettingsPage() {
               )}
               {tab === "backup"    && <BackupTab />}
               {tab === "server"    && <ServerStatusTab />}
-              {tab === "automation" && <SiemAutomationTab />}
+              {tab === "automation"  && <SiemAutomationTab />}
+              {tab === "threat-intel" && <ThreatIntelTab />}
             </>
           )}
 

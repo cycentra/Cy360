@@ -23,6 +23,7 @@ from correlator import run_correlation
 from ueba import analyse_alert
 from risk_scorer import calculate_entity_risk, compute_fp_score, CLOUD_ENTITY_NAMES
 from misp_enricher import enrich_incident
+from ti_enricher import enrich_incident_ti
 from llm_enricher import enrich_incident as llm_enrich_incident
 from models import write_audit
 from ueba_ml import ml_analyse_alert
@@ -221,6 +222,8 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
             misp_result = {}
             if created or new_rules:
                 misp_result = await enrich_incident(db, incident)
+                # Phase 1: follow up with unified TI enrichment (VT + AbuseIPDB + GreyNoise)
+                await enrich_incident_ti(db, incident)
 
             # 6. LLM enrichment (critical/high with ≥3 alerts, throttled)
             # NOTE: LLM runs BEFORE SOAR — SOAR uses the enriched narrative.
@@ -445,6 +448,7 @@ async def _reenrich_held_incident(incident_id: str) -> None:
                 return   # already handled by analyst
 
             misp_result = await enrich_incident(db, incident)
+            await enrich_incident_ti(db, incident)
 
             rules = incident.correlated_rules or []
             avg_conf = (
