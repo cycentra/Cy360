@@ -101,6 +101,297 @@ function getCloudSource(categories) {
   return null;
 }
 
+// ── Confidence ring gauge (Phase 4) ───────────────────────────────────────────
+function ConfidenceRing({ score }) {
+  const [showBreakdown, setShowBreakdown] = useState(false);
+  const pct  = Math.round((score?.score ?? 0) * 100);
+  const raw  = score?.score ?? 0;
+  const breakdown = score?.breakdown ?? {};
+  const color = raw >= 0.85 ? "#00e5a0"
+              : raw >= 0.70 ? "#f5c518"
+              : raw >= 0.50 ? "#ff8c00"
+              : "#ff3b3b";
+
+  const R = 28, CX = 34, CY = 34, STROKE = 6;
+  const circ  = 2 * Math.PI * R;
+  const dash  = (raw * circ).toFixed(2);
+  const label = raw >= 0.85 ? "HIGH CONF"
+              : raw >= 0.70 ? "MED CONF"
+              : raw >= 0.50 ? "LOW CONF"
+              : "UNCERTAIN";
+
+  return (
+    <div style={{ position: "relative" }}>
+      <div
+        onClick={() => setShowBreakdown(v => !v)}
+        title="Click to see confidence breakdown"
+        style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer",
+          background: "rgba(255,255,255,0.02)", border: `1px solid ${color}30`,
+          borderRadius: 6, padding: "10px 14px", userSelect: "none" }}>
+        <svg width={CX * 2} height={CY * 2} style={{ transform: "rotate(-90deg)", flexShrink: 0 }}>
+          <circle cx={CX} cy={CY} r={R} fill="none"
+            stroke="rgba(255,255,255,0.07)" strokeWidth={STROKE} />
+          <circle cx={CX} cy={CY} r={R} fill="none"
+            stroke={color} strokeWidth={STROKE}
+            strokeDasharray={`${dash} ${circ}`}
+            strokeLinecap="round"
+            style={{ transition: "stroke-dasharray 0.6s ease" }} />
+        </svg>
+        <div>
+          <div style={{ color, fontSize: 22, fontWeight: 800, fontFamily: "monospace",
+            lineHeight: 1 }}>{pct}%</div>
+          <div style={{ color, fontSize: 9, fontFamily: "monospace", letterSpacing: "1px",
+            marginTop: 2 }}>{label}</div>
+        </div>
+        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace",
+          marginLeft: "auto" }}>
+          {showBreakdown ? "▲" : "▼"} breakdown
+        </div>
+      </div>
+
+      {showBreakdown && Object.keys(breakdown).length > 0 && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 50,
+          background: "#0d1117", border: "1px solid rgba(255,255,255,0.1)",
+          borderRadius: 4, padding: "14px 16px", marginTop: 4,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.5)" }}>
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 9, fontFamily: "monospace",
+            letterSpacing: "1px", marginBottom: 10 }}>CONFIDENCE BREAKDOWN</div>
+          {Object.entries(breakdown).map(([key, comp]) => {
+            const compPct = Math.round((comp.score ?? 0) * 100);
+            const compColor = compPct >= 70 ? "#00e5a0" : compPct >= 40 ? "#f5c518" : "#ff8c00";
+            return (
+              <div key={key} style={{ marginBottom: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                  <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 10,
+                    fontFamily: "monospace" }}>{comp.label}</span>
+                  <span style={{ color: compColor, fontSize: 10, fontFamily: "monospace",
+                    fontWeight: 700 }}>
+                    {compPct}% · {Math.round((comp.weight ?? 0) * 100)}% wt
+                  </span>
+                </div>
+                <div style={{ height: 4, background: "rgba(255,255,255,0.06)",
+                  borderRadius: 2, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${compPct}%`,
+                    background: compColor, borderRadius: 2,
+                    transition: "width 0.4s ease" }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Evidence Collection panel (Phase 3) ───────────────────────────────────────
+const EV_STATUS_CFG = {
+  COLLECTED: { color: "#00e5a0", label: "COLLECTED" },
+  MISSING:   { color: "#f5c518", label: "MISSING"   },
+  FAILED:    { color: "#ff3b3b", label: "FAILED"    },
+  PENDING:   { color: "rgba(255,255,255,0.3)", label: "PENDING" },
+};
+
+function EvidenceCollectionPanel({ evidenceLog, coverage, collectedAt }) {
+  const [expandedIdx, setExpandedIdx] = useState(null);
+  const items = evidenceLog || [];
+
+  if (items.length === 0) {
+    return (
+      <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace",
+        padding: "12px 0" }}>
+        Evidence collection has not run yet or produced no items.
+      </div>
+    );
+  }
+
+  const totalItems     = items.length;
+  const collectedCount = items.filter(e => e.status === "COLLECTED").length;
+
+  return (
+    <div>
+      {/* Coverage summary */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12,
+        background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+        borderRadius: 4, padding: "10px 14px" }}>
+        <span style={{ color: "#00e5a0", fontSize: 18, fontWeight: 700,
+          fontFamily: "monospace" }}>{collectedCount}/{totalItems}</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+            <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 10,
+              fontFamily: "monospace" }}>Evidence collected</span>
+            <span style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace",
+              fontWeight: 700 }}>{Math.round((coverage ?? 0) * 100)}%</span>
+          </div>
+          <div style={{ height: 4, background: "rgba(255,255,255,0.06)",
+            borderRadius: 2, overflow: "hidden" }}>
+            <div style={{ height: "100%",
+              width: `${Math.round((coverage ?? 0) * 100)}%`,
+              background: "#00e5a0", borderRadius: 2,
+              transition: "width 0.5s ease" }} />
+          </div>
+        </div>
+        {collectedAt && (
+          <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10,
+            fontFamily: "monospace", flexShrink: 0 }}>
+            {fmtTs(collectedAt)}
+          </span>
+        )}
+      </div>
+
+      {/* Timeline */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {items.map((item, i) => {
+          const cfg = EV_STATUS_CFG[item.status] || EV_STATUS_CFG.PENDING;
+          const isExpanded = expandedIdx === i;
+          const hasData = item.data && Object.keys(item.data).length > 0;
+          return (
+            <div key={i} style={{ background: "rgba(255,255,255,0.015)",
+              border: "1px solid rgba(255,255,255,0.06)", borderRadius: 3,
+              overflow: "hidden" }}>
+              <div
+                onClick={() => hasData && setExpandedIdx(isExpanded ? null : i)}
+                style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px",
+                  cursor: hasData ? "pointer" : "default" }}>
+                <span style={{ width: 7, height: 7, borderRadius: "50%",
+                  background: cfg.color, flexShrink: 0 }} />
+                <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9,
+                  fontFamily: "monospace", flexShrink: 0 }}>
+                  {item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : "—"}
+                </span>
+                <span style={{ color: cfg.color, fontSize: 9, fontFamily: "monospace",
+                  fontWeight: 700, flexShrink: 0 }}>{cfg.label}</span>
+                <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 9,
+                  fontFamily: "monospace", flexShrink: 0 }}>
+                  [{item.hypothesis_id}] {item.collector}
+                </span>
+                <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 10,
+                  flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis",
+                  whiteSpace: "nowrap" }}>{item.summary}</span>
+                {item.error && (
+                  <span style={{ color: "#ff8c00", fontSize: 9, fontFamily: "monospace",
+                    flexShrink: 0 }} title={item.error}>!</span>
+                )}
+                {hasData && (
+                  <span style={{ color: "#4d9eff", fontSize: 9, fontFamily: "monospace",
+                    flexShrink: 0 }}>{isExpanded ? "▲" : "▼"}</span>
+                )}
+              </div>
+              {isExpanded && hasData && (
+                <div style={{ padding: "0 12px 10px 27px" }}>
+                  <pre style={{ color: "rgba(255,255,255,0.45)", fontSize: 9,
+                    fontFamily: "monospace", overflowX: "auto", maxHeight: 200,
+                    background: "rgba(0,0,0,0.3)", borderRadius: 3,
+                    padding: "8px 10px", margin: 0 }}>
+                    {JSON.stringify(item.data, null, 2)}
+                  </pre>
+                </div>
+              )}
+              {item.error && isExpanded && (
+                <div style={{ padding: "0 12px 10px 27px",
+                  color: "#ff8c00", fontSize: 10, fontFamily: "monospace" }}>
+                  Error: {item.error}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Hypothesis card ────────────────────────────────────────────────────────────
+function HypothesisCard({ h, probColor, idx, evidenceCoverage }) {
+  const [expanded, setExpanded] = useState(idx === 0);
+  return (
+    <div style={{ background: "rgba(255,255,255,0.025)", border: `1px solid ${probColor}22`,
+      borderLeft: `3px solid ${probColor}`, borderRadius: 4, padding: "12px 14px" }}>
+      {/* Card header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+        <span style={{ color: probColor, fontSize: 11, fontFamily: "monospace", fontWeight: 700,
+          flexShrink: 0 }}>{h.id}</span>
+        <span style={{ color: "rgba(255,255,255,0.85)", fontSize: 12, flex: 1,
+          minWidth: 0 }}>{h.label}</span>
+        {h.technique && (
+          <a href={`https://attack.mitre.org/techniques/${h.technique.replace(".", "/")}`}
+            target="_blank" rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            style={{ background: "rgba(77,158,255,0.1)", color: "#4d9eff",
+              border: "1px solid rgba(77,158,255,0.3)", fontSize: 9, fontFamily: "monospace",
+              padding: "2px 7px", borderRadius: 2, textDecoration: "none", flexShrink: 0 }}>
+            {h.technique} ↗
+          </a>
+        )}
+        <span style={{ background: `${probColor}18`, color: probColor,
+          border: `1px solid ${probColor}40`, fontSize: 9, fontFamily: "monospace",
+          padding: "2px 7px", borderRadius: 2, flexShrink: 0 }}>
+          {h.kill_chain_stage}
+        </span>
+      </div>
+      {/* Probability bar */}
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+          <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace" }}>
+            Probability
+          </span>
+          <span style={{ color: probColor, fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>
+            {h.initial_probability}%
+          </span>
+        </div>
+        <div style={{ height: 5, background: "rgba(255,255,255,0.07)", borderRadius: 2, overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${h.initial_probability}%`,
+            background: probColor, borderRadius: 2, transition: "width 0.5s ease" }} />
+        </div>
+      </div>
+      {/* Evidence coverage bar (Phase 3) */}
+      {evidenceCoverage != null && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+            <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace" }}>
+              Evidence Coverage
+            </span>
+            <span style={{ color: "#4d9eff", fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>
+              {Math.round(evidenceCoverage * 100)}%
+            </span>
+          </div>
+          <div style={{ height: 3, background: "rgba(255,255,255,0.06)", borderRadius: 2, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${Math.round(evidenceCoverage * 100)}%`,
+              background: "#4d9eff", borderRadius: 2, transition: "width 0.5s ease" }} />
+          </div>
+        </div>
+      )}
+      {/* Reasoning (always visible on H1, expandable for others) */}
+      {h.reasoning && (
+        <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, lineHeight: 1.6,
+          marginBottom: (h.evidence_needed || []).length > 0 ? 8 : 0 }}>
+          {h.reasoning}
+        </div>
+      )}
+      {/* Evidence needed — expandable */}
+      {(h.evidence_needed || []).length > 0 && (
+        <div>
+          <button onClick={() => setExpanded(v => !v)}
+            style={{ background: "none", border: "none", color: "#4d9eff",
+              fontSize: 10, fontFamily: "monospace", cursor: "pointer", padding: "0 0 4px 0" }}>
+            {expanded ? "▲ Hide Evidence Needed" : `▼ Evidence Needed (${h.evidence_needed.length})`}
+          </button>
+          {expanded && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {h.evidence_needed.map((ev, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <span style={{ color: "#f5c518", fontSize: 10, flexShrink: 0, marginTop: 1 }}>▸</span>
+                  <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 11 }}>{ev}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Incident drawer ────────────────────────────────────────────────────────────
 function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenCase }) {
   const [inc, setInc]           = useState(initialIncident);
@@ -129,6 +420,12 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
   const [wazuhLaunching, setWazuhLaunching] = useState(false);
   const [requestingAi, setRequestingAi]     = useState(false);
   const [aiRequestErr, setAiRequestErr]     = useState("");
+  // Phase 5: SOAR approval
+  const [soarStatus, setSoarStatus]         = useState(null);
+  const [approvingSoar, setApprovingSoar]   = useState(false);
+  const [soarApproveErr, setSoarApproveErr] = useState("");
+  // Phase 6: similar incidents
+  const [similarIncidents, setSimilarIncidents] = useState(null);
 
   // Fetch full incident detail + analyst list on mount
   useEffect(() => {
@@ -153,6 +450,46 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
       setLoadingDetail(false);
     })();
   }, [initialIncident.id]);
+
+  // Phase 5: fetch CySOAR status on mount (for Response tab status bar)
+  useEffect(() => {
+    fetch("/api/siem/soar/status", { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setSoarStatus(d); })
+      .catch(() => {});
+  }, []);
+
+  // Phase 6: fetch similar past incidents after detail loads
+  useEffect(() => {
+    if (!inc.id) return;
+    fetch(`/api/siem/incidents/${inc.id}/similar`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.similar) setSimilarIncidents(d.similar); })
+      .catch(() => {});
+  }, [inc.id]);
+
+  const handleApproveSoar = async () => {
+    if (!window.confirm(
+      "Send structured response actions to CySOAR (Node-RED) for execution?\n\nThis will trigger automated containment and eradication steps."
+    )) return;
+    setApprovingSoar(true);
+    setSoarApproveErr("");
+    try {
+      const res = await fetch(`/api/siem/incidents/${inc.id}/approve-soar`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = await res.json().catch(() => ({}));
+      setApprovingSoar(false);
+      if (!res.ok) { setSoarApproveErr(data.error || `HTTP ${res.status}`); return; }
+      // Refresh incident state
+      const fresh = await siemFetch(siemApi.getIncident(inc.id));
+      if (!fresh._error) setInc(prev => ({ ...prev, ...fresh }));
+    } catch {
+      setApprovingSoar(false);
+      setSoarApproveErr("Network error — try again.");
+    }
+  };
 
   const fetchAudit = async () => {
     setAuditLoading(true);
@@ -221,9 +558,24 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
     if (data._error)   { setAiRequestErr(data._error); return; }
     setInc(prev => ({
       ...prev,
-      llm_summary:      data.llm_summary,
-      llm_remediation:  data.llm_remediation,
-      llm_generated_at: data.llm_generated_at,
+      llm_summary:              data.llm_summary,
+      llm_remediation:          data.llm_remediation,
+      llm_generated_at:         data.llm_generated_at,
+      hypotheses:               data.hypotheses ?? prev.hypotheses,
+      hypothesis_generated_at:  data.hypothesis_generated_at ?? prev.hypothesis_generated_at,
+      // Phase 3: evidence (may still be running — keep prev if new value is null)
+      evidence_log:             data.evidence_log ?? prev.evidence_log,
+      evidence_coverage:        data.evidence_coverage ?? prev.evidence_coverage,
+      evidence_collected_at:    data.evidence_collected_at ?? prev.evidence_collected_at,
+      // Phase 4: confidence
+      confidence_score:         data.confidence_score ?? prev.confidence_score,
+      confidence_breakdown:     data.confidence_breakdown ?? prev.confidence_breakdown,
+      confidence_computed_at:   data.confidence_computed_at ?? prev.confidence_computed_at,
+      // Phase 5: structured recommendation + SOAR dispatch state
+      recommendation:           data.recommendation ?? prev.recommendation,
+      soar_dispatched:          data.soar_dispatched ?? prev.soar_dispatched,
+      soar_dispatched_at:       data.soar_dispatched_at ?? prev.soar_dispatched_at,
+      soar_dispatch_log:        data.soar_dispatch_log ?? prev.soar_dispatch_log,
     }));
   };
 
@@ -343,7 +695,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
               </span>
             )}
           </div>
-          <div style={{ display: "flex", gap: 16, marginTop: 6, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 16, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
             <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11 }}>
               First seen: <span style={{ color: "rgba(255,255,255,0.6)" }}>{fmtTs(inc.first_seen)}</span>
             </span>
@@ -354,6 +706,14 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
               <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11 }}>
                 Risk: <span style={{ color: inc.risk_score >= 8 ? "#ff3b3b" : inc.risk_score >= 5 ? "#ff8c00" : "#f5c518",
                   fontWeight: 700 }}>{inc.risk_score?.toFixed(1)}</span>
+              </span>
+            )}
+            {/* Phase 3: Evidence coverage badge */}
+            {inc.evidence_coverage != null && (
+              <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 11 }}>
+                Evidence: <span style={{ color: "#4d9eff", fontWeight: 700 }}>
+                  {Math.round(inc.evidence_coverage * 100)}%
+                </span>
               </span>
             )}
             {inc.fp_probability != null && (() => {
@@ -416,6 +776,23 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
             </div>
           ))}
         </div>
+
+        {/* Phase 4 — Confidence Ring */}
+        {inc.confidence_score != null && (
+          <>
+            <SectionLabel>INVESTIGATION CONFIDENCE</SectionLabel>
+            <ConfidenceRing score={{
+              score:     inc.confidence_score,
+              breakdown: inc.confidence_breakdown || {},
+            }} />
+            {inc.confidence_computed_at && (
+              <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace",
+                marginTop: 4, marginBottom: 8 }}>
+                Computed {fmtTs(inc.confidence_computed_at)}
+              </div>
+            )}
+          </>
+        )}
 
         {/* Agents / Cloud collector */}
         {agents.length > 0 && (() => {
@@ -790,6 +1167,329 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
               {requestingAi ? "Analysing…" : "🤖 Request AI Analysis"}
             </button>
           </div>
+        )}
+
+        {/* Phase 2+3 — Investigation Hypotheses panel */}
+        {(inc.hypotheses || []).length > 0 && (() => {
+          const hyps = inc.hypotheses;
+          return (
+            <>
+              <SectionLabel>🧠 INVESTIGATION HYPOTHESES</SectionLabel>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 4 }}>
+                {hyps.map((h, idx) => {
+                  const probColor = h.initial_probability >= 70 ? "#ff3b3b"
+                                  : h.initial_probability >= 45 ? "#ff8c00"
+                                  : "#f5c518";
+                  return (
+                    <HypothesisCard
+                      key={h.id}
+                      h={h}
+                      probColor={probColor}
+                      idx={idx}
+                      evidenceCoverage={inc.evidence_coverage}
+                    />
+                  );
+                })}
+              </div>
+              {inc.hypothesis_generated_at && (
+                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace",
+                  marginTop: 4, marginBottom: 8 }}>
+                  Generated {fmtTs(inc.hypothesis_generated_at)}
+                </div>
+              )}
+            </>
+          );
+        })()}
+
+        {/* Phase 3 — Evidence Collection panel */}
+        {(inc.hypotheses || []).length > 0 && (
+          <>
+            <SectionLabel>🔍 EVIDENCE COLLECTION</SectionLabel>
+            <EvidenceCollectionPanel
+              evidenceLog={inc.evidence_log}
+              coverage={inc.evidence_coverage}
+              collectedAt={inc.evidence_collected_at}
+            />
+          </>
+        )}
+
+        {/* Phase 5 — Structured Response & CySOAR Dispatch */}
+        {inc.recommendation && (() => {
+          const rec = inc.recommendation;
+          const conf = inc.confidence_score != null ? Math.round(inc.confidence_score * 100) : null;
+          const dispLog = inc.soar_dispatch_log || [];
+          const lastDispatch = dispLog.length > 0 ? dispLog[dispLog.length - 1] : null;
+
+          const gateState = conf == null ? "unknown"
+            : conf >= 90 ? "auto"
+            : conf >= 70 ? "pending"
+            : "review";
+
+          const gateColor  = { auto: "#00e5a0", pending: "#f5c518", review: "#ff6b6b", unknown: "#888" }[gateState];
+          const gateLabel  = {
+            auto:    `✅ Auto-Executed${inc.soar_dispatched_at ? ` at ${new Date(inc.soar_dispatched_at).toLocaleString()}` : ""}`,
+            pending: "🟡 Analyst Approval Required",
+            review:  `🔴 Confidence ${conf}% — Needs Review (below 70% threshold)`,
+            unknown: "Confidence not yet computed",
+          }[gateState];
+
+          const [responseExpanded, setResponseExpanded] = [
+            inc._responseOpen, v => setInc(p => ({ ...p, _responseOpen: v }))
+          ];
+
+          return (
+            <>
+              <SectionLabel>⚡ RESPONSE</SectionLabel>
+
+              {/* CySOAR status bar */}
+              <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+                borderRadius: 4, padding: "10px 14px", marginBottom: 8,
+                display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                {soarStatus?.running ? (
+                  <span style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>
+                    🟢 CySOAR RUNNING · Auto-wired
+                  </span>
+                ) : soarStatus?.installed ? (
+                  <span style={{ color: "#f5c518", fontSize: 11, fontFamily: "monospace" }}>
+                    🟡 CySOAR installed but not running
+                  </span>
+                ) : (
+                  <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace" }}>
+                    ⚪ CySOAR not installed —{" "}
+                    <a href="/extensions" style={{ color: "#4d9eff", textDecoration: "none" }}>
+                      Install from Extensions ↗
+                    </a>
+                  </span>
+                )}
+                {soarStatus == null && (
+                  <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+                    Checking CySOAR status…
+                  </span>
+                )}
+              </div>
+
+              {/* Confidence gate banner */}
+              <div style={{ background: `${gateColor}10`, border: `1px solid ${gateColor}30`,
+                borderRadius: 4, padding: "9px 14px", marginBottom: 10,
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ color: gateColor, fontSize: 11, fontFamily: "monospace", fontWeight: 600 }}>
+                  {gateLabel}
+                </span>
+                {gateState === "pending" && !inc.soar_dispatched && soarStatus?.running && (
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                    <button
+                      onClick={handleApproveSoar}
+                      disabled={approvingSoar}
+                      style={{ background: "rgba(245,197,24,0.12)", border: "1px solid rgba(245,197,24,0.4)",
+                        color: "#f5c518", padding: "6px 14px", borderRadius: 3, cursor: "pointer",
+                        fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>
+                      {approvingSoar ? "Dispatching…" : "Approve & Execute"}
+                    </button>
+                    {soarApproveErr && (
+                      <span style={{ color: "#ff6464", fontSize: 10, fontFamily: "monospace" }}>
+                        ✗ {soarApproveErr}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Executive summary */}
+              {rec.executive_summary && (
+                <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 12, fontFamily: "monospace",
+                  lineHeight: 1.55, marginBottom: 12, padding: "10px 14px",
+                  background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
+                  borderRadius: 4 }}>
+                  {rec.executive_summary}
+                </div>
+              )}
+
+              {/* Three accordion sections */}
+              {[
+                { key: "containment",  label: "🛡️ CONTAINMENT",  color: "#ff6b6b" },
+                { key: "eradication",  label: "🔥 ERADICATION",  color: "#ff8c00" },
+                { key: "recovery",     label: "✅ RECOVERY",      color: "#00e5a0" },
+              ].map(({ key, label, color }) => {
+                const items = rec[key] || [];
+                if (!items.length) return null;
+                const sectionOpen = inc[`_rec_${key}_open`];
+                return (
+                  <div key={key} style={{ marginBottom: 6, border: "1px solid rgba(255,255,255,0.07)",
+                    borderRadius: 4, overflow: "hidden" }}>
+                    <button
+                      onClick={() => setInc(p => ({ ...p, [`_rec_${key}_open`]: !sectionOpen }))}
+                      style={{ width: "100%", background: `${color}08`, border: "none",
+                        padding: "9px 14px", cursor: "pointer",
+                        display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ color, fontSize: 10, fontFamily: "monospace", fontWeight: 700,
+                        letterSpacing: "1px" }}>{label} ({items.length})</span>
+                      <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10 }}>
+                        {sectionOpen ? "▲" : "▼"}
+                      </span>
+                    </button>
+                    {sectionOpen && (
+                      <div style={{ padding: "8px 14px 10px" }}>
+                        {items.map((item, i) => {
+                          const pColor = item.priority === "immediate" ? "#ff6b6b"
+                            : item.priority === "high" ? "#ff8c00"
+                            : item.priority === "medium" ? "#f5c518"
+                            : "#00e5a0";
+                          return (
+                            <div key={i} style={{ marginBottom: i < items.length - 1 ? 10 : 0,
+                              paddingBottom: i < items.length - 1 ? 10 : 0,
+                              borderBottom: i < items.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
+                              <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
+                                <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10,
+                                  fontFamily: "monospace", flexShrink: 0 }}>{i + 1}.</span>
+                                <span style={{ color: "white", fontSize: 12, fontWeight: 600 }}>
+                                  {item.action}
+                                </span>
+                                <span style={{ background: `${pColor}18`, color: pColor,
+                                  border: `1px solid ${pColor}40`, borderRadius: 2,
+                                  fontSize: 8, fontFamily: "monospace", padding: "1px 5px",
+                                  fontWeight: 700, flexShrink: 0, marginLeft: "auto" }}>
+                                  {(item.priority || "").toUpperCase()}
+                                </span>
+                              </div>
+                              {item.detail && (
+                                <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 11,
+                                  fontFamily: "monospace", lineHeight: 1.4, paddingLeft: 18 }}>
+                                  {item.detail}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* Dispatch log accordion */}
+              {dispLog.length > 0 && (
+                <div style={{ marginTop: 6 }}>
+                  <button
+                    onClick={() => setInc(p => ({ ...p, _dispatch_log_open: !p._dispatch_log_open }))}
+                    style={{ background: "none", border: "none", color: "#4d9eff",
+                      fontSize: 10, fontFamily: "monospace", cursor: "pointer", padding: "4px 0" }}>
+                    {inc._dispatch_log_open ? "▲ Hide Dispatch Log" : `▼ Dispatch Log (${dispLog.length})`}
+                  </button>
+                  {inc._dispatch_log_open && (
+                    <div style={{ border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4,
+                      overflow: "hidden", marginTop: 4 }}>
+                      {dispLog.map((entry, i) => {
+                        const stColor = entry.status === "auto_dispatched" || entry.status === "analyst_dispatched"
+                          ? "#00e5a0" : entry.status === "pending_approval" ? "#f5c518"
+                          : entry.status === "needs_review" ? "#888" : "#ff6b6b";
+                        return (
+                          <div key={i} style={{ padding: "8px 12px",
+                            borderBottom: i < dispLog.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
+                            display: "flex", gap: 10, alignItems: "flex-start" }}>
+                            <div style={{ width: 7, height: 7, borderRadius: "50%",
+                              background: stColor, flexShrink: 0, marginTop: 4 }} />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                                <span style={{ color: stColor, fontSize: 10, fontFamily: "monospace",
+                                  fontWeight: 700, textTransform: "uppercase" }}>
+                                  {entry.status?.replace(/_/g, " ")}
+                                </span>
+                                <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10 }}>
+                                  {entry.confidence}% conf
+                                </span>
+                                {entry.actions_sent > 0 && (
+                                  <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10 }}>
+                                    {entry.actions_sent} actions
+                                  </span>
+                                )}
+                                {entry.http_status && (
+                                  <span style={{ color: entry.http_status < 300 ? "#00e5a0" : "#ff6b6b",
+                                    fontSize: 10, fontFamily: "monospace" }}>
+                                    HTTP {entry.http_status}
+                                  </span>
+                                )}
+                                <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, marginLeft: "auto" }}>
+                                  {entry.timestamp ? new Date(entry.timestamp).toLocaleString() : ""}
+                                </span>
+                              </div>
+                              {entry.reason && (
+                                <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10,
+                                  fontFamily: "monospace", marginTop: 2 }}>
+                                  {entry.reason}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          );
+        })()}
+
+        {/* Phase 6 — Similar Past Incidents */}
+        {similarIncidents != null && similarIncidents.length > 0 && (
+          <>
+            <SectionLabel>🔁 SIMILAR PAST INCIDENTS</SectionLabel>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+              {similarIncidents.map((p, i) => {
+                const simPct = Math.round((p.similarity || 0) * 100);
+                const simColor = simPct >= 80 ? "#ff6b6b" : simPct >= 60 ? "#ff8c00" : "#f5c518";
+                const outcomeColor = p.outcome === "resolved" ? "#00e5a0"
+                  : p.outcome === "false_positive" ? "#888"
+                  : "rgba(255,255,255,0.4)";
+                return (
+                  <div key={i} style={{ background: "rgba(255,255,255,0.02)",
+                    border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, padding: "10px 14px",
+                    display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
+                        marginBottom: 3 }}>
+                        {p.technique && (
+                          <span style={{ background: "rgba(77,158,255,0.10)", color: "#4d9eff",
+                            border: "1px solid rgba(77,158,255,0.3)",
+                            fontSize: 9, fontFamily: "monospace", padding: "1px 5px",
+                            borderRadius: 2, fontWeight: 700 }}>
+                            {p.technique}
+                          </span>
+                        )}
+                        {p.kill_chain_stage && (
+                          <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10,
+                            fontFamily: "monospace" }}>
+                            {p.kill_chain_stage}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace" }}>
+                        Pattern stored {p.created_at ? new Date(p.created_at).toLocaleDateString() : "—"}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right", flexShrink: 0 }}>
+                      <div style={{ color: simColor, fontSize: 13, fontFamily: "monospace",
+                        fontWeight: 700 }}>
+                        {simPct}% similar
+                      </div>
+                      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 3 }}>
+                        <span style={{ color: outcomeColor, fontSize: 9, fontFamily: "monospace",
+                          fontWeight: 700, textTransform: "uppercase" }}>
+                          {p.outcome || "—"}
+                        </span>
+                        {p.confidence_at_resolution != null && (
+                          <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 9,
+                            fontFamily: "monospace" }}>
+                            {Math.round(p.confidence_at_resolution * 100)}% conf at close
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
         )}
 
         {/* Alerts table */}
@@ -1432,7 +2132,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
   const [incidents, setIncidents]   = useState([]);
   const [total, setTotal]           = useState(0);
   const [loading, setLoading]       = useState(true);
-  const [filters, setFilters]       = useState({ status: "active", severity: "" });
+  const [filters, setFilters]       = useState({ status: "active", severity: "", confidence: "" });
   const [selected, setSelected]     = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [closeConfirm, setCloseConfirm] = useState(false); // close FP+resolved → closed
@@ -1591,7 +2291,17 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
   // Server already returns exactly one page; totalPages drives the pagination controls using the full API total.
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   // Client-side sort applies to the current page only (server handles sort for the mapped fields above).
-  const pagedIncidents = sortedIncidents;
+  // Client-side confidence filter (server has no confidence_score query param yet).
+  const pagedIncidents = filters.confidence
+    ? sortedIncidents.filter(i => {
+        const pct = i.confidence_score != null ? Math.round(i.confidence_score * 100) : null;
+        if (filters.confidence === "low")      return pct != null && pct < 50;
+        if (filters.confidence === "medium")   return pct != null && pct >= 50 && pct < 70;
+        if (filters.confidence === "high")     return pct != null && pct >= 70 && pct < 85;
+        if (filters.confidence === "critical") return pct != null && pct >= 85;
+        return true;
+      })
+    : sortedIncidents;
 
   // ── Chart data (derived from the main incidents list) ─────────────────────
   const severityData = [
@@ -1681,6 +2391,8 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
               labels: ["All Statuses", "Active (non-closed)", "Open", "Investigating", "In Review", "Resolved", "False Positive", "Closed"] },
             { key: "severity", opts: ["", "critical", "high", "medium", "low"],
               labels: ["All Severities", "Critical", "High", "Medium", "Low"] },
+            { key: "confidence", opts: ["", "critical", "high", "medium", "low"],
+              labels: ["All Confidence", ">85% Critical", "70-85% High", "50-70% Medium", "<50% Low"] },
           ].map(({ key, opts, labels }) => (
             <select key={key} value={filters[key]}
               onChange={e => setFilters(prev => ({ ...prev, [key]: e.target.value }))}
@@ -2008,6 +2720,89 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
                       🌐 {inc.ti_reputation.confidence ?? 0}%
                     </span>
                   )}
+                  {/* H1 hypothesis chip */}
+                  {(inc.hypotheses || []).length > 0 && (() => {
+                    const h1 = inc.hypotheses[0];
+                    const pc = h1.initial_probability >= 70 ? "#ff3b3b"
+                             : h1.initial_probability >= 45 ? "#ff8c00"
+                             : "#f5c518";
+                    return (
+                      <span
+                        title={`H1: ${h1.label} · ${h1.kill_chain_stage}`}
+                        style={{
+                          background: `${pc}15`, color: pc,
+                          border: `1px solid ${pc}40`,
+                          fontSize: 9, fontFamily: "monospace", padding: "1px 5px",
+                          borderRadius: 2, fontWeight: 700, maxWidth: 120,
+                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          display: "inline-block",
+                        }}>
+                        H1 {h1.initial_probability}%
+                      </span>
+                    );
+                  })()}
+                  {/* Confidence chip */}
+                  {inc.confidence_score != null && (() => {
+                    const cs = inc.confidence_score;
+                    const pct = Math.round(cs * 100);
+                    const [color, bg] = pct >= 85 ? ["#00e5a0", "rgba(0,229,160,0.10)"]
+                                      : pct >= 70 ? ["#f5c518", "rgba(245,197,24,0.10)"]
+                                      : pct >= 50 ? ["#ff8c00", "rgba(255,140,0,0.10)"]
+                                      : ["#ff6b6b", "rgba(255,59,59,0.10)"];
+                    return (
+                      <span
+                        title={`Investigation confidence: ${pct}%`}
+                        style={{
+                          background: bg, color,
+                          border: `1px solid ${color}55`,
+                          fontSize: 9, fontFamily: "monospace", padding: "1px 5px",
+                          borderRadius: 2, fontWeight: 700,
+                        }}>
+                        {pct}% CONF
+                      </span>
+                    );
+                  })()}
+                  {/* SOAR dispatch badge (Phase 5) */}
+                  {(() => {
+                    const log = inc.soar_dispatch_log;
+                    if (!log || !log.length) return null;
+                    const last = log[log.length - 1];
+                    const st = last.status;
+                    if (st === "auto_dispatched" || st === "analyst_dispatched") {
+                      return (
+                        <span title="SOAR auto-dispatched"
+                          style={{ background: "rgba(179,107,255,0.12)", color: "#b36bff",
+                            border: "1px solid rgba(179,107,255,0.35)",
+                            fontSize: 9, fontFamily: "monospace", padding: "1px 5px",
+                            borderRadius: 2, fontWeight: 700 }}>
+                          ⚡ AUTO
+                        </span>
+                      );
+                    }
+                    if (st === "pending_approval") {
+                      return (
+                        <span title="Awaiting analyst SOAR approval"
+                          style={{ background: "rgba(245,197,24,0.10)", color: "#f5c518",
+                            border: "1px solid rgba(245,197,24,0.3)",
+                            fontSize: 9, fontFamily: "monospace", padding: "1px 5px",
+                            borderRadius: 2, fontWeight: 700 }}>
+                          ⏳ PENDING
+                        </span>
+                      );
+                    }
+                    if (st === "needs_review") {
+                      return (
+                        <span title="Confidence too low — analyst review required"
+                          style={{ background: "rgba(255,59,59,0.08)", color: "#ff6b6b",
+                            border: "1px solid rgba(255,59,59,0.25)",
+                            fontSize: 9, fontFamily: "monospace", padding: "1px 5px",
+                            borderRadius: 2, fontWeight: 700 }}>
+                          👤 REVIEW
+                        </span>
+                      );
+                    }
+                    return null;
+                  })()}
                   {inc.case_opened_at && (
                     <span
                       title={`CyCases — ${inc.status}`}
@@ -2023,7 +2818,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
                       🗂️ CASE
                     </span>
                   )}
-                  {!inc.llm_summary && !(inc.misp_enrichment?.ioc_hits || []).length && !inc.case_opened_at && (
+                  {!inc.llm_summary && !(inc.misp_enrichment?.ioc_hits || []).length && !inc.case_opened_at && !(inc.hypotheses || []).length && inc.confidence_score == null && (
                     <span style={{ color: "rgba(255,255,255,0.42)", fontSize: 10 }}>—</span>
                   )}
                 </div>

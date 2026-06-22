@@ -17,7 +17,7 @@ from typing import Optional
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
-from models import Alert, Incident, UEBAAnomaly, RiskScore, MISPIOCCache
+from models import Alert, Incident, UEBAAnomaly, RiskScore, MISPIOCCache, IncidentPattern
 from config import get_settings
 
 log = structlog.get_logger()
@@ -162,6 +162,181 @@ def compute_fp_score(
         base = max(base, 30.0)
 
     return round(max(0.0, min(100.0, base)), 1)
+
+
+# ── Phase 4: Investigation Confidence Engine ──────────────────────────────────
+# Component weights (sum = 1.0 when all active)
+_CONF_WEIGHTS: dict[str, float] = {
+    "rule":        0.30,
+    "ti":          0.25,
+    "historical":  0.20,
+    "asset":       0.10,
+    "llm":         0.15,
+}
+
+_TI_VERDICT_SCORES: dict[str, float] = {
+    "malicious":  1.0,
+    "suspicious": 0.6,
+    "clean":      0.0,
+    "benign":     0.0,
+}
+
+
+def _rule_confidence_score(incident) -> float:
+    """Rule contribution score 0–1 from correlated_rules confidence values.
+
+    Uses average confidence of fired rules — matches component intent in the
+    confidence model (high-confidence rules → genuine threat → high confidence).
+    Falls back to severity-derived score when no rules fired.
+    """
+    rules = incident.correlated_rules or []
+    if rules:
+        confs = [float(r.get("confidence", 0.5)) for r in rules]
+        return max(0.0, min(1.0, sum(confs) / len(confs)))
+    # Severity fallback
+    sev_map = {"critical": 0.9, "high": 0.75, "medium": 0.5, "low": 0.25}
+    return sev_map.get((incident.severity or "low").lower(), 0.25)
+
+
+def _ti_confidence_score(ti_reputation: dict | None) -> float:
+    """TI verdict → 0–1 score.  Missing TI contributes 0.3 (neutral, not zero)."""
+    if not ti_reputation:
+        return 0.3
+    verdict = (ti_reputation.get("verdict") or "unknown").lower()
+    if verdict in _TI_VERDICT_SCORES:
+        return _TI_VERDICT_SCORES[verdict]
+    # Partial signal: use raw confidence percentage if present
+    raw_conf = ti_reputation.get("confidence")
+    if raw_conf is not None:
+        return max(0.0, min(1.0, float(raw_conf) / 100.0)) * 0.6
+    return 0.3
+
+
+def _asset_confidence_score(asset_tier: Optional[int]) -> float:
+    """Asset criticality → 0–1 normalized confidence contribution.
+
+    Tier 1 (crown jewel)   → 1.0  — high-value targets warrant high attention
+    Tier 2 (biz critical)  → 0.6
+    Tier 3 / unknown       → 0.2  — dev/low tier = less likely genuine attack
+    """
+    if asset_tier == 1:
+        return 1.0
+    if asset_tier == 2:
+        return 0.6
+    return 0.2
+
+
+def compute_investigation_confidence(
+    incident,
+    ti_reputation: dict | None,
+    top_hypothesis_prob: Optional[int],
+    asset_tier: Optional[int],
+    historical_similarity: float = 0.0,
+) -> tuple[float, dict]:
+    """Compute 5-component investigation confidence score (0–1).
+
+    Until Phase 6 deploys historical_similarity data, historical weight is
+    redistributed proportionally across the other four components so the
+    achievable maximum remains 1.0.
+
+    Returns:
+        (confidence_0_to_1, breakdown_dict)  — breakdown keyed by component
+        name with {score, weight, contribution} sub-dicts.
+    """
+    scores = {
+        "rule":       _rule_confidence_score(incident),
+        "ti":         _ti_confidence_score(ti_reputation),
+        "historical": max(0.0, min(1.0, historical_similarity)),
+        "asset":      _asset_confidence_score(asset_tier),
+        "llm":        max(0.0, min(1.0, (top_hypothesis_prob or 0) / 100.0)),
+    }
+
+    # Build effective weights: drop historical from denominator if 0 (Phase 6 not active)
+    effective_weights: dict[str, float] = {}
+    for name, base_w in _CONF_WEIGHTS.items():
+        if name == "historical" and scores["historical"] == 0.0:
+            effective_weights[name] = 0.0
+        else:
+            effective_weights[name] = base_w
+
+    denom = sum(effective_weights.values())
+    if denom == 0.0:
+        return 0.0, {}
+
+    weighted_sum = sum(scores[k] * effective_weights[k] for k in scores)
+    confidence = round(weighted_sum / denom, 4)
+
+    breakdown = {
+        k: {
+            "score":        round(scores[k], 4),
+            "weight":       round(effective_weights[k], 4),
+            "contribution": round(scores[k] * effective_weights[k] / denom, 4),
+            "label":        {
+                "rule":       "Rule Contribution",
+                "ti":         "Threat Intelligence",
+                "historical": "Historical Similarity",
+                "asset":      "Asset Criticality",
+                "llm":        "LLM Reasoning",
+            }[k],
+        }
+        for k in scores
+    }
+
+    return confidence, breakdown
+
+
+async def compute_historical_similarity(
+    db: AsyncSession,
+    technique: Optional[str],
+    kill_chain_stage: Optional[str],
+) -> float:
+    """Phase 6: Score 0–1 representing how closely this incident matches resolved patterns.
+
+    Query strategy:
+      1. Find up to 10 patterns with matching technique OR kill-chain stage.
+      2. Score each match: technique match = 0.6, kill-chain match = 0.4.
+      3. Return max score across all matches (0.0 if no patterns exist yet).
+
+    Returns 0.0 when no patterns have been stored yet — the Phase 4 confidence engine
+    redistributes that weight automatically via the zero-check in compute_investigation_confidence().
+    Never raises.
+    """
+    if not technique and not kill_chain_stage:
+        return 0.0
+
+    try:
+        from sqlalchemy import or_
+        filters = []
+        if technique:
+            filters.append(IncidentPattern.technique == technique)
+        if kill_chain_stage:
+            filters.append(IncidentPattern.kill_chain_stage == kill_chain_stage)
+
+        result = await db.execute(
+            select(IncidentPattern.technique, IncidentPattern.kill_chain_stage)
+            .where(or_(*filters))
+            .limit(10)
+        )
+        rows = result.all()
+
+        if not rows:
+            return 0.0
+
+        best = 0.0
+        for row in rows:
+            score = 0.0
+            if technique and row[0] == technique:
+                score += 0.60
+            if kill_chain_stage and row[1] == kill_chain_stage:
+                score += 0.40
+            if score > best:
+                best = score
+
+        return round(min(1.0, best), 4)
+
+    except Exception as exc:
+        log.debug("historical_similarity_error", error=str(exc))
+        return 0.0
 
 
 def _trend(current: float, previous: Optional[float]) -> str:

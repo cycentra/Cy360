@@ -5160,3 +5160,87 @@ def prune_agent_packages():
 @system_bp.route("/api/system/agent-packages/prune", methods=["OPTIONS"])
 def prune_agent_packages_options():
     return add_cors_headers(make_response("", 204))
+
+
+# ── Phase 6: AI Investigation Stats ────────────────────────────────────────────
+
+@system_bp.route("/api/system/ai-stats", methods=["GET"])
+def system_ai_stats():
+    """Return aggregate AI investigation engine stats for the portal Settings card.
+
+    Returns:
+      {
+        patterns_total,         — total stored incident patterns
+        avg_confidence_accuracy,— avg confidence score at resolution (as proxy for accuracy)
+        phases_active,          — list of active phases ["phase1".."phase6"]
+        last_pattern_at,        — ISO timestamp of most recent pattern
+      }
+    GET → viewer+
+    """
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    try:
+        import os as _os, psycopg2, psycopg2.extras
+
+        db_url = (
+            _os.environ.get("CYCENTRA_DB_URL")
+            or _os.environ.get("CORRELATION_DB_URL")
+            or _os.environ.get("DATABASE_URL",
+               "postgresql://corruser:changeme@127.0.0.1:5433/correlation")
+        ).replace("+asyncpg", "")
+
+        conn = psycopg2.connect(db_url)
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT
+                    COUNT(*)                                AS patterns_total,
+                    AVG(confidence_at_resolution)           AS avg_confidence,
+                    MAX(created_at)                         AS last_pattern_at
+                FROM incident_patterns
+            """)
+            row = cur.fetchone() or {}
+        conn.close()
+
+        patterns_total   = int(row.get("patterns_total") or 0)
+        avg_conf_raw     = row.get("avg_confidence")
+        avg_confidence   = round(float(avg_conf_raw) * 100, 1) if avg_conf_raw else None
+        last_pattern_at  = row.get("last_pattern_at")
+
+    except Exception as exc:
+        patterns_total  = 0
+        avg_confidence  = None
+        last_pattern_at = None
+
+    # Determine which phases are active by probing for their artefacts
+    phases_active = ["phase1", "phase2", "phase3", "phase4"]
+    try:
+        from pathlib import Path as _P
+        if patterns_total > 0:
+            phases_active.append("phase6")
+        # Phase 5: check if any incidents have structured recommendations
+        import os as _os, psycopg2
+        db_url2 = (
+            _os.environ.get("CYCENTRA_DB_URL")
+            or _os.environ.get("DATABASE_URL",
+               "postgresql://corruser:changeme@127.0.0.1:5433/correlation")
+        ).replace("+asyncpg", "")
+        conn2 = psycopg2.connect(db_url2)
+        with conn2.cursor() as cur2:
+            cur2.execute(
+                "SELECT EXISTS(SELECT 1 FROM incidents "
+                "WHERE recommendation IS NOT NULL LIMIT 1)"
+            )
+            has_rec = cur2.fetchone()[0]
+        conn2.close()
+        if has_rec:
+            phases_active.append("phase5")
+    except Exception:
+        pass
+
+    return add_cors_headers(jsonify({
+        "patterns_total":          patterns_total,
+        "avg_confidence_accuracy": avg_confidence,
+        "phases_active":           sorted(set(phases_active)),
+        "last_pattern_at":         last_pattern_at.isoformat() if last_pattern_at else None,
+    }))

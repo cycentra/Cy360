@@ -357,6 +357,193 @@ function IncidentStateWidget({ onViewAll }) {
 }
 
 
+// ── HighConfidenceWidget ───────────────────────────────────────────────────────
+// Shows top 5 incidents where the AI Investigation Engine confidence_score > 0.85.
+// Fetches /api/siem/incidents with status=active and filters client-side.
+
+function HighConfidenceWidget({ onViewAll }) {
+  const [rows, setRows]       = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [offline, setOffline] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch("/api/siem/incidents?limit=200&status=active&sort_by=confidence_score&sort_dir=desc", { credentials: "include" });
+        if (!r.ok) { if (!cancelled) { setOffline(true); setLoading(false); } return; }
+        const d = await r.json();
+        if (!cancelled) {
+          const highConf = (d.incidents || [])
+            .filter(i => i.confidence_score != null && i.confidence_score >= 0.85)
+            .sort((a, b) => b.confidence_score - a.confidence_score)
+            .slice(0, 5);
+          setRows(highConf);
+          setOffline(false);
+          setLoading(false);
+        }
+      } catch {
+        if (!cancelled) { setOffline(true); setLoading(false); }
+      }
+    };
+    load();
+    const t = setInterval(load, 120_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, []);
+
+  const sevColor = s => ({ critical: "#ff3b3b", high: "#ff8c00", medium: "#f5c518", low: "#00e5a0" }[s] || "#888");
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
+      borderTop: "2px solid #00e5a0", borderRadius: 5, padding: "18px 22px", marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
+          textTransform: "uppercase", fontFamily: "monospace" }}>
+          High Confidence Incidents
+          <span style={{ background: "rgba(0,229,160,0.1)", color: "#00e5a0", fontSize: 9,
+            fontFamily: "monospace", padding: "1px 6px", borderRadius: 2, fontWeight: 700,
+            marginLeft: 8 }}>≥85% CONF</span>
+        </div>
+        {onViewAll && !loading && !offline && rows.length > 0 && (
+          <button onClick={onViewAll}
+            style={{ background: "none", border: "none", color: "#00e5a0", fontSize: 10,
+              fontFamily: "monospace", cursor: "pointer", opacity: 0.7 }}>
+            View All ↗
+          </button>
+        )}
+      </div>
+
+      {loading && (
+        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace",
+          padding: "10px 0" }}>Loading…</div>
+      )}
+      {!loading && offline && (
+        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace",
+          padding: "10px 0" }}>CySIEM engine offline</div>
+      )}
+      {!loading && !offline && rows.length === 0 && (
+        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace",
+          padding: "10px 0" }}>No high-confidence incidents — AI analysis still running or no active incidents.</div>
+      )}
+      {!loading && !offline && rows.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {rows.map(inc => {
+            const pct = Math.round(inc.confidence_score * 100);
+            const sc = sevColor(inc.severity);
+            const h1 = (inc.hypotheses || [])[0];
+            return (
+              <div key={inc.id}
+                onClick={() => onViewAll?.()}
+                style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px",
+                  background: "rgba(0,229,160,0.03)", borderRadius: 3,
+                  border: "1px solid rgba(0,229,160,0.1)", borderLeft: `3px solid ${sc}`,
+                  cursor: onViewAll ? "pointer" : "default" }}>
+                {/* Confidence ring — simple text gauge */}
+                <div style={{ flexShrink: 0, width: 36, height: 36, borderRadius: "50%",
+                  border: `2px solid #00e5a0`, display: "flex", alignItems: "center",
+                  justifyContent: "center", flexDirection: "column" }}>
+                  <span style={{ color: "#00e5a0", fontSize: 9, fontFamily: "monospace", fontWeight: 700,
+                    lineHeight: 1 }}>{pct}%</span>
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ color: "white", fontSize: 12, fontWeight: 600, overflow: "hidden",
+                    textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {h1 ? h1.label : `Incident ${inc.id.slice(0, 8)}`}
+                  </div>
+                  <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace",
+                    marginTop: 1 }}>
+                    {inc.id.slice(0, 12)} · {(inc.severity || "").toUpperCase()} · {inc.alert_count} alerts
+                  </div>
+                </div>
+                <span style={{ color: sc, fontSize: 10, fontFamily: "monospace",
+                  fontWeight: 700, flexShrink: 0 }}>
+                  {(inc.severity || "").toUpperCase()}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ── SoarActivityWidget ─────────────────────────────────────────────────────────
+// Phase 5: Shows last 24h SOAR dispatch counts and CySOAR connection status.
+
+function SoarActivityWidget() {
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch("/api/siem/soar/status", { credentials: "include" });
+        if (!r.ok) { if (!cancelled) setLoading(false); return; }
+        const d = await r.json();
+        if (!cancelled) { setData(d); setLoading(false); }
+      } catch { if (!cancelled) setLoading(false); }
+    };
+    load();
+    const t = setInterval(load, 120_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, []);
+
+  const dotColor = data?.running ? "#00e5a0" : data?.installed ? "#f5c518" : "rgba(255,255,255,0.2)";
+  const dotTitle = data?.running ? "CySOAR running"
+    : data?.installed ? "CySOAR installed, not running" : "CySOAR not installed";
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)",
+      borderTop: "2px solid #b36bff", borderRadius: 5, padding: "18px 22px", marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
+          textTransform: "uppercase", fontFamily: "monospace" }}>
+          SOAR Activity
+          <span title={dotTitle} style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%",
+            background: dotColor, marginLeft: 8, verticalAlign: "middle" }} />
+        </div>
+        <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>Last 24h</span>
+      </div>
+      {loading ? (
+        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace",
+          padding: "10px 0" }}>Loading…</div>
+      ) : !data ? (
+        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace",
+          padding: "10px 0" }}>CySOAR status unavailable</div>
+      ) : (
+        <div style={{ display: "flex", gap: 16 }}>
+          {[
+            { label: "Auto-Dispatched", value: data.auto_dispatched_24h ?? 0, color: "#00e5a0" },
+            { label: "Pending Approval", value: data.pending_approval ?? 0, color: "#f5c518" },
+            { label: "Needs Review",    value: data.needs_review ?? 0, color: "#ff6b6b" },
+          ].map(({ label, value, color }) => (
+            <div key={label} style={{ flex: 1, textAlign: "center",
+              background: `${color}08`, border: `1px solid ${color}25`,
+              borderRadius: 4, padding: "12px 8px" }}>
+              <div style={{ color, fontSize: 24, fontFamily: "monospace", fontWeight: 800,
+                lineHeight: 1 }}>{value}</div>
+              <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 9, fontFamily: "monospace",
+                marginTop: 5, textTransform: "uppercase", letterSpacing: "0.5px" }}>{label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {!data?.running && !loading && (
+        <div style={{ marginTop: 10, color: "rgba(255,255,255,0.25)", fontSize: 10,
+          fontFamily: "monospace" }}>
+          {data?.installed
+            ? "CySOAR installed but not running — start it from Extensions"
+            : "Install CySOAR from Extensions to enable automated response"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 export function DashboardPage({ assets, data, stats, installedModules, setActiveTab, setSelectedAsset, setShowImport }) {
   const emailSec        = getEmailSecData(assets);
   const webSec          = getWebSecStats(assets);
@@ -718,6 +905,12 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
           </div>
         </div>
       )}
+
+      {/* High Confidence Incidents (Phase 4 AI Investigation Engine) */}
+      <HighConfidenceWidget onViewAll={() => setActiveTab("siem-incidents")} />
+
+      {/* SOAR Activity (Phase 5 AI Investigation Engine) */}
+      <SoarActivityWidget />
 
       {/* Critical & High vuln list */}
       <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:4, padding:"18px 22px" }}>

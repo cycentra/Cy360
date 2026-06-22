@@ -282,6 +282,293 @@ def siem_incident_analyse_options(incident_id):
     return add_cors_headers(make_response('', 204))
 
 
+# ── Phase 5: SOAR status endpoint ─────────────────────────────────────────────
+
+@siem_bp.route("/soar/status", methods=["GET"])
+@require_siem_auth
+def siem_soar_status():
+    """Return CySOAR connection state (installed/running/url/source).
+    Used by the portal Response tab to show the CySOAR status bar.
+    GET → viewer+
+    """
+    try:
+        import psycopg2.extras
+        from datetime import timedelta
+        conn = _corr_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+            cur.execute("""
+                SELECT
+                    COUNT(*) FILTER (WHERE soar_dispatched = TRUE
+                        AND soar_dispatched_at >= %s)              AS auto_dispatched_24h,
+                    COUNT(*) FILTER (
+                        WHERE soar_dispatch_log IS NOT NULL
+                          AND soar_dispatched = FALSE
+                          AND confidence_score >= 0.70
+                          AND confidence_score < 0.90
+                          AND status NOT IN ('closed','false_positive')
+                    )                                               AS pending_approval,
+                    COUNT(*) FILTER (
+                        WHERE confidence_score IS NOT NULL
+                          AND confidence_score < 0.70
+                          AND status NOT IN ('closed','false_positive')
+                    )                                               AS needs_review
+                FROM incidents
+            """, [cutoff])
+            row = cur.fetchone() or {}
+        conn.close()
+    except Exception:
+        row = {}
+
+    # Read CySOAR install state from modules/state.json
+    try:
+        import json as _json
+        state_raw = open("/opt/cycentra/modules/state.json").read()
+        state = _json.loads(state_raw)
+        soar_state = state.get("cysoar") or {}
+        installed = soar_state.get("installed", False)
+        running   = soar_state.get("status") == "running"
+    except Exception:
+        installed = False
+        running   = False
+
+    # Resolve URL without exposing auto-detected internal address
+    url_src = ""
+    try:
+        import json as _json
+        from pathlib import Path as _P
+        ai_raw = _P("/opt/cycentra/ai_settings.json").read_text()
+        ai_cfg = _json.loads(ai_raw)
+        url_src = (ai_cfg.get("soar", {}).get("webhookUrl") or "").strip()
+    except Exception:
+        pass
+    env_url = os.environ.get("SOAR_WEBHOOK_URL", "").strip()
+
+    return jsonify({
+        "installed":           installed,
+        "running":             running,
+        "url":                 env_url or url_src,
+        "source":              "env" if env_url else ("config" if url_src else ("auto" if running else "none")),
+        "auto_dispatched_24h": int(row.get("auto_dispatched_24h") or 0),
+        "pending_approval":    int(row.get("pending_approval") or 0),
+        "needs_review":        int(row.get("needs_review") or 0),
+    })
+
+
+# ── Phase 5: Analyst approval gate for 70–89% confidence incidents ────────────
+
+@siem_bp.route("/incidents/<incident_id>/approve-soar", methods=["POST"])
+@require_siem_analyst
+def siem_incident_approve_soar(incident_id):
+    """Analyst manually approves SOAR dispatch for an incident in the 70–89% gate.
+
+    Reads recommendation from DB, forwards to Node-RED, records dispatch log.
+    POST → analyst+
+    """
+    import psycopg2.extras
+    try:
+        conn = _corr_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, recommendation, confidence_score, severity, "
+                "mitre_ids, kill_chain_stage_name, affected_agents, affected_users, "
+                "src_ips, soar_dispatch_log, soar_dispatched "
+                "FROM incidents WHERE id = %s",
+                [incident_id],
+            )
+            inc = cur.fetchone()
+        conn.close()
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    if not inc:
+        return jsonify({"error": "Incident not found"}), 404
+
+    recommendation = inc.get("recommendation") or {}
+    confidence     = float(inc.get("confidence_score") or 0)
+
+    if confidence >= 0.90:
+        return jsonify({"error": "This incident was already auto-dispatched (confidence ≥ 90%)"}), 400
+    if confidence < 0.70:
+        return jsonify({"error": "Confidence too low for SOAR dispatch (< 70%)"}), 400
+    if inc.get("soar_dispatched"):
+        return jsonify({"error": "Already dispatched"}), 409
+    if not recommendation:
+        return jsonify({"error": "No structured recommendation available yet"}), 422
+
+    analyst_email = session.get("user_email", "analyst")
+    now = datetime.now(timezone.utc)
+
+    # Resolve webhook URL
+    soar_url = os.environ.get("SOAR_WEBHOOK_URL", "").strip()
+    if not soar_url:
+        try:
+            import json as _j
+            ai_raw = open("/opt/cycentra/ai_settings.json").read()
+            ai_cfg = _j.loads(ai_raw)
+            soar_url = (ai_cfg.get("soar", {}).get("webhookUrl") or "").strip()
+        except Exception:
+            pass
+    if not soar_url:
+        try:
+            import json as _j
+            state_raw = open("/opt/cycentra/modules/state.json").read()
+            state = _j.loads(state_raw)
+            if (state.get("cysoar") or {}).get("status") == "running":
+                soar_url = "http://127.0.0.1:1880"
+        except Exception:
+            pass
+
+    if not soar_url:
+        return jsonify({"error": "CySOAR not installed or not running"}), 503
+
+    payload = {
+        "incident_id":      incident_id,
+        "confidence_score": round(confidence * 100, 1),
+        "approved_by":      analyst_email,
+        "severity":         inc.get("severity"),
+        "mitre_ids":        inc.get("mitre_ids") or [],
+        "recommendation":   recommendation,
+        "timestamp":        now.isoformat(),
+    }
+
+    http_status = None
+    success = False
+    try:
+        import requests as _rqs
+        resp = _rqs.post(soar_url, json=payload, timeout=10, verify=False)
+        http_status = resp.status_code
+        success = resp.status_code in (200, 201, 202, 204)
+    except Exception as exc:
+        _logger.warning("[approve-soar] Node-RED call failed: %s", exc)
+
+    rec = recommendation or {}
+    actions_count = (
+        len(rec.get("containment", []))
+        + len(rec.get("eradication", []))
+        + len(rec.get("recovery", []))
+    )
+
+    entry = {
+        "timestamp":    now.isoformat(),
+        "confidence":   round(confidence * 100, 1),
+        "actor":        analyst_email,
+        "status":       "analyst_dispatched" if success else "dispatch_failed",
+        "reason":       f"Analyst-approved dispatch by {analyst_email}",
+        "actions_sent": actions_count,
+        "http_status":  http_status,
+    }
+
+    existing_log = list(inc.get("soar_dispatch_log") or [])
+    existing_log.append(entry)
+
+    try:
+        import json as _j
+        conn = _corr_conn()
+        with conn:
+            with conn.cursor() as cur:
+                if success:
+                    cur.execute(
+                        "UPDATE incidents SET soar_dispatched=TRUE, soar_dispatched_at=%s, "
+                        "soar_dispatch_log=%s WHERE id=%s",
+                        [now, _j.dumps(existing_log), incident_id],
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE incidents SET soar_dispatch_log=%s WHERE id=%s",
+                        [_j.dumps(existing_log), incident_id],
+                    )
+        conn.close()
+    except Exception as exc:
+        _logger.warning("[approve-soar] DB update failed: %s", exc)
+
+    return jsonify({
+        "ok":          success,
+        "dispatch_log": entry,
+        "http_status": http_status,
+    })
+
+
+@siem_bp.route("/incidents/<incident_id>/approve-soar", methods=["OPTIONS"])
+def siem_incident_approve_soar_options(incident_id):
+    from core.helpers import add_cors_headers
+    return add_cors_headers(make_response('', 204))
+
+
+# ── Phase 6: Similar past incidents ───────────────────────────────────────────
+
+@siem_bp.route("/incidents/<incident_id>/similar", methods=["GET"])
+@require_siem_auth
+def siem_incident_similar(incident_id):
+    """Return up to 3 similar past resolved incidents from incident_patterns.
+
+    Matches on technique + kill_chain_stage. Similarity score is computed as
+    a weighted Jaccard overlap of payload_indicators. GET → viewer+
+    """
+    import psycopg2.extras
+    try:
+        conn = _corr_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Get the incident's technique + kill-chain
+            cur.execute(
+                "SELECT mitre_ids, kill_chain_stage_name FROM incidents WHERE id = %s",
+                [incident_id],
+            )
+            inc = cur.fetchone()
+            if not inc:
+                conn.close()
+                return jsonify({"similar": []}), 200
+
+            mitre_ids = inc.get("mitre_ids") or []
+            kill_chain = inc.get("kill_chain_stage_name") or ""
+
+            # Find patterns with matching technique or kill-chain stage (last 90 days)
+            cur.execute("""
+                SELECT id, source_incident_id, technique, kill_chain_stage,
+                       payload_indicators, response_actions, outcome,
+                       confidence_at_resolution, created_at
+                FROM incident_patterns
+                WHERE (technique = ANY(%s) OR kill_chain_stage = %s)
+                  AND source_incident_id != %s
+                  AND created_at > NOW() - INTERVAL '90 days'
+                ORDER BY created_at DESC
+                LIMIT 20
+            """, [mitre_ids if mitre_ids else ["__none__"], kill_chain or "__none__", incident_id])
+            patterns = cur.fetchall()
+        conn.close()
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    if not patterns:
+        return jsonify({"similar": []}), 200
+
+    # Score: exact technique match = 0.6, exact kill-chain match = 0.4
+    scored = []
+    for p in patterns:
+        score = 0.0
+        p_technique = p.get("technique") or ""
+        p_kill = p.get("kill_chain_stage") or ""
+        if p_technique and p_technique in mitre_ids:
+            score += 0.60
+        if p_kill and kill_chain and p_kill == kill_chain:
+            score += 0.40
+        if score > 0.40:  # surface threshold matching the plan's 0.4 filter
+            scored.append({
+                "pattern_id":               p["id"],
+                "source_incident_id":       p["source_incident_id"],
+                "technique":                p_technique,
+                "kill_chain_stage":         p_kill,
+                "similarity":               round(score, 2),
+                "outcome":                  p.get("outcome"),
+                "confidence_at_resolution": _f(p.get("confidence_at_resolution")),
+                "created_at":               _iso(p.get("created_at")),
+            })
+
+    # Sort by similarity desc, take top 3
+    scored.sort(key=lambda x: x["similarity"], reverse=True)
+    return jsonify({"similar": scored[:3]})
+
+
 # ── FP Pattern management endpoints ───────────────────────────────────────────
 
 @siem_bp.route("/fp-patterns")

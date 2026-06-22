@@ -672,6 +672,22 @@ def _incident_to_dict(i: Incident) -> dict:
         "asset_tier":             i.asset_tier,
         "soar_actions":           i.soar_actions or [],
         "ti_reputation":          i.ti_reputation,
+        "hypotheses":             i.hypotheses,
+        "hypothesis_generated_at": (
+            i.hypothesis_generated_at.isoformat() if i.hypothesis_generated_at else None
+        ),
+        # Phase 3: evidence collection
+        "evidence_log":           i.evidence_log,
+        "evidence_collected_at":  (
+            i.evidence_collected_at.isoformat() if i.evidence_collected_at else None
+        ),
+        "evidence_coverage":      float(i.evidence_coverage) if i.evidence_coverage is not None else None,
+        # Phase 4: investigation confidence
+        "confidence_score":       float(i.confidence_score) if i.confidence_score is not None else None,
+        "confidence_breakdown":   i.confidence_breakdown,
+        "confidence_computed_at": (
+            i.confidence_computed_at.isoformat() if i.confidence_computed_at else None
+        ),
     }
 
 
@@ -1218,6 +1234,14 @@ async def transition_incident(
             notes         = body.comment.strip(),
         )
 
+    # Phase 6: store resolved/closed incident as a reusable investigation pattern
+    if to_st in ("resolved", "closed"):
+        try:
+            from llm_enricher import _store_incident_pattern
+            await _store_incident_pattern(db, inc)
+        except Exception as _p_exc:
+            log.debug("pattern_store_skipped", incident_id=incident_id, reason=str(_p_exc))
+
     await db.commit()
     return _incident_to_dict(inc)
 
@@ -1455,10 +1479,26 @@ async def analyse_incident(incident_id: str, db: AsyncSession = Depends(get_db))
             detail="No alerts are linked to this incident — nothing to analyse.",
         )
     return {
-        "ok":               True,
-        "llm_summary":      inc.llm_summary,
-        "llm_remediation":  inc.llm_remediation,
-        "llm_generated_at": inc.llm_generated_at.isoformat() if inc.llm_generated_at else None,
+        "ok":                       True,
+        "llm_summary":              inc.llm_summary,
+        "llm_remediation":          inc.llm_remediation,
+        "llm_generated_at":         inc.llm_generated_at.isoformat() if inc.llm_generated_at else None,
+        "hypotheses":               inc.hypotheses,
+        "hypothesis_generated_at":  (
+            inc.hypothesis_generated_at.isoformat() if inc.hypothesis_generated_at else None
+        ),
+        # Phase 3: evidence collection (may still be in-flight — caller should poll)
+        "evidence_log":             inc.evidence_log,
+        "evidence_coverage":        float(inc.evidence_coverage) if inc.evidence_coverage is not None else None,
+        "evidence_collected_at":    (
+            inc.evidence_collected_at.isoformat() if inc.evidence_collected_at else None
+        ),
+        # Phase 4: confidence (computed after evidence — may be None until background task finishes)
+        "confidence_score":         float(inc.confidence_score) if inc.confidence_score is not None else None,
+        "confidence_breakdown":     inc.confidence_breakdown,
+        "confidence_computed_at":   (
+            inc.confidence_computed_at.isoformat() if inc.confidence_computed_at else None
+        ),
     }
 
 

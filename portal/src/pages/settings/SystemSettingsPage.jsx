@@ -174,6 +174,7 @@ function UpdatesTab() {
   const [success,      setSuccess]      = useState(null);
   const [latestInfo,   setLatestInfo]   = useState(null);   // {current, latest, up_to_date, error?}
   const [checkingVer,  setCheckingVer]  = useState(false);
+  const [aiStats,      setAiStats]      = useState(null);
   const logRef  = useRef(null);
   const pollRef = useRef(null);
 
@@ -181,6 +182,10 @@ function UpdatesTab() {
     fetch(`${API_BASE}/api/system/version`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
       .then(d => d && setVersionData(d))
+      .catch(() => {});
+    fetch(`${API_BASE}/api/system/ai-stats`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => d && setAiStats(d))
       .catch(() => {});
     // Cleanup update-log poll on unmount (e.g. user switches tabs mid-update)
     return () => { clearInterval(pollRef.current); };
@@ -412,6 +417,45 @@ function UpdatesTab() {
           </div>
         ))}
       </CollapsibleSection>
+
+      {aiStats?.phases_active?.length > 0 && (
+        <CollapsibleSection icon="🧠" title="AI Investigation Engine">
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 16 }}>
+            <div style={{ background: "rgba(0,229,160,0.04)", border: "1px solid rgba(0,229,160,0.15)", borderRadius: 5, padding: "14px 16px", textAlign: "center" }}>
+              <div style={{ color: "#00e5a0", fontSize: 22, fontFamily: "monospace", fontWeight: 700 }}>
+                {aiStats.patterns_total ?? 0}
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", marginTop: 4, letterSpacing: "0.8px" }}>PATTERNS STORED</div>
+            </div>
+            <div style={{ background: "rgba(77,158,255,0.04)", border: "1px solid rgba(77,158,255,0.15)", borderRadius: 5, padding: "14px 16px", textAlign: "center" }}>
+              <div style={{ color: "#4d9eff", fontSize: 22, fontFamily: "monospace", fontWeight: 700 }}>
+                {aiStats.avg_confidence_accuracy != null ? `${(aiStats.avg_confidence_accuracy * 100).toFixed(1)}%` : "—"}
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", marginTop: 4, letterSpacing: "0.8px" }}>AVG CONFIDENCE</div>
+            </div>
+            <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 5, padding: "14px 16px", textAlign: "center" }}>
+              <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>
+                {aiStats.last_pattern_at ? new Date(aiStats.last_pattern_at).toLocaleDateString() : "—"}
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", marginTop: 4, letterSpacing: "0.8px" }}>LAST PATTERN</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+            <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace", marginRight: 4 }}>ACTIVE PHASES</span>
+            {["phase1","phase2","phase3","phase4","phase5","phase6"].map(ph => {
+              const active = aiStats.phases_active?.includes(ph);
+              return (
+                <span key={ph} style={{
+                  background: active ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.03)",
+                  color: active ? "#00e5a0" : "rgba(255,255,255,0.2)",
+                  border: `1px solid ${active ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.07)"}`,
+                  borderRadius: 3, padding: "2px 7px", fontSize: 9, fontFamily: "monospace", letterSpacing: "0.5px"
+                }}>{ph.toUpperCase()}</span>
+              );
+            })}
+          </div>
+        </CollapsibleSection>
+      )}
     </div>
   );
 }
