@@ -371,10 +371,135 @@ if (item.config_type === "your_type") return <YourConfigModal ... />;
 
 ---
 
+## Validating a Publish — Confirming Content Went Live
+
+After clicking "Publish to cycentra.com" in CyAdmin, use these commands to confirm the content reached the live catalog before checking the portal.
+
+### 1. Health check — item count (fastest)
+
+```bash
+curl https://cycentra.com/marketplace/api/health
+```
+
+Expected response:
+```json
+{"ok": true, "catalog_items": 9, "pending": 0}
+```
+
+`catalog_items` must match the number of items in CyAdmin's working catalog. If it's lower, check the CyAdmin publish toast — a failed publish returns an error message there.
+
+### 2. Full catalog — confirm specific item by ID
+
+```bash
+curl -s \
+  -H "X-CyCentra-Token: $MARKETPLACE_CATALOG_TOKEN" \
+  https://cycentra.com/marketplace/catalog.json \
+  | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print(f'Items: {len(d[\"items\"])}  updated: {d[\"updated\"]}')
+for i in d['items']:
+    print(f'  {i[\"id\"]:35s} {i[\"name\"]}')
+"
+```
+
+Replace `$MARKETPLACE_CATALOG_TOKEN` with the value from `/opt/cycentra/.env` on the Cy360 server. The list is what every Cy360 instance fetches on the next Marketplace tab load.
+
+### 3. Check pending submissions
+
+```bash
+curl -s \
+  -H "Authorization: Bearer $MARKETPLACE_ADMIN_TOKEN" \
+  https://cycentra.com/marketplace/api/submissions \
+  | python3 -m json.tool
+```
+
+Returns `{"ok": true, "submissions": [...], "count": N}`. Pending items waiting for CyAdmin review appear here.
+
+### 4. SSH directly to the marketplace-api logs (deepest check)
+
+```bash
+ssh -p 2026 root@204.168.193.23 'docker logs marketplace-api --tail=20'
+```
+
+Look for `PUBLISH  items=N` at the timestamp you clicked Publish. This is the definitive confirmation that the write went through.
+
+### What to do if catalog_items is wrong after a publish
+
+The most common cause: the publish sent a stale working catalog. Check item count in CyAdmin (top of the toolbar). If it disagrees with the health check:
+
+1. In CyAdmin, confirm the item you expect is visible in the catalog table.
+2. Click "Publish to cycentra.com" again — the toast shows the exact item count sent.
+3. Re-run the health check.
+
+---
+
+## cycentra.com Server — Deployment & Maintenance
+
+The cycentra.com server runs two Docker containers sharing a named volume. This section covers how to deploy, update, and verify the server. SSH access: `ssh -p 2026 root@204.168.193.23`.
+
+### Two-service Docker stack
+
+```
+cycentra-web (nginx:alpine)          ghcr.io/cycentra/cycentra.com:latest
+  port 127.0.0.1:8081 → :80          reverse-proxied by host nginx (Cloudflare → host nginx → 8081)
+  /usr/share/nginx/html/marketplace ─┐
+                                     │  shared Docker volume: marketplace-data
+  /data ─────────────────────────────┘
+marketplace-api (python:3.12-slim)   built from CyCentra.com/marketplace-api/
+  port 5050 (internal only)
+  reads/writes /data/catalog.json and /data/submissions.json
+```
+
+Both containers share `cycentracom_marketplace-data`. Catalog changes written by marketplace-api are immediately visible to nginx — no restart needed.
+
+### Deploy a new cycentra.com image (after `./git-push.sh`)
+
+GitHub Actions builds the image in ~60 seconds after the tag push. Then on the server:
+
+```bash
+ssh -p 2026 root@204.168.193.23
+cd /root/cycentra.com
+docker compose pull          # pulls new ghcr.io/cycentra/cycentra.com:latest
+docker compose up -d         # recreates cycentra-web with the new image; marketplace-api stays running
+```
+
+**Important:** `docker compose up -d` recreates only the container whose image changed. The `marketplace-data` volume is NOT wiped. Catalog content persists across image updates.
+
+### Verify after update
+
+```bash
+# From the server (no token needed for health):
+curl https://cycentra.com/marketplace/api/health
+
+# What image is running:
+docker inspect cycentra-web --format "Image: {{.Config.Image}}  Created: {{.Created}}"
+
+# Container statuses:
+docker ps --filter "name=cycentra-web" --filter "name=marketplace-api"
+```
+
+### After any image update — re-publish from CyAdmin
+
+The nginx image bakes a snapshot of `public/marketplace/catalog.json` at build time. When a brand-new `marketplace-data` volume is first created, Docker seeds it from the image's baked-in file (frozen at the last `./git-push.sh`). This seed is overwritten the moment CyAdmin publishes, and every subsequent publish keeps the volume authoritative.
+
+**Rule:** always click "Publish to cycentra.com" in CyAdmin after deploying a new server or recreating the `marketplace-data` volume. Takes 2 seconds and ensures the live catalog reflects the working catalog exactly.
+
+### Restart just marketplace-api (e.g. after a code change)
+
+```bash
+ssh -p 2026 root@204.168.193.23
+cd /root/cycentra.com
+docker compose restart marketplace-api
+docker logs marketplace-api --tail=10   # confirm Flask started
+```
+
+---
+
 ## Adding a New Item — Quick Checklist
 
 - [ ] Opened CyAdmin at `http://localhost:7070/marketplace`
-- [ ] `CYCENTRA_COM_URL` and `MARKETPLACE_ADMIN_TOKEN` are set in `CyAdmin/docker-compose.yml`
+- [ ] `CYCENTRA_COM_URL=https://cycentra.com` and `MARKETPLACE_ADMIN_TOKEN` are set in `CyAdmin/docker-compose.yml` (and the token is in `CyAdmin/.env`)
 - [ ] Item `id` is lowercase alphanumeric + hyphens, 3–50 chars, unique across all existing items
 - [ ] `type` is `"integration"` or `"playbook"`
 - [ ] `description` is non-empty
@@ -382,5 +507,6 @@ if (item.config_type === "your_type") return <YourConfigModal ... />;
 - [ ] Tags are lowercase with no spaces
 - [ ] If `config_type` is set, a backend endpoint and portal modal exist for it
 - [ ] If `cysoar_flow` is set, the flow file exists in CySOAR
-- [ ] Clicked **"Publish to cycentra.com"** button — toast confirms success
+- [ ] Clicked **"Publish to cycentra.com"** button — toast confirms success with item count
+- [ ] Ran `curl https://cycentra.com/marketplace/api/health` — `catalog_items` matches expected count
 - [ ] Verified new item appears in the CyCentra 360 portal Marketplace tab (no deploy step needed)
