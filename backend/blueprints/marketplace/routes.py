@@ -41,7 +41,12 @@ import requests as http_requests
 from flask import Blueprint, jsonify, request, session
 
 from core.helpers import add_cors_headers
-from core.config  import MARKETPLACE_CATALOG_TOKEN, MARKETPLACE_CATALOG_URL, CYCENTRA_ADMIN_EMAIL, MARKETPLACE_ADMIN_EMAIL, FRONTEND_URL
+from core.config  import (
+    MARKETPLACE_CATALOG_TOKEN, MARKETPLACE_CATALOG_URL,
+    CYCENTRA_ADMIN_EMAIL, MARKETPLACE_ADMIN_EMAIL,
+    CYADMIN_URL, CYADMIN_CONTRIBUTOR_TOKEN,
+    FRONTEND_URL,
+)
 import smtp_service
 
 marketplace_bp = Blueprint("marketplace", __name__)
@@ -96,36 +101,49 @@ def _write_json(path, data):
 
 
 def _fetch_cloud_catalog():
-    """Fetch the catalog from cycentra.com.
+    """Fetch the catalog from the configured URL (cycentra.com or CyAdmin direct).
 
-    Sends X-CyCentra-Token when MARKETPLACE_CATALOG_TOKEN is configured,
-    allowing cycentra.com/marketplace/ to restrict access to licensed instances.
-    When the token is not set on either side the endpoint is open (backwards compat).
+    Primary source: MARKETPLACE_CATALOG_URL (default: https://cycentra.com/marketplace/catalog.json)
+    Fallback:       CYADMIN_URL/api/marketplace/catalog.json when primary fails and CYADMIN_URL is set.
 
-    Returns a (items, status) tuple where status is one of:
-      'ok'          — successfully fetched
-      'fetch_error' — network/parse error
+    For local/single-host deployments set MARKETPLACE_CATALOG_URL to the CyAdmin catalog endpoint
+    (e.g. http://localhost:7070/api/marketplace/catalog.json) to bypass the cycentra.com hop entirely.
+
+    Sends X-CyCentra-Token when MARKETPLACE_CATALOG_TOKEN is set.
+    Returns (items, status) where status is 'ok' or 'fetch_error'.
     """
-    try:
+    def _get(url, token=None):
         headers = {}
-        if MARKETPLACE_CATALOG_TOKEN:
-            headers["X-CyCentra-Token"] = MARKETPLACE_CATALOG_TOKEN
-        resp = http_requests.get(
-            MARKETPLACE_CATALOG_URL,
-            headers=headers,
-            timeout=6,
-        )
+        if token:
+            headers["X-CyCentra-Token"] = token
+        resp = http_requests.get(url, headers=headers, timeout=6)
         if resp.ok:
-            items = resp.json().get("items", [])
+            return resp.json().get("items", [])
+        log.warning("marketplace catalog fetch failed — HTTP %s from %s", resp.status_code, url)
+        return None
+
+    try:
+        items = _get(MARKETPLACE_CATALOG_URL, MARKETPLACE_CATALOG_TOKEN or None)
+        if items is not None:
             for item in items:
                 item["source"] = "cloud"
             return items, "ok"
-        log.warning(
-            "marketplace catalog fetch failed — HTTP %s from %s",
-            resp.status_code, MARKETPLACE_CATALOG_URL,
-        )
     except Exception as exc:
         log.warning("marketplace catalog fetch error — %s: %s", type(exc).__name__, exc)
+
+    # Fallback: fetch directly from CyAdmin when primary URL is unreachable
+    if CYADMIN_URL:
+        cyadmin_catalog = f"{CYADMIN_URL.rstrip('/')}/api/marketplace/catalog.json"
+        try:
+            items = _get(cyadmin_catalog)
+            if items is not None:
+                for item in items:
+                    item["source"] = "cloud"
+                log.info("marketplace catalog: using CyAdmin fallback (%s)", cyadmin_catalog)
+                return items, "ok"
+        except Exception as exc:
+            log.warning("marketplace CyAdmin fallback error — %s: %s", type(exc).__name__, exc)
+
     return [], "fetch_error"
 
 
@@ -374,6 +392,46 @@ def catalog_custom_submit(item_id):
         submitted_by = item["submitted_by"],
         server_url   = FRONTEND_URL,
     )
+
+    # Forward to CyAdmin submissions queue so it appears in the CyAdmin Submissions tab.
+    # Fire-and-forget: failure is logged but never surfaces to the caller.
+    if CYADMIN_URL and CYADMIN_CONTRIBUTOR_TOKEN:
+        import threading
+        _item_snapshot = dict(item)
+
+        def _forward():
+            try:
+                payload = {
+                    "id":               _item_snapshot["id"],
+                    "name":             _item_snapshot.get("name", ""),
+                    "type":             _item_snapshot.get("type", ""),
+                    "description":      _item_snapshot.get("description", ""),
+                    "category":         _item_snapshot.get("category", ""),
+                    "vendor":           _item_snapshot.get("vendor", ""),
+                    "icon":             _item_snapshot.get("icon", "🔧"),
+                    "color":            _item_snapshot.get("color", "#4d9eff"),
+                    "tags":             _item_snapshot.get("tags", []),
+                    "modules_required": _item_snapshot.get("modules_required", []),
+                    "config_type":      _item_snapshot.get("config_type"),
+                    "steps":            _item_snapshot.get("steps", []),
+                    "cysoar_flow":      _item_snapshot.get("cysoar_flow", ""),
+                    "submitted_by":     _item_snapshot.get("submitted_by", ""),
+                    "notes":            f"Submitted from Cy360 server: {FRONTEND_URL}",
+                }
+                r = http_requests.post(
+                    f"{CYADMIN_URL.rstrip('/')}/api/marketplace/submissions",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {CYADMIN_CONTRIBUTOR_TOKEN}"},
+                    timeout=8,
+                )
+                if r.ok:
+                    log.info("marketplace: forwarded submission %s to CyAdmin", _item_snapshot["id"])
+                else:
+                    log.warning("marketplace: CyAdmin forward HTTP %s — %s", r.status_code, r.text[:200])
+            except Exception as exc:
+                log.warning("marketplace: CyAdmin forward error — %s: %s", type(exc).__name__, exc)
+
+        threading.Thread(target=_forward, daemon=True).start()
 
     resp = jsonify({"ok": True, "item": item, "message": "Submitted for CyCentra review. You will be notified once approved."})
     return add_cors_headers(resp)
