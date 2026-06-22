@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 evidence_collector.py
 Autonomous Evidence Collection — Phase 3 of the AI Investigation Engine.

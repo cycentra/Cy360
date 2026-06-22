@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 llm_enricher.py
 Incident narrative generation via LLM.

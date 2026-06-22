@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 gap_analyser.py
 Evidence Gap Analysis — Phase 3 of the AI Investigation Engine.

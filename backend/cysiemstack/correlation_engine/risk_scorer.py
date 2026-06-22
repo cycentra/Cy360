@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 risk_scorer.py
 Composite 0–100 risk scoring per entity (host or user).

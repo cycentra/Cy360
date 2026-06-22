@@ -688,6 +688,13 @@ def _incident_to_dict(i: Incident) -> dict:
         "confidence_computed_at": (
             i.confidence_computed_at.isoformat() if i.confidence_computed_at else None
         ),
+        # Phase 5: structured recommendation + SOAR dispatch state
+        "recommendation":         i.recommendation,
+        "soar_dispatched":        bool(i.soar_dispatched) if i.soar_dispatched is not None else False,
+        "soar_dispatched_at":     (
+            i.soar_dispatched_at.isoformat() if i.soar_dispatched_at else None
+        ),
+        "soar_dispatch_log":      i.soar_dispatch_log or [],
     }
 
 

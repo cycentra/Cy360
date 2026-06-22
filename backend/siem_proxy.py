@@ -1313,15 +1313,18 @@ def _sync_hunt_rules():
     conn = _corr_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # correlated_rules is JSONB stored as [{rule_id: "HT-001", ...}, ...]
+            # categories ARRAY tags hunt incidents as 'hunt_finding' (no incident_type column)
             cur.execute("""
-                SELECT metadata->>'hunt_rule_id' AS rule_id,
+                SELECT correlated_rules->0->>'rule_id' AS rule_id,
                        COUNT(*) AS total,
                        COUNT(*) FILTER (WHERE status NOT IN ('closed','false_positive')) AS open
-                FROM incidents WHERE incident_type = 'hunt_finding'
-                GROUP BY metadata->>'hunt_rule_id'
+                FROM incidents
+                WHERE 'hunt_finding' = ANY(categories)
+                GROUP BY correlated_rules->0->>'rule_id'
             """)
             counts = {r["rule_id"]: {"total": r["total"], "open": r["open"]}
-                      for r in cur.fetchall()}
+                      for r in cur.fetchall() if r["rule_id"]}
         return [{
             "id": r.get("id"), "name": r.get("name"),
             "description": r.get("description"), "enabled": r.get("enabled", True),
@@ -2626,7 +2629,38 @@ def siem_threat_hunt_rules():
 @siem_bp.route("/threat-hunting/findings", methods=["GET"])
 @require_siem_auth
 def siem_threat_hunt_findings():
-    return _proxy("/incidents?category=hunt_finding")
+    import psycopg2.extras
+    limit  = min(int(request.args.get("limit",  100)), 500)
+    offset = int(request.args.get("offset", 0))
+    status = request.args.get("status")
+    try:
+        conn = _corr_conn()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                wheres = ["'hunt_finding' = ANY(categories)"]
+                params: list = []
+                if status:
+                    wheres.append("status = %s")
+                    params.append(status)
+                where_sql = " AND ".join(wheres)
+                cur.execute(f"SELECT COUNT(*) AS total FROM incidents WHERE {where_sql}", params)
+                total = cur.fetchone()["total"] or 0
+                cur.execute(
+                    f"SELECT id, status, severity, first_seen, last_seen, "
+                    f"       affected_agents, affected_agent_names, affected_users, "
+                    f"       categories, mitre_ids, correlated_rules, llm_summary, "
+                    f"       fp_probability, risk_score "
+                    f"FROM incidents WHERE {where_sql} "
+                    f"ORDER BY first_seen DESC LIMIT %s OFFSET %s",
+                    params + [limit, offset],
+                )
+                rows = [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+        return jsonify({"total": total, "incidents": rows})
+    except Exception as exc:
+        _logger.exception("siem_threat_hunt_findings error")
+        return jsonify({"error": str(exc)}), 500
 
 
 @siem_bp.route("/threat-hunting/run", methods=["POST"])
@@ -2657,7 +2691,7 @@ def siem_threat_hunt_summary():
                 cur.execute("""
                     SELECT COUNT(*) AS total
                     FROM incidents
-                    WHERE incident_type = 'hunt_finding'
+                    WHERE 'hunt_finding' = ANY(categories)
                 """)
                 findings_total = cur.fetchone()["total"] or 0
 
@@ -2665,7 +2699,7 @@ def siem_threat_hunt_summary():
                 cur.execute("""
                     SELECT COUNT(*) AS open
                     FROM incidents
-                    WHERE incident_type = 'hunt_finding'
+                    WHERE 'hunt_finding' = ANY(categories)
                       AND status NOT IN ('closed', 'false_positive')
                 """)
                 findings_open = cur.fetchone()["open"] or 0
@@ -2674,7 +2708,7 @@ def siem_threat_hunt_summary():
                 cur.execute("""
                     SELECT COUNT(*) AS crit_high
                     FROM incidents
-                    WHERE incident_type = 'hunt_finding'
+                    WHERE 'hunt_finding' = ANY(categories)
                       AND status NOT IN ('closed', 'false_positive')
                       AND severity IN ('critical', 'high')
                 """)
@@ -2685,7 +2719,7 @@ def siem_threat_hunt_summary():
                 cur.execute("""
                     SELECT COUNT(*) AS last_24h
                     FROM incidents
-                    WHERE incident_type = 'hunt_finding'
+                    WHERE 'hunt_finding' = ANY(categories)
                       AND status NOT IN ('closed', 'false_positive')
                       AND first_seen >= %s
                 """, [cutoff])
@@ -2740,7 +2774,7 @@ def siem_threat_hunt_analyze():
                     SELECT id, severity, llm_summary, mitre_ids,
                            correlated_rules, first_seen
                     FROM incidents
-                    WHERE incident_type = 'hunt_finding'
+                    WHERE 'hunt_finding' = ANY(categories)
                       AND status NOT IN ('closed', 'false_positive')
                     ORDER BY first_seen DESC
                     LIMIT 10
