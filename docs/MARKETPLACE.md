@@ -34,7 +34,7 @@ The CyCentra 360 Integration Marketplace is a **three-tier, cloud-pull system**.
                                │  file write
                                ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  CyCentra/cycentra.com/public/marketplace/catalog.json              │
+│  CyCentra.com/public/marketplace/catalog.json                       │
 │  (local repo file — git tracked)                                     │
 │                                                                      │
 │  bash git-push.sh   →   CI builds + deploys to cycentra.com server  │
@@ -94,7 +94,7 @@ Click the **"Publish to cycentra.com"** button in the toolbar.
 
 This writes all approved items to:
 ```
-CyCentra/cycentra.com/public/marketplace/catalog.json
+CyCentra.com/public/marketplace/catalog.json
 ```
 
 A toast confirms: *"Published N item(s) to cycentra.com catalog."*
@@ -102,7 +102,7 @@ A toast confirms: *"Published N item(s) to cycentra.com catalog."*
 ### Step 4 — Deploy live
 
 ```bash
-cd /path/to/CyCentra/cycentra.com
+cd /path/to/CyCentra.com
 bash git-push.sh
 ```
 
@@ -132,7 +132,7 @@ If `CYADMIN_TOKEN` is set in `docker-compose.yml`, the page prompts for the toke
 | Location | Purpose |
 |----------|---------|
 | `CyAdmin/data/catalog.json` | Working copy — all edits happen here |
-| `CyCentra/cycentra.com/public/marketplace/catalog.json` | Live static file served to all CyCentra 360 instances |
+| `CyCentra.com/public/marketplace/catalog.json` | Live static file served to all CyCentra 360 instances |
 
 The **Publish** button syncs the working copy to the live file. Until you publish and run `git-push.sh`, changes in CyAdmin are not visible to any CyCentra 360 instance.
 
@@ -186,7 +186,7 @@ Share the token only with trusted contributors. It is separate from `CYADMIN_TOK
 | `modules_required` | | Array of CyCentra module names the item depends on (`"CySIEM"`, `"CySOAR"`) |
 | `estimated_time` | | Rough config/deploy estimate shown in the card |
 | `tags` | | Lowercase strings used by the search filter |
-| `config_type` | | `"o365"` or `"gcloud"` — opens the dedicated config modal on install. Omit for items needing no guided setup. |
+| `config_type` | | `"o365"`, `"gcloud"`, or `"github"` — opens the dedicated config modal on install. Omit for items needing no guided setup. |
 | `cysoar_flow` | | Playbooks only — the CySOAR flow filename to reference |
 | `steps` | | Playbooks only — ordered list of automation steps shown in the detail panel |
 
@@ -240,26 +240,28 @@ location /marketplace/ {
 | `CyAdmin/app.py` | All marketplace API routes and Publish endpoint |
 | `CyAdmin/templates/marketplace.html` | Admin manager UI |
 | `CyAdmin/templates/marketplace_contribute.html` | Contributor submission form |
-| `CyCentra/cycentra.com/public/marketplace/catalog.json` | **Live static catalog** — written by Publish, deployed by `git-push.sh` |
-| `CyCentra/cycentra.com/nginx.conf.template` | nginx CORS config for `/marketplace/` |
-| `cycentra360/backend/blueprints/marketplace/routes.py` | All CyCentra 360 marketplace API endpoints |
-| `cycentra360/portal/src/pages/marketplace/MarketplacePage.jsx` | CyCentra 360 consumer-side Marketplace UI |
+| `CyCentra.com/public/marketplace/catalog.json` | **Live static catalog** — written by Publish, deployed by `git-push.sh` |
+| `CyCentra.com/nginx.conf.template` | nginx CORS config for `/marketplace/` |
+| `Cy360/backend/blueprints/marketplace/routes.py` | All CyCentra 360 marketplace API endpoints |
+| `Cy360/portal/src/pages/marketplace/MarketplacePage.jsx` | CyCentra 360 consumer-side Marketplace UI |
 | `/opt/cycentra/marketplace_custom.json` | Per-server custom items (local to each server) |
 | `/var/ossec/etc/cycentra_marketplace.json` | Per-server install state |
-| `cycentra360/backend/core/config.py` (lines 141–150) | `MARKETPLACE_CATALOG_TOKEN`, `MARKETPLACE_CATALOG_URL`, `CYCENTRA_ADMIN_EMAIL` |
+| `Cy360/backend/core/config.py` (lines 141–150) | `MARKETPLACE_CATALOG_TOKEN`, `MARKETPLACE_CATALOG_URL`, `CYCENTRA_ADMIN_EMAIL` |
 
 ---
 
 ## Adding a Config Modal for a New Integration
 
-If your integration requires credentials (like O365 or Google Cloud), add a `config_type` and a portal modal.
+If your integration requires credentials, add a `config_type` and a portal modal.
+Three `config_type` values are already implemented end-to-end: `o365`, `gcloud`, and `github`.
+Use one of these as a reference implementation before adding a new type.
 
 ### Step 1 — Register the `config_type`
 
 In `backend/blueprints/marketplace/routes.py`:
 
 ```python
-_VALID_CONFIG_TYPES = {"o365", "gcloud", "your_type", None}
+_VALID_CONFIG_TYPES = {"o365", "gcloud", "github", "your_type", None}
 ```
 
 ### Step 2 — Add backend config endpoints
@@ -316,6 +318,8 @@ Admin submits for cloud review
   → status becomes "submitted"
   → visible to the CyCentra platform admin (CYCENTRA_ADMIN_EMAIL)
   → cannot be edited while under review (recall first to edit)
+  → email notification sent to CYCENTRA_ADMIN_EMAIL with item details and server URL
+     (fire-and-forget via smtp_service; silently skipped if SMTP is not configured)
 
 CyCentra admin approves in CyAdmin
   → adds item to working catalog → Publish → git-push.sh → visible globally
@@ -338,7 +342,7 @@ Per-server custom items are **never** sent to cycentra.com automatically. The su
 | `CYADMIN_TOKEN` | *(unset — open)* | Bearer token protecting all admin API routes |
 | `CONTRIBUTOR_TOKEN` | *(unset — open)* | Separate token for contributor submissions |
 | `CATALOG_FILE` | `./data/catalog.json` | Path to the working catalog inside the container |
-| `CYCENTRA_CATALOG_PATH` | `../CyCentra/cycentra.com/public/marketplace/catalog.json` | Destination written by the Publish action |
+| `CYCENTRA_CATALOG_PATH` | `../CyCentra.com/public/marketplace/catalog.json` | Destination written by the Publish action |
 
 ### CyCentra 360 (`/opt/cycentra/.env`)
 
@@ -346,7 +350,8 @@ Per-server custom items are **never** sent to cycentra.com automatically. The su
 |----------|---------|---------|
 | `MARKETPLACE_CATALOG_URL` | `https://cycentra.com/marketplace/catalog.json` | URL of the live cloud catalog fetched by Flask |
 | `MARKETPLACE_CATALOG_TOKEN` | *(empty)* | Pre-shared token for future gated catalog access. Currently unused. |
-| `CYCENTRA_ADMIN_EMAIL` | `cyadmin@cycentra.com` | Account that can approve/reject per-server submitted items |
+| `CYCENTRA_ADMIN_EMAIL` | `cyadmin@cycentra.com` | Account that can approve/reject per-server submitted items in the portal |
+| `MARKETPLACE_ADMIN_EMAIL` | `marketplace@cycentra.com` | Destination for submission notification emails; can be a shared team inbox |
 
 ---
 
@@ -372,5 +377,5 @@ Per-server custom items are **never** sent to cycentra.com automatically. The su
 - [ ] If `config_type` is set, a backend endpoint and portal modal exist for it
 - [ ] If `cysoar_flow` is set, the flow file exists in CySOAR
 - [ ] Clicked **"Publish to cycentra.com"** button — toast confirms success
-- [ ] `bash git-push.sh` run from `CyCentra/cycentra.com/`
+- [ ] `bash git-push.sh` run from `CyCentra.com/`
 - [ ] Verified new item appears in the CyCentra 360 portal Marketplace tab

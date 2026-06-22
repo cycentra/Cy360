@@ -292,6 +292,61 @@ def send_test_email(to: str) -> tuple:
     return _send_sync(cfg, to, "CyCentra 360 — SMTP Test", html)
 
 
+def send_marketplace_submission_notification(
+    admin_email: str,
+    item_id: str,
+    item_name: str,
+    item_type: str,
+    description: str,
+    submitted_by: str,
+    server_url: str = "",
+) -> None:
+    """Email to CyCentra admin when a per-server custom item is submitted for cloud review."""
+    server_row = (
+        f'<tr><td style="color:#8b949e;padding:5px 0;width:110px;font-size:13px">Server</td>'
+        f'<td style="color:#e6edf3;font-size:13px">{server_url}</td></tr>'
+        if server_url else ""
+    )
+    body = f"""
+      <h2 style="color:#e6edf3;margin-top:0;font-size:20px">New Marketplace Submission</h2>
+      <p style="color:#8b949e;margin-bottom:16px">
+        A CyCentra 360 server admin has submitted a custom item for inclusion in the
+        global marketplace catalog.
+      </p>
+      <table style="background:#161b22;border-radius:6px;padding:16px 20px;
+                    width:100%;border-collapse:collapse;margin-bottom:20px">
+        <tr>
+          <td style="color:#8b949e;padding:5px 0;width:110px;font-size:13px">Item ID</td>
+          <td style="color:#e6edf3;font-size:13px">{item_id}</td>
+        </tr>
+        <tr>
+          <td style="color:#8b949e;padding:5px 0;font-size:13px">Name</td>
+          <td style="color:#e6edf3;font-size:13px">{item_name}</td>
+        </tr>
+        <tr>
+          <td style="color:#8b949e;padding:5px 0;font-size:13px">Type</td>
+          <td style="color:#e6edf3;font-size:13px">{item_type}</td>
+        </tr>
+        <tr>
+          <td style="color:#8b949e;padding:5px 0;font-size:13px">Submitted by</td>
+          <td style="color:#e6edf3;font-size:13px">{submitted_by}</td>
+        </tr>
+        {server_row}
+      </table>
+      <p style="color:#8b949e;font-size:13px;margin-bottom:20px">
+        <strong style="color:#e6edf3">Description:</strong><br/>
+        {description}
+      </p>
+      <p style="color:#484f58;font-size:11px;margin-top:16px">
+        Review pending submissions in the CyCentra 360 portal at
+        <a href="{FRONTEND_URL}" style="color:#00e5a0">{FRONTEND_URL}</a>
+        → Marketplace → Submissions.
+      </p>
+    """
+    html = _BASE_STYLE.format(body=body)
+    _send_background(admin_email, "CyCentra 360 — New Marketplace Submission", html)
+
+
 # ── Attachment-capable send ───────────────────────────────────────────────────
 
 def _send_with_attachments_sync(

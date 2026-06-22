@@ -172,6 +172,9 @@ MARKETPLACE_CATALOG_URL   = os.environ.get(
 # Email of the CyCentra platform admin who can approve/reject submitted items.
 # Defaults to the bootstrap account; override in .env for production.
 CYCENTRA_ADMIN_EMAIL = os.environ.get("CYCENTRA_ADMIN_EMAIL", "cyadmin@cycentra.com")
+# Destination for marketplace submission notification emails.
+# Separate from CYCENTRA_ADMIN_EMAIL so the submissions inbox can be a shared mailbox.
+MARKETPLACE_ADMIN_EMAIL = os.environ.get("MARKETPLACE_ADMIN_EMAIL", "marketplace@cycentra.com")
 
 # ── SMTP (email notifications) ────────────────────────────────────────────────
 # Used for SSO approval workflow — notifying admins of new sign-in requests and

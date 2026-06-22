@@ -41,7 +41,8 @@ import requests as http_requests
 from flask import Blueprint, jsonify, request, session
 
 from core.helpers import add_cors_headers
-from core.config  import MARKETPLACE_CATALOG_TOKEN, MARKETPLACE_CATALOG_URL, CYCENTRA_ADMIN_EMAIL
+from core.config  import MARKETPLACE_CATALOG_TOKEN, MARKETPLACE_CATALOG_URL, CYCENTRA_ADMIN_EMAIL, MARKETPLACE_ADMIN_EMAIL, FRONTEND_URL
+import smtp_service
 
 marketplace_bp = Blueprint("marketplace", __name__)
 log = logging.getLogger(__name__)
@@ -363,7 +364,18 @@ def catalog_custom_submit(item_id):
     items[idx].pop("rejection_reason", None)
     _write_custom_catalog(items)
 
-    resp = jsonify({"ok": True, "item": items[idx], "message": "Submitted for CyCentra review. You will be notified once approved."})
+    item = items[idx]
+    smtp_service.send_marketplace_submission_notification(
+        admin_email  = MARKETPLACE_ADMIN_EMAIL,
+        item_id      = item["id"],
+        item_name    = item.get("name", ""),
+        item_type    = item.get("type", ""),
+        description  = item.get("description", ""),
+        submitted_by = item["submitted_by"],
+        server_url   = FRONTEND_URL,
+    )
+
+    resp = jsonify({"ok": True, "item": item, "message": "Submitted for CyCentra review. You will be notified once approved."})
     return add_cors_headers(resp)
 
 

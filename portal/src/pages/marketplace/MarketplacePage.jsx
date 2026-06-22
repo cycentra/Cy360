@@ -616,6 +616,9 @@ function CatalogItemFormModal({ initial, onClose, onSaved }) {
   const [submitting,   setSubmitting]   = useState(false);
   const [error,        setError]        = useState(null);
   const [savedItem,    setSavedItem]    = useState(null);
+  // Track the saved ID so that retries after a partial failure use PUT instead of POST,
+  // avoiding a 409 duplicate-ID error on the second attempt.
+  const [savedId,      setSavedId]      = useState(initial?.id || null);
 
   function set(key, val) { setForm(f => ({ ...f, [key]: val })); }
 
@@ -639,11 +642,13 @@ function CatalogItemFormModal({ initial, onClose, onSaved }) {
   }
 
   async function saveItem() {
-    const url    = isEdit ? `${API_BASE}/api/marketplace/catalog/custom/${initial.id}` : `${API_BASE}/api/marketplace/catalog/custom`;
-    const method = isEdit ? "PUT" : "POST";
+    const effectiveId = savedId;
+    const url    = effectiveId ? `${API_BASE}/api/marketplace/catalog/custom/${effectiveId}` : `${API_BASE}/api/marketplace/catalog/custom`;
+    const method = effectiveId ? "PUT" : "POST";
     const r = await fetch(url, { method, credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(buildPayload()) });
     const d = await r.json();
     if (!r.ok || !d.ok) throw new Error(d.error || "Save failed");
+    setSavedId(d.item.id);
     return d.item;
   }
 
@@ -653,7 +658,7 @@ function CatalogItemFormModal({ initial, onClose, onSaved }) {
     try {
       const item = await saveItem();
       setSavedItem(item);
-      onSaved(item, isEdit);
+      onSaved(item, isEdit || !!savedId);
     } catch(err) { setError(err.message); }
     finally { setSaving(false); }
   }
@@ -662,13 +667,14 @@ function CatalogItemFormModal({ initial, onClose, onSaved }) {
     e.preventDefault();
     setError(null); setSubmitting(true);
     try {
-      // Save/update first, then submit
+      // Save/update first, then submit. If submit fails the user can retry safely
+      // because saveItem() will use PUT (not POST) on subsequent attempts.
       const item    = await saveItem();
       const r2      = await fetch(`${API_BASE}/api/marketplace/catalog/custom/${item.id}/submit`, { method:"POST", credentials:"include" });
       const d2      = await r2.json();
       if (!r2.ok || !d2.ok) throw new Error(d2.error || "Submit failed");
       setSavedItem(d2.item);
-      onSaved(d2.item, isEdit);
+      onSaved(d2.item, isEdit || !!savedId);
     } catch(err) { setError(err.message); }
     finally { setSubmitting(false); }
   }
@@ -782,6 +788,7 @@ function CatalogItemFormModal({ initial, onClose, onSaved }) {
                 <option value="">— None (manual configuration) —</option>
                 <option value="o365">o365 — Office 365 API integration</option>
                 <option value="gcloud">gcloud — Google Cloud Pub/Sub integration</option>
+                <option value="github">github — GitHub organization audit logs (PAT)</option>
               </select>
             </div>
           )}
