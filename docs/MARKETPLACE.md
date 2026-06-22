@@ -2,7 +2,7 @@
 
 ## Overview
 
-The CyCentra 360 Integration Marketplace is a **three-tier, cloud-pull system**. No integrations or playbooks are bundled with the platform at ship time. Everything visible in the Marketplace tab is fetched on demand from the cloud catalog hosted on `cycentra.com`.
+The CyCentra 360 Integration Marketplace is a **three-tier, live-API system**. No integrations or playbooks are bundled with the platform at ship time. Everything visible in the Marketplace tab is fetched on demand from the cloud catalog hosted on `cycentra.com`.
 
 **The catalog is managed exclusively through the CyAdmin Marketplace Manager UI — never by editing files directly.**
 
@@ -12,89 +12,106 @@ The CyCentra 360 Integration Marketplace is a **three-tier, cloud-pull system**.
 
 | UI | URL | Who uses it | Purpose |
 |----|-----|-------------|---------|
-| **CyAdmin Marketplace Manager** | `http://localhost:7070/marketplace` | CyCentra team (internal) | Add/edit/delete items, review and approve/reject contributor submissions, publish to cycentra.com |
+| **CyAdmin Marketplace Manager** | `http://localhost:7070/marketplace` | CyCentra team (internal, dev machine only) | Add/edit/delete items, review remote submissions from Cy360 instances, publish live to cycentra.com |
 | **CyAdmin Contributor Form** | `http://localhost:7070/marketplace/contribute` | Authorized contributors | Submit new integrations or playbooks for review |
-| **CyCentra 360 Marketplace Tab** | Portal → Marketplace | End users (SOC analysts, admins) | Browse the live catalog, pull integrations, configure credentials |
+| **CyCentra 360 Marketplace Tab** | Portal → Marketplace | End users (SOC analysts, admins) | Browse the live catalog, pull integrations, configure credentials, contribute items |
+
+> **Important:** CyAdmin lives only on the developer's local machine — it is never exposed to client Cy360 instances. All live traffic passes through `cycentra.com`.
 
 ---
 
 ## Architecture & Data Flow
 
-### Publication path (CyAdmin → Cy360)
+### Publication path (CyAdmin → cycentra.com → Cy360 — immediate, no CI)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  CyAdmin (internal, localhost:7070)                                  │
-│  /marketplace             — admin catalog manager UI                │
-│  /marketplace/contribute  — external contributor submission form    │
-│  data/catalog.json        — working copy (bind-mounted ./data/)     │
+│  CyAdmin (developer laptop only — localhost:7070)                    │
+│  /marketplace           — admin catalog manager UI                   │
+│  data/catalog.json      — working copy (bind-mounted ./data/)        │
 │                                                                      │
-│  GET /api/marketplace/catalog.json  ← also serves catalog directly  │
-│                                         (used by Cy360 as fallback) │
 │  [Publish to cycentra.com] button                                    │
 │   → POST /api/marketplace/publish                                    │
-│   → writes approved items to CyCentra.com repo on disk              │
+│   → HTTP POST to cycentra.com/marketplace/api/publish               │
+│     (Authorization: Bearer MARKETPLACE_ADMIN_TOKEN)                  │
 └──────────────────────────────┬───────────────────────────────────────┘
-                               │  file write (via Docker volume mount)
+                               │  HTTPS POST
                                ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  CyCentra.com/public/marketplace/catalog.json                       │
-│  (local repo file — git tracked)                                     │
+│  cycentra.com — marketplace-api (Flask, port 5050, Docker)           │
+│  POST /marketplace/api/publish                                        │
+│   → validates MARKETPLACE_ADMIN_TOKEN                                │
+│   → writes catalog.json to shared Docker volume (/data/)             │
 │                                                                      │
-│  bash git-push.sh  →  CI builds + deploys to live cycentra.com      │
-│  (server must pull new Docker image to serve updated catalog)        │
+│  cycentra-web (nginx)                                                 │
+│   → serves /marketplace/catalog.json from same shared volume         │
+│   → LIVE immediately — zero CI rebuild, zero restart                 │
 └──────────────────────────────┬───────────────────────────────────────┘
                                │  HTTPS GET — MARKETPLACE_CATALOG_URL
-                               │  (default: cycentra.com/marketplace/catalog.json)
-                               │  For local dev: set to localhost:7070/api/marketplace/catalog.json
+                               │  X-CyCentra-Token header (if token set)
                                ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  CyCentra 360 Backend (Flask)  _fetch_cloud_catalog()               │
-│  GET /api/marketplace/catalog                                        │
-│  • Fetches MARKETPLACE_CATALOG_URL (with X-CyCentra-Token if set)  │
-│  • Falls back to CYADMIN_URL/api/marketplace/catalog.json if set   │
-│  • Merges with approved custom items on this server                 │
-│  • Returns merged list — cycentra.com URL never exposed to browser  │
+│  CyCentra 360 Backend (Flask)  _fetch_cloud_catalog()                │
+│  GET /api/marketplace/catalog                                         │
+│  • Fetches MARKETPLACE_CATALOG_URL with X-CyCentra-Token            │
+│  • Merges with approved custom items local to this server            │
+│  • Returns merged list — cycentra.com URL never exposed to browser   │
 └──────────────────────────────┬───────────────────────────────────────┘
                                │  JSON response
                                ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  CyCentra 360 Portal (React)                                         │
-│  portal/src/pages/marketplace/MarketplacePage.jsx                   │
+│  CyCentra 360 Portal (React)                                          │
+│  portal/src/pages/marketplace/MarketplacePage.jsx                    │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-### Contribution path (Cy360 portal → CyAdmin → global catalog)
+### Contribution path (Cy360 portal → cycentra.com → CyAdmin review — immediate)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  Cy360 Portal — "+ Contribute to Marketplace"                        │
-│  Admin fills form → clicks "Submit for Review"                       │
-│  POST /api/marketplace/catalog/custom          (create draft)        │
-│  POST /api/marketplace/catalog/custom/<id>/submit                    │
+│  Cy360 Portal — "+ Contribute to Marketplace"                         │
+│  Admin fills form → clicks "Submit for Review"                        │
+│  POST /api/marketplace/catalog/custom          (create draft)         │
+│  POST /api/marketplace/catalog/custom/<id>/submit                     │
 └──────────────────────────────┬───────────────────────────────────────┘
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  Cy360 Backend  catalog_custom_submit()                              │
+│  Cy360 Backend  catalog_custom_submit()                               │
 │  • Saves status="submitted" to /opt/cycentra/marketplace_custom.json │
-│  • Sends email to MARKETPLACE_ADMIN_EMAIL                           │
-│  • If CYADMIN_URL + CYADMIN_CONTRIBUTOR_TOKEN are set:              │
-│      POST {CYADMIN_URL}/api/marketplace/submissions  (async)         │
+│  • Sends email notification to MARKETPLACE_ADMIN_EMAIL               │
+│  • Fire-and-forget: POST MARKETPLACE_SUBMIT_URL                      │
+│    (defaults to cycentra.com/marketplace/api/submissions)            │
+│    X-CyCentra-Token: MARKETPLACE_CATALOG_TOKEN                       │
 └──────────────────────────────┬───────────────────────────────────────┘
-                               │  HTTP POST (fire-and-forget thread)
+                               │  HTTPS POST (async background thread)
                                ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  CyAdmin  POST /api/marketplace/submissions                          │
-│  • Submission appears in Submissions tab                             │
-│  • CyAdmin admin reviews → Approve → item added to working catalog  │
-│  • Click Publish → git-push.sh → live for all Cy360 instances       │
+│  cycentra.com marketplace-api                                         │
+│  POST /marketplace/api/submissions                                    │
+│   → validates X-CyCentra-Token                                       │
+│   → appends to submissions.json on shared volume                     │
+│   → persisted immediately, visible to CyAdmin                        │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               │  HTTPS GET (CyAdmin polls on load)
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│  CyAdmin — Remote Submissions tab                                     │
+│  GET /api/marketplace/remote-submissions                              │
+│   → proxies GET cycentra.com/marketplace/api/submissions             │
+│                                                                      │
+│  Approve → POST cycentra.com/marketplace/api/submissions/<id>/approve│
+│   → item promoted to live catalog.json immediately (no Publish step) │
+│                                                                      │
+│  Reject → POST cycentra.com/marketplace/api/submissions/<id>/reject  │
+│   → reason stored; item stays off live catalog                       │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
 **Key principles:**
 - The browser never calls CyAdmin or cycentra.com directly — all catalog traffic is proxied through the Cy360 Flask backend.
-- For local/single-host setups, set `MARKETPLACE_CATALOG_URL=http://localhost:7070/api/marketplace/catalog.json` and `CYADMIN_URL=http://localhost:7070` to bypass the cycentra.com hop entirely.
+- Publishing from CyAdmin goes live immediately — no `git-push.sh` required.
+- Contributions from Cy360 instances land on cycentra.com; CyAdmin pulls them from there for review.
 
 ---
 
@@ -119,21 +136,11 @@ http://localhost:7070/marketplace
 
 Click the **"Publish to cycentra.com"** button in the toolbar.
 
-This writes all approved items to:
-```
-CyCentra.com/public/marketplace/catalog.json
-```
+This POSTs all approved items to `cycentra.com/marketplace/api/publish` via the admin API. The live `catalog.json` is updated immediately on the shared Docker volume.
 
-A toast confirms: *"Published N item(s) to cycentra.com catalog."*
+A toast confirms: *"Published N item(s)."*
 
-### Step 4 — Deploy live
-
-```bash
-cd /path/to/CyCentra.com
-bash git-push.sh
-```
-
-CI builds and deploys the updated container to `cycentra.com`. Once deployed, **all connected CyCentra 360 instances see the new item immediately** on the next page load — no server-side action required on any connected server.
+**That's it — no `git-push.sh` needed. All connected Cy360 instances see the new item on the next page load.**
 
 ---
 
@@ -145,43 +152,45 @@ CI builds and deploys the updated container to `cycentra.com`. Once deployed, **
 - Add new items via a full-form modal — validates all fields, checks ID uniqueness
 - Edit any existing item — ID is locked once created to protect install state on live servers
 - Delete items
-- View all contributor submissions (Submissions tab with red dot when pending reviews exist)
-- Approve a submission → item immediately added to the working catalog
+- View **Local Submissions** (items submitted from the CyAdmin contributor form)
+- View **Remote Submissions** (items submitted from Cy360 portal instances via cycentra.com)
+- Approve a submission → item published live immediately to cycentra.com catalog
 - Reject a submission with a mandatory written reason
-- **Publish to cycentra.com** — syncs approved working catalog to the live static file
+- **Publish to cycentra.com** — syncs approved working catalog to the live API
 
 ### Auth
 
 If `CYADMIN_TOKEN` is set in `docker-compose.yml`, the page prompts for the token on first load (stored in `localStorage`). If not set, the portal is open.
 
-### Working catalog vs. live catalog
-
-| Location | Purpose |
-|----------|---------|
-| `CyAdmin/data/catalog.json` | Working copy — all edits happen here |
-| `CyCentra.com/public/marketplace/catalog.json` | Live static file served to all CyCentra 360 instances |
-
-The **Publish** button syncs the working copy to the live file. Until you publish and run `git-push.sh`, changes in CyAdmin are not visible to any CyCentra 360 instance.
-
 ---
 
 ## Contributor Workflow
 
-Anyone with a `CONTRIBUTOR_TOKEN` can submit items for review without admin access.
-
-### Submitting
+### From the CyAdmin contributor form
 
 ```
 http://localhost:7070/marketplace/contribute
 ```
 
-The form collects all catalog fields, has a playbook-specific section shown when "Playbook" is selected, and requires the contributor token. **Submissions never publish directly** — they land in the Submissions queue for admin review.
+The form collects all catalog fields and requires the contributor token. **Submissions never publish directly** — they land in the Local Submissions queue for admin review.
 
-### Review
+### From the Cy360 portal (recommended for client submissions)
 
-CyAdmin admins see pending submissions in the Submissions tab. They can:
-- **Approve** — item moves to the working catalog; Publish + `git-push.sh` to go live
-- **Reject** — mandatory reason is recorded
+Admins on a Cy360 server can create items local to their installation and submit them for inclusion in the global catalog.
+
+1. Portal → Marketplace → "+ Contribute to Marketplace"
+2. Fill the form → click "Submit for Review"
+3. The item is saved locally (status = "submitted") and forwarded to cycentra.com's submissions queue
+4. CyAdmin team sees it in the **Remote Submissions** tab
+5. Approve → item goes live in the catalog immediately; all Cy360 instances see it
+6. Reject → admin sees the reason in the portal and can edit + resubmit
+
+### Review in CyAdmin
+
+| Tab | Source |
+|-----|--------|
+| **Local Submissions** | Submissions via `http://localhost:7070/marketplace/contribute` |
+| **Remote Submissions** | Submissions from Cy360 portal instances, stored on cycentra.com |
 
 ### Setting up contributor tokens
 
@@ -193,8 +202,6 @@ Set in `CyAdmin/docker-compose.yml`:
 ```yaml
 - CONTRIBUTOR_TOKEN=<generated-token>
 ```
-
-Share the token only with trusted contributors. It is separate from `CYADMIN_TOKEN` — contributors cannot access admin functions.
 
 ---
 
@@ -228,7 +235,17 @@ Share the token only with trusted contributors. It is separate from `CYADMIN_TOK
 | Browse/edit catalog items | `CYADMIN_TOKEN` (or open if not set) |
 | Approve/reject submissions | `CYADMIN_TOKEN` |
 | Submit new item for review | `CONTRIBUTOR_TOKEN` (or `CYADMIN_TOKEN`) |
-| Publish to cycentra.com | `CYADMIN_TOKEN` |
+| Publish to cycentra.com live API | `CYADMIN_TOKEN` + `MARKETPLACE_ADMIN_TOKEN` |
+
+### cycentra.com marketplace-api
+
+| Action | Requirement |
+|--------|-------------|
+| Publish catalog (write) | `Authorization: Bearer MARKETPLACE_ADMIN_TOKEN` |
+| Fetch submissions list | `Authorization: Bearer MARKETPLACE_ADMIN_TOKEN` |
+| Approve / reject submission | `Authorization: Bearer MARKETPLACE_ADMIN_TOKEN` |
+| Submit a contribution | `X-CyCentra-Token: MARKETPLACE_CATALOG_TOKEN` |
+| Read catalog.json | `X-CyCentra-Token: MARKETPLACE_CATALOG_TOKEN` |
 
 ### CyCentra 360 Portal (consumer layer)
 
@@ -241,22 +258,6 @@ Share the token only with trusted contributors. It is separate from `CYADMIN_TOK
 | Create / edit per-server custom items | `admin` only |
 | Submit per-server item for cloud review | `admin` only |
 
-Unauthenticated requests to any `/api/marketplace/*` route return `401`. Insufficient-role requests return `403`.
-
-### cycentra.com CORS lock
-
-`nginx.conf.template` restricts `/marketplace/` to a single allowed origin:
-
-```nginx
-location /marketplace/ {
-    add_header Access-Control-Allow-Origin "${FRONTEND_URL}" always;
-    add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
-    add_header Cache-Control "no-store" always;
-}
-```
-
-`FRONTEND_URL` is injected at container startup (e.g. `https://cy360.cycentra.com`). The CyCentra 360 Flask backend fetches the catalog server-side, so this CORS lock does not affect normal operation.
-
 ---
 
 ## File Locations
@@ -264,16 +265,52 @@ location /marketplace/ {
 | File | Purpose |
 |------|---------|
 | `CyAdmin/data/catalog.json` | Working catalog — managed via CyAdmin UI |
-| `CyAdmin/app.py` | All marketplace API routes and Publish endpoint |
-| `CyAdmin/templates/marketplace.html` | Admin manager UI |
-| `CyAdmin/templates/marketplace_contribute.html` | Contributor submission form |
-| `CyCentra.com/public/marketplace/catalog.json` | **Live static catalog** — written by Publish, deployed by `git-push.sh` |
-| `CyCentra.com/nginx.conf.template` | nginx CORS config for `/marketplace/` |
+| `CyAdmin/app.py` | All marketplace API routes; publish calls cycentra.com API |
+| `CyAdmin/templates/marketplace.html` | Admin manager UI (Local + Remote Submissions tabs) |
+| `CyAdmin/templates/marketplace_contribute.html` | Local contributor submission form |
+| `CyCentra.com/marketplace-api/app.py` | Live Flask API: publish, submissions, approve/reject |
+| `CyCentra.com/marketplace-api/Dockerfile` | python:3.12-slim, port 5050 |
+| `CyCentra.com/docker-compose.yml` | Shared `marketplace-data` volume; nginx + marketplace-api services |
+| `CyCentra.com/nginx.conf.template` | Routes `/marketplace/api/` → marketplace-api; `/marketplace/` serves catalog.json |
 | `Cy360/backend/blueprints/marketplace/routes.py` | All CyCentra 360 marketplace API endpoints |
 | `Cy360/portal/src/pages/marketplace/MarketplacePage.jsx` | CyCentra 360 consumer-side Marketplace UI |
 | `/opt/cycentra/marketplace_custom.json` | Per-server custom items (local to each server) |
 | `/var/ossec/etc/cycentra_marketplace.json` | Per-server install state |
-| `Cy360/backend/core/config.py` (lines 141–150) | `MARKETPLACE_CATALOG_TOKEN`, `MARKETPLACE_CATALOG_URL`, `CYCENTRA_ADMIN_EMAIL` |
+| `Cy360/backend/core/config.py` | `MARKETPLACE_CATALOG_TOKEN`, `MARKETPLACE_CATALOG_URL`, `MARKETPLACE_SUBMIT_URL` |
+
+---
+
+## Environment Variables
+
+### CyAdmin (`CyAdmin/docker-compose.yml`)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CYADMIN_TOKEN` | *(unset — open)* | Bearer token protecting all admin API routes |
+| `CONTRIBUTOR_TOKEN` | *(unset — open)* | Separate token for local contributor submissions |
+| `CATALOG_FILE` | `./data/catalog.json` | Path to the working catalog inside the container |
+| `CYCENTRA_COM_URL` | `https://cycentra.com` | Base URL of the live cycentra.com marketplace API |
+| `MARKETPLACE_ADMIN_TOKEN` | *(required for Publish)* | Admin secret shared with cycentra.com; gates publish and remote submission review |
+| `NOTIFY_EMAIL` | `marketplace@cycentra.com` | Destination for local contributor submission email notifications |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | *(unset)* | SMTP config for email notifications |
+
+### cycentra.com (`CyCentra.com/.env`)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MARKETPLACE_ADMIN_TOKEN` | *(required)* | Secret known only to CyAdmin; gates publish and submission review |
+| `MARKETPLACE_CATALOG_TOKEN` | *(empty)* | Pre-shared token for Cy360 instances; gates catalog read and contribution submit. Leave empty for open access. |
+| `FRONTEND_URL` | `https://cy360.cycentra.com` | CORS allowed origin for nginx catalog endpoint |
+
+### CyCentra 360 (`/opt/cycentra/.env`)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MARKETPLACE_CATALOG_URL` | `https://cycentra.com/marketplace/catalog.json` | URL Cy360 fetches the live catalog from |
+| `MARKETPLACE_CATALOG_TOKEN` | *(empty)* | Pre-shared token sent as `X-CyCentra-Token`; must match `MARKETPLACE_CATALOG_TOKEN` on cycentra.com |
+| `MARKETPLACE_SUBMIT_URL` | derived from `MARKETPLACE_CATALOG_URL` | URL to POST contributions to (auto-derived as `{base}/marketplace/api/submissions`) |
+| `CYCENTRA_ADMIN_EMAIL` | `cyadmin@cycentra.com` | Account that can approve/reject per-server submitted items in the Cy360 portal |
+| `MARKETPLACE_ADMIN_EMAIL` | `marketplace@cycentra.com` | Destination for submission notification emails; can be a shared team inbox |
 
 ---
 
@@ -294,10 +331,6 @@ _VALID_CONFIG_TYPES = {"o365", "gcloud", "github", "your_type", None}
 ### Step 2 — Add backend config endpoints
 
 ```python
-@system_bp.route("/api/system/yourconfig", methods=["OPTIONS"])
-def options_yourconfig():
-    return add_cors_headers(make_response('', 204))
-
 @system_bp.route("/api/system/yourconfig", methods=["GET"])
 def get_yourconfig():
     ...
@@ -326,81 +359,22 @@ Wire it into `renderConfigModal`:
 if (item.config_type === "your_type") return <YourConfigModal ... />;
 ```
 
-### Step 4 — Register the new env var
-
-Add any new secrets/config keys to `core/config.py` and `cycentra-setup.sh`. Notify `@cyra-devops`.
-
----
-
-## Per-Server Custom Item Workflow
-
-Admins on a CyCentra 360 server can create items **local to their installation** and submit them for inclusion in the global catalog. When `CYADMIN_URL` and `CYADMIN_CONTRIBUTOR_TOKEN` are configured, submissions are forwarded directly to CyAdmin's Submissions queue for review.
-
-```
-Admin creates draft item in Cy360 portal (+ Contribute to Marketplace)
-  → stored in /opt/cycentra/marketplace_custom.json on this server
-  → editable freely while in draft or rejected state
-
-Admin clicks "Submit for Review"
-  → status becomes "submitted" locally
-  → email notification fired to MARKETPLACE_ADMIN_EMAIL (marketplace@cycentra.com)
-  → if CYADMIN_URL + CYADMIN_CONTRIBUTOR_TOKEN are set:
-       item is forwarded via POST {CYADMIN_URL}/api/marketplace/submissions
-       → appears in CyAdmin Submissions tab for the CyCentra team to review
-  → cannot be edited while under review (recall first to edit)
-
-CyCentra team reviews in CyAdmin Submissions tab
-  → Approve → item moves to CyAdmin working catalog
-  → Click Publish → writes to CyCentra.com/public/marketplace/catalog.json
-  → Run git-push.sh → CI deploys to cycentra.com → all Cy360 instances see it
-
-CyCentra team rejects (with mandatory reason)
-  → status becomes "rejected" in both CyAdmin and locally
-  → admin sees rejection reason in the portal; can edit and resubmit
-```
-
-Without `CYADMIN_URL` configured, submissions are stored locally and visible only to the `CYCENTRA_ADMIN_EMAIL` user in the Cy360 portal's review queue. **Set `CYADMIN_URL` to enable the full CyAdmin integration.**
-
----
-
-## Environment Variables
-
-### CyAdmin (`CyAdmin/docker-compose.yml`)
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `CYADMIN_TOKEN` | *(unset — open)* | Bearer token protecting all admin API routes |
-| `CONTRIBUTOR_TOKEN` | *(unset — open)* | Separate token for contributor submissions |
-| `CATALOG_FILE` | `./data/catalog.json` | Path to the working catalog inside the container |
-| `CYCENTRA_CATALOG_PATH` | `../CyCentra.com/public/marketplace/catalog.json` | Destination written by the Publish action |
-
-### CyCentra 360 (`/opt/cycentra/.env`)
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `MARKETPLACE_CATALOG_URL` | `https://cycentra.com/marketplace/catalog.json` | Primary URL Cy360 fetches the catalog from. **Set to `http://localhost:7070/api/marketplace/catalog.json` for local/single-host deployments** to pull directly from CyAdmin without waiting for cycentra.com to deploy. |
-| `MARKETPLACE_CATALOG_TOKEN` | *(empty)* | Pre-shared token sent as `X-CyCentra-Token`; must match `MARKETPLACE_CATALOG_TOKEN` on cycentra.com. Leave empty on both sides for open access. |
-| `CYADMIN_URL` | *(empty)* | Base URL of CyAdmin (e.g. `http://localhost:7070`). When set, Cy360 forwards contributor submissions to CyAdmin's Submissions tab and uses CyAdmin as a catalog fallback when the primary URL fails. |
-| `CYADMIN_CONTRIBUTOR_TOKEN` | *(empty)* | The `CONTRIBUTOR_TOKEN` (or `CYADMIN_TOKEN`) configured in CyAdmin. Required for submission forwarding. |
-| `CYCENTRA_ADMIN_EMAIL` | `cyadmin@cycentra.com` | Account that can approve/reject per-server submitted items in the Cy360 portal review queue |
-| `MARKETPLACE_ADMIN_EMAIL` | `marketplace@cycentra.com` | Destination for submission notification emails; can be a shared team inbox |
-
 ---
 
 ## What NOT to Do
 
 - **Never edit `catalog.json` files directly in any text editor.** Use the CyAdmin Marketplace Manager UI.
-- **Never add or modify catalog items directly on a live server via SSH.** All catalog changes go through CyAdmin → Publish → `git-push.sh`.
+- **Never configure Cy360 to call CyAdmin directly.** CyAdmin is on a developer machine — it cannot be reached by client instances. All traffic goes through cycentra.com.
 - **Never hard-code an integration into the portal or backend.** The catalog is the single source of truth.
 - **Never commit real secrets into any catalog file.** Catalog files contain metadata only. Credentials go in `/opt/cycentra/.env` on the server.
 - **Never change an existing item's `id`.** The ID is the primary key for install state on every connected server. Renaming it breaks tracking silently and permanently.
-- **Never skip `git-push.sh` after Publish.** The Publish button writes to the local repo file only. The live cycentra.com server is only updated after CI deploys.
 
 ---
 
 ## Adding a New Item — Quick Checklist
 
 - [ ] Opened CyAdmin at `http://localhost:7070/marketplace`
+- [ ] `CYCENTRA_COM_URL` and `MARKETPLACE_ADMIN_TOKEN` are set in `CyAdmin/docker-compose.yml`
 - [ ] Item `id` is lowercase alphanumeric + hyphens, 3–50 chars, unique across all existing items
 - [ ] `type` is `"integration"` or `"playbook"`
 - [ ] `description` is non-empty
@@ -409,5 +383,4 @@ Without `CYADMIN_URL` configured, submissions are stored locally and visible onl
 - [ ] If `config_type` is set, a backend endpoint and portal modal exist for it
 - [ ] If `cysoar_flow` is set, the flow file exists in CySOAR
 - [ ] Clicked **"Publish to cycentra.com"** button — toast confirms success
-- [ ] `bash git-push.sh` run from `CyCentra.com/`
-- [ ] Verified new item appears in the CyCentra 360 portal Marketplace tab
+- [ ] Verified new item appears in the CyCentra 360 portal Marketplace tab (no deploy step needed)

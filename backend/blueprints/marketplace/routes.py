@@ -43,8 +43,8 @@ from flask import Blueprint, jsonify, request, session
 from core.helpers import add_cors_headers
 from core.config  import (
     MARKETPLACE_CATALOG_TOKEN, MARKETPLACE_CATALOG_URL,
+    MARKETPLACE_SUBMIT_URL,
     CYCENTRA_ADMIN_EMAIL, MARKETPLACE_ADMIN_EMAIL,
-    CYADMIN_URL, CYADMIN_CONTRIBUTOR_TOKEN,
     FRONTEND_URL,
 )
 import smtp_service
@@ -101,49 +101,24 @@ def _write_json(path, data):
 
 
 def _fetch_cloud_catalog():
-    """Fetch the catalog from the configured URL (cycentra.com or CyAdmin direct).
-
-    Primary source: MARKETPLACE_CATALOG_URL (default: https://cycentra.com/marketplace/catalog.json)
-    Fallback:       CYADMIN_URL/api/marketplace/catalog.json when primary fails and CYADMIN_URL is set.
-
-    For local/single-host deployments set MARKETPLACE_CATALOG_URL to the CyAdmin catalog endpoint
-    (e.g. http://localhost:7070/api/marketplace/catalog.json) to bypass the cycentra.com hop entirely.
+    """Fetch the marketplace catalog from cycentra.com.
 
     Sends X-CyCentra-Token when MARKETPLACE_CATALOG_TOKEN is set.
     Returns (items, status) where status is 'ok' or 'fetch_error'.
     """
-    def _get(url, token=None):
-        headers = {}
-        if token:
-            headers["X-CyCentra-Token"] = token
-        resp = http_requests.get(url, headers=headers, timeout=6)
-        if resp.ok:
-            return resp.json().get("items", [])
-        log.warning("marketplace catalog fetch failed — HTTP %s from %s", resp.status_code, url)
-        return None
-
+    headers = {}
+    if MARKETPLACE_CATALOG_TOKEN:
+        headers["X-CyCentra-Token"] = MARKETPLACE_CATALOG_TOKEN
     try:
-        items = _get(MARKETPLACE_CATALOG_URL, MARKETPLACE_CATALOG_TOKEN or None)
-        if items is not None:
+        resp = http_requests.get(MARKETPLACE_CATALOG_URL, headers=headers, timeout=6)
+        if resp.ok:
+            items = resp.json().get("items", [])
             for item in items:
                 item["source"] = "cloud"
             return items, "ok"
+        log.warning("marketplace catalog fetch failed — HTTP %s from %s", resp.status_code, MARKETPLACE_CATALOG_URL)
     except Exception as exc:
         log.warning("marketplace catalog fetch error — %s: %s", type(exc).__name__, exc)
-
-    # Fallback: fetch directly from CyAdmin when primary URL is unreachable
-    if CYADMIN_URL:
-        cyadmin_catalog = f"{CYADMIN_URL.rstrip('/')}/api/marketplace/catalog.json"
-        try:
-            items = _get(cyadmin_catalog)
-            if items is not None:
-                for item in items:
-                    item["source"] = "cloud"
-                log.info("marketplace catalog: using CyAdmin fallback (%s)", cyadmin_catalog)
-                return items, "ok"
-        except Exception as exc:
-            log.warning("marketplace CyAdmin fallback error — %s: %s", type(exc).__name__, exc)
-
     return [], "fetch_error"
 
 
@@ -393,13 +368,14 @@ def catalog_custom_submit(item_id):
         server_url   = FRONTEND_URL,
     )
 
-    # Forward to CyAdmin submissions queue so it appears in the CyAdmin Submissions tab.
+    # Forward contribution to the cycentra.com marketplace API submissions queue.
+    # CyAdmin polls this queue and reviews it from the Remote Submissions tab.
     # Fire-and-forget: failure is logged but never surfaces to the caller.
-    if CYADMIN_URL and CYADMIN_CONTRIBUTOR_TOKEN:
+    if MARKETPLACE_SUBMIT_URL:
         import threading
         _item_snapshot = dict(item)
 
-        def _forward():
+        def _forward_to_cycentra():
             try:
                 payload = {
                     "id":               _item_snapshot["id"],
@@ -416,22 +392,20 @@ def catalog_custom_submit(item_id):
                     "steps":            _item_snapshot.get("steps", []),
                     "cysoar_flow":      _item_snapshot.get("cysoar_flow", ""),
                     "submitted_by":     _item_snapshot.get("submitted_by", ""),
-                    "notes":            f"Submitted from Cy360 server: {FRONTEND_URL}",
+                    "notes":            f"Submitted from Cy360 instance: {FRONTEND_URL}",
                 }
-                r = http_requests.post(
-                    f"{CYADMIN_URL.rstrip('/')}/api/marketplace/submissions",
-                    json=payload,
-                    headers={"Authorization": f"Bearer {CYADMIN_CONTRIBUTOR_TOKEN}"},
-                    timeout=8,
-                )
+                headers = {}
+                if MARKETPLACE_CATALOG_TOKEN:
+                    headers["X-CyCentra-Token"] = MARKETPLACE_CATALOG_TOKEN
+                r = http_requests.post(MARKETPLACE_SUBMIT_URL, json=payload, headers=headers, timeout=8)
                 if r.ok:
-                    log.info("marketplace: forwarded submission %s to CyAdmin", _item_snapshot["id"])
+                    log.info("marketplace: contribution %s forwarded to cycentra.com", _item_snapshot["id"])
                 else:
-                    log.warning("marketplace: CyAdmin forward HTTP %s — %s", r.status_code, r.text[:200])
+                    log.warning("marketplace: cycentra.com forward HTTP %s — %s", r.status_code, r.text[:200])
             except Exception as exc:
-                log.warning("marketplace: CyAdmin forward error — %s: %s", type(exc).__name__, exc)
+                log.warning("marketplace: cycentra.com forward error — %s: %s", type(exc).__name__, exc)
 
-        threading.Thread(target=_forward, daemon=True).start()
+        threading.Thread(target=_forward_to_cycentra, daemon=True).start()
 
     resp = jsonify({"ok": True, "item": item, "message": "Submitted for CyCentra review. You will be notified once approved."})
     return add_cors_headers(resp)

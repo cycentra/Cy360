@@ -169,13 +169,15 @@ MARKETPLACE_CATALOG_URL   = os.environ.get(
     "MARKETPLACE_CATALOG_URL",
     "https://cycentra.com/marketplace/catalog.json",
 )
-# CyAdmin connection — when set, Cy360 forwards contributor submissions to CyAdmin's
-# submissions queue so they appear in the CyAdmin Submissions tab for review.
-# CYADMIN_URL: base URL of CyAdmin (e.g. http://localhost:7070 for local dev,
-#              https://cyadmin.cycentra.com in production).
-# CYADMIN_CONTRIBUTOR_TOKEN: the CONTRIBUTOR_TOKEN (or CYADMIN_TOKEN) set in CyAdmin.
-CYADMIN_URL               = os.environ.get("CYADMIN_URL",               "")
-CYADMIN_CONTRIBUTOR_TOKEN = os.environ.get("CYADMIN_CONTRIBUTOR_TOKEN", "")
+# Derived: base URL for the cycentra.com marketplace API (strip /marketplace/catalog.json).
+# Used to POST contributions to /marketplace/api/submissions.
+_catalog_url_base = MARKETPLACE_CATALOG_URL
+if _catalog_url_base.endswith("/marketplace/catalog.json"):
+    _catalog_url_base = _catalog_url_base[: -len("/marketplace/catalog.json")]
+MARKETPLACE_SUBMIT_URL = os.environ.get(
+    "MARKETPLACE_SUBMIT_URL",
+    f"{_catalog_url_base}/marketplace/api/submissions",
+)
 # Email of the CyCentra platform admin who can approve/reject submitted items.
 # Defaults to the bootstrap account; override in .env for production.
 CYCENTRA_ADMIN_EMAIL = os.environ.get("CYCENTRA_ADMIN_EMAIL", "cyadmin@cycentra.com")
