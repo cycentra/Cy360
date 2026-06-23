@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.81 -- 2026-06-23 11:30 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.82 -- 2026-06-23 11:56 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1068,7 +1068,11 @@ systemctl is-active cysiem-to-redis >/dev/null 2>&1 \
 # ── Download release bundle ───────────────────────────────────────────────────
 step_header "DOWNLOAD RELEASE BUNDLE"
 
-GH_TOKEN="${GH_TOKEN:-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}"
+# In update mode .env is not sourced until Step 5, so read GH_TOKEN early
+# from .env if it is not already in the shell environment.
+if [[ -z "${GH_TOKEN:-}" && -f "/opt/cycentra/.env" ]]; then
+    GH_TOKEN="$(grep '^GH_TOKEN=' /opt/cycentra/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d ' \r')"
+fi
 GH_ORG="cycentra"
 GH_REPO="Cy360"
 
@@ -1093,7 +1097,9 @@ if [[ -f "$_SCRIPT_DIR/manifest.json" && "$_SCRIPT_DIR" != "/opt/cycentra" ]]; t
 else
     # ── Remote download path: requires GH_TOKEN ───────────────────────────────
     if [[ -z "$GH_TOKEN" ]]; then
-        error "GH_TOKEN is not set and could not be resolved. Ensure it is exported or set in the environment."
+        error "GH_TOKEN is not set. Add it to /opt/cycentra/.env or pass inline:"
+        error "  GH_TOKEN=ghp_... sudo -E bash cycentra-setup.sh --update"
+        error "Token needs 'repo' scope (or 'contents:read' on a fine-grained PAT) for cycentra/Cy360."
         exit 1
     fi
 
