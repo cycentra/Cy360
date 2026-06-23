@@ -59,6 +59,8 @@ _SECRET_KEYS = {
     "CYSOAR_OIDC_SECRET",
     "NODE_RED_CREDENTIAL_SECRET",
     "JWT_SECRET", "ADMIN_API_KEY", "SMTP_PASS",
+    "INFISICAL_CLIENT_SECRET", "INFISICAL_CLIENT_ID", "INFISICAL_PROJECT_ID",
+    "VT_API_KEY", "VIRUSTOTAL_API_KEY", "ABUSEIPDB_API_KEY", "GREYNOISE_API_KEY",
 }
 
 # ── Preflight ─────────────────────────────────────────────────────────────────
@@ -425,6 +427,12 @@ def ti_test():
     data   = request.get_json() or {}
     source = data.get("source", "")   # "virustotal" | "abuseipdb" | "greynoise"
 
+    _TI_ENV_FALLBACK = {
+        "vtApiKey":        "VIRUSTOTAL_API_KEY",
+        "abuseipdbApiKey": "ABUSEIPDB_API_KEY",
+        "greynoiseApiKey": "GREYNOISE_API_KEY",
+    }
+
     def _resolve_key(field: str) -> str:
         key = data.get("apiKey", "")
         if not key or key == _MASK:
@@ -433,6 +441,9 @@ def ti_test():
                 key = stored.get("threat_intel", {}).get(field, "")
             except Exception:
                 key = ""
+        # Fall back to vault-injected env var if UI has nothing configured
+        if not key:
+            key = os.environ.get(_TI_ENV_FALLBACK.get(field, ""), "")
         return key
 
     try:

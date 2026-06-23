@@ -191,6 +191,10 @@ ENGINE_KV_MAP: dict[str, str] = {
     "CLOUD_MISP_API_KEY": "CLOUD-MISP-API-KEY",
     "CYMIND_API_URL":     "CYMIND-API-URL",
     "CYMIND_API_KEY":     "CYMIND-API-KEY",
+    # TI keys — shared vault secret, same name as ASM_KV_MAP so one vault entry covers both
+    "VIRUSTOTAL_API_KEY":  "VIRUSTOTAL-API-KEY",
+    "ABUSEIPDB_API_KEY":   "ABUSEIPDB-API-KEY",
+    "GREYNOISE_API_KEY":   "GREYNOISE-API-KEY",
 }
 
 # CyASM scanning modules
@@ -205,6 +209,8 @@ ASM_KV_MAP: dict[str, str] = {
     "HIBP_API_KEY":           "HIBP-API-KEY",
     "GVM_PASSWORD":           "GVM-PASSWORD",
     "GVM_USER":               "GVM-USER",
+    "ABUSEIPDB_API_KEY":      "ABUSEIPDB-API-KEY",
+    "GREYNOISE_API_KEY":      "GREYNOISE-API-KEY",
 }
 
 

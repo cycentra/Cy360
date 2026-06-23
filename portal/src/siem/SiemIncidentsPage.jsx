@@ -920,83 +920,192 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
             <SectionLabel>🌐 THREAT INTELLIGENCE REPUTATION</SectionLabel>
             {(() => {
               const ti = inc.ti_reputation;
-              const verdictColor = {
+              const VERDICT_COLOR = {
                 malicious:  "#ff3b3b",
                 suspicious: "#f5c518",
                 benign:     "#00e5a0",
                 unknown:    "#888",
-              }[ti.verdict] || "#888";
+              };
+              const verdictColor = VERDICT_COLOR[ti.verdict] || "#888";
+              const conf = ti.confidence ?? 0;
+
+              // Reconstruct per-source score contributions for the breakdown strip
+              const scoreRows = [];
+              if ((ti.misp_hits ?? 0) > 0)
+                scoreRows.push({ label: "MISP", pts: Math.min(35, (ti.misp_hits ?? 0) * 35), detail: `${ti.misp_hits} IOC match${ti.misp_hits > 1 ? "es" : ""}`, color: "#b06eff" });
+
+              (ti.ioc_hits || []).forEach(hit => {
+                (hit.sources || []).forEach(s => {
+                  const d = s.details || {};
+                  if (s.source === "virustotal") {
+                    const pts = s.verdict === "malicious" ? 25 : s.verdict === "suspicious" ? 10 : 0;
+                    if (pts > 0 && !scoreRows.find(r => r.label === "VirusTotal"))
+                      scoreRows.push({ label: "VirusTotal", pts, detail: `${d.malicious ?? "?"}/${d.total ?? "?"} engines flagged`, color: "#4d9eff" });
+                  } else if (s.source === "abuseipdb") {
+                    const score = d.abuse_score ?? 0;
+                    const pts = score >= 50 ? 20 : score >= 25 ? 10 : 0;
+                    if (pts > 0 && !scoreRows.find(r => r.label === "AbuseIPDB"))
+                      scoreRows.push({ label: "AbuseIPDB", pts, detail: `abuse score ${score}/100`, color: "#ff8c00" });
+                  } else if (s.source === "greynoise") {
+                    if (d.riot) {
+                      if (!scoreRows.find(r => r.label === "GreyNoise"))
+                        scoreRows.push({ label: "GreyNoise", pts: -15, detail: "known benign scanner (RIOT)", color: "#00e5a0" });
+                    } else if (s.verdict === "malicious") {
+                      if (!scoreRows.find(r => r.label === "GreyNoise"))
+                        scoreRows.push({ label: "GreyNoise", pts: 20, detail: `classified malicious${d.name ? ` · ${d.name}` : ""}`, color: "#ff3b3b" });
+                    }
+                  }
+                });
+              });
+
+              // Per-source detail line for each source within an IOC hit
+              function renderSourceDetail(s) {
+                const d = s.details || {};
+                const vc = VERDICT_COLOR[s.verdict] || "#888";
+                let detail = null;
+                if (s.source === "virustotal") {
+                  detail = d.total != null
+                    ? `${d.malicious ?? 0}/${d.total} engines · rep ${d.community_score ?? 0}`
+                    : s.verdict;
+                } else if (s.source === "abuseipdb") {
+                  detail = d.abuse_score != null
+                    ? `abuse ${d.abuse_score}/100 · ${d.total_reports ?? 0} reports${d.country ? ` · ${d.country}` : ""}`
+                    : s.verdict;
+                } else if (s.source === "greynoise") {
+                  detail = d.riot ? "RIOT — known benign scanner"
+                          : d.noise ? `noise · ${d.classification ?? "unknown"}${d.name ? ` (${d.name})` : ""}`
+                          : `not seen · ${d.classification ?? "unknown"}`;
+                }
+                return (
+                  <div key={s.source} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
+                    <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4,
+                      background: `${vc}15`, border: `1px solid ${vc}30`,
+                      color: vc, fontFamily: "monospace", fontWeight: 700 }}>
+                      {s.source}
+                    </span>
+                    <span style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", fontFamily: "monospace" }}>
+                      {detail}
+                    </span>
+                  </div>
+                );
+              }
+
               return (
                 <div style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${verdictColor}33`,
                   borderRadius: 4, padding: "12px 14px" }}>
-                  {/* Verdict row */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+
+                  {/* Verdict + credibility bar */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
                     <span style={{
                       background: `${verdictColor}18`, border: `1px solid ${verdictColor}44`,
                       color: verdictColor, fontSize: 11, fontWeight: 700, padding: "3px 10px",
-                      borderRadius: 12, fontFamily: "monospace", letterSpacing: "0.06em",
+                      borderRadius: 12, fontFamily: "monospace", letterSpacing: "0.06em", flexShrink: 0,
                     }}>
                       {(ti.verdict || "unknown").toUpperCase()}
                     </span>
-                    {/* Confidence bar */}
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginBottom: 3 }}>
-                        TI Confidence: {ti.confidence ?? 0}%
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                        <span style={{ fontSize: 10, color: "rgba(255,255,255,0.35)" }}
+                          title="Threat credibility: how strongly VT / AbuseIPDB / GreyNoise / MISP agree this is malicious. High = genuine external threat. This is NOT a false-positive indicator.">
+                          Threat Credibility Score ⓘ
+                        </span>
+                        <span style={{ fontSize: 10, color: verdictColor, fontWeight: 700,
+                          fontFamily: "monospace" }}>{conf}/100</span>
                       </div>
-                      <div style={{ height: 4, background: "rgba(255,255,255,0.08)", borderRadius: 2, overflow: "hidden" }}>
-                        <div style={{ height: "100%", width: `${ti.confidence ?? 0}%`,
-                          background: verdictColor, borderRadius: 2, transition: "width 0.4s" }} />
+                      <div style={{ height: 5, background: "rgba(255,255,255,0.08)", borderRadius: 3, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${conf}%`,
+                          background: verdictColor, borderRadius: 3, transition: "width 0.4s" }} />
+                      </div>
+                      <div style={{ fontSize: 9, color: "rgba(255,255,255,0.22)", marginTop: 3 }}>
+                        {conf >= 60 ? "Strong TI signal — treat as confirmed threat"
+                          : conf >= 30 ? "Moderate TI signal — investigate further"
+                          : conf > 0  ? "Weak TI signal — may be noise"
+                          :             "No external TI signal"}
                       </div>
                     </div>
                   </div>
-                  {/* Sources used */}
-                  {(ti.sources_used || []).length > 0 && (
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-                      {ti.sources_used.map(s => (
-                        <span key={s} style={{ fontSize: 10, padding: "2px 8px", borderRadius: 10,
-                          background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.5)",
-                          fontFamily: "monospace" }}>
-                          {s}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {/* IOC hits from external sources */}
-                  {(ti.ioc_hits || []).length > 0 && (
-                    <div style={{ marginTop: 6 }}>
-                      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", marginBottom: 4,
-                        textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                        External IOC Matches
-                      </div>
-                      {ti.ioc_hits.map((hit, i) => (
-                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8,
-                          marginBottom: 4, fontSize: 12 }}>
-                          <span style={{ fontFamily: "monospace", color: "rgba(255,255,255,0.75)" }}>
-                            {hit.ioc}
-                          </span>
-                          <span style={{ fontSize: 10, color: "rgba(255,255,255,0.35)" }}>
-                            [{hit.type}]
-                          </span>
-                          <span style={{ fontSize: 10, fontWeight: 700,
-                            color: { malicious: "#ff3b3b", suspicious: "#f5c518", benign: "#00e5a0", unknown: "#888" }[hit.verdict] || "#888" }}>
-                            {(hit.verdict || "unknown").toUpperCase()}
-                          </span>
-                          {(hit.sources || []).map(s => (
-                            <span key={s.source} style={{ fontSize: 9, padding: "1px 5px", borderRadius: 6,
-                              background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.4)",
-                              fontFamily: "monospace" }}>
-                              {s.source}
+
+                  {/* Score breakdown strip */}
+                  {scoreRows.length > 0 && (
+                    <div style={{ marginBottom: 12, padding: "8px 10px",
+                      background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)",
+                      borderRadius: 4 }}>
+                      <div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", letterSpacing: "0.8px",
+                        textTransform: "uppercase", marginBottom: 7 }}>Score breakdown</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                        {scoreRows.map(row => (
+                          <div key={row.label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <span style={{ fontSize: 9, width: 70, color: row.color, fontFamily: "monospace",
+                              fontWeight: 700, flexShrink: 0 }}>{row.label}</span>
+                            <span style={{ fontSize: 10, fontFamily: "monospace", fontWeight: 700,
+                              color: row.pts < 0 ? "#00e5a0" : row.color, width: 32, flexShrink: 0 }}>
+                              {row.pts > 0 ? `+${row.pts}` : row.pts}
                             </span>
-                          ))}
+                            <div style={{ flex: 1, height: 3, background: "rgba(255,255,255,0.06)", borderRadius: 2, overflow: "hidden" }}>
+                              <div style={{ height: "100%", background: row.color, borderRadius: 2,
+                                width: `${Math.abs(row.pts) / 35 * 100}%` }} />
+                            </div>
+                            <span style={{ fontSize: 9, color: "rgba(255,255,255,0.35)",
+                              fontFamily: "monospace", flexShrink: 0 }}>{row.detail}</span>
+                          </div>
+                        ))}
+                        <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", marginTop: 3,
+                          paddingTop: 5, display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ fontSize: 9, width: 70, color: "rgba(255,255,255,0.5)",
+                            fontFamily: "monospace", fontWeight: 700, flexShrink: 0 }}>TOTAL</span>
+                          <span style={{ fontSize: 10, fontFamily: "monospace", fontWeight: 700,
+                            color: verdictColor }}>{conf}/100</span>
                         </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* IOC hits with per-source detail */}
+                  {(ti.ioc_hits || []).length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", letterSpacing: "0.8px",
+                        textTransform: "uppercase", marginBottom: 7 }}>External IOC Matches</div>
+                      {ti.ioc_hits.map((hit, i) => {
+                        const hc = VERDICT_COLOR[hit.verdict] || "#888";
+                        return (
+                          <div key={i} style={{ marginBottom: 10, padding: "8px 10px",
+                            background: `${hc}08`, border: `1px solid ${hc}20`, borderRadius: 4 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+                              <span style={{ fontFamily: "monospace", fontSize: 12,
+                                color: "rgba(255,255,255,0.85)", wordBreak: "break-all" }}>
+                                {hit.ioc}
+                              </span>
+                              <span style={{ fontSize: 9, color: "rgba(255,255,255,0.3)",
+                                flexShrink: 0 }}>[{hit.type}]</span>
+                              <span style={{ fontSize: 10, fontWeight: 700, color: hc,
+                                fontFamily: "monospace", flexShrink: 0 }}>
+                                {(hit.verdict || "unknown").toUpperCase()}
+                              </span>
+                            </div>
+                            {(hit.sources || []).map(s => renderSourceDetail(s))}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Sources queried + timestamp */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+                    marginTop: 8, flexWrap: "wrap", gap: 6 }}>
+                    <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                      {(ti.sources_used || []).map(s => (
+                        <span key={s} style={{ fontSize: 9, padding: "1px 7px", borderRadius: 10,
+                          background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.4)",
+                          fontFamily: "monospace" }}>{s}</span>
                       ))}
                     </div>
-                  )}
-                  {ti.checked_at && (
-                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.2)", marginTop: 8 }}>
-                      Checked: {new Date(ti.checked_at).toLocaleString()}
-                    </div>
-                  )}
+                    {ti.checked_at && (
+                      <span style={{ fontSize: 9, color: "rgba(255,255,255,0.2)", fontFamily: "monospace" }}>
+                        Checked {new Date(ti.checked_at).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+
                 </div>
               );
             })()}

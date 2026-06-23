@@ -127,6 +127,20 @@ class Settings(BaseSettings):
                 self.misp_mode = "cloud"
         return self
 
+    @model_validator(mode='after')
+    def _bridge_ti_keys(self) -> 'Settings':
+        """Bridge VIRUSTOTAL_API_KEY / ABUSEIPDB_API_KEY / GREYNOISE_API_KEY from
+        os.environ (injected by ENGINE_KV_MAP vault bootstrap) into the TI fields.
+        UI-set values in cysiemstack.env (written by _sync_ti_to_siem_env) take
+        priority — this only fills the field when the UI has not configured it."""
+        if not self.vt_api_key:
+            self.vt_api_key = os.environ.get("VIRUSTOTAL_API_KEY", "").strip()
+        if not self.abuseipdb_api_key:
+            self.abuseipdb_api_key = os.environ.get("ABUSEIPDB_API_KEY", "").strip()
+        if not self.greynoise_api_key:
+            self.greynoise_api_key = os.environ.get("GREYNOISE_API_KEY", "").strip()
+        return self
+
     model_config = SettingsConfigDict(
         env_file="/opt/cycentra/cysiemstack.env",
         case_sensitive=False,
