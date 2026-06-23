@@ -69,6 +69,7 @@ import { SystemSettingsPage } from './pages/settings/SystemSettingsPage.jsx';
 import { AssetModal }        from './pages/assets/AssetModal.jsx';
 import { ImportModal }       from './pages/assets/ImportModal.jsx';
 import { CyMindChatOverlay } from './components/CyMindChatOverlay.jsx';
+import { LicenseBanner }    from './components/LicenseBanner.jsx';
 import { AuditTrailPage }         from './pages/audit/AuditTrailPage.jsx';
 import { BenchmarkPage }          from './pages/benchmark/BenchmarkPage.jsx';
 import { PlatformExtensionsPage } from './pages/platform-extensions/index.jsx';
@@ -338,6 +339,9 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {/* ── License Banner ───────────────────────────────────────────────── */}
+      <LicenseBanner />
 
       {/* ── Body ─────────────────────────────────────────────────────────── */}
       <div style={{ flex:1, display:"flex", overflow:"hidden" }}>

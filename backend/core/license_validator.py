@@ -43,6 +43,9 @@ DEMO_MAX_DAYS  = 15
 DEMO_STATE     = Path("/opt/cycentra/.demo_start")
 LICENSE_PATH   = Path("/opt/cycentra/cycentra.lic")
 
+GRACE_DAYS     = 30   # days after expiry before portal is blocked
+EXPIRY_WARN_DAYS = 15  # days before expiry to start showing warning
+
 # v3 subscription types; v2 aliases: full→enterprise, trial→starter
 _V3_TYPES      = {"starter", "professional", "enterprise", "demo"}
 _V2_ALIAS      = {"full": "enterprise", "trial": "starter"}
@@ -128,33 +131,40 @@ def validate(lic_path: Path = LICENSE_PATH) -> dict:
         days = _demo_days_remaining()
         if days <= 0:
             return {"valid": False, "type": "demo", "days_remaining": 0,
-                    "features": [], "customer": "Demo",
+                    "status": "blocked", "grace_days_remaining": 0,
+                    "features": [], "customer": "Demo", "max_hosts": 10, "max_users": 5,
                     "message": "Demo period expired. Purchase a license at cycentra.com"}
         return {"valid": True, "type": "demo", "days_remaining": days,
-                "features": ["cysiem"],
+                "status": "valid" if days > 5 else "expiry_warning",
+                "grace_days_remaining": GRACE_DAYS,
+                "features": ["cysiem"], "max_hosts": 10, "max_users": 5,
                 "customer": "Demo",
                 "message": f"Demo mode — {days} day(s) remaining"}
 
     result = _parse_lic_file(lic_path)
     if len(result) == 2:
-        return {"valid": False, "type": "none", "days_remaining": 0,
+        return {"valid": False, "type": "none", "days_remaining": 0, "status": "invalid",
+                "grace_days_remaining": 0, "max_hosts": 0, "max_users": 0,
                 "features": [], "customer": "unknown",
                 "message": "License file is corrupt or unreadable"}
     payload, sig_b64, payload_str = result
 
     if payload is None:
-        return {"valid": False, "type": "none", "days_remaining": 0,
+        return {"valid": False, "type": "none", "days_remaining": 0, "status": "invalid",
+                "grace_days_remaining": 0, "max_hosts": 0, "max_users": 0,
                 "features": [], "customer": "unknown",
                 "message": "License file could not be parsed"}
 
     if not _verify_signature(payload_str, sig_b64):
-        return {"valid": False, "type": "none", "days_remaining": 0,
+        return {"valid": False, "type": "none", "days_remaining": 0, "status": "invalid",
+                "grace_days_remaining": 0, "max_hosts": 0, "max_users": 0,
                 "features": [], "customer": payload.get("customer", "unknown"),
                 "message": "License signature is invalid — file may have been tampered"}
 
     expiry_str = payload.get("subscription_end") or payload.get("expires", "")
     if not expiry_str:
         return {"valid": False, "type": payload.get("type", "none"), "days_remaining": 0,
+                "status": "invalid", "grace_days_remaining": 0, "max_hosts": 0, "max_users": 0,
                 "features": [], "customer": payload.get("customer", "unknown"),
                 "message": "License file missing expiry date"}
     days = _days_remaining(expiry_str)
@@ -176,23 +186,46 @@ def validate(lic_path: Path = LICENSE_PATH) -> dict:
     expiry_date   = payload.get("subscription_end") or payload.get("expires", "")
     # v3 uses max_users; v2 uses users. Support both.
     max_users     = payload.get("max_users", payload.get("users", 0))
+    max_hosts     = payload.get("max_hosts", 0)
     billing_cycle = payload.get("billing_cycle", "annual")
     # Normalise type aliases (full → enterprise, trial → starter)
     lic_type      = _V2_ALIAS.get(payload["type"], payload["type"])
 
-    if days < 0:
-        return {"valid": False, "type": lic_type, "days_remaining": 0,
-                "features": payload.get("features", []),
-                "customer": payload["customer"],
-                "billing_cycle": billing_cycle, "max_users": max_users,
-                "subscription_end": expiry_date,
-                "message": f"License expired on {expiry_date}"}
+    base = {
+        "type": lic_type,
+        "features": payload.get("features", []),
+        "customer": payload["customer"],
+        "billing_cycle": billing_cycle,
+        "max_users": max_users,
+        "max_hosts": max_hosts,
+        "subscription_end": expiry_date,
+    }
 
-    return {"valid": True, "type": lic_type, "days_remaining": days,
-            "features": payload.get("features", []),
-            "customer": payload["customer"],
-            "billing_cycle": billing_cycle, "max_users": max_users,
-            "subscription_end": expiry_date,
+    if days < 0:
+        days_since_expiry = -days  # positive count of days past expiry
+        if days_since_expiry > GRACE_DAYS:
+            # Past the 30-day grace period — block portal access
+            return {**base, "valid": False, "days_remaining": 0,
+                    "status": "blocked", "grace_days_remaining": 0,
+                    "message": f"License expired {days_since_expiry} day(s) ago — "
+                               f"grace period of {GRACE_DAYS} days exceeded. "
+                               "Renew at cycentra.com or decommission this instance."}
+        else:
+            # Within grace period — portal still accessible but banner shown
+            grace_remaining = GRACE_DAYS - days_since_expiry
+            return {**base, "valid": True, "days_remaining": 0,
+                    "status": "grace", "grace_days_remaining": grace_remaining,
+                    "message": f"License expired {days_since_expiry} day(s) ago — "
+                               f"{grace_remaining} day(s) of grace period remaining. "
+                               "Renew now to avoid portal lockout."}
+
+    if days <= EXPIRY_WARN_DAYS:
+        return {**base, "valid": True, "days_remaining": days,
+                "status": "expiry_warning", "grace_days_remaining": GRACE_DAYS,
+                "message": f"License expires in {days} day(s) on {expiry_date} — renew soon."}
+
+    return {**base, "valid": True, "days_remaining": days,
+            "status": "valid", "grace_days_remaining": GRACE_DAYS,
             "message": f"License valid — {days} day(s) remaining (expires {expiry_date})"}
 
 
@@ -211,15 +244,14 @@ if __name__ == "__main__":
         print(json.dumps(result, indent=2))
 
     # Map to exit code
-    if not result["valid"]:
-        if "expired" in result["message"]:
-            sys.exit(2)
-        elif result["type"] == "none":
-            sys.exit(3)
-        elif result["type"] == "demo":
-            sys.exit(2)   # demo expired
+    status = result.get("status", "")
+    if status == "blocked":
+        sys.exit(2)
+    elif status == "invalid":
+        sys.exit(3)
+    elif result["type"] == "none" and not result["valid"]:
         sys.exit(4)
-    elif result["type"] == "demo":
+    elif result["type"] == "demo" and result["valid"]:
         sys.exit(1)
     else:
         sys.exit(0)

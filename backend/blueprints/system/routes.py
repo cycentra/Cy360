@@ -31,6 +31,7 @@ import shutil
 import stat
 import subprocess
 import threading
+from datetime import date
 from pathlib import Path
 
 import requests as http_requests
@@ -979,9 +980,40 @@ def env_put(target):
 
 # ── License management ────────────────────────────────────────────────────────
 
-_LIC_PATH       = Path("/opt/cycentra/cycentra.lic")
-_LIC_LOCKFILE   = Path("/opt/cycentra/.license_expired")
-_LIC_VALIDATOR  = Path("/opt/cycentra/license_validator.py")   # deployed copy
+_LIC_PATH              = Path("/opt/cycentra/cycentra.lic")
+_LIC_LOCKFILE          = Path("/opt/cycentra/.license_expired")
+_LIC_VALIDATOR         = Path("/opt/cycentra/license_validator.py")   # deployed copy
+_HOST_LIMIT_EXCEEDED   = Path("/opt/cycentra/.host_limit_exceeded_since")
+_HOST_LIMIT_WARN_DAYS  = 15
+
+_CORR_DB_URL = (
+    os.environ.get("CYCENTRA_DB_URL")
+    or os.environ.get("CORRELATION_DB_URL")
+    or os.environ.get("DATABASE_URL", "postgresql://corruser:changeme@127.0.0.1:5433/correlation")
+).replace("+asyncpg", "")
+
+
+def _get_host_count() -> int:
+    try:
+        import psycopg2
+        with psycopg2.connect(_CORR_DB_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM host_posture_cache")
+                return cur.fetchone()[0]
+    except Exception:
+        return -1  # unknown — don't enforce limit if DB unreachable
+
+
+def _get_or_set_host_limit_date() -> date:
+    if _HOST_LIMIT_EXCEEDED.exists():
+        try:
+            return date.fromisoformat(_HOST_LIMIT_EXCEEDED.read_text().strip())
+        except Exception:
+            pass
+    today = date.today()
+    _HOST_LIMIT_EXCEEDED.parent.mkdir(parents=True, exist_ok=True)
+    _HOST_LIMIT_EXCEEDED.write_text(today.isoformat())
+    return today
 
 
 def _run_validator(lic_path: Path) -> dict:
@@ -1010,8 +1042,34 @@ def _run_validator(lic_path: Path) -> dict:
 
 @system_bp.route("/api/system/license", methods=["GET"])
 def get_license():
-    """Return current license status — reads /opt/cycentra/cycentra.lic."""
+    """Return license status with host count and limit enforcement."""
     result = _run_validator(_LIC_PATH)
+
+    # ── Host limit enforcement ─────────────────────────────────────────────
+    max_hosts        = result.get("max_hosts", 0)
+    registered_hosts = _get_host_count()
+    result["registered_hosts"] = registered_hosts
+
+    if max_hosts > 0 and registered_hosts >= 0:
+        if registered_hosts > max_hosts:
+            exceeded_since = _get_or_set_host_limit_date()
+            days_exceeded  = (date.today() - exceeded_since).days
+            if days_exceeded >= _HOST_LIMIT_WARN_DAYS:
+                result["host_status"]              = "host_blocked"
+                result["host_registration_blocked"] = True
+            else:
+                result["host_status"]              = "host_warning"
+                result["host_registration_blocked"] = False
+            result["host_limit_exceeded_since"] = exceeded_since.isoformat()
+            result["host_limit_days_exceeded"]  = days_exceeded
+        else:
+            _HOST_LIMIT_EXCEEDED.unlink(missing_ok=True)
+            result["host_status"]              = "ok"
+            result["host_registration_blocked"] = False
+    else:
+        result["host_status"]              = "unlimited" if max_hosts == 0 else "unknown"
+        result["host_registration_blocked"] = False
+
     return add_cors_headers(jsonify(result))
 
 
