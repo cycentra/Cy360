@@ -39,16 +39,12 @@ WQIDAQAB
 -----END PUBLIC KEY-----
 """
 
-DEMO_MAX_DAYS  = 15
-DEMO_STATE     = Path("/opt/cycentra/.demo_start")
-LICENSE_PATH   = Path("/opt/cycentra/cycentra.lic")
+DEMO_MAX_DAYS    = 15
+DEMO_STATE       = Path("/opt/cycentra/.demo_start")
+LICENSE_PATH     = Path("/opt/cycentra/cycentra.lic")
 
-GRACE_DAYS     = 30   # days after expiry before portal is blocked
-EXPIRY_WARN_DAYS = 15  # days before expiry to start showing warning
-
-# v3 subscription types; v2 aliases: full→enterprise, trial→starter
-_V3_TYPES      = {"starter", "professional", "enterprise", "demo"}
-_V2_ALIAS      = {"full": "enterprise", "trial": "starter"}
+GRACE_DAYS       = 30   # days after expiry before portal is blocked
+EXPIRY_WARN_DAYS = 15   # days before expiry to start showing warning
 
 # ── Core validation ───────────────────────────────────────────────────────────
 
@@ -181,23 +177,19 @@ def validate(lic_path: Path = LICENSE_PATH) -> dict:
         if install_days > days:
             days = install_days
 
-    # ── v3 / v2 normalisation ────────────────────────────────────────────────
-    # v3 uses subscription_end; v2 uses expires. Support both.
-    expiry_date   = payload.get("subscription_end") or payload.get("expires", "")
-    # v3 uses max_users; v2 uses users. Support both.
-    max_users     = payload.get("max_users", payload.get("users", 0))
-    max_hosts     = payload.get("max_hosts", 0)
-    billing_cycle = payload.get("billing_cycle", "annual")
-    # Normalise type aliases (full → enterprise, trial → starter)
-    lic_type      = _V2_ALIAS.get(payload["type"], payload["type"])
+    # subscription_end (v3) or expires (v2) — both supported
+    expiry_date = payload.get("subscription_end") or payload.get("expires", "")
+    # max_users: v3 field name; v2 used "users"
+    max_users   = payload.get("max_users", payload.get("users", 0))
+    max_hosts   = payload.get("max_hosts", 0)
+    lic_type    = payload.get("type", "full")
 
     base = {
-        "type": lic_type,
-        "features": payload.get("features", []),
-        "customer": payload["customer"],
-        "billing_cycle": billing_cycle,
-        "max_users": max_users,
-        "max_hosts": max_hosts,
+        "type":             lic_type,
+        "features":         payload.get("features", []),
+        "customer":         payload["customer"],
+        "max_users":        max_users,
+        "max_hosts":        max_hosts,
         "subscription_end": expiry_date,
     }
 
