@@ -1,14 +1,5 @@
 <group name="cycentra_rules,">
 
-  <!-- ── ORIGINAL RULE: CyAI block action ───────────────────────────────── -->
-  <rule id="100050" level="3">
-    <decoded_as>json</decoded_as>
-    <field name="llm_model">^CyAI$</field>
-    <field name="ai_action">^block$</field>
-    <description>IP $(srcip) Blocked on Agent $(agent_id). $(ai_outcome)</description>
-    <options>no_log</options>
-  </rule>
-
   <!-- ================================================================== -->
   <!-- CREDENTIAL ACCESS (TA0006)                                          -->
   <!-- ================================================================== -->
@@ -315,6 +306,28 @@
   </rule>
 
   <!-- ================================================================== -->
+  <!-- REMOVABLE MEDIA (TA0002 / T1091)                                  -->
+  <!-- ================================================================== -->
+
+  <!-- T1091 — USB Storage Insertion (Windows built-in rule extension) -->
+  <rule id="100910" level="10">
+    <if_sid>60054</if_sid>
+    <description>USB storage device connected on $(agent.name) — T1091</description>
+    <mitre><id>T1091</id></mitre>
+    <group>discovery,removable_media,</group>
+  </rule>
+
+  <!-- T1091 — USB Storage Driver Loaded (Sysmon EventID 6, USBSTOR driver) -->
+  <rule id="100911" level="10">
+    <if_group>sysmon</if_group>
+    <field name="data.win.system.eventID">^6$</field>
+    <field name="data.win.eventdata.imageLoaded" type="pcre2">(?i)\\USBSTOR\\</field>
+    <description>Sysmon: USB storage driver (USBSTOR) loaded on $(agent.name) — T1091</description>
+    <mitre><id>T1091</id></mitre>
+    <group>discovery,removable_media,</group>
+  </rule>
+
+  <!-- ================================================================== -->
   <!-- ACTIVE RESPONSE TRIGGERS                                           -->
   <!-- ── Rules in 'active_response' group fire firewall-drop on match ── -->
   <!-- ================================================================== -->
@@ -441,6 +454,75 @@
     <frequency>3</frequency>
     <description>CyCentra 360: Sustained resource utilization breach on $(agent.name) — 3+ threshold events in 10 minutes</description>
     <group>resource_monitor,sustained_breach,</group>
+  </rule>
+
+  <!-- ================================================================== -->
+  <!-- WINDOWS KERNEL TELEMETRY — Sysmon + Windows Event Log             -->
+  <!-- XDR parity with Linux auditd rules 101000-101001                  -->
+  <!-- IDs 101010–101013                                                   -->
+  <!-- ================================================================== -->
+
+  <!-- Windows: Wazuh agent service stopped (anti-tamper — EventID 7036 System log)
+       Requires: Windows System event channel in agent.conf (added v1.0.31+).
+       Triggers: local isolate-host AR (same block as 101000-101001). -->
+  <rule id="101010" level="14">
+    <if_group>windows</if_group>
+    <field name="data.win.system.eventID">^7036$</field>
+    <field name="data.win.eventdata.param1" type="pcre2">(?i)wazuh|ossec</field>
+    <field name="data.win.eventdata.param2" type="pcre2">(?i)stopped</field>
+    <description>XDR anti-tamper: Wazuh agent service stopped on Windows $(agent.name) — T1562.001</description>
+    <mitre><id>T1562.001</id></mitre>
+    <group>xdr_kernel_isolate,kernel_telemetry,</group>
+  </rule>
+
+  <!-- Windows: Sysmon CreateRemoteThread — cross-process thread injection
+       Equivalent to Linux ptrace write (auditd rule 101001).
+       Triggers: local isolate-host AR. -->
+  <rule id="101011" level="13">
+    <if_group>sysmon</if_group>
+    <field name="data.win.system.eventID">^8$</field>
+    <description>Sysmon: Remote thread injected into $(data.win.eventdata.targetImage) on $(agent.name) — T1055</description>
+    <mitre><id>T1055</id></mitre>
+    <group>xdr_kernel_isolate,kernel_telemetry,</group>
+  </rule>
+
+  <!-- Windows: Sysmon ProcessAccess on lsass.exe — credential dump via handle
+       Equivalent to Linux process_vm_readv syscall (auditd rule 101001). -->
+  <rule id="101012" level="14">
+    <if_group>sysmon</if_group>
+    <field name="data.win.system.eventID">^10$</field>
+    <field name="data.win.eventdata.targetImage" type="pcre2">(?i)\\lsass\.exe$</field>
+    <description>Sysmon: LSASS memory accessed by $(data.win.eventdata.sourceImage) on $(agent.name) — T1003.001</description>
+    <mitre><id>T1003.001</id></mitre>
+    <group>credential_access,kernel_telemetry,active_response,</group>
+  </rule>
+
+  <!-- Windows: Sysmon ProcessTampering — process hollowing / image unmapping
+       Equivalent to Linux memfd_create + overwrite (auditd rule 101001). -->
+  <rule id="101013" level="14">
+    <if_group>sysmon</if_group>
+    <field name="data.win.system.eventID">^25$</field>
+    <description>Sysmon: Process image tampering (hollowing/unmapping) in $(data.win.eventdata.image) on $(agent.name) — T1055.012</description>
+    <mitre><id>T1055.012</id></mitre>
+    <group>defense_evasion,kernel_telemetry,</group>
+  </rule>
+
+  <!-- ================================================================== -->
+  <!-- macOS KERNEL TELEMETRY — FIM-based agent tamper detection          -->
+  <!-- ID 101020                                                           -->
+  <!-- Note: Full macOS kernel coverage requires OpenBSM audit            -->
+  <!-- (/etc/security/audit_control). This rule provides FIM-level cover. -->
+  <!-- ================================================================== -->
+
+  <!-- macOS: Wazuh agent binary or config modified via syscheck FIM
+       Monitors /Library/Ossec/ — the macOS Wazuh agent install path.
+       For deeper coverage, enable OpenBSM audit on macOS endpoints. -->
+  <rule id="101020" level="14">
+    <if_sid>550,554</if_sid>
+    <match>/Library/Ossec/bin/|/Library/Ossec/etc/</match>
+    <description>XDR anti-tamper: Wazuh agent binary or config modified on macOS $(agent.name) — T1562.001</description>
+    <mitre><id>T1562.001</id></mitre>
+    <group>kernel_telemetry,</group>
   </rule>
 
 </group>

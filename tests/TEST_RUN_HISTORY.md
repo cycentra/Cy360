@@ -10,6 +10,24 @@
 
 ---
 
+## Run: 2026-06-23 09:15 UTC — ✅ PASSED
+
+**Trigger:** Manual — /g-cyra-test: Wazuh agent kernel package + VirusTotal feed validation
+**Branch:** main (local) | **Commit:** working tree
+**Suites:** 13 (new) | **Files changed:** 1 (new test file)
+**Result:** PASSED | **Total:** 100/100 passed
+
+**Failures:** None
+
+**Notes:** New Suite 13 adds 110 fully autonomous tests across two domains:
+- Part A (57 tests): Validates kernel telemetry config for all 3 platforms — macOS apple-oslog/ULS, Linux journald priority 0-4, Windows Security eventchannel with suppression list. Manager-side syscollector (all 9 inventory modules), vulnerability-detection, syscheck, rootcheck, and isolate-host AR blocks all confirmed correct.
+- Part B (43 tests): Validates VirusTotal v3 integration in ti_enricher.py — verdict logic (≥10% malicious engines → malicious, ≥5% combined → suspicious), HTTP edge cases (404→unknown, 429→graceful skip), IOC type URL routing (IP/domain/SHA256), confidence contribution (+25 malicious, +10 suspicious), and enrich_incident_ti() sources_used gating. VT is IMPLEMENTED but INACTIVE — activate via Settings → Threat Intelligence tab or cloud vault secret VIRUSTOTAL-API-KEY (never hand-edit cysiemstack.env). B7 (10 new tests) validates the full key chain: UI → ai_settings.json → _sync_ti_to_siem_env() auto-sync; ENGINE_KV_MAP vault fallback; GET masking; /api/system/ti/test endpoint.
+- **macOS FDA note:** Full Disk Access for wazuh-agentd is a manual prerequisite; cannot be auto-tested.
+
+Full checklist: see `tests/TEST_RUN_REPORT.md` (this run).
+
+---
+
 ## Run: 2026-06-22 11:30 UTC — ✅ PASSED
 
 **Trigger:** Manual — review INVESTIGATION_ENGINE_PLAN.md; add Phase 1–6 autonomous tests

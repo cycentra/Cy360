@@ -3093,3 +3093,534 @@ def siem_agent_groups_available_agents():
         "agents": agents,
         "total": data.get("total_affected_items", len(agents)),
     })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ENDPOINT POLICY ENGINE
+# Policies store named sets of remediation actions + scope + trigger config.
+# Manual trigger: Flask → Wazuh REST PUT /active-response per agent.
+# Auto trigger:   /sync writes <active-response> blocks to ossec.conf via
+#                 Wazuh API PUT /manager/files and restarts wazuh-manager.
+# ══════════════════════════════════════════════════════════════════════════════
+
+import uuid as _uuid
+import json as _json
+
+# Action catalog — "command" must match <command><name> in ossec.conf
+POLICY_ACTIONS = {
+    "isolate_host": {
+        "label": "Isolate Host",
+        "description": "Full network isolation — blocks all traffic, keeps only Wazuh port 1514",
+        "severity": "critical", "reversible": True, "timeout": 3600,
+        "command": "isolate-host",
+    },
+    "restrict_network": {
+        "label": "Restrict Network",
+        "description": "Block internet access while preserving LAN connectivity",
+        "severity": "high", "reversible": True, "timeout": 3600,
+        "command": "restrict-network",
+    },
+    "block_usb": {
+        "label": "Block USB Storage",
+        "description": "Prevent USB mass storage from mounting (persists across reboot on Linux)",
+        "severity": "medium", "reversible": True, "timeout": 0,
+        "command": "block-usb",
+    },
+    "block_wifi": {
+        "label": "Block WiFi",
+        "description": "Disable wireless networking adapter via nmcli/rfkill or networksetup",
+        "severity": "medium", "reversible": True, "timeout": 3600,
+        "command": "block-wifi",
+    },
+    "quarantine_file": {
+        "label": "Quarantine File",
+        "description": "Move matched file to /var/ossec/quarantine/ and kill owning process",
+        "severity": "high", "reversible": False, "timeout": 0,
+        "command": "quarantine-file",
+    },
+    "scan_endpoint": {
+        "label": "Scan Endpoint",
+        "description": "Run ClamAV (if installed) or heuristic malware scan on volatile paths",
+        "severity": "low", "reversible": True, "timeout": 600,
+        "command": "scan-endpoint",
+    },
+    "collect_forensics": {
+        "label": "Collect Forensics",
+        "description": "Capture volatile artifacts: processes, connections, cron, open files, recent changes",
+        "severity": "low", "reversible": True, "timeout": 300,
+        "command": "collect-forensics",
+    },
+    "disable_account": {
+        "label": "Disable Account",
+        "description": "Lock the triggering user account (passwd -l / usermod -L)",
+        "severity": "high", "reversible": True, "timeout": 3600,
+        "command": "disable-account",
+    },
+    "firewall_drop": {
+        "label": "Firewall Drop IP",
+        "description": "Add source IP from the alert to iptables/nftables DROP rule",
+        "severity": "medium", "reversible": True, "timeout": 3600,
+        "command": "firewall-drop",
+    },
+}
+
+_policy_tables_ready = False
+
+
+def _ensure_policy_tables():
+    global _policy_tables_ready
+    if _policy_tables_ready:
+        return
+    try:
+        conn = _corr_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS endpoint_policies (
+                id            TEXT        PRIMARY KEY,
+                name          TEXT        NOT NULL,
+                description   TEXT        NOT NULL DEFAULT '',
+                actions       JSONB       NOT NULL DEFAULT '[]',
+                scope_type    TEXT        NOT NULL DEFAULT 'local',
+                scope_value   TEXT,
+                auto_trigger  BOOLEAN     NOT NULL DEFAULT false,
+                trigger_rules JSONB       NOT NULL DEFAULT '[]',
+                enabled       BOOLEAN     NOT NULL DEFAULT true,
+                created_by    TEXT        NOT NULL DEFAULT '',
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS endpoint_policy_executions (
+                id            TEXT        PRIMARY KEY,
+                policy_id     TEXT        NOT NULL,
+                policy_name   TEXT        NOT NULL DEFAULT '',
+                agent_id      TEXT        NOT NULL,
+                agent_name    TEXT        NOT NULL DEFAULT '',
+                actions       JSONB       NOT NULL DEFAULT '[]',
+                trigger_type  TEXT        NOT NULL DEFAULT 'manual',
+                status        TEXT        NOT NULL DEFAULT 'pending',
+                triggered_by  TEXT        NOT NULL DEFAULT '',
+                error_msg     TEXT,
+                executed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_ep_exec_policy ON endpoint_policy_executions(policy_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_ep_exec_agent  ON endpoint_policy_executions(agent_id)")
+        conn.commit()
+        conn.close()
+        _policy_tables_ready = True
+    except Exception as _exc:
+        _logger.warning("[policy-tables] init failed: %s", _exc)
+
+
+def _policy_row(row):
+    def _jl(v):
+        return v if isinstance(v, list) else _json.loads(v or "[]")
+    return {
+        "id":            row["id"],
+        "name":          row["name"],
+        "description":   row["description"],
+        "actions":       _jl(row["actions"]),
+        "scope_type":    row["scope_type"],
+        "scope_value":   row["scope_value"],
+        "auto_trigger":  row["auto_trigger"],
+        "trigger_rules": _jl(row["trigger_rules"]),
+        "enabled":       row["enabled"],
+        "created_by":    row["created_by"],
+        "created_at":    _iso(row["created_at"]),
+        "updated_at":    _iso(row["updated_at"]),
+    }
+
+
+def _resolve_scope_agents(policy):
+    """Return list of agent IDs for the policy's scope."""
+    scope_type  = policy.get("scope_type", "local")
+    scope_value = policy.get("scope_value")
+    token = _wazuh_auth_token()
+    if not token:
+        return []
+    if scope_type == "all":
+        r = _wz(token, "GET", "/agents",
+                params={"select": "id", "limit": 500, "status": "active"})
+        if r is None or r.status_code != 200:
+            return []
+        return [a["id"] for a in r.json().get("data", {}).get("affected_items", [])]
+    if scope_type == "group" and scope_value:
+        r = _wz(token, "GET", f"/groups/{scope_value}/agents",
+                params={"select": "id", "limit": 500})
+        if r is None or r.status_code != 200:
+            return []
+        return [a["id"] for a in r.json().get("data", {}).get("affected_items", [])]
+    if scope_type == "agents" and scope_value:
+        try:
+            ids = _json.loads(scope_value)
+            return ids if isinstance(ids, list) else []
+        except Exception:
+            return []
+    return []  # "local" scope — caller provides explicit agent_ids
+
+
+def _run_policy_on_agents(policy, agent_ids, triggered_by, trigger_type="manual"):
+    """Fire every action in the policy on each agent via Wazuh REST API."""
+    token = _wazuh_auth_token()
+    if not token:
+        return 0, len(agent_ids) * len(policy.get("actions", []))
+    successes = failures = 0
+    for agent_id in agent_ids:
+        for action_key in (policy.get("actions") or []):
+            info = POLICY_ACTIONS.get(action_key)
+            if not info:
+                continue
+            status = err_msg = None
+            try:
+                r = _wz(token, "PUT", "/active-response",
+                    params={"agents_list": agent_id},
+                    json_body={"command": info["command"], "custom": True, "arguments": ["add"]})
+                if r is not None and r.status_code in (200, 201):
+                    status = "success"; successes += 1
+                else:
+                    status = "failed"
+                    err_msg = (r.text[:200] if r else "Wazuh unreachable")
+                    failures += 1
+            except Exception as exc:
+                status = "failed"; err_msg = str(exc)[:200]; failures += 1
+            try:
+                conn = _corr_conn()
+                cur = conn.cursor()
+                cur.execute(
+                    """INSERT INTO endpoint_policy_executions
+                       (id,policy_id,policy_name,agent_id,agent_name,actions,
+                        trigger_type,status,triggered_by,error_msg)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    [str(_uuid.uuid4()), policy["id"], policy["name"],
+                     agent_id, agent_id, _json.dumps([action_key]),
+                     trigger_type, status, triggered_by, err_msg])
+                conn.commit()
+                conn.close()
+            except Exception as dbe:
+                _logger.warning("[policy-exec] DB write: %s", dbe)
+    return successes, failures
+
+
+def _generate_ossec_ar_blocks(policies):
+    lines = []
+    for p in policies:
+        if not (p.get("enabled") and p.get("auto_trigger")):
+            continue
+        rule_ids = ",".join(str(r) for r in (p.get("trigger_rules") or []))
+        if not rule_ids:
+            continue
+        for action_key in (p.get("actions") or []):
+            info = POLICY_ACTIONS.get(action_key)
+            if not info:
+                continue
+            lines += [
+                f"  <!-- Policy: {p['name']} | {action_key} -->",
+                f"  <active-response>",
+                f"    <command>{info['command']}</command>",
+                f"    <location>local</location>",
+                f"    <rules_id>{rule_ids}</rules_id>",
+            ]
+            if info["timeout"] > 0:
+                lines.append(f"    <timeout>{info['timeout']}</timeout>")
+            lines.append(f"  </active-response>")
+    return "\n".join(lines)
+
+
+# ── OPTIONS ───────────────────────────────────────────────────────────────────
+@siem_bp.route("/endpoint-policies",         methods=["OPTIONS"])
+@siem_bp.route("/endpoint-policies/sync",    methods=["OPTIONS"])
+@siem_bp.route("/endpoint-policies/actions", methods=["OPTIONS"])
+def _ep_opts_root():
+    from core.helpers import add_cors_headers
+    from flask import make_response
+    return add_cors_headers(make_response('', 204))
+
+
+@siem_bp.route("/endpoint-policies/<pid>",            methods=["OPTIONS"])
+@siem_bp.route("/endpoint-policies/<pid>/apply",      methods=["OPTIONS"])
+@siem_bp.route("/endpoint-policies/<pid>/executions", methods=["OPTIONS"])
+def _ep_opts_item(pid):
+    from core.helpers import add_cors_headers
+    from flask import make_response
+    return add_cors_headers(make_response('', 204))
+
+
+# ── Action catalog ────────────────────────────────────────────────────────────
+@siem_bp.route("/endpoint-policies/actions", methods=["GET"])
+@require_siem_auth
+def ep_actions():
+    return jsonify({"actions": [
+        {"key": k, **{kk: vv for kk, vv in v.items() if kk != "command"}}
+        for k, v in POLICY_ACTIONS.items()
+    ]})
+
+
+# ── List ──────────────────────────────────────────────────────────────────────
+@siem_bp.route("/endpoint-policies", methods=["GET"])
+@require_siem_auth
+def ep_list():
+    _ensure_policy_tables()
+    try:
+        import psycopg2.extras as _pge
+        conn = _corr_conn()
+        conn.cursor_factory = _pge.RealDictCursor
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM endpoint_policies ORDER BY created_at DESC")
+        rows = [_policy_row(r) for r in cur.fetchall()]
+        conn.close()
+        return jsonify({"policies": rows, "total": len(rows)})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Create ────────────────────────────────────────────────────────────────────
+@siem_bp.route("/endpoint-policies", methods=["POST"])
+@require_siem_analyst
+def ep_create():
+    _ensure_policy_tables()
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    actions = [a for a in (body.get("actions") or []) if a in POLICY_ACTIONS]
+    if not actions:
+        return jsonify({"error": "at least one valid action is required"}), 400
+    pid = str(_uuid.uuid4())
+    rules = [int(r) for r in (body.get("trigger_rules") or []) if str(r).isdigit()]
+    try:
+        import psycopg2.extras as _pge
+        conn = _corr_conn()
+        conn.cursor_factory = _pge.RealDictCursor
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO endpoint_policies
+               (id,name,description,actions,scope_type,scope_value,
+                auto_trigger,trigger_rules,enabled,created_by)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,true,%s)""",
+            [pid, name, (body.get("description") or "").strip(),
+             _json.dumps(actions),
+             body.get("scope_type", "local"), body.get("scope_value"),
+             bool(body.get("auto_trigger", False)), _json.dumps(rules),
+             session.get("user_email", "")])
+        conn.commit()
+        cur.execute("SELECT * FROM endpoint_policies WHERE id=%s", [pid])
+        row = _policy_row(cur.fetchone())
+        conn.close()
+        return jsonify({"policy": row}), 201
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Get one ───────────────────────────────────────────────────────────────────
+@siem_bp.route("/endpoint-policies/<pid>", methods=["GET"])
+@require_siem_auth
+def ep_get(pid):
+    _ensure_policy_tables()
+    try:
+        import psycopg2.extras as _pge
+        conn = _corr_conn()
+        conn.cursor_factory = _pge.RealDictCursor
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM endpoint_policies WHERE id=%s", [pid])
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({"error": "not found"}), 404
+        return jsonify({"policy": _policy_row(row)})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Update ────────────────────────────────────────────────────────────────────
+@siem_bp.route("/endpoint-policies/<pid>", methods=["PUT"])
+@require_siem_analyst
+def ep_update(pid):
+    _ensure_policy_tables()
+    body = request.get_json(silent=True) or {}
+    sets, vals = [], []
+    if "name" in body:
+        n = body["name"].strip()
+        if not n: return jsonify({"error": "name cannot be empty"}), 400
+        sets.append("name=%s"); vals.append(n)
+    if "description" in body:
+        sets.append("description=%s"); vals.append(body["description"])
+    if "actions" in body:
+        acts = [a for a in body["actions"] if a in POLICY_ACTIONS]
+        sets.append("actions=%s"); vals.append(_json.dumps(acts))
+    if "scope_type" in body:
+        sets.append("scope_type=%s"); vals.append(body["scope_type"])
+    if "scope_value" in body:
+        sets.append("scope_value=%s"); vals.append(body.get("scope_value"))
+    if "auto_trigger" in body:
+        sets.append("auto_trigger=%s"); vals.append(bool(body["auto_trigger"]))
+    if "trigger_rules" in body:
+        rules = [int(r) for r in body["trigger_rules"] if str(r).isdigit()]
+        sets.append("trigger_rules=%s"); vals.append(_json.dumps(rules))
+    if "enabled" in body:
+        sets.append("enabled=%s"); vals.append(bool(body["enabled"]))
+    if not sets:
+        return jsonify({"error": "no fields to update"}), 400
+    sets.append("updated_at=NOW()"); vals.append(pid)
+    try:
+        import psycopg2.extras as _pge
+        conn = _corr_conn()
+        conn.cursor_factory = _pge.RealDictCursor
+        cur = conn.cursor()
+        cur.execute(f"UPDATE endpoint_policies SET {','.join(sets)} WHERE id=%s", vals)
+        conn.commit()
+        cur.execute("SELECT * FROM endpoint_policies WHERE id=%s", [pid])
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({"error": "not found"}), 404
+        return jsonify({"policy": _policy_row(row)})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Delete ────────────────────────────────────────────────────────────────────
+@siem_bp.route("/endpoint-policies/<pid>", methods=["DELETE"])
+@require_siem_admin
+def ep_delete(pid):
+    _ensure_policy_tables()
+    try:
+        conn = _corr_conn()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM endpoint_policies WHERE id=%s", [pid])
+        deleted = cur.rowcount
+        conn.commit()
+        conn.close()
+        if not deleted:
+            return jsonify({"error": "not found"}), 404
+        return jsonify({"ok": True})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Apply (manual trigger) ────────────────────────────────────────────────────
+@siem_bp.route("/endpoint-policies/<pid>/apply", methods=["POST"])
+@require_siem_analyst
+def ep_apply(pid):
+    """
+    Body: { "agent_ids": ["001","002"] }  — optional; if omitted uses policy scope.
+    """
+    _ensure_policy_tables()
+    body = request.get_json(silent=True) or {}
+    try:
+        import psycopg2.extras as _pge
+        conn = _corr_conn()
+        conn.cursor_factory = _pge.RealDictCursor
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM endpoint_policies WHERE id=%s", [pid])
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({"error": "policy not found"}), 404
+        policy = _policy_row(row)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    explicit = body.get("agent_ids")
+    agent_ids = ([str(a) for a in explicit] if isinstance(explicit, list) and explicit
+                 else _resolve_scope_agents(policy))
+    if not agent_ids:
+        return jsonify({"error": "no target agents — specify agent_ids or configure policy scope"}), 400
+
+    ok, fail = _run_policy_on_agents(policy, agent_ids, session.get("user_email", ""), "manual")
+    return jsonify({
+        "ok": True,
+        "agents_targeted":    len(agent_ids),
+        "actions_attempted":  len(agent_ids) * len(policy["actions"]),
+        "successes": ok, "failures": fail,
+    })
+
+
+# ── Execution history ─────────────────────────────────────────────────────────
+@siem_bp.route("/endpoint-policies/<pid>/executions", methods=["GET"])
+@require_siem_auth
+def ep_executions(pid):
+    _ensure_policy_tables()
+    limit = min(200, max(1, int(request.args.get("limit", 50))))
+    try:
+        import psycopg2.extras as _pge
+        conn = _corr_conn()
+        conn.cursor_factory = _pge.RealDictCursor
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT id,policy_id,policy_name,agent_id,agent_name,actions,
+                      trigger_type,status,triggered_by,error_msg,executed_at
+               FROM endpoint_policy_executions WHERE policy_id=%s
+               ORDER BY executed_at DESC LIMIT %s""",
+            [pid, limit])
+        rows = cur.fetchall()
+        conn.close()
+        def _fmt(r):
+            d = dict(r)
+            d["executed_at"] = _iso(r["executed_at"])
+            d["actions"] = (r["actions"] if isinstance(r["actions"], list)
+                            else _json.loads(r["actions"] or "[]"))
+            return d
+        return jsonify({"executions": [_fmt(r) for r in rows], "total": len(rows)})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Sync auto-trigger policies → ossec.conf ───────────────────────────────────
+@siem_bp.route("/endpoint-policies/sync", methods=["POST"])
+@require_siem_admin
+def ep_sync():
+    """
+    Reads all auto-trigger policies from DB, generates <active-response> blocks,
+    writes back to ossec.conf via Wazuh API, then restarts wazuh-manager.
+    """
+    _ensure_policy_tables()
+    token = _wazuh_auth_token()
+    if not token:
+        return jsonify({"error": "Wazuh credentials not configured"}), 503
+    try:
+        import psycopg2.extras as _pge
+        conn = _corr_conn()
+        conn.cursor_factory = _pge.RealDictCursor
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM endpoint_policies WHERE enabled=true AND auto_trigger=true")
+        policies = [_policy_row(r) for r in cur.fetchall()]
+        conn.close()
+    except Exception as exc:
+        return jsonify({"error": f"DB: {exc}"}), 500
+
+    r = _wz(token, "GET", "/manager/files",
+             params={"path": "etc/ossec.conf", "raw": "true"})
+    if r is None or r.status_code != 200:
+        return jsonify({"error": "cannot read ossec.conf from Wazuh API"}), 503
+    content = r.text
+
+    MSTART = "<!-- CyCentra Policy Engine: BEGIN MANAGED -->"
+    MEND   = "<!-- CyCentra Policy Engine: END MANAGED -->"
+    blocks  = _generate_ossec_ar_blocks(policies)
+    managed = f"\n  {MSTART}\n{blocks}\n  {MEND}"
+
+    import re as _re
+    if MSTART in content:
+        content = _re.sub(
+            _re.escape(MSTART) + r".*?" + _re.escape(MEND),
+            managed.strip(), content, flags=_re.DOTALL)
+    else:
+        content = content.replace("</ossec_config>", managed + "\n</ossec_config>")
+
+    r2 = _wz(token, "PUT", "/manager/files",
+              params={"path": "etc/ossec.conf", "overwrite": "true"},
+              raw_body=content.encode("utf-8"),
+              extra_headers={"Content-Type": "application/octet-stream"})
+    if r2 is None or r2.status_code not in (200, 201):
+        return jsonify({"error": "ossec.conf write failed",
+                        "detail": (r2.text[:300] if r2 else "unreachable")}), 503
+
+    r3 = _wz(token, "PUT", "/manager/restart")
+    return jsonify({
+        "ok": True,
+        "policies_synced":   len(policies),
+        "blocks_generated":  blocks.count("<active-response>"),
+        "wazuh_restarted":   r3 is not None and r3.status_code in (200, 202),
+    })

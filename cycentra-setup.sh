@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.84 -- 2026-06-23 12:43 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.85 -- 2026-06-23 21:05 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -3250,22 +3250,23 @@ if [[ -d "/var/ossec" ]]; then
     [[ -d "$CONFIG_SRC/decoders" ]] && \
         cp "$CONFIG_SRC/decoders/"*.xml /var/ossec/etc/decoders/ 2>/dev/null || true
 
-    if [[ -f "$CONFIG_SRC/integrations/custom-llm.py" ]]; then
-        cp "$CONFIG_SRC/integrations/custom-llm.py" /var/ossec/integrations/
-        chmod 750 /var/ossec/integrations/custom-llm.py
-        chown root:wazuh /var/ossec/integrations/custom-llm.py
-        success "custom-llm.py deployed"
-    fi
+    # ── Active-response scripts — deploy all from CYSIEM-Config/active-response/ ──
+    mkdir -p /var/ossec/active-response/bin
+    for _ar_script in isolate-host.sh quarantine-file.sh scan-endpoint.sh block-usb.sh block-wifi.sh restrict-network.sh collect-forensics.sh; do
+        if [[ -f "$CONFIG_SRC/active-response/$_ar_script" ]]; then
+            cp "$CONFIG_SRC/active-response/$_ar_script" /var/ossec/active-response/bin/
+            chmod 750 "/var/ossec/active-response/bin/$_ar_script"
+            chown root:wazuh "/var/ossec/active-response/bin/$_ar_script"
+            success "$_ar_script deployed to active-response/bin"
+        else
+            warn "$_ar_script not found in CYSIEM-Config/active-response — skipping"
+        fi
+    done
 
-    # ── Active-response: isolate-host.sh (XDR host isolation) ────────────────
-    if [[ -f "$CONFIG_SRC/active-response/isolate-host.sh" ]]; then
-        mkdir -p /var/ossec/active-response/bin
-        cp "$CONFIG_SRC/active-response/isolate-host.sh" /var/ossec/active-response/bin/
-        chmod 750 /var/ossec/active-response/bin/isolate-host.sh
-        chown root:wazuh /var/ossec/active-response/bin/isolate-host.sh
-        success "isolate-host.sh deployed to active-response/bin"
-    else
-        warn "isolate-host.sh not in CYSIEM-Config/active-response — skipping"
+    # ── Clean up legacy LLM integration left from prior installs ─────────────
+    if [[ -f "/var/ossec/integrations/custom-llm.py" ]]; then
+        rm -f /var/ossec/integrations/custom-llm.py
+        info "Removed legacy custom-llm.py from /var/ossec/integrations/"
     fi
 
     if [[ -f "$CONFIG_SRC/conf/ossec.conf" ]]; then
@@ -3319,19 +3320,27 @@ if [[ -d "/var/ossec" ]]; then
         fi
 
         # 2c. isolate-host active-response blocks (python3 for clean multi-line insert)
-        if ! grep -qF '<rules_id>101000,101001</rules_id>' "$_OSSEC_LIVE"; then
+        if ! grep -qF '<rules_id>101000,101001' "$_OSSEC_LIVE"; then
             python3 - "$_OSSEC_LIVE" << 'PYEOF'
 import sys
 path = sys.argv[1]
 with open(path) as f:
     content = f.read()
 AR_BLOCK = (
-    "\n  <!-- CyCentra 360 XDR: local isolation — anti-tamper and memory anomalies -->\n"
+    "\n  <!-- CyCentra 360 XDR: local isolation — anti-tamper + fileless + Windows kernel tamper -->\n"
     "  <active-response>\n"
     "    <command>isolate-host</command>\n"
     "    <location>local</location>\n"
-    "    <rules_id>101000,101001</rules_id>\n"
+    "    <rules_id>101000,101001,101010,101011</rules_id>\n"
     "    <timeout>600</timeout>\n"
+    "    <disabled>no</disabled>\n"
+    "  </active-response>\n\n"
+    "  <!-- CyCentra 360 XDR: extended local isolation — ransomware precursor -->\n"
+    "  <active-response>\n"
+    "    <command>isolate-host</command>\n"
+    "    <location>local</location>\n"
+    "    <rules_id>100203</rules_id>\n"
+    "    <timeout>3600</timeout>\n"
     "    <disabled>no</disabled>\n"
     "  </active-response>\n\n"
     "  <!-- CyCentra 360 XDR: global isolation — absolute MISP threat intel match -->\n"
@@ -3348,6 +3357,121 @@ with open(path, 'w') as f:
     f.write(content)
 PYEOF
             info "isolate-host active-response blocks injected into ossec.conf"
+        fi
+
+        # 2d. Upgrade existing isolate-host local AR block to include Windows kernel rules
+        if grep -qF '101000,101001</rules_id>' "$_OSSEC_LIVE" \
+           && ! grep -qF '101010' "$_OSSEC_LIVE"; then
+            sed -i 's|<rules_id>101000,101001</rules_id>|<rules_id>101000,101001,101010,101011</rules_id>|' "$_OSSEC_LIVE"
+            info "isolate-host AR block updated to include Windows kernel tamper rules (101010,101011)"
+        fi
+
+        # 2e. Remove stale custom-llm.py integration block
+        if grep -q 'custom-llm\.py' "$_OSSEC_LIVE"; then
+            python3 - "$_OSSEC_LIVE" << 'PYEOF'
+import sys, re
+path = sys.argv[1]
+with open(path) as f: content = f.read()
+content = re.sub(
+    r'\n?\s*<integration>\s*<name>custom-llm\.py</name>.*?</integration>',
+    '', content, flags=re.DOTALL
+)
+with open(path, 'w') as f: f.write(content)
+PYEOF
+            info "Removed stale custom-llm.py integration block from ossec.conf"
+        fi
+
+        # 2f. Remove stale CyAI active-response blocks (rules_id 100050)
+        if grep -q 'rules_id>100050' "$_OSSEC_LIVE"; then
+            python3 - "$_OSSEC_LIVE" << 'PYEOF'
+import sys, re
+path = sys.argv[1]
+with open(path) as f: content = f.read()
+content = re.sub(
+    r'\n?\s*<active-response>(?:(?!</active-response>).)*?<rules_id>100050</rules_id>.*?</active-response>',
+    '', content, flags=re.DOTALL
+)
+with open(path, 'w') as f: f.write(content)
+PYEOF
+            info "Removed stale CyAI active-response blocks (rule 100050) from ossec.conf"
+        fi
+
+        # 2g. Add new CyCentra commands + AR blocks (python3 for multi-line insert)
+        if ! grep -q 'quarantine-file' "$_OSSEC_LIVE"; then
+            python3 - "$_OSSEC_LIVE" << 'PYEOF'
+import sys
+path = sys.argv[1]
+with open(path) as f: content = f.read()
+NEW_CMDS = (
+    "\n  <!-- CyCentra 360: quarantine malicious file and kill owning process -->\n"
+    "  <command>\n"
+    "    <name>quarantine-file</name>\n"
+    "    <executable>quarantine-file.sh</executable>\n"
+    "    <timeout_allowed>no</timeout_allowed>\n"
+    "  </command>\n\n"
+    "  <!-- CyCentra 360: on-demand endpoint malware scan (portal-triggered) -->\n"
+    "  <command>\n"
+    "    <name>scan-endpoint</name>\n"
+    "    <executable>scan-endpoint.sh</executable>\n"
+    "    <timeout_allowed>no</timeout_allowed>\n"
+    "  </command>\n\n"
+    "  <!-- CyCentra 360: block USB storage device on endpoint -->\n"
+    "  <command>\n"
+    "    <name>block-usb</name>\n"
+    "    <executable>block-usb.sh</executable>\n"
+    "    <timeout_allowed>yes</timeout_allowed>\n"
+    "  </command>\n\n"
+    "  <!-- CyCentra 360: disable WiFi/wireless on endpoint (portal-triggered) -->\n"
+    "  <command>\n"
+    "    <name>block-wifi</name>\n"
+    "    <executable>block-wifi.sh</executable>\n"
+    "    <timeout_allowed>yes</timeout_allowed>\n"
+    "  </command>\n"
+)
+NEW_AR = (
+    "\n  <!-- CyCentra 360: C2 / DCSync / PtH / cryptominer — firewall-drop on local agent -->\n"
+    "  <active-response>\n"
+    "    <command>firewall-drop</command>\n"
+    "    <location>local</location>\n"
+    "    <rules_id>100950,100951,100952,100953</rules_id>\n"
+    "    <timeout>3600</timeout>\n"
+    "    <disabled>no</disabled>\n"
+    "  </active-response>\n\n"
+    "  <!-- CyCentra 360: MFA push bombing — lock targeted OS account -->\n"
+    "  <active-response>\n"
+    "    <command>disable-account</command>\n"
+    "    <location>local</location>\n"
+    "    <rules_id>100801</rules_id>\n"
+    "    <timeout>3600</timeout>\n"
+    "    <disabled>no</disabled>\n"
+    "  </active-response>\n\n"
+    "  <!-- CyCentra 360: MISP hash match — quarantine matched process binary -->\n"
+    "  <active-response>\n"
+    "    <command>quarantine-file</command>\n"
+    "    <location>local</location>\n"
+    "    <rules_id>101003</rules_id>\n"
+    "    <disabled>no</disabled>\n"
+    "  </active-response>\n\n"
+    "  <!-- CyCentra 360: USB insertion — block USB storage on endpoint -->\n"
+    "  <active-response>\n"
+    "    <command>block-usb</command>\n"
+    "    <location>local</location>\n"
+    "    <rules_id>100910,100911</rules_id>\n"
+    "    <timeout>0</timeout>\n"
+    "    <disabled>no</disabled>\n"
+    "  </active-response>\n"
+)
+content = content.replace('<!-- Log analysis -->', NEW_CMDS + '\n' + NEW_AR + '\n  <!-- Log analysis -->', 1)
+with open(path, 'w') as f: f.write(content)
+PYEOF
+            info "CyCentra 360 AR commands and blocks injected into ossec.conf"
+        fi
+
+        # 2h. Add <expect>user</expect> to disable-account command if missing
+        if grep -q 'name>disable-account<' "$_OSSEC_LIVE" \
+           && ! grep -A5 'name>disable-account<' "$_OSSEC_LIVE" | grep -q 'expect'; then
+            sed -i '/name>disable-account<\/name>/a\    <expect>user<\/expect>' "$_OSSEC_LIVE"
+            info "Added <expect>user</expect> to disable-account command in ossec.conf"
         fi
 
     fi
@@ -3455,6 +3579,18 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 MISPCRON
         chmod 644 "$MISP_CRON"
         success "MISP sync cron installed → $MISP_CRON (runs every hour)"
+    fi
+
+    # ── Sysmon Windows deployment package ────────────────────────────────────
+    # Pre-populate /opt/cycentra/sysmon/ with cycentra_sysmon_config.xml so
+    # operators can copy the directory to Windows endpoints immediately after install,
+    # without having to run integrate_sysmon.sh first. PS1 scripts are added by
+    # integrate_sysmon.sh when Sysmon integration is enabled.
+    _SYSMON_PKG="/opt/cycentra/sysmon"
+    if [[ -f "$CONFIG_SRC/sysmon/cycentra_sysmon_config.xml" ]]; then
+        mkdir -p "$_SYSMON_PKG"
+        cp "$CONFIG_SRC/sysmon/cycentra_sysmon_config.xml" "$_SYSMON_PKG/"
+        success "cycentra_sysmon_config.xml staged to $_SYSMON_PKG"
     fi
 
     # ── Reload Wazuh after config/decoder/agent changes ───────────────────────
