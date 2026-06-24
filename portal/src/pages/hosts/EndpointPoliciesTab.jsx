@@ -10,12 +10,17 @@ import { useState, useEffect, useCallback } from "react";
 
 const API = "/api/siem";
 
-// ── Style tokens (match AgentGroupsTab / dark theme) ──────────────────────────
+// ── Style tokens ──────────────────────────────────────────────────────────────
 const S = {
   card: {
-    background: "rgba(255,255,255,0.03)",
-    border: "1px solid rgba(255,255,255,0.07)",
+    background: "#0d1117",
+    border: "1px solid rgba(255,255,255,0.10)",
     borderRadius: 8,
+  },
+  cardInner: {
+    background: "#111520",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 6,
   },
   btn: (v = "default") => ({
     border: "1px solid",
@@ -25,22 +30,22 @@ const S = {
     fontSize: 11,
     padding: "5px 12px",
     ...(v === "accent"
-      ? { background: "rgba(0,229,160,0.1)",  borderColor: "rgba(0,229,160,0.35)",  color: "#00e5a0" }
+      ? { background: "rgba(0,229,160,0.15)",  borderColor: "rgba(0,229,160,0.45)",  color: "#00e5a0" }
       : v === "danger"
-      ? { background: "rgba(255,59,59,0.08)",  borderColor: "rgba(255,59,59,0.35)",  color: "#ff6b6b" }
+      ? { background: "rgba(255,59,59,0.12)",  borderColor: "rgba(255,59,59,0.45)",  color: "#ff6b6b" }
       : v === "ghost"
-      ? { background: "none",                  borderColor: "rgba(255,255,255,0.12)", color: "#aaa" }
+      ? { background: "#161b26",               borderColor: "rgba(255,255,255,0.15)", color: "#aaa" }
       : v === "warn"
-      ? { background: "rgba(255,140,0,0.08)",  borderColor: "rgba(255,140,0,0.35)",  color: "#ff8c00" }
-      : { background: "rgba(77,158,255,0.1)",  borderColor: "rgba(77,158,255,0.35)", color: "#4d9eff" }),
+      ? { background: "rgba(255,140,0,0.12)",  borderColor: "rgba(255,140,0,0.45)",  color: "#ff8c00" }
+      : { background: "rgba(77,158,255,0.12)", borderColor: "rgba(77,158,255,0.45)", color: "#4d9eff" }),
   }),
   input: {
-    background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)",
+    background: "#161b26", border: "1px solid rgba(255,255,255,0.15)",
     color: "#e8eaed", padding: "6px 10px", borderRadius: 4,
     fontSize: 11, fontFamily: "monospace", outline: "none", width: "100%", boxSizing: "border-box",
   },
-  label: { fontSize: 9, letterSpacing: "1.5px", color: "#666", marginBottom: 4, display: "block" },
-  sectionHead: { fontSize: 9, letterSpacing: "2px", color: "#555", marginBottom: 10 },
+  label: { fontSize: 9, letterSpacing: "1.5px", color: "#888", marginBottom: 4, display: "block" },
+  sectionHead: { fontSize: 9, letterSpacing: "2px", color: "#666", marginBottom: 10 },
 };
 
 const SEVERITY_COLOR  = { critical: "#ff3b3b", high: "#ff8c00", medium: "#4d9eff", low: "#00e5a0" };
@@ -97,8 +102,8 @@ function ScopeBadge({ scope_type, scope_value }) {
   return (
     <span style={{
       fontSize: 10, color: "#aaa",
-      background: "rgba(255,255,255,0.05)",
-      border: "1px solid rgba(255,255,255,0.1)",
+      background: "#1a1f2e",
+      border: "1px solid rgba(255,255,255,0.15)",
       borderRadius: 3, padding: "2px 7px",
     }}>{label}{val}</span>
   );
@@ -155,11 +160,13 @@ function PolicyFormModal({ policy, catalog, groups, onClose, onSaved }) {
 
   return (
     <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)",
       display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
     }} onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={{
-        ...S.card, width: 600, maxHeight: "90vh", overflowY: "auto",
+        background: "#0d1117", border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+        width: 600, maxHeight: "90vh", overflowY: "auto",
         padding: 24, display: "flex", flexDirection: "column", gap: 18,
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -196,7 +203,7 @@ function PolicyFormModal({ policy, catalog, groups, onClose, onSaved }) {
                   border: sel
                     ? `1px solid ${SEVERITY_COLOR[info.severity]}60`
                     : "1px solid rgba(255,255,255,0.07)",
-                  background: sel ? `${SEVERITY_COLOR[info.severity]}0d` : "rgba(255,255,255,0.03)",
+                  background: sel ? `${SEVERITY_COLOR[info.severity]}20` : "#111520",
                 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                     <span style={{
@@ -263,13 +270,13 @@ function PolicyFormModal({ policy, catalog, groups, onClose, onSaved }) {
         </div>
 
         {/* Auto-trigger */}
-        <div style={{ ...S.card, padding: "12px 14px" }}>
+        <div style={{ ...S.cardInner, padding: "12px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: form.auto_trigger ? 12 : 0 }}>
             <div
               onClick={() => set("auto_trigger", !form.auto_trigger)}
               style={{
                 width: 36, height: 20, borderRadius: 10,
-                background: form.auto_trigger ? "rgba(0,229,160,0.6)" : "rgba(255,255,255,0.1)",
+                background: form.auto_trigger ? "#00b87a" : "#2a2f3e",
                 position: "relative", cursor: "pointer", transition: "background 0.2s",
               }}>
               <div style={{
@@ -347,10 +354,14 @@ function ApplyModal({ policy, catalog, onClose, onApplied }) {
 
   return (
     <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)",
       display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
     }} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={{ ...S.card, width: 520, maxHeight: "80vh", overflowY: "auto", padding: 24 }}>
+      <div style={{
+        background: "#0d1117", border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+        width: 520, maxHeight: "80vh", overflowY: "auto", padding: 24,
+      }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
           <span style={{ fontFamily: "monospace", fontSize: 13, color: "#e8eaed", fontWeight: 600 }}>
             Apply: {policy.name}
@@ -413,7 +424,7 @@ function ApplyModal({ policy, catalog, onClose, onApplied }) {
         {result && (
           <div style={{
             marginTop: 12, padding: 12, borderRadius: 6,
-            background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.2)",
+            background: "rgba(0,229,160,0.12)", border: "1px solid rgba(0,229,160,0.25)",
             fontSize: 11, fontFamily: "monospace", color: "#00e5a0",
           }}>
             ✓ Applied — {result.successes} succeeded, {result.failures} failed
@@ -495,7 +506,7 @@ function PolicyDetail({ policy, catalog, groups, onUpdate, onDelete }) {
             <div onClick={handleToggle} title={policy.enabled ? "Disable" : "Enable"}
               style={{
                 width: 30, height: 16, borderRadius: 8,
-                background: policy.enabled ? "rgba(0,229,160,0.5)" : "rgba(255,255,255,0.1)",
+                background: policy.enabled ? "#00b87a" : "#2a2f3e",
                 position: "relative", cursor: toggling ? "wait" : "pointer",
               }}>
               <div style={{
@@ -531,7 +542,7 @@ function PolicyDetail({ policy, catalog, groups, onUpdate, onDelete }) {
           marginBottom: 12, padding: "8px 12px", borderRadius: 6, fontSize: 11,
           fontFamily: "monospace",
           background: syncMsg.startsWith("✓")
-            ? "rgba(0,229,160,0.06)" : "rgba(255,59,59,0.06)",
+            ? "rgba(0,229,160,0.12)" : "rgba(255,59,59,0.12)",
           color: syncMsg.startsWith("✓") ? "#00e5a0" : "#ff6b6b",
           border: `1px solid ${syncMsg.startsWith("✓") ? "rgba(0,229,160,0.2)" : "rgba(255,59,59,0.2)"}`,
         }}>{syncMsg}</div>
@@ -588,7 +599,7 @@ function PolicyDetail({ policy, catalog, groups, onUpdate, onDelete }) {
 
           {/* Scope + Trigger */}
           <div style={{ display: "flex", gap: 12 }}>
-            <div style={{ ...S.card, padding: 14, flex: 1 }}>
+            <div style={{ ...S.cardInner, padding: 14, flex: 1 }}>
               <div style={S.sectionHead}>SCOPE</div>
               <div style={{ fontSize: 11, color: "#e8eaed", fontFamily: "monospace", marginBottom: 6 }}>
                 {SCOPE_LABELS[policy.scope_type] || policy.scope_type}
@@ -597,7 +608,7 @@ function PolicyDetail({ policy, catalog, groups, onUpdate, onDelete }) {
                 <div style={{ fontSize: 11, color: "#aaa" }}>{policy.scope_value}</div>
               )}
             </div>
-            <div style={{ ...S.card, padding: 14, flex: 1 }}>
+            <div style={{ ...S.cardInner, padding: 14, flex: 1 }}>
               <div style={S.sectionHead}>TRIGGER</div>
               <div style={{ fontSize: 11, color: "#e8eaed", fontFamily: "monospace", marginBottom: 6 }}>
                 {policy.auto_trigger ? "Auto + Manual" : "Manual only"}

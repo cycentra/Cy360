@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.85 -- 2026-06-23 21:05 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.86 -- 2026-06-24 06:40 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -2484,6 +2484,15 @@ mkdir -p "$PORTAL_DIR"
 if [[ -d "$BUNDLE_DIR/portal/dist" ]]; then
     rsync -a --delete "$BUNDLE_DIR/portal/dist/" "$PORTAL_DIR/"
     success "Portal deployed → ${PORTAL_DIR} ($(find $PORTAL_DIR -type f | wc -l) files)"
+    # Inject domain immediately after deploy so the portal never ships without it,
+    # even if later steps fail or setup is run incrementally.
+    _pidx="$PORTAL_DIR/index.html"
+    if [[ -f "$_pidx" ]]; then
+        sed -i '/window\.__CYCENTRA_DOMAIN__/d' "$_pidx"
+        sed -i '/window\.__CYCENTRA_CLIENT__/d'  "$_pidx"
+        sed -i "s|</head>|<script>window.__CYCENTRA_DOMAIN__='${BASE_DOMAIN}';window.__CYCENTRA_CLIENT__='${CLIENT_NAME:-cycentra}';</script></head>|" "$_pidx"
+        success "Domain injected into portal index.html → ${BASE_DOMAIN}"
+    fi
 else
     warn "portal/dist not in bundle"; ERRORS+=("Portal dist missing")
 fi
