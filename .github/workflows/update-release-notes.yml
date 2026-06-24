@@ -19,7 +19,7 @@ jobs:
   summarize_pr:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && !startsWith(github.event.head_commit.message, 'Release v')
     runs-on: ubuntu-latest
     steps:
       - name: Install gh CLI
