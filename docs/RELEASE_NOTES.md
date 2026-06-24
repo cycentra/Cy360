@@ -1,3 +1,19 @@
+## v1.0.87 -- 2026-06-24
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.87 -- 2026-06-24
+
+### Bug Fixes
+
+  - **CyMind chat probe timeout fixed** — The "Test Connection" chat key probe now uses `use_external: true` (routes via external AI / Groq) and a 30 s timeout instead of the previous `use_external: false` / 20 s combination. The old probe hit Ollama directly; if the CyMind container had recently restarted, Ollama needs 30–60 s to load the model into memory, causing the probe to always time out. The fix bypasses local model warm-up so key validation is reliable immediately after any container restart. Same correction applied to the auto-probe inside the "Re-connect / Enable Integration" flow.
+
+---
+
 ## v1.0.86 -- 2026-06-24
 
 ### Improvements

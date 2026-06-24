@@ -1705,12 +1705,12 @@ def cymind_enable():
                             "messages":         [{"role": "user", "content": "ping"}],
                             "system":           "Reply: pong",
                             "use_rag":          False,
-                            "use_external":     False,
+                            "use_external":     True,
                             "use_mcp":          False,
                             "use_integrations": False,
                             "use_operational":  False,
                         },
-                        timeout=10,
+                        timeout=30,
                     )
                     if _probe.ok:
                         chat_verified = True
@@ -1808,13 +1808,13 @@ def cymind_test():
                     "messages":         [{"role": "user", "content": "ping"}],
                     "system":           "Reply with one word: pong",
                     "use_rag":          False,
-                    "use_external":     False,
+                    "use_external":     True,
                     "use_mcp":          False,
                     "use_integrations": False,
                     "use_operational":  False,
                     "temperature":      0.0,
                 },
-                timeout=20,
+                timeout=30,
             )
             ms = int((time.monotonic() - t0) * 1000)
             if probe_resp.ok:
