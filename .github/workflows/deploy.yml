@@ -13,68 +13,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  cleanup-artifacts:
+  build-and-publish:
     runs-on: ubuntu-latest
     permissions:
+      contents: write
+      packages: write
       actions: write
-    steps:
-      - name: Delete stale transit artifacts
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data } = await github.rest.actions.listArtifactsForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              per_page: 100,
-            });
-            const transit = data.artifacts.filter(a =>
-              ['portal-dist', 'python-wheel'].includes(a.name)
-            );
-            for (const a of transit) {
-              await github.rest.actions.deleteArtifact({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                artifact_id: a.id,
-              });
-              core.info(`Deleted artifact ${a.name} (id=${a.id}, created=${a.created_at})`);
-            }
-            core.info(`Cleaned up ${transit.length} stale transit artifact(s).`);
 
-  build-portal:
-    needs: cleanup-artifacts
-    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - name: Build React SPA
-        run: cd portal && npm ci && npm run build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: portal-dist
-          path: portal/dist/
-          retention-days: 1
-
-  build-wheel:
-    needs: cleanup-artifacts
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
 
       - name: Resolve version
         id: version
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
-            VER="${TAG#v}"
+            echo "tag=${TAG}"       >> $GITHUB_OUTPUT
+            echo "ver=${TAG#v}"     >> $GITHUB_OUTPUT
+            echo "is_release=true"  >> $GITHUB_OUTPUT
           else
-            VER="0.0.${{ github.run_number }}"
+            echo "tag=dev-${{ github.run_number }}" >> $GITHUB_OUTPUT
+            echo "ver=0.0.${{ github.run_number }}"  >> $GITHUB_OUTPUT
+            echo "is_release=false"                   >> $GITHUB_OUTPUT
           fi
-          echo "ver=${VER}" >> $GITHUB_OUTPUT
+
+      # ── Build React SPA ─────────────────────────────────────────────────
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build React SPA
+        run: cd portal && npm ci && npm run build
+
+      # ── Build Python wheel ───────────────────────────────────────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Stamp version into pyproject.toml
         run: |
@@ -89,45 +63,7 @@ jobs:
           cd backend
           python -m build --wheel --outdir ../dist/
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: python-wheel
-          path: dist/*.whl
-          retention-days: 1
-
-  publish:
-    needs: [build-portal, build-wheel]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      packages: write # Required for GitHub Packages
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: portal-dist
-          path: portal/dist/
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: python-wheel
-          path: dist/
-
-      - name: Resolve version
-        id: version
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-            echo "tag=${TAG}"      >> $GITHUB_OUTPUT
-            echo "ver=${TAG#v}"    >> $GITHUB_OUTPUT
-            echo "is_release=true" >> $GITHUB_OUTPUT
-          else
-            echo "tag=dev-${{ github.run_number }}" >> $GITHUB_OUTPUT
-            echo "ver=0.0.${{ github.run_number }}"  >> $GITHUB_OUTPUT
-            echo "is_release=false"                  >> $GITHUB_OUTPUT
-          fi
-
+      # ── Compile setup script ─────────────────────────────────────────────
       - name: Install SHC and compile setup script to Linux binary
         run: |
           sudo apt-get install -y shc

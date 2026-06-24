@@ -1,3 +1,24 @@
+## v1.0.91 -- 2026-06-24
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.91 -- 2026-06-25
+
+### Infrastructure
+
+**`.github/workflows/deploy.yml` — Eliminated artifact storage quota dependency**
+- Root cause: `deploy.yml` split the build into 3 jobs (`build-portal`, `build-wheel`, `publish`) with `upload-artifact`/`download-artifact` to pass files between them. GitHub's free-tier artifact storage quota (~500 MB) was exhausted from accumulated runs, blocking all releases with "Artifact storage quota has been hit" — quota recalculates every 6–12 hours so deleting artifacts doesn't unblock immediately.
+- Fix: Collapsed 3 jobs into one `build-and-publish` job. Node (portal) + Python (wheel) + SHC compile + bundle assembly all run sequentially on the same runner. No inter-job file transfer needed, so zero artifact storage is consumed.
+
+**`.github/workflows/update-release-notes.yml` — Deleted (dead workflow)**
+- Both jobs in this workflow had `if:` conditions that never fired in the direct-push release workflow: `summarize_pr` requires a pull_request event (never used); `update_release_notes` requires `github.actor == 'github-actions[bot]'` (user pushes from SSH key). Workflow started and immediately skipped on every `git-push.sh` run — wasting a runner startup for no benefit.
+
+---
+
 ## v1.0.90 -- 2026-06-24
 
 ### Improvements
