@@ -1,3 +1,11 @@
+## v1.0.94 -- 2026-06-25
+
+### New Features
+
+  - mcp): expose /mcp/sse as authenticated public proxy on Flask backend
+
+---
+
 ## v1.0.93 -- 2026-06-25
 
 ### Improvements
