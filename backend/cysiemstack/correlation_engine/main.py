@@ -2734,11 +2734,32 @@ try:
             }, indent=2)
 
         # Mount the MCP sub-application — SSE endpoint: /mcp/sse
-        # FastMCP >=1.6 removed get_application(); fall back to the ASGI app directly.
-        _mcp_asgi = (
-            _mcp.get_application() if hasattr(_mcp, "get_application")
-            else getattr(_mcp, "get_asgi_app", lambda: _mcp)()
-        )
+        # mcp API varies by version:
+        #   >=1.6: sse_app() returns a Starlette ASGI app
+        #   <1.6:  no direct ASGI helper; build manually via SseServerTransport
+        if hasattr(_mcp, "sse_app"):
+            _mcp_asgi = _mcp.sse_app()
+        elif hasattr(_mcp, "get_application"):
+            _mcp_asgi = _mcp.get_application()
+        else:
+            from mcp.server.sse import SseServerTransport
+            from starlette.applications import Starlette as _Starlette
+            from starlette.routing import Mount as _Mount, Route as _Route
+            _sse_transport = SseServerTransport("/mcp/messages/")
+            _mcp_server = _mcp._mcp_server
+
+            async def _sse_endpoint(request):
+                async with _sse_transport.connect_sse(
+                    request.scope, request.receive, request._send
+                ) as (recv, send):
+                    await _mcp_server.run(
+                        recv, send, _mcp_server.create_initialization_options()
+                    )
+
+            _mcp_asgi = _Starlette(routes=[
+                _Route("/sse", endpoint=_sse_endpoint),
+                _Mount("/messages/", app=_sse_transport.handle_post_message),
+            ])
         app.mount("/mcp", _mcp_asgi)
         log.info("security_mcp_mounted", path="/mcp/sse")
 

@@ -2909,6 +2909,23 @@ server {
         proxy_set_header        X-Scheme \$scheme;
     }
     location @error401 { return 302 https://cy360.${BASE_DOMAIN}/oauth2/sign_in?rd=https://\$host\$request_uri; }
+    # ── MCP SSE bridge — public HTTPS access for CyMind on a separate server ──
+    # CyMind on LAN uses the port-80 default_server block above.
+    # CyMind on a public-facing server (e.g. cymind.cycentra.com) must reach
+    # this via HTTPS — we proxy /mcp/ directly to the correlation engine.
+    # Auth is enforced by the engine itself (Bearer cymk_... key check).
+    location /mcp/ {
+        proxy_pass         http://127.0.0.1:8100/mcp/;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              \$host;
+        proxy_set_header   Authorization     \$http_authorization;
+        proxy_set_header   X-CyMind-Key      \$http_x_cymind_key;
+        proxy_set_header   Connection        "";
+        proxy_buffering    off;
+        proxy_cache        off;
+        proxy_read_timeout 3600s;
+        chunked_transfer_encoding on;
+    }
     # location /cymind/ is injected here by routes.py when CyMind is configured via portal
     # location /cysoar/ is injected here by routes.py when CySOAR is installed via portal
 }
