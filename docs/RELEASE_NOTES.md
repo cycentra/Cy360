@@ -1,3 +1,59 @@
+## v1.0.98 -- 2026-06-25
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.98 -- 2026-06-26
+
+### Bug Fix — "Save Automation Settings" crashes with `✗ name 'log' is not defined`
+
+**Root cause:** Two undefined-name bugs in `_sync_misp_to_siem_env()` inside
+`blueprints/system/routes.py` caused every POST to `/api/ai/settings` to return HTTP 500
+whenever `ai_settings.json` already contained a `misp` key (i.e. after any MISP configuration).
+
+**Crash chain:**
+1. User clicks "Save" on the SIEM Automation tab → POST `/api/ai/settings`
+   with `{ system: { fpThreshold: <value> } }`.
+2. Handler merges payload into existing `ai_settings.json` and **writes the file
+   successfully** (line 346).
+3. Because `existing["misp"]` is present, `_sync_misp_to_siem_env()` is called.
+4. Inside that function, line 202 references `pathlib.Path(...)` — but only
+   `from pathlib import Path` was imported (not the `pathlib` module itself) →
+   **`NameError: name 'pathlib' is not defined`**.
+5. The inner `except` block catches this and attempts `log.warning(...)` — but `log`
+   was never imported or defined anywhere in the file →
+   **`NameError: name 'log' is not defined`** (unhandled).
+6. This second `NameError` propagates to the outer `except Exception as e` in
+   `ai_settings_post()` and is returned to the frontend as HTTP 500
+   `{"error": "name 'log' is not defined"}`.
+
+**Important:** Because the file write (step 2) completed before the crash, the
+`fpThreshold` value **was** being persisted to disk. The correlation engine's
+`_get_fp_threshold()` in `ingestor.py` was picking it up correctly on every new alert.
+The feature was operational — only the success response was broken.
+
+#### `backend/blueprints/system/routes.py`
+- Line 202: `pathlib.Path(...)` → `Path(...)` (uses the already-imported `Path` from
+  `from pathlib import Path`).
+- Line 211: `log.warning(...)` → `current_app.logger.warning(...)` (`current_app` is
+  already imported from Flask; safe to call inside any route context).
+
+### Confirmed operational — False Positive Auto-Close Threshold
+
+The FP auto-close mechanism in the correlation engine is fully functional:
+- `ingestor.py` → `_get_fp_threshold()` reads `system.fpThreshold` from
+  `/opt/cycentra/ai_settings.json` on every alert and auto-closes incidents where
+  `fp_probability >= threshold` (Band 1 action: `auto_close`).
+- `main.py` startup migration 4 applies the same threshold to any stale
+  `false_positive` incidents at engine start.
+- The "Automated Decision Bands" displayed in the UI (Auto-close / Investigating /
+  In Review → Case) match the actual three-band logic in the ingestor.
+
+---
+
 ## v1.0.97 -- 2026-06-25
 
 ### Improvements

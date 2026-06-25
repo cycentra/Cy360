@@ -199,7 +199,7 @@ def _sync_misp_to_siem_env(misp: dict) -> None:
     # ai_settings.json is what the Flask benchmark blueprint reads.
     try:
         import json as _j
-        _ai = pathlib.Path("/opt/cycentra/ai_settings.json")
+        _ai = Path("/opt/cycentra/ai_settings.json")
         _d  = _j.loads(_ai.read_text()) if _ai.exists() else {}
         _d["misp"] = {
             "mode":   misp.get("mode", "disabled"),
@@ -208,7 +208,7 @@ def _sync_misp_to_siem_env(misp: dict) -> None:
         }
         _ai.write_text(_j.dumps(_d, indent=4))
     except Exception as _e:
-        log.warning("[system] MISP ai_settings sync failed: %s", _e)
+        current_app.logger.warning("[system] MISP ai_settings sync failed: %s", _e)
 
     try:
         lines = env_path.read_text().splitlines() if env_path.exists() else []
