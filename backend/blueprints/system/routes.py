@@ -1618,8 +1618,17 @@ def cymind_enable():
         return jsonify({"error": "CyMind login response did not include an access token."}), 502
 
     # ── Step 3: Call CyMind activate endpoint ────────────────────────────────
+    # cycentra_url is CyCentra's address AS SEEN FROM CyMind's container.
+    # CYCENTRA_SELF_URL must be set when BASE_DOMAIN is not available (on-prem / dev).
+    # Default 172.16.0.3 is the standard CyCentra IP in the dual-server LAN layout.
+    # Do NOT fall back to SIEM_ENGINE_URL — that is the internal correlation engine
+    # at 127.0.0.1:8100, which CyMind cannot reach.
     base_domain = os.environ.get("BASE_DOMAIN", "")
-    cycentra_url = f"https://cy360.{base_domain}" if base_domain else os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100").replace(":8100", "")
+    cycentra_url = (
+        f"https://cy360.{base_domain}"
+        if base_domain
+        else os.environ.get("CYCENTRA_SELF_URL", "http://172.16.0.3")
+    )
 
     try:
         act_r = http_requests.post(

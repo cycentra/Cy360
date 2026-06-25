@@ -2766,7 +2766,13 @@ def _load_valid_mcp_keys() -> set:
         import json as _json
         from pathlib import Path as _Path
         data = _json.loads(_Path("/opt/cycentra/ai_settings.json").read_text())
-        for entry in data.get("cymind_integration", {}).get("mcp_api_keys", []):
+        ci = data.get("cymind_integration", {})
+        # Primary M2M key written by cymind_enable() / System Settings → CyMind
+        primary = str(ci.get("apiKey", "")).strip()
+        if primary:
+            keys.add(primary)
+        # 3rd-party keys from /api/system/mcp/keys (operator-generated)
+        for entry in ci.get("mcp_api_keys", []):
             k = str(entry.get("key", "")).strip()
             if k:
                 keys.add(k)
