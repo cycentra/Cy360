@@ -1,12 +1,12 @@
 # Cy360 Weekly Architecture Review
 
-**Last reviewed:** 2026-06-18
-**Current version:** v1.0.57 (git HEAD `2560f90`; RELEASE_NOTES.md also contains pre-release notes for v1.0.58)
-**Commits this week:** 30 (v1.0.28 → v1.0.57, 2026-06-10 → 2026-06-17)
+**Last reviewed:** 2026-06-25
+**Current version:** v1.0.91
+**Commits this week:** 40 (v1.0.58 → v1.0.91, 2026-06-17 → 2026-06-24)
 
 ## Summary
 
-This week saw heavy release activity (30 commits) focused on SIEM stability — critical fixes for a zero-incident production outage caused by an FP-threshold miscalibration and a race condition in incident ID assignment. Structural additions include new threat hunter rules (HT-007 through HT-012), the `AgentGroupsTab` frontend component, multi-platform cy360-agent distribution packages, and automation tooling for agent command updates.
+Heavy release activity (40 commits) this week. Major structural additions include a new `integrations_bp` blueprint with matching frontend page, four new `cysiemstack/correlation_engine` modules (evidence_collector, gap_analyser, hypothesis_engine, ti_enricher), seven active-response scripts in CYSIEM-Config, and a test suite (`tests/unit/`) with seven new test files. A `tests/` directory now exists and is not yet documented in CLAUDE.md. The `integrations_bp` is fully registered in `app.py` but undocumented in CLAUDE.md.
 
 ---
 
@@ -16,36 +16,61 @@ Items present in code but **not described** in CLAUDE.md:
 
 | Area | What exists in code | CLAUDE.md status |
 |---|---|---|
-| Blueprint | `blueprints/cases/` — `cases_bp` (routes.py, service.py, checklist_templates.py) — fully registered in app.py as a case management module | **Missing entirely** |
-| Sub-package | `backend/cysiemstack/` — FastAPI correlation engine (20+ files) + threat_hunter with 12 YAML hunt rules | **Missing entirely** |
+| Blueprint | `blueprints/cases/` — `cases_bp` (routes.py, service.py, checklist_templates.py) | **Missing entirely** |
+| Blueprint | `blueprints/integrations/` — `integrations_bp` (routes.py, health.py) | **Missing entirely** (new this week) |
+| Sub-package | `backend/cysiemstack/` — correlation_engine (24 modules) + threat_hunter | **Missing entirely** |
 | Core file | `core/license_validator.py` | Not listed; only config.py, helpers.py, kv_secrets.py mentioned |
 | Blueprint support files | `blueprints/platform/compose.py`, `docker_utils.py`, `state.py` | Only `routes.py` mentioned |
-| SIEM blueprint layout | `blueprints/siem/` contains only `__init__.py`; actual proxy is `siem_proxy.py` at backend root. App.py header comment incorrectly labels it as `blueprints/siem/proxy.py` | Comment is stale |
-| Frontend pages | `pages/ai/`, `pages/assets/`, `pages/cases/`, `pages/hosts/`, `pages/guest-scan/`, `pages/history/`, `pages/platform-extensions/`, `pages/usecases/`, `pages/vulnerabilities/`, `HostIntelligencePage.jsx` | All missing from page directory list |
-| ASM modules | 15 actual modules: cloud_infra, crypto_checks, dark_web, debug_crypto, dns_recon, email_security, mobile_api, nuclei_scanner, passive_osint, social_eng, subdomain_enum, supply_chain, vuln_scanner, web_analysis, whois_history | CLAUDE.md says "(dns, ssl, ports, etc.)" — no ssl or ports module exists |
-| Agent packages | `agent-packages/` — cy360-agent v1.0.33 for amd64 deb, x86_64/aarch64 rpm, arm64/intel64 pkg, msi | Not documented |
-| Docs | 15 docs files not in CLAUDE.md reference table (see docs list below) | Docs table is significantly stale |
+| SIEM blueprint layout | `blueprints/siem/` has only `__init__.py`; proxy is `siem_proxy.py` at backend root. `app.py` header comment incorrectly references `blueprints/siem/proxy.py` | Comment is stale |
+| Frontend pages | `pages/ai/`, `pages/assets/`, `pages/cases/`, `pages/hosts/`, `pages/guest-scan/`, `pages/history/`, `pages/integrations/`, `pages/platform-extensions/`, `pages/usecases/`, `pages/vulnerabilities/`, `HostIntelligencePage.jsx` | All absent from page directory list |
+| Frontend SIEM component | `portal/src/siem/ThreatHuntingPage.jsx` | In `src/siem/`, not `src/pages/` — not documented |
+| ASM modules | 15 actual modules (cloud_infra, crypto_checks, dark_web, debug_crypto, dns_recon, email_security, mobile_api, nuclei_scanner, passive_osint, social_eng, subdomain_enum, supply_chain, vuln_scanner, web_analysis, whois_history) | CLAUDE.md says "(dns, ssl, ports, etc.)" — no ssl or ports module exists |
+| Test suite | `tests/unit/` — 17 test files, `tests/TEST_RUN_HISTORY.md`, `tests/TEST_RUN_REPORT.md` | `tests/` not mentioned anywhere in CLAUDE.md |
+| Docs | 22 docs files not in CLAUDE.md reference table | Docs table significantly stale |
 
 ---
 
 ## New Since Last Review
 
-*(No prior WEEKLY_REVIEW.md — scoped to last 8 days, 2026-06-10 → 2026-06-18)*
+*(Scoped to 2026-06-18 → 2026-06-25)*
 
-**Code:**
-- `backend/cysiemstack/threat_hunter/rules/HT-007-wmi-persistence.yml`
-- `backend/cysiemstack/threat_hunter/rules/HT-008-lolbas-pattern.yml`
-- `backend/cysiemstack/threat_hunter/rules/HT-009-slow-cloud-exfil.yml`
-- `backend/cysiemstack/threat_hunter/rules/HT-010-mfa-fatigue-campaign.yml`
-- `backend/cysiemstack/threat_hunter/rules/HT-011-pass-the-hash-lateral.yml`
-- `backend/cysiemstack/threat_hunter/rules/HT-012-cryptominer-detection.yml`
-- `portal/src/pages/hosts/AgentGroupsTab.jsx`
-- `scripts/update_agent_commands.py`
+**Backend:**
+- `backend/blueprints/integrations/__init__.py`, `health.py`, `routes.py` — new `integrations_bp`; registered in `app.py`
+- `backend/cysiemstack/correlation_engine/evidence_collector.py`
+- `backend/cysiemstack/correlation_engine/gap_analyser.py`
+- `backend/cysiemstack/correlation_engine/hypothesis_engine.py`
+- `backend/cysiemstack/correlation_engine/ti_enricher.py`
 
-**Infra / tooling:**
-- `.github/workflows/update-agent-commands.yml` — CI workflow for agent command sync
-- `.claude/commands/` — 12 CyRA agent command files added
-- `agent-packages/` — cy360-agent v1.0.33 multi-platform distribution packages (deb, rpm, msi, pkg)
+**Frontend:**
+- `portal/src/pages/hosts/EndpointPoliciesTab.jsx`
+- `portal/src/pages/integrations/index.jsx`
+- `portal/src/siem/ThreatHuntingPage.jsx`
+- `portal/src/components/LicenseBanner.jsx`
+
+**CYSIEM-Config:**
+- `CYSIEM-Config/active-response/block-usb.sh`, `block-wifi.sh`, `collect-forensics.sh`, `isolate-host.sh`, `quarantine-file.sh`, `restrict-network.sh`, `scan-endpoint.sh`
+- `CYSIEM-Config/agent_config/cy360_resource_check.ps1`, `cy360_resource_check.sh`
+- `CYSIEM-Config/lists/sync_misp_cache.py`
+- `CYSIEM-Config/sysmon/cycentra_sysmon_config.xml`
+
+**Docs:**
+- `docs/BENCHMARK_COHORT_OPT_IN.md`
+- `docs/ENDPOINT_POLICY_ENGINE.md`
+- `docs/INVESTIGATION_ENGINE_PLAN.md`
+- `docs/KERNEL_TELEMETRY_QA.md`
+- `docs/TEST_INVENTORY.md`
+- `docs/THREAT_HUNTING.md`
+- `docs/WAZUH_INTEGRATION_AUDIT.md`
+
+**Tests (new this week):**
+- `tests/unit/test_agent_installer.py`
+- `tests/unit/test_correlation_rules.py`
+- `tests/unit/test_integration_health.py`
+- `tests/unit/test_investigation_engine.py`
+- `tests/unit/test_resource_monitor.py`
+- `tests/unit/test_ueba_detectors.py`
+- `tests/unit/test_wazuh_kernel_virustotal.py`
+- `tests/TEST_RUN_HISTORY.md`, `tests/TEST_RUN_REPORT.md`
 
 ---
 
@@ -67,33 +92,37 @@ Items present in code but **not described** in CLAUDE.md:
 | `sso_bp` | `blueprints/sso/routes.py` | SSO configuration |
 | `benchmark_bp` | `blueprints/benchmark/routes.py` | Security benchmark scoring |
 | `comp_bp` | `blueprints/comp/routes.py` | GRC compliance engine routes |
-| `cases_bp` | `blueprints/cases/routes.py` | CyCases native case management (**undocumented in CLAUDE.md**) |
+| `cases_bp` | `blueprints/cases/routes.py` | CyCases native case management (undocumented in CLAUDE.md) |
+| `integrations_bp` | `blueprints/integrations/routes.py` | Third-party integration health + configuration (undocumented in CLAUDE.md) |
 
 ---
 
 ## Frontend Pages (authoritative from portal/src/pages/)
 
-| Page file | Path |
+| Page file(s) | Directory |
 |---|---|
-| HostIntelligencePage.jsx | `pages/` (root) |
-| AISettingsPage.jsx | `pages/ai/` |
-| AssetsPage.jsx, AssetModal.jsx, ImportModal.jsx, WorldMapWidget.jsx | `pages/assets/` |
-| AuditTrailPage.jsx | `pages/audit/` |
-| BenchmarkPage.jsx | `pages/benchmark/` |
-| CaseDetailPage.jsx, CasesListPage.jsx | `pages/cases/` |
-| ComplianceAssessmentPage.jsx, ComplianceDashboardPage.jsx, ComplianceFindingsPage.jsx, ComplianceLiveAlertsPage.jsx, ComplianceReportsPage.jsx, PolicyDocumentsPage.jsx, RiskRegisterPage.jsx | `pages/compliance/` |
-| DashboardPage.jsx | `pages/dashboard/` |
-| GuestScanPage.jsx | `pages/guest-scan/` |
-| ScanHistoryPage.jsx | `pages/history/` |
-| AgentGroupsTab.jsx, HostDetailPanel.jsx, HostsPage.jsx | `pages/hosts/` |
-| LoginPage.jsx | `pages/login/` |
-| MarketplacePage.jsx | `pages/marketplace/` |
-| index.jsx | `pages/platform-extensions/` |
-| PlatformPage.jsx | `pages/platform/` |
-| ScanPage.jsx | `pages/scan/` |
-| SSOTab.jsx, SystemSettingsPage.jsx | `pages/settings/` |
-| UseCasesPage.jsx | `pages/usecases/` |
-| VulnerabilityPage.jsx | `pages/vulnerabilities/` |
+| `HostIntelligencePage.jsx` | `pages/` (root) |
+| `AISettingsPage.jsx` | `pages/ai/` |
+| `AssetsPage.jsx`, `AssetModal.jsx`, `ImportModal.jsx`, `WorldMapWidget.jsx` | `pages/assets/` |
+| `AuditTrailPage.jsx` | `pages/audit/` |
+| `BenchmarkPage.jsx` | `pages/benchmark/` |
+| `CaseDetailPage.jsx`, `CasesListPage.jsx` | `pages/cases/` |
+| `ComplianceAssessmentPage.jsx`, `ComplianceDashboardPage.jsx`, `ComplianceFindingsPage.jsx`, `ComplianceLiveAlertsPage.jsx`, `ComplianceReportsPage.jsx`, `PolicyDocumentsPage.jsx`, `RiskRegisterPage.jsx` | `pages/compliance/` |
+| `DashboardPage.jsx` | `pages/dashboard/` |
+| `GuestScanPage.jsx` | `pages/guest-scan/` |
+| `ScanHistoryPage.jsx` | `pages/history/` |
+| `AgentGroupsTab.jsx`, `EndpointPoliciesTab.jsx` *(new)*, `HostDetailPanel.jsx`, `HostsPage.jsx` | `pages/hosts/` |
+| `index.jsx` *(new)* | `pages/integrations/` |
+| `LoginPage.jsx` | `pages/login/` |
+| `MarketplacePage.jsx` | `pages/marketplace/` |
+| `index.jsx` | `pages/platform-extensions/` |
+| `PlatformPage.jsx` | `pages/platform/` |
+| `ScanPage.jsx` | `pages/scan/` |
+| `SSOTab.jsx`, `SystemSettingsPage.jsx` | `pages/settings/` |
+| `UseCasesPage.jsx` | `pages/usecases/` |
+| `VulnerabilityPage.jsx` | `pages/vulnerabilities/` |
+
+**Note:** `ThreatHuntingPage.jsx` lives in `portal/src/siem/`, not `pages/`.
 
 ---
 
@@ -105,38 +134,33 @@ Support: `Utils/update_wordlist.py`, `wordlists/`
 
 ---
 
-## cysiemstack Sub-Package (undocumented — authoritative from backend/cysiemstack/)
+## cysiemstack Sub-Package (authoritative from backend/cysiemstack/)
 
-**`correlation_engine/`** (FastAPI service):
-`ai_router`, `audit_reporter`, `campaign_correlator`, `config`, `correlator`, `cysiem_to_redis`, `cysoar_connector`, `feedback_store`, `fp_pattern_store`, `grouper`, `ingestor`, `llm_enricher`, `main`, `misp_enricher`, `models`, `normaliser`, `risk_scorer`, `ueba`, `ueba_ml`
+Not documented in CLAUDE.md.
 
-**`threat_hunter/`**: `hunter.py` + 12 YAML hunt rules (HT-001 through HT-012)
+**`correlation_engine/`** (24 modules):
+`ai_router`, `audit_reporter`, `campaign_correlator`, `config`, `correlator`, `cysiem_to_redis`, `cysoar_connector`, `evidence_collector` *(new)*, `feedback_store`, `fp_pattern_store`, `gap_analyser` *(new)*, `grouper`, `hypothesis_engine` *(new)*, `ingestor`, `llm_enricher`, `main`, `misp_enricher`, `models`, `normaliser`, `risk_scorer`, `ti_enricher` *(new)*, `ueba`, `ueba_ml`
+
+**`threat_hunter/`**: `hunter.py`
 
 **`host_service.py`** (top-level)
 
 ---
 
-## Docs in docs/ (authoritative)
-
-Documented in CLAUDE.md: `GRC_ENGINE_FLOW.md`, `CYMIND_INTEGRATION.md`, `INFISICAL-SETUP.md`, `SCAN_DATA_FLOW.md`, `GRC_SCORING_MODEL.md`, `SSO-Configuration.md`, `SCHEDULER.md`, `RELEASE_NOTES.md`, `MARKETPLACE.md`
-
-**Not in CLAUDE.md docs table:**
-`AGENTS_MARKETPLACE.md`, `AGENT_TROUBLESHOOTING.md`, `ASM_ENHANCEMENTS.md`, `AUTO_TICKET_LOGIC.md`, `BEHAVIOURAL_ANALYTICS.md`, `Benchmark Score Calculations.md`, `COMPLIANCE_GAP_ANALYSIS.md`, `GRC_CROSS_FRAMEWORK_CORRELATION.md`, `MITRE_ATTACK_COVERAGE.md`, `Reports.md`, `SIEM_SEVERITY_TUNING.md`, `SSO-Troubleshooting.md`, `infisical-secrets-template.csv`, `install-warnings-explained.md`, `standard-vs-deep-scan.md`
-
----
-
 ## Action Items
 
-1. **CLAUDE.md — Add `blueprints/cases/` to Repository Layout and blueprint list.** `cases_bp` is fully registered and production-active; CLAUDE.md is the primary onboarding reference and it is completely absent.
+1. **CLAUDE.md — Add `blueprints/cases/` and `blueprints/integrations/` to Repository Layout and blueprint list.** Both are production-registered; both are absent from CLAUDE.md.
 
-2. **CLAUDE.md — Document `backend/cysiemstack/`.** This is a substantial FastAPI sub-service (correlation engine + threat hunter) with no mention anywhere in CLAUDE.md. Add it to the repo layout, describe its role, and note it is separate from the Flask app.
+2. **CLAUDE.md — Document `backend/cysiemstack/`.** A substantial sub-service (24-module correlation engine + threat hunter) with zero CLAUDE.md coverage.
 
-3. **CLAUDE.md — Add `core/license_validator.py` to the core/ list.** Currently only `config.py`, `helpers.py`, `kv_secrets.py` are mentioned.
+3. **CLAUDE.md — Add `tests/` to the repository layout.** A test suite now exists (`tests/unit/` — 17 test files). No mention exists in CLAUDE.md.
 
-4. **CLAUDE.md — Correct ASM modules description.** Replace "(dns, ssl, ports, etc.)" with the actual module names; there is no `ssl` or `ports` module.
+4. **CLAUDE.md — Add `core/license_validator.py` to the core/ list.** Currently only `config.py`, `helpers.py`, `kv_secrets.py` are mentioned.
 
-5. **CLAUDE.md — Update Frontend Pages section.** At least 10 page directories are unlisted (assets, cases, hosts, guest-scan, history, platform-extensions, usecases, vulnerabilities, ai, HostIntelligencePage).
+5. **CLAUDE.md — Correct ASM modules description.** Replace "(dns, ssl, ports, etc.)" with actual module names; there is no `ssl` or `ports` module.
 
-6. **CLAUDE.md — Expand the Docs Reference table.** 15 additional doc files exist and are not referenced.
+6. **CLAUDE.md — Update Frontend Pages section.** At least 11 page directories are unlisted.
 
-7. **`app.py` header comment — Update blueprint list.** The docstring at the top of app.py omits `scheduler_bp`, `marketplace_bp`, `sso_bp`, `benchmark_bp`, `comp_bp`, and `cases_bp` from its blueprint–responsibility table.
+7. **CLAUDE.md — Expand the Docs Reference table.** 32 docs files exist; only 9 are referenced.
+
+8. **`app.py` header comment — Update blueprint list.** The docstring omits `scheduler_bp`, `marketplace_bp`, `sso_bp`, `benchmark_bp`, `comp_bp`, `cases_bp`, and `integrations_bp` from its blueprint–responsibility table.
