@@ -102,25 +102,55 @@ _CLOUD_MISP_URL_DEFAULT = "https://cymisp.cycentra.com"
 
 def get_misp_config() -> dict | None:
     """
-    Returns MISP connection config sourced exclusively from vault secrets.
+    Returns MISP connection config. Priority:
+      1. /opt/cycentra/ai_settings.json  misp.{mode,url,apiKey}  (set via UI)
+      2. CLOUD_MISP_URL / CLOUD_MISP_API_KEY  env vars (vault-injected)
+      3. MISP_URL / MISP_API_KEY  env vars (cysiemstack.env)
 
-    CLOUD_MISP_URL and CLOUD_MISP_API_KEY are injected into os.environ at
-    process startup by core/kv_secrets.py (FLASK_KV_MAP / ENGINE_KV_MAP).
-    No UI configuration or ai_settings.json reads — vault is the only source.
-
-    Returns dict with keys url, apiKey, mode — or None if key is absent.
+    Returns dict with keys url, apiKey, mode — or None if not configured.
     """
     import logging as _log
+    import json  as _json
+    import pathlib as _pathlib
     _logger = _log.getLogger(__name__)
+
+    # Source 1: UI-saved config in ai_settings.json
+    try:
+        _ai = _pathlib.Path("/opt/cycentra/ai_settings.json")
+        if _ai.exists():
+            stored = _json.loads(_ai.read_text())
+            misp   = stored.get("misp", {})
+            mode   = str(misp.get("mode", "disabled")).lower()
+            url    = str(misp.get("url",    "")).strip().rstrip("/")
+            key    = str(misp.get("apiKey", "")).strip()
+            if mode == "disabled":
+                return None
+            if mode == "local" and url and key:
+                return {"url": url, "apiKey": key, "mode": "local"}
+            if mode == "cloud":
+                url = url or os.environ.get("CLOUD_MISP_URL", _CLOUD_MISP_URL_DEFAULT).rstrip("/")
+                key = key or os.environ.get("CLOUD_MISP_API_KEY", "").strip()
+                if key:
+                    return {"url": url, "apiKey": key, "mode": "cloud"}
+    except Exception:
+        pass
+
+    # Source 2: vault env vars
     url = os.environ.get("CLOUD_MISP_URL", _CLOUD_MISP_URL_DEFAULT).rstrip("/")
     key = os.environ.get("CLOUD_MISP_API_KEY", "").strip()
-    if not key:
-        _logger.warning(
-            "⏭️  [MISP] CLOUD_MISP_API_KEY not set — IOC lookups disabled. "
-            "Add the secret to your vault (Infisical / Azure KV / HashiCorp) "
-            "under key CLOUD_MISP_API_KEY."
-        )
-        return None
-    return {"url": url, "apiKey": key, "mode": "cloud"}
+    if key:
+        return {"url": url, "apiKey": key, "mode": "cloud"}
+
+    # Source 3: cysiemstack.env MISP_* vars
+    key = os.environ.get("MISP_API_KEY", "").strip()
+    if key:
+        url = os.environ.get("MISP_URL", url).rstrip("/")
+        return {"url": url, "apiKey": key, "mode": os.environ.get("MISP_MODE", "local")}
+
+    _logger.warning(
+        "⏭️  [MISP] Not configured — IOC lookups disabled. "
+        "Configure MISP in System Settings → Threat Intel or add CLOUD_MISP_API_KEY to vault."
+    )
+    return None
 
 

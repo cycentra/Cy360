@@ -1581,8 +1581,11 @@ def cymind_enable():
 
     import secrets as _secrets
     data        = request.get_json() or {}
-    # CyMind is always at 172.16.0.2:8080 — URL is fixed, not user-configurable
-    cymind_url  = "http://172.16.0.2:8080"
+    cymind_url  = (
+        str(data.get("cymindUrl", "")).strip().rstrip("/")
+        or os.environ.get("CYMIND_API_URL", "")
+        or "http://172.16.0.2:8080"
+    )
     admin_email = str(data.get("cymindAdminEmail", "")).strip()
     admin_pw    = str(data.get("cymindAdminPassword", "")).strip()
 
@@ -1906,6 +1909,22 @@ def _fetch_siem_context_block() -> str:
             ctx["ueba_anomalies"] = r.json()
     except Exception:
         pass
+    try:
+        r = http_requests.get(f"{engine_url}/cases",
+                              params={"limit": 10}, timeout=_t)
+        if r.ok:
+            _cd = r.json()
+            if _cd.get("total", 0) > 0:
+                ctx["cases"] = _cd
+    except Exception:
+        pass
+    try:
+        from cy_comp.services.compliance import get_latest_scores
+        _scores = get_latest_scores()
+        if _scores:
+            ctx["compliance"] = _scores
+    except Exception:
+        pass
 
     if not ctx:
         return ""
@@ -1995,6 +2014,45 @@ def _fetch_siem_context_block() -> str:
                     f"| {u.get('anomaly_type', u.get('type', '?'))} "
                     f"| {u.get('score', u.get('risk_score', '?'))} "
                     f"| {u.get('last_activity', u.get('last_seen', '?'))} |"
+                )
+            lines.append("")
+
+    if ctx.get("cases"):
+        _cd   = ctx["cases"]
+        _crows = _cd.get("cases", [])
+        if _crows:
+            _mttd_str = f"{_cd['avg_mttd_hours']}h" if _cd.get("avg_mttd_hours") else "N/A"
+            _mtta_str = f"{_cd['avg_mtta_hours']}h" if _cd.get("avg_mtta_hours") else "N/A"
+            lines += [
+                f"## CyCases Investigations (total: {_cd.get('total', '?')} | avg MTTD: {_mttd_str} | avg MTTA: {_mtta_str})",
+                "| ID | Severity | Status | Assigned To | MTTD | Summary |",
+                "|---|---|---|---|---|---|",
+            ]
+            for c in _crows[:10]:
+                _mttd = f"{c['mttd_hours']}h" if c.get("mttd_hours") else "—"
+                lines.append(
+                    f"| {c.get('id', '?')} "
+                    f"| {c.get('severity', '?')} "
+                    f"| {c.get('status', '?')} "
+                    f"| {c.get('assigned_to') or 'Unassigned'} "
+                    f"| {_mttd} "
+                    f"| {(c.get('summary') or '')[:60] or '—'} |"
+                )
+            lines.append("")
+
+    if ctx.get("compliance"):
+        _scores = ctx["compliance"]
+        if _scores:
+            lines += ["## Compliance Posture (GRC)",
+                      "| Framework | Score | Grade |"]
+            lines += ["|---|---|---|"]
+            for fw in _scores:
+                _s = fw.get("score", 0)
+                _grade = "A" if _s >= 90 else "B" if _s >= 75 else "C" if _s >= 60 else "D" if _s >= 40 else "F"
+                lines.append(
+                    f"| {fw.get('framework', '?').upper()} "
+                    f"| {_s}% "
+                    f"| {_grade} |"
                 )
             lines.append("")
 
@@ -3173,7 +3231,8 @@ def cymind_chat_proxy():
     # Check if the user's last message contains a confirmed action intent.
     # Only analyst/admin reach here; no role re-check needed.
     _ACTION_VERB_RE = _re.compile(
-        r'\b(?:close|resolve|mark\s+(?:as\s+)?(?:fp|false.positive)|assign|escalate)\b',
+        r'\b(?:close|resolve|mark\s+(?:as\s+)?(?:fp|false.positive)|assign|escalate'
+        r'|block|disable|restart\s+agent|add\s+note|open\s+case|enrich|trigger\s+soar)\b',
         _re.IGNORECASE,
     )
     if body_json is not None:

@@ -1796,6 +1796,58 @@ async def get_incident_distribution(db: AsyncSession = Depends(get_db)):
     }
 
 
+@app.get("/cases")
+async def list_cases_rest(
+    status:      Optional[str] = None,
+    severity:    Optional[str] = None,
+    assigned_to: Optional[str] = None,
+    limit: int = Query(20, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """List open CyCases investigations for the Cy360 chat context block."""
+    q = (
+        select(Incident)
+        .where(Incident.case_opened_at.isnot(None))
+        .order_by(desc(Incident.case_opened_at))
+    )
+    if status:      q = q.where(Incident.status == status)
+    if severity:    q = q.where(Incident.severity == severity)
+    if assigned_to: q = q.where(func.lower(Incident.assigned_to).contains(assigned_to.lower()))
+    q = q.limit(limit)
+
+    rows = (await db.execute(q)).scalars().all()
+    total = (await db.execute(
+        select(func.count()).select_from(Incident).where(Incident.case_opened_at.isnot(None))
+    )).scalar() or 0
+
+    avg_mttd = (await db.execute(
+        select(func.avg(Incident.case_mttd_seconds))
+        .where(Incident.case_opened_at.isnot(None), Incident.case_mttd_seconds.isnot(None))
+    )).scalar()
+    avg_mtta = (await db.execute(
+        select(func.avg(Incident.case_mtta_seconds))
+        .where(Incident.case_opened_at.isnot(None), Incident.case_mtta_seconds.isnot(None))
+    )).scalar()
+
+    return {
+        "total":          total,
+        "avg_mttd_hours": round(float(avg_mttd) / 3600, 1) if avg_mttd else None,
+        "avg_mtta_hours": round(float(avg_mtta) / 3600, 1) if avg_mtta else None,
+        "cases": [{
+            "id":             c.id,
+            "status":         c.status,
+            "severity":       c.severity,
+            "assigned_to":    c.assigned_to,
+            "case_opened_at": c.case_opened_at.isoformat() if c.case_opened_at else None,
+            "mttd_hours":     round(c.case_mttd_seconds / 3600, 1) if c.case_mttd_seconds else None,
+            "mtta_hours":     round(c.case_mtta_seconds / 3600, 1) if c.case_mtta_seconds else None,
+            "risk_score":     float(c.risk_score or 0),
+            "categories":     c.categories or [],
+            "summary":        (c.llm_summary or "")[:120],
+        } for c in rows],
+    }
+
+
 @app.post("/hosts/refresh")
 async def trigger_host_refresh(background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     """Trigger an immediate host posture refresh outside the hourly scheduler.

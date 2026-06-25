@@ -1734,9 +1734,6 @@ async with sse_client("${status?.public_url || status?.endpoint || "<MCP_ENDPOIN
 // CyMind Integration Settings tab
 // ════════════════════════════════════════════════════════════════════════════
 
-// CyMind IP is fixed — not user-configurable
-const CYMIND_URL = "http://172.16.0.2:8080";
-
 function CyMindIntegrationTab() {
   const [cfg,         setCfg]         = useState({});
   const [loading,     setLoading]     = useState(true);
@@ -1746,8 +1743,9 @@ function CyMindIntegrationTab() {
   const [mcpStatus,   setMcpStatus]   = useState(null);
 
   // Enable form
-  const [adminEmail,  setAdminEmail]  = useState("");
-  const [adminPw,     setAdminPw]     = useState("");
+  const [adminEmail,     setAdminEmail]     = useState("");
+  const [adminPw,        setAdminPw]        = useState("");
+  const [cymindUrlInput, setCymindUrlInput] = useState("http://172.16.0.2:8080");
   const [showAdvanced,setShowAdvanced]= useState(false);
 
   // Advanced: manual M2M key rotation or manual chat key paste
@@ -1767,7 +1765,13 @@ function CyMindIntegrationTab() {
     setLoading(true);
     fetch(`${API_BASE}/api/system/cymind`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) setCfg(d); setLoading(false); })
+      .then(d => {
+        if (d) {
+          setCfg(d);
+          if (d.cymindUrl) setCymindUrlInput(d.cymindUrl);
+        }
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
   };
 
@@ -1797,6 +1801,7 @@ function CyMindIntegrationTab() {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          cymindUrl:           cymindUrlInput.trim() || "http://172.16.0.2:8080",
           cymindAdminEmail:    adminEmail.trim(),
           cymindAdminPassword: adminPw,
         }),
@@ -1927,7 +1932,7 @@ function CyMindIntegrationTab() {
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: "currentColor" }} />
             {isEnabled ? "CONNECTED" : "NOT CONFIGURED"}
           </span>
-          <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace" }}>{CYMIND_URL}</span>
+          <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace" }}>{cfg.cymindUrl || "http://172.16.0.2:8080"}</span>
           {cfg.hasKey     && <span style={{ color: "rgba(0,229,160,0.6)", fontSize: 10, fontFamily: "monospace" }}>✓ M2M key</span>}
           {cfg.hasChatKey && <span style={{ color: "rgba(0,229,160,0.6)", fontSize: 10, fontFamily: "monospace" }}>✓ Chat key</span>}
         </div>
@@ -1971,6 +1976,16 @@ function CyMindIntegrationTab() {
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
+          <div>
+            <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyMind Server URL</div>
+            <input
+              type="url"
+              value={cymindUrlInput}
+              onChange={e => setCymindUrlInput(e.target.value)}
+              placeholder="http://172.16.0.2:8080"
+              style={{ ...INPUT, width: "100%", boxSizing: "border-box" }}
+            />
+          </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 180 }}>
               <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyMind Admin Email</div>
@@ -2734,15 +2749,20 @@ function BackupTab() {
 
 function ThreatIntelTab() {
   const _MASK = "●".repeat(8);
-  const [ti, setTi]       = useState({ vtApiKey: "", abuseipdbApiKey: "", greynoiseApiKey: "" });
-  const [saved, setSaved] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [ti,        setTi]        = useState({ vtApiKey: "", abuseipdbApiKey: "", greynoiseApiKey: "" });
+  const [misp,      setMisp]      = useState({ mode: "disabled", url: "", apiKey: "" });
+  const [saved,     setSaved]     = useState(false);
+  const [saving,    setSaving]    = useState(false);
   const [testState, setTestState] = useState({});   // { [source]: "testing"|"ok"|"fail"|msg }
+  const [mispTest,  setMispTest]  = useState(null); // { ok, text }
 
   useEffect(() => {
     fetch(`${API_BASE}/api/ai/settings`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d?.threat_intel) setTi(d.threat_intel); })
+      .then(d => {
+        if (d?.threat_intel) setTi(d.threat_intel);
+        if (d?.misp) setMisp(m => ({ ...m, ...d.misp }));
+      })
       .catch(() => {});
   }, []);
 
@@ -2752,10 +2772,25 @@ function ThreatIntelTab() {
       const r = await fetch(`${API_BASE}/api/ai/settings`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ threat_intel: ti }),
+        body: JSON.stringify({ threat_intel: ti, misp }),
       });
       if (r.ok) { setSaved(true); setTimeout(() => setSaved(false), 2500); }
     } finally { setSaving(false); }
+  };
+
+  const testMisp = async () => {
+    setMispTest({ ok: null, text: "Testing…" });
+    try {
+      const r = await fetch(`${API_BASE}/api/system/misp/test`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: misp.url, apiKey: misp.apiKey || _MASK, useStored: !misp.apiKey }),
+      });
+      const d = await r.json();
+      setMispTest({ ok: d.ok, text: d.message || d.error || "" });
+    } catch {
+      setMispTest({ ok: false, text: "Cannot reach backend" });
+    }
   };
 
   const testSource = async (source) => {
@@ -2801,6 +2836,8 @@ function ThreatIntelTab() {
     },
   ];
 
+  const mispConnected = misp.mode !== "disabled" && misp.url && misp.apiKey;
+
   return (
     <div>
       <div style={{ ...LABEL, marginBottom: 6 }}>External Threat Intelligence Sources</div>
@@ -2809,6 +2846,77 @@ function ThreatIntelTab() {
         with multi-source reputation data visible in the Incidents drawer.
         Keys are stored in <code style={{ color: "rgba(0,229,160,0.6)" }}>/opt/cycentra/ai_settings.json</code> and
         synced to <code style={{ color: "rgba(0,229,160,0.6)" }}>cysiemstack.env</code> automatically.
+      </div>
+
+      {/* ── MISP ──────────────────────────────────────────────────────────── */}
+      <div style={{ ...CARD, marginBottom: 16, borderLeft: `3px solid ${mispConnected ? "rgba(176,110,255,0.6)" : "rgba(255,255,255,0.08)"}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 13, color: "#fff", marginBottom: 3 }}>MISP — Threat Intelligence Platform</div>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
+              IOC feed for incident enrichment, ASM scans, and host intelligence. Supports on-prem and cloud (CyMISP) instances.
+            </div>
+          </div>
+          {mispConnected && <span style={{ fontSize: 11, color: "#b06eff" }}>● configured</span>}
+        </div>
+
+        {/* Mode selector */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          {["disabled", "local", "cloud"].map(m => (
+            <button key={m}
+              onClick={() => { setMisp(s => ({ ...s, mode: m })); setMispTest(null); }}
+              style={{
+                background: misp.mode === m ? "rgba(176,110,255,0.15)" : "rgba(255,255,255,0.03)",
+                border: `1px solid ${misp.mode === m ? "rgba(176,110,255,0.5)" : "rgba(255,255,255,0.1)"}`,
+                color: misp.mode === m ? "#b06eff" : "rgba(255,255,255,0.4)",
+                padding: "5px 14px", borderRadius: 4, fontFamily: "monospace", fontSize: 11,
+                fontWeight: 700, cursor: "pointer", textTransform: "uppercase",
+              }}>
+              {m === "disabled" ? "Disabled" : m === "local" ? "Local (on-prem)" : "Cloud (CyMISP)"}
+            </button>
+          ))}
+        </div>
+
+        {misp.mode !== "disabled" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div>
+              <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>
+                MISP Server URL {misp.mode === "cloud" && <span style={{ color: "rgba(255,255,255,0.3)", fontWeight: 400 }}>(leave blank to use cymisp.cycentra.com)</span>}
+              </div>
+              <input
+                type="url"
+                value={misp.url}
+                onChange={e => { setMisp(s => ({ ...s, url: e.target.value })); setMispTest(null); }}
+                placeholder={misp.mode === "cloud" ? "https://cymisp.cycentra.com" : "https://misp.corp.example.com"}
+                style={{ ...INPUT, width: "100%", boxSizing: "border-box" }}
+              />
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>MISP API Key</div>
+                <input
+                  type="password"
+                  value={misp.apiKey}
+                  onChange={e => { setMisp(s => ({ ...s, apiKey: e.target.value })); setMispTest(null); }}
+                  placeholder="Paste your MISP automation key"
+                  style={{ ...INPUT, width: "100%", boxSizing: "border-box" }}
+                />
+              </div>
+              <button
+                onClick={testMisp}
+                disabled={mispTest?.ok === null}
+                style={{ ...BTN("#4d9eff"), whiteSpace: "nowrap", opacity: mispTest?.ok === null ? 0.6 : 1 }}>
+                {mispTest?.ok === null ? "Testing…" : "Test"}
+              </button>
+            </div>
+            {mispTest && mispTest.ok !== null && (
+              <div style={{ fontSize: 11, fontFamily: "monospace",
+                color: mispTest.ok ? "#00e5a0" : "#ff6b6b" }}>
+                {mispTest.ok ? "✓" : "✗"} {mispTest.text}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {sources.map(src => {

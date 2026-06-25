@@ -20,9 +20,6 @@ const LABEL = { color: "rgba(255,255,255,0.62)", fontSize: 10, letterSpacing: "1
 const INPUT = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, color: "white", fontFamily: "monospace", fontSize: 12, padding: "8px 12px", width: "100%", outline: "none", boxSizing: "border-box" };
 const BTN   = (color = "#00e5a0") => ({ background: `rgba(${color === "#00e5a0" ? "0,229,160" : color === "#4d9eff" ? "77,158,255" : color === "#ff6b6b" ? "255,107,107" : color === "#ff8c00" ? "255,140,0" : "0,229,160"},0.1)`, color, border: `1px solid ${color}40`, padding: "8px 18px", borderRadius: 4, fontFamily: "monospace", fontSize: 11, fontWeight: 700, letterSpacing: "1px", cursor: "pointer", textTransform: "uppercase" });
 
-// CyMind IP is fixed — not user-configurable
-const CYMIND_URL = "http://172.16.0.2:8080";
-
 // ── Section heading ───────────────────────────────────────────────────────────
 function SectionLabel({ icon, title, badge }) {
   return (
@@ -325,8 +322,9 @@ function CyMindSection() {
   const [msg,         setMsg]         = useState(null);
   const [testResults, setTestResults] = useState(null);
   const [mcpStatus,   setMcpStatus]   = useState(null);
-  const [adminEmail,  setAdminEmail]  = useState("");
-  const [adminPw,     setAdminPw]     = useState("");
+  const [adminEmail,     setAdminEmail]     = useState("");
+  const [adminPw,        setAdminPw]        = useState("");
+  const [cymindUrlInput, setCymindUrlInput] = useState("http://172.16.0.2:8080");
   const [showAdvanced,setShowAdvanced]= useState(false);
   const [newKey,      setNewKey]      = useState(null);
   const [chatKeyInput,setChatKeyInput]= useState("");
@@ -335,7 +333,13 @@ function CyMindSection() {
     setLoading(true);
     fetch(`${API_BASE}/api/system/cymind`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) setCfg(d); setLoading(false); })
+      .then(d => {
+        if (d) {
+          setCfg(d);
+          if (d.cymindUrl) setCymindUrlInput(d.cymindUrl);
+        }
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
   };
 
@@ -354,7 +358,7 @@ function CyMindSection() {
       const r = await fetch(`${API_BASE}/api/system/cymind/enable`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cymindAdminEmail: adminEmail.trim(), cymindAdminPassword: adminPw }),
+        body: JSON.stringify({ cymindUrl: cymindUrlInput.trim() || "http://172.16.0.2:8080", cymindAdminEmail: adminEmail.trim(), cymindAdminPassword: adminPw }),
       });
       const d = await r.json();
       if (d.ok) {
@@ -442,7 +446,7 @@ function CyMindSection() {
       </div>
 
       <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.6, marginBottom: 16 }}>
-        {CYMIND_URL} &nbsp;·&nbsp;
+        {cfg.cymindUrl || "http://172.16.0.2:8080"} &nbsp;·&nbsp;
         {cfg.hasKey     && <span style={{ color: "rgba(0,229,160,0.6)" }}>✓ M2M key &nbsp;</span>}
         {cfg.hasChatKey && <span style={{ color: "rgba(0,229,160,0.6)" }}>✓ Chat key</span>}
       </div>
@@ -471,14 +475,20 @@ function CyMindSection() {
           Enter your CyMind <strong style={{ color: "rgba(255,255,255,0.5)" }}>admin</strong> credentials.
           CyCentra will automatically configure both sides — no manual steps in CyMind needed.
         </div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-          <div style={{ flex: 1, minWidth: 180 }}>
-            <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyMind Admin Email</div>
-            <input type="email" value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@cymind.local" style={{ ...INPUT, boxSizing: "border-box" }} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 14 }}>
+          <div>
+            <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyMind Server URL</div>
+            <input type="url" value={cymindUrlInput} onChange={e => setCymindUrlInput(e.target.value)} placeholder="http://172.16.0.2:8080" style={{ ...INPUT, boxSizing: "border-box" }} />
           </div>
-          <div style={{ flex: 1, minWidth: 180 }}>
-            <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyMind Admin Password</div>
-            <input type="password" value={adminPw} onChange={e => setAdminPw(e.target.value)} placeholder="••••••••" style={{ ...INPUT, boxSizing: "border-box" }} onKeyDown={e => e.key === "Enter" && handleEnable()} />
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 180 }}>
+              <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyMind Admin Email</div>
+              <input type="email" value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@cymind.local" style={{ ...INPUT, boxSizing: "border-box" }} />
+            </div>
+            <div style={{ flex: 1, minWidth: 180 }}>
+              <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyMind Admin Password</div>
+              <input type="password" value={adminPw} onChange={e => setAdminPw(e.target.value)} placeholder="••••••••" style={{ ...INPUT, boxSizing: "border-box" }} onKeyDown={e => e.key === "Enter" && handleEnable()} />
+            </div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
