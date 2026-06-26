@@ -16,7 +16,7 @@ except Exception:
 
 class Settings(BaseSettings):
     # Database — native PostgreSQL on localhost
-    # Port 5433 used to avoid conflict with CyIRIS postgres on :5432
+    # Port 5433 to avoid conflict with any other postgres instance on :5432
     database_url: str = "postgresql+asyncpg://corruser:@127.0.0.1:5433/correlation"
 
     # Redis — native Redis on localhost
@@ -61,11 +61,11 @@ class Settings(BaseSettings):
     ueba_ml_model_dir: str = "/opt/cycentra/ml_models"
     ueba_ml_contamination: float = 0.05
 
-    # ── DFIR IRIS (CyIRIS) Integration ───────────────────────────────────────
+    # ── CyCases / DFIR IRIS Integration ──────────────────────────────────────
     # Written by _sync_iris_to_siem_env() in system/routes.py whenever the
-    # portal saves CyIRIS settings.  Values: "disabled" | "cloud" | "local"
+    # portal saves CyCases settings.  Values: "disabled" | "cloud" | "local"
     iris_mode: str = "disabled"
-    iris_url: str = "https://cyiris.cycentra.com"
+    iris_url: str = ""
     iris_api_key: str = ""
     iris_enabled: bool = False
     iris_customer_id: int = 1

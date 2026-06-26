@@ -1,5 +1,5 @@
 """
-Regression test — CyIRIS / pyoidc client_secret_basic auth method
+Regression test — pyoidc client_secret_basic auth method
 
 Bug: POST /oidc/token with credentials in Authorization: Basic header
      returned 401 {"error": "invalid_client"} because the endpoint only

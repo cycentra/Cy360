@@ -55,7 +55,7 @@ MS_CLIENT_SECRET = os.environ.get("MICROSOFT_CLIENT_SECRET", "")
 
 # ── OIDC clients ───────────────────────────────────────────────────────────────
 # oauth2-proxy is the single IAP gate for all subdomains.
-# CyIRIS and CySOAR no longer register individual OIDC clients — they trust
+# CySOAR no longer registers an individual OIDC client — it trusts
 # the X-Email header injected by nginx after oauth2-proxy validates the session.
 # cysiem (Wazuh) uses nginx proxy auth mode as the primary SSO path (X-Proxy-User /
 # X-Proxy-Roles headers). The `cysiem` client here is the secondary/fallback OIDC
@@ -71,7 +71,7 @@ OIDC_CLIENTS = {
             f"https://cy360.{BASE_DOMAIN}/oauth2/callback",
         ],
         "allowed_scopes": ["openid", "email", "profile"],
-        "allowed_roles":  ["admin", "analyst", "viewer", "cyiris", "cysoar"],
+        "allowed_roles":  ["admin", "analyst", "viewer", "cysoar"],
     },
     # cysiem (Wazuh Dashboard) — OIDC fallback path for CySIEM SSO.
     # Used when the Dashboard is configured for openid auth type rather than proxy
@@ -96,16 +96,15 @@ OIDC_CLIENTS = {
             f"{FRONTEND_URL}/api/sso/callback",
         ],
         "allowed_scopes": ["openid", "email", "profile"],
-        "allowed_roles":  ["admin", "analyst", "viewer", "cyiris", "cysoar"],
+        "allowed_roles":  ["admin", "analyst", "viewer", "cysoar"],
     },
 }
 
 # ── RBAC ───────────────────────────────────────────────────────────────────────
 ROLE_APPS = {
-    "admin":   ["cy360", "cysiem", "cyiris", "cysoar", "cyasm", "cycomp"],
-    "analyst": ["cy360", "cysiem", "cyiris", "cysoar", "cyasm", "cycomp"],
+    "admin":   ["cy360", "cysiem", "cycases", "cysoar", "cyasm", "cycomp"],
+    "analyst": ["cy360", "cysiem", "cycases", "cysoar", "cyasm", "cycomp"],
     "viewer":  ["cy360", "cysiem", "cycomp"],
-    "cyiris":  ["cy360", "cyiris"],
     "cysoar":  ["cy360", "cysoar"],
 }
 VALID_ROLES = set(ROLE_APPS.keys())
@@ -141,12 +140,10 @@ ASM_DIR   = _SITE_PKG / "cy_asm"
 
 # ── Docker images ──────────────────────────────────────────────────────────────
 CYSOAR_IMAGE     = os.environ.get("CYSOAR_IMAGE",     "ghcr.io/cycentra/cysoar:latest")
-CYIRIS_IMAGE_APP = os.environ.get("CYIRIS_IMAGE_APP", "ghcr.io/cycentra/cyiris:latest")
-CYIRIS_IMAGE_DB  = os.environ.get("CYIRIS_IMAGE_DB",  "postgres:15-alpine")
 
-# ── IRIS (Incident Response) Integration ─────────────────────────────────────
-# Set IRIS_URL and IRIS_API_KEY in /opt/cycentra/.env to enable escalation.
-# IRIS_URL example: https://iris.cycentra.com
+# ── CyCases Integration ───────────────────────────────────────────────────────
+# CyCases is built-in (cases_bp). For correlation-engine escalation, set
+# IRIS_URL and IRIS_API_KEY in /opt/cycentra/.env if using an external DFIR IRIS backend.
 IRIS_URL     = os.environ.get("IRIS_URL", "")
 IRIS_API_KEY = os.environ.get("IRIS_API_KEY", "")
 
@@ -228,7 +225,6 @@ CORS_ALLOWED_ORIGINS = {
     BASE_URL,
     f"https://cy360.{BASE_DOMAIN}",
     f"https://cyasm.{BASE_DOMAIN}",
-    f"https://cyiris.{BASE_DOMAIN}",
     f"https://cysoar.{BASE_DOMAIN}",
     f"https://cysiem.{BASE_DOMAIN}",
     f"https://cymisp.{BASE_DOMAIN}",

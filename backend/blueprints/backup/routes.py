@@ -23,7 +23,7 @@ What every backup archive contains
     ├── *.lic             license file(s)
     └── modules/
         └── <module>/
-            ├── .env      per-module env (cyiris, cysoar, cymisp, …)
+            ├── .env      per-module env (cysoar, cymisp, …)
             └── *.json    per-module config files
 
   database_dump.sql  (included when DATABASE_URL env var is set and

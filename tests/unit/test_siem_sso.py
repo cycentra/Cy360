@@ -3,8 +3,8 @@ Regression tests — CySIEM (Wazuh) SSO Authentication
 
 Bug: Users authenticated via the CyCentra360 Portal received
      {"statusCode":401,"error":"Unauthorized","message":"Unauthorized"}
-     when accessing CySIEM (Wazuh Dashboard) via SSO, while CyIRIS and
-     CySOAR SSO worked correctly.
+     when accessing CySIEM (Wazuh Dashboard) via SSO, while CySOAR
+     SSO worked correctly.
 
 Root causes fixed:
   1. `cysiem` OIDC client was removed from OIDC_CLIENTS in config.py even
@@ -326,7 +326,7 @@ class TestCySiemRoleAccess:
     IAP gate (oauth2proxy): all portal roles — everyone who can log in to the
     portal can reach cysiem.DOMAIN through the nginx IAP.
     Wazuh Dashboard OIDC (cysiem): only admin / analyst / viewer — the SIEM-
-    capable roles. cyiris and cysoar role accounts do not have CySIEM access.
+    capable roles. cysoar role accounts do not have CySIEM access.
     """
 
     def _mock_role(self, email: str, role: str):
@@ -355,7 +355,7 @@ class TestCySiemRoleAccess:
                 f"Role '{role}' must be permitted to use cysiem OIDC client"
             )
 
-    @pytest.mark.parametrize("role", ["cyiris", "cysoar"])
+    @pytest.mark.parametrize("role", ["cysoar"])
     def test_non_siem_role_denied_cysiem_oidc_client(self, role):
         """Roles without CySIEM app access must NOT use cysiem OIDC client directly."""
         email = f"{role}@test.local"
@@ -366,7 +366,7 @@ class TestCySiemRoleAccess:
                 "these roles have no CySIEM app access in ROLE_APPS"
             )
 
-    @pytest.mark.parametrize("role", ["admin", "analyst", "viewer", "cyiris", "cysoar"])
+    @pytest.mark.parametrize("role", ["admin", "analyst", "viewer", "cysoar"])
     def test_all_portal_roles_can_use_oauth2proxy_iap_gate(self, role):
         """ALL portal roles must be allowed through the oauth2proxy IAP gate.
 

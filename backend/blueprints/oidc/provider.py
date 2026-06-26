@@ -1,7 +1,7 @@
 """
 blueprints/oidc/provider.py
 ============================
-OIDC Identity Provider — CyCentra acts as the IdP for CyIRIS and CySOAR.
+OIDC Identity Provider — CyCentra acts as the IdP for CySOAR and other integrated services.
 
 Routes (all under /oidc/):
   GET  /oidc/.well-known/openid-configuration
@@ -211,7 +211,7 @@ def oidc_token():
         "apps":  get_user_apps(email),
         **( {"nonce": code_data["nonce"]} if code_data.get("nonce") else {} ),
     }
-    # pyoidc-based clients (e.g. cyiris) verify id_token using client_secret (HS256).
+    # pyoidc-based clients verify id_token using client_secret (HS256).
     # OIDC Core 1.0 §10.1: HS256 ID tokens MUST be signed with client_secret,
     # not with the server's generic JWT_SECRET.
     # cysiem: Wazuh/OpenSearch OIDC domain requires RS256 (asymmetric JWT verifiable
