@@ -230,6 +230,18 @@ CORS_ALLOWED_ORIGINS = {
     f"https://cymisp.{BASE_DOMAIN}",
 }
 
+# ── CyEDR — Endpoint Detection & Response ─────────────────────────────────────
+# Redis URL shared with the SIEM ingestor.  Set in /opt/cycentra/.env.
+EDR_REDIS_URL           = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
+# Minimum confidence score (0-100) to forward an EDR event into the SIEM queue.
+EDR_MIN_SCORE           = float(os.environ.get("EDR_MIN_SCORE", "10"))
+# Score above which critical detections auto-open a CyCases ticket.
+EDR_CASES_THRESHOLD     = float(os.environ.get("EDR_CASES_THRESHOLD", "80"))
+# Score above which critical detections trigger auto-isolation response.
+EDR_AUTO_ISOLATE_SCORE  = float(os.environ.get("EDR_AUTO_ISOLATE_SCORE", "90"))
+# gRPC collector listen address (for future native agent transport).
+EDR_GRPC_LISTEN         = os.environ.get("EDR_GRPC_LISTEN", "0.0.0.0:50051")
+
 # ── Flask session cookie settings ─────────────────────────────────────────────
 COOKIE_SETTINGS = {
     "SESSION_COOKIE_SECURE":    True,

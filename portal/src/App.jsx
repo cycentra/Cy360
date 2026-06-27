@@ -83,6 +83,14 @@ import { PolicyDocumentsPage }      from './pages/compliance/PolicyDocumentsPage
 import { ComplianceAssessmentPage } from './pages/compliance/ComplianceAssessmentPage.jsx';
 import IntegrationHealthPage from './pages/integrations/index.jsx';
 
+// ── CyEDR pages ───────────────────────────────────────────────────────────────
+import EdrFleetPage          from './pages/edr/index.jsx';
+import EdrDetectionsPage     from './pages/edr/EdrDetectionsPage.jsx';
+import EdrResponsePage       from './pages/edr/EdrResponsePage.jsx';
+import EdrPoliciesPage       from './pages/edr/EdrPoliciesPage.jsx';
+import EdrAgentInstallerPage from './pages/edr/EdrAgentInstallerPage.jsx';
+import EdrEndpointDetailPage from './pages/edr/EdrEndpointDetailPage.jsx';
+
 // ── Scan History Dropdown ─────────────────────────────────────────────────────
 
 function ScanHistoryDropdown({ scanHistory, selectedScanId, onSelect, historyLoading }) {
@@ -236,8 +244,9 @@ export default function App() {
     handleScanSelect,
   } = useAppState();
 
-  const [showCyMind,       setShowCyMind]       = useState(false);
-  const [casesIncidentId,  setCasesIncidentId]  = useState(null);
+  const [showCyMind,        setShowCyMind]        = useState(false);
+  const [casesIncidentId,   setCasesIncidentId]   = useState(null);
+  const [selectedEdrAgent,  setSelectedEdrAgent]  = useState(null);
 
   // Must be before early returns — hooks cannot be called conditionally
   useEffect(() => {
@@ -411,6 +420,14 @@ export default function App() {
               if (tab === "cases" && opts?.incidentId) { setCasesIncidentId(opts.incidentId); setActiveTab("cases-detail"); }
               else setActiveTab(tab);
             }} />}
+
+            {/* ── CyEDR — Endpoint Defense ─────────────────────────────── */}
+            {activeTab==="edr-fleet"      && <EdrFleetPage onViewDetail={id => { setSelectedEdrAgent(id); setActiveTab("edr-endpoint-detail"); }} />}
+            {activeTab==="edr-detections" && <EdrDetectionsPage />}
+            {activeTab==="edr-response"   && <EdrResponsePage />}
+            {activeTab==="edr-policies"   && <EdrPoliciesPage />}
+            {activeTab==="edr-installer"  && <EdrAgentInstallerPage />}
+            {activeTab==="edr-endpoint-detail" && <EdrEndpointDetailPage agentId={selectedEdrAgent} />}
 
           </div>
           </PageErrorBoundary>
