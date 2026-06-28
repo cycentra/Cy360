@@ -317,15 +317,10 @@
     <group>discovery,removable_media,</group>
   </rule>
 
-  <!-- T1091 — USB Storage Driver Loaded (Sysmon EventID 6, USBSTOR driver) -->
-  <rule id="100911" level="10">
-    <if_group>sysmon</if_group>
-    <field name="data.win.system.eventID">^6$</field>
-    <field name="data.win.eventdata.imageLoaded" type="pcre2">(?i)\\USBSTOR\\</field>
-    <description>Sysmon: USB storage driver (USBSTOR) loaded on $(agent.name) — T1091</description>
-    <mitre><id>T1091</id></mitre>
-    <group>discovery,removable_media,</group>
-  </rule>
+  <!-- T1091 — USB Storage Driver Loaded
+       Previously: Sysmon EventID 6 via Wazuh (rule 100911 — removed).
+       Now: CyEDR reads Sysmon EventID 6 directly → TelemetryEnvelope → SIEM via edr_bridge.py.
+       USB events are still detected; detection authority transferred to CyEDR. -->
 
   <!-- ================================================================== -->
   <!-- ACTIVE RESPONSE TRIGGERS                                           -->
@@ -385,15 +380,12 @@
   </rule>
 
   <!-- Auditd: fileless malware / process injection via memory syscalls
-       Matches: memfd_create, process_vm_writev, process_vm_readv, ptrace
-       Active-response: local isolation (timeout 600s) — rule 101000,101001 -->
-  <rule id="101001" level="13">
-    <if_group>audit</if_group>
-    <match>memfd_create|process_vm_writev|process_vm_readv|ptrace</match>
-    <description>Fileless malware or process injection syscall detected on $(agent.name) — T1055/T1620</description>
-    <mitre><id>T1055</id></mitre>
-    <group>xdr_kernel_isolate,kernel_telemetry,</group>
-  </rule>
+       Rule 101001 REMOVED — CyEDR now owns this detection.
+       CyEDR reads auditd key cy360_edr_inject (ptrace, memfd_create, process_vm_writev,
+       process_vm_readv) and scores via memory_injection trigger (+40 weight).
+       Keeping this rule would cause duplicate SIEM alerts: Wazuh reads the same
+       /var/log/audit/audit.log that CyEDR reads (Wazuh auditd is native, not removable).
+       Detection authority: CyEDR → edr_bridge.py → SIEM pipeline. -->
 
   <!-- MISP global blacklist CDB lookup — destination IP (address_match_key supports CIDR)
        Requires: /var/ossec/etc/lists/misp_global_blacklist populated via MISP feed sync.
@@ -406,12 +398,13 @@
     <group>threat_intel,kernel_telemetry,</group>
   </rule>
 
-  <!-- MISP global blacklist CDB lookup — process SHA256 hash
-       Matches: data.win.eventdata.hashes (Sysmon EventID 1) on Windows endpoints.
+  <!-- MISP global blacklist CDB lookup — process SHA256 hash (CyEDR telemetry field)
+       Field updated: data.win.eventdata.hashes (Sysmon EventID 1) was replaced by
+       data.edr.process.file_hash_sha256 sent by cyedr_agent.py TelemetryEnvelope.
        Active-response: global isolation (all agents, timeout 3600s) — rules 101002,101003 -->
   <rule id="101003" level="14">
     <if_sid>0</if_sid>
-    <list field="data.win.eventdata.hashes" lookup="match_key">etc/lists/misp_global_blacklist</list>
+    <list field="data.edr.process.file_hash_sha256" lookup="match_key">etc/lists/misp_global_blacklist</list>
     <description>MISP threat intel absolute match: process hash in global blacklist on $(agent.name)</description>
     <mitre><id>T1204</id></mitre>
     <group>threat_intel,kernel_telemetry,</group>
@@ -457,14 +450,18 @@
   </rule>
 
   <!-- ================================================================== -->
-  <!-- WINDOWS KERNEL TELEMETRY — Sysmon + Windows Event Log             -->
-  <!-- XDR parity with Linux auditd rules 101000-101001                  -->
-  <!-- IDs 101010–101013                                                   -->
+  <!-- WINDOWS KERNEL TELEMETRY — Windows Event Log (Wazuh-owned)        -->
+  <!-- ID 101010 only — Sysmon rules 101011-101013 REMOVED               -->
+  <!-- Sysmon EventIDs 8/10/25 now owned by CyEDR:                       -->
+  <!--   EventID 8  → memory_injection trigger (+40)                     -->
+  <!--   EventID 10 → lsass_access trigger (+45)                         -->
+  <!--   EventID 25 → process_tampering trigger (+38)                    -->
+  <!-- Detection path: CyEDR → edr_bridge.py → SIEM pipeline            -->
   <!-- ================================================================== -->
 
   <!-- Windows: Wazuh agent service stopped (anti-tamper — EventID 7036 System log)
-       Requires: Windows System event channel in agent.conf (added v1.0.31+).
-       Triggers: local isolate-host AR (same block as 101000-101001). -->
+       Wazuh reads Windows System event channel (in agent.conf) — this is Wazuh
+       protecting ITSELF, not a Sysmon event. Still valid. -->
   <rule id="101010" level="14">
     <if_group>windows</if_group>
     <field name="data.win.system.eventID">^7036$</field>
@@ -475,36 +472,33 @@
     <group>xdr_kernel_isolate,kernel_telemetry,</group>
   </rule>
 
-  <!-- Windows: Sysmon CreateRemoteThread — cross-process thread injection
-       Equivalent to Linux ptrace write (auditd rule 101001).
-       Triggers: local isolate-host AR. -->
-  <rule id="101011" level="13">
-    <if_group>sysmon</if_group>
-    <field name="data.win.system.eventID">^8$</field>
-    <description>Sysmon: Remote thread injected into $(data.win.eventdata.targetImage) on $(agent.name) — T1055</description>
-    <mitre><id>T1055</id></mitre>
+  <!-- ================================================================== -->
+  <!-- CyEDR AGENT ANTI-TAMPER — IDs 101030–101031                       -->
+  <!-- Mirrors cy360_wazuh_tamper rules (101000, 101010) for CyEDR.      -->
+  <!-- ================================================================== -->
+
+  <!-- Linux/macOS: CyEDR agent binary or config accessed/modified
+       auditd key cy360_edr_tamper written by cyedr-install.sh rule 60-cyedr.rules.
+       Watches /opt/cycentra/edr/ — triggers alongside existing rule 101000. -->
+  <rule id="101030" level="14">
+    <if_group>audit</if_group>
+    <field name="audit.key">^cy360_edr_tamper$</field>
+    <description>CyEDR anti-tamper: CyEDR agent binary or config accessed/modified on $(agent.name) — T1562.001</description>
+    <mitre><id>T1562.001</id></mitre>
     <group>xdr_kernel_isolate,kernel_telemetry,</group>
   </rule>
 
-  <!-- Windows: Sysmon ProcessAccess on lsass.exe — credential dump via handle
-       Equivalent to Linux process_vm_readv syscall (auditd rule 101001). -->
-  <rule id="101012" level="14">
-    <if_group>sysmon</if_group>
-    <field name="data.win.system.eventID">^10$</field>
-    <field name="data.win.eventdata.targetImage" type="pcre2">(?i)\\lsass\.exe$</field>
-    <description>Sysmon: LSASS memory accessed by $(data.win.eventdata.sourceImage) on $(agent.name) — T1003.001</description>
-    <mitre><id>T1003.001</id></mitre>
-    <group>credential_access,kernel_telemetry,active_response,</group>
-  </rule>
-
-  <!-- Windows: Sysmon ProcessTampering — process hollowing / image unmapping
-       Equivalent to Linux memfd_create + overwrite (auditd rule 101001). -->
-  <rule id="101013" level="14">
-    <if_group>sysmon</if_group>
-    <field name="data.win.system.eventID">^25$</field>
-    <description>Sysmon: Process image tampering (hollowing/unmapping) in $(data.win.eventdata.image) on $(agent.name) — T1055.012</description>
-    <mitre><id>T1055.012</id></mitre>
-    <group>defense_evasion,kernel_telemetry,</group>
+  <!-- Windows: CyEDR agent service stopped (EventID 7036 System log)
+       Complements rule 101010 (Wazuh service stop) with CyEDR service name.
+       Triggers local isolate-host AR. -->
+  <rule id="101031" level="14">
+    <if_group>windows</if_group>
+    <field name="data.win.system.eventID">^7036$</field>
+    <field name="data.win.eventdata.param1" type="pcre2">(?i)cyedr|cycentra.edr|CyEDRAgent</field>
+    <field name="data.win.eventdata.param2" type="pcre2">(?i)stopped</field>
+    <description>CyEDR anti-tamper: CyEDR agent service stopped on Windows $(agent.name) — T1562.001</description>
+    <mitre><id>T1562.001</id></mitre>
+    <group>xdr_kernel_isolate,kernel_telemetry,</group>
   </rule>
 
   <!-- ================================================================== -->

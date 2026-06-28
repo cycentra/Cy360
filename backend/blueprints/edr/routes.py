@@ -19,6 +19,7 @@ RBAC summary:
 """
 from __future__ import annotations
 import json
+import os
 import uuid
 import secrets
 import logging
@@ -27,7 +28,7 @@ from functools import wraps
 
 import psycopg2
 import psycopg2.extras
-from flask import Blueprint, jsonify, request, session, make_response
+from flask import Blueprint, jsonify, request, session, make_response, send_file
 
 from blueprints.rbac.manager import get_user_role
 from core.helpers import add_cors_headers, auth_event
@@ -989,55 +990,273 @@ def revoke_token(tok_id):
 @require_admin
 def installer_commands():
     """
-    Return platform-specific install commands for a given deployment token.
-    Query param: token=<value>
+    Return arch-aware install commands for a deployment token.
+    Response: { os: { arch: { method: cmd, "method+siem": cmd } }, collector_url, token }
     """
     token = request.args.get("token", "")
     if not token:
         return jsonify({"error": "token query param required"}), 400
     from core.config import BASE_DOMAIN
-    collector_url = f"https://cy360.{BASE_DOMAIN}/api/edr"
+    base = f"https://cy360.{BASE_DOMAIN}"
+    u    = f"{base}/api/edr"
+
+    def _sh(siem=False):
+        sf = " --with-cysiem" if siem else ""
+        return (
+            f'curl -fsSL {u}/installer/unix | '
+            f'sudo bash -s -- --token "{token}" --platform "{base}"{sf}'
+        )
+
+    def _pkg(os_key, arch, ext, siem=False):
+        inst = {
+            "deb": f'dpkg -i cyedr-agent.{ext} && systemctl enable --now cyedr-agent',
+            "rpm": f'rpm -ivh cyedr-agent.{ext} && systemctl enable --now cyedr-agent',
+            "pkg": f'sudo installer -pkg cyedr-agent.{ext} -target /',
+        }[ext]
+        siem_tail = (
+            f' && curl -fsSL -H "Authorization: Bearer {token}" '
+            f'{u}/installer/cysiem-script | sudo bash'
+        ) if siem else ""
+        return (
+            f'curl -fsSL -H "Authorization: Bearer {token}" '
+            f'"{u}/installer/agent-bundle?os={os_key}&arch={arch}" '
+            f'-o cyedr-agent.{ext} && {inst}{siem_tail}'
+        )
+
+    def _ps1(arch, siem=False):
+        sf = " -WithCySIEM" if siem else ""
+        return (
+            f'[Net.ServicePointManager]::SecurityProtocol="Tls12"; '
+            f'$t="{token}"; $p="{base}"; '
+            f'iwr "$p/api/edr/installer/win" -UseBasicParsing | '
+            f'iex; '
+            f'cyedr-install.ps1 -Token $t -Platform $p -Arch {arch}{sf}'
+        )
+
+    def _msi(arch, siem=False):
+        sf = " INSTALL_CYSIEM=1" if siem else ""
+        return (
+            f'msiexec /i cyedr-agent-{arch}.msi '
+            f'DEPLOYMENT_TOKEN="{token}" '
+            f'COLLECTOR_URL="{u}" '
+            f'/qn /l*v cyedr-install.log{sf}'
+        )
+
     return jsonify({
         "windows": {
-            "powershell": (
-                f'$Token="{token}"; $Url="{collector_url}"; '
-                f'Invoke-WebRequest "$Url/installer/win/cyedr-setup.exe" -OutFile cyedr-setup.exe; '
-                f'Start-Process cyedr-setup.exe -ArgumentList "/token $Token /url $Url /S" -Wait; '
-                f'Remove-Item cyedr-setup.exe'
-            ),
-            "msiexec": (
-                f'msiexec /i cyedr.msi DEPLOYMENT_TOKEN="{token}" '
-                f'COLLECTOR_URL="{collector_url}" /qn /l*v cyedr-install.log'
-            ),
+            "x64": {
+                "powershell":      _ps1("x64"),
+                "msiexec":         _msi("x64"),
+                "powershell+siem": _ps1("x64", siem=True),
+                "msiexec+siem":    _msi("x64", siem=True),
+            },
+            "arm64": {
+                "powershell":      _ps1("arm64"),
+                "msiexec":         _msi("arm64"),
+                "powershell+siem": _ps1("arm64", siem=True),
+                "msiexec+siem":    _msi("arm64", siem=True),
+            },
         },
         "linux": {
-            "bash": (
-                f'curl -fsSL {collector_url}/installer/linux/cyedr-install.sh | '
-                f'DEPLOYMENT_TOKEN="{token}" COLLECTOR_URL="{collector_url}" bash'
-            ),
-            "rpm": (
-                f'DEPLOYMENT_TOKEN="{token}" COLLECTOR_URL="{collector_url}" '
-                f'rpm -ivh cyedr-agent.rpm && systemctl enable --now cyedr-agent'
-            ),
-            "deb": (
-                f'DEPLOYMENT_TOKEN="{token}" COLLECTOR_URL="{collector_url}" '
-                f'dpkg -i cyedr-agent.deb && systemctl enable --now cyedr-agent'
-            ),
+            "amd64": {
+                "bash":      _sh(),
+                "deb":       _pkg("LINUX", "amd64", "deb"),
+                "bash+siem": _sh(siem=True),
+                "deb+siem":  _pkg("LINUX", "amd64", "deb", siem=True),
+            },
+            "arm64": {
+                "bash":      _sh(),
+                "deb":       _pkg("LINUX", "arm64", "deb"),
+                "bash+siem": _sh(siem=True),
+                "deb+siem":  _pkg("LINUX", "arm64", "deb", siem=True),
+            },
+            "x86_64-rpm": {
+                "bash":      _sh(),
+                "rpm":       _pkg("LINUX", "x86_64", "rpm"),
+                "bash+siem": _sh(siem=True),
+                "rpm+siem":  _pkg("LINUX", "x86_64", "rpm", siem=True),
+            },
+            "aarch64-rpm": {
+                "bash":      _sh(),
+                "rpm":       _pkg("LINUX", "aarch64", "rpm"),
+                "bash+siem": _sh(siem=True),
+                "rpm+siem":  _pkg("LINUX", "aarch64", "rpm", siem=True),
+            },
         },
         "macos": {
-            "bash": (
-                f'curl -fsSL {collector_url}/installer/macos/cyedr-install.sh | '
-                f'DEPLOYMENT_TOKEN="{token}" COLLECTOR_URL="{collector_url}" bash'
-            ),
-            "pkg": (
-                f'sudo installer -pkg cyedr-agent.pkg -target / && '
-                f'sudo /Library/CyEDR/cyedr-ctl configure '
-                f'--token "{token}" --collector "{collector_url}"'
-            ),
+            "intel": {
+                "bash":      _sh(),
+                "pkg":       _pkg("MACOS", "intel64", "pkg"),
+                "bash+siem": _sh(siem=True),
+                "pkg+siem":  _pkg("MACOS", "intel64", "pkg", siem=True),
+            },
+            "apple_silicon": {
+                "bash":      _sh(),
+                "pkg":       _pkg("MACOS", "arm64", "pkg"),
+                "bash+siem": _sh(siem=True),
+                "pkg+siem":  _pkg("MACOS", "arm64", "pkg", siem=True),
+            },
         },
-        "collector_url": collector_url,
+        "collector_url": u,
         "token":         token,
     })
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INSTALLER ASSET ENDPOINTS
+# Serve pre-built binaries and config files to installer scripts.
+# All require a valid deployment token in Authorization: Bearer <token>.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_EDR_PKG_DIR = "/var/lib/cycentra-agent-packages/edr"
+
+# Deployment-token auth (for installer scripts; no session needed)
+def _require_deploy_token():
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return jsonify({"error": "Bearer deployment token required"}), 401
+    from .policy_engine import validate_deployment_token
+    if not validate_deployment_token(CYCENTRA_DB_URL, auth[7:]):
+        return jsonify({"error": "Invalid or expired deployment token"}), 401
+    return None  # OK
+
+
+for _ap in ("/installer/agent-bundle", "/installer/sysmon-config",
+            "/installer/sysmon-exe", "/installer/yara-rules",
+            "/installer/yara-exe", "/installer/cysiem-script",
+            "/installer/cysiem-msi", "/installer/unix", "/installer/win"):
+    edr_bp.add_url_rule(
+        _ap,
+        endpoint=f"opts_asset_{_ap.replace('/','_').replace('-','_')}",
+        view_func=lambda **_: add_cors_headers(make_response("", 204)),
+        methods=["OPTIONS"],
+    )
+
+
+@edr_bp.route("/installer/agent-bundle", methods=["GET"])
+def installer_agent_bundle():
+    """Serve arch-specific standalone CyEDR binary for quick-install path."""
+    err = _require_deploy_token()
+    if err:
+        return err
+    os_key = request.args.get("os", "LINUX").upper()
+    arch   = request.args.get("arch", "x86_64")
+    _map = {
+        ("LINUX",  "x86_64"):  "cyedr-agent-linux-x86_64",
+        ("LINUX",  "aarch64"): "cyedr-agent-linux-aarch64",
+        ("LINUX",  "amd64"):   "cyedr-agent-linux-x86_64",
+        ("LINUX",  "arm64"):   "cyedr-agent-linux-aarch64",
+        ("MACOS",  "intel64"): "cyedr-agent-macos-intel64",
+        ("MACOS",  "arm64"):   "cyedr-agent-macos-arm64",
+        ("MACOS",  "x86_64"):  "cyedr-agent-macos-intel64",
+    }
+    fname = _map.get((os_key, arch))
+    if not fname:
+        return jsonify({"error": f"Unsupported platform: {os_key}/{arch}"}), 400
+    fpath = os.path.join(_EDR_PKG_DIR, fname)
+    if not os.path.exists(fpath):
+        return jsonify({
+            "error": f"Agent binary not built for {os_key}/{arch}. Run agent-packages/build-edr-packages.sh"
+        }), 404
+    return send_file(fpath, as_attachment=True, download_name=fname,
+                     mimetype="application/octet-stream")
+
+
+@edr_bp.route("/installer/sysmon-config", methods=["GET"])
+def installer_sysmon_config():
+    """Serve CyCentra Sysmon XML config for Windows deployment."""
+    err = _require_deploy_token()
+    if err:
+        return err
+    fpath = os.path.join(_EDR_PKG_DIR, "cycentra_sysmon_config.xml")
+    if not os.path.exists(fpath):
+        return jsonify({"error": "Sysmon config not staged"}), 404
+    return send_file(fpath, mimetype="application/xml")
+
+
+@edr_bp.route("/installer/sysmon-exe", methods=["GET"])
+def installer_sysmon_exe():
+    """Serve Sysmon64.exe for Windows deployment."""
+    err = _require_deploy_token()
+    if err:
+        return err
+    fpath = os.path.join(_EDR_PKG_DIR, "Sysmon64.exe")
+    if not os.path.exists(fpath):
+        return jsonify({"error": "Sysmon64.exe not staged"}), 404
+    return send_file(fpath, as_attachment=True, mimetype="application/octet-stream")
+
+
+@edr_bp.route("/installer/yara-rules", methods=["GET"])
+def installer_yara_rules():
+    """Serve bundled YARA rules for CyEDR scanning."""
+    err = _require_deploy_token()
+    if err:
+        return err
+    fpath = os.path.join(_EDR_PKG_DIR, "cycentra.yar")
+    if not os.path.exists(fpath):
+        return jsonify({"error": "YARA rules not staged"}), 404
+    return send_file(fpath, mimetype="text/plain")
+
+
+@edr_bp.route("/installer/yara-exe", methods=["GET"])
+def installer_yara_exe():
+    """Serve yara64.exe for Windows."""
+    err = _require_deploy_token()
+    if err:
+        return err
+    fpath = os.path.join(_EDR_PKG_DIR, "yara64.exe")
+    if not os.path.exists(fpath):
+        return jsonify({"error": "yara64.exe not staged"}), 404
+    return send_file(fpath, as_attachment=True, mimetype="application/octet-stream")
+
+
+@edr_bp.route("/installer/cysiem-script", methods=["GET"])
+def installer_cysiem_script():
+    """Serve CySIEM (Wazuh) shell installer for Linux/macOS."""
+    err = _require_deploy_token()
+    if err:
+        return err
+    fpath = os.path.join(_EDR_PKG_DIR, "cysiem-install.sh")
+    if not os.path.exists(fpath):
+        return jsonify({"error": "CySIEM installer script not staged"}), 404
+    return send_file(fpath, mimetype="text/x-shellscript")
+
+
+@edr_bp.route("/installer/cysiem-msi", methods=["GET"])
+def installer_cysiem_msi():
+    """Serve Wazuh MSI for Windows CySIEM installation."""
+    err = _require_deploy_token()
+    if err:
+        return err
+    # Serve from the Wazuh agent packages directory
+    from core.config import CY360_VERSION
+    wazuh_dir = "/var/lib/cycentra-agent-packages"
+    arch = request.args.get("arch", "x64")
+    fname = f"cy360-agent-{CY360_VERSION}.msi"
+    fpath = os.path.join(wazuh_dir, fname)
+    if not os.path.exists(fpath):
+        return jsonify({"error": f"CySIEM MSI not found: {fname}"}), 404
+    return send_file(fpath, as_attachment=True, mimetype="application/octet-stream")
+
+
+@edr_bp.route("/installer/unix", methods=["GET"])
+def installer_unix_script():
+    """Serve the CyEDR Unix installer shell script (no auth — public endpoint)."""
+    fpath = os.path.join(os.path.dirname(__file__), "../../../../scripts/cyedr-install.sh")
+    fpath = os.path.realpath(fpath)
+    if not os.path.exists(fpath):
+        return jsonify({"error": "Unix installer not found on platform"}), 404
+    return send_file(fpath, mimetype="text/x-shellscript")
+
+
+@edr_bp.route("/installer/win", methods=["GET"])
+def installer_win_script():
+    """Serve the CyEDR Windows PowerShell installer (no auth — public endpoint)."""
+    fpath = os.path.join(os.path.dirname(__file__), "../../../../scripts/cyedr-install.ps1")
+    fpath = os.path.realpath(fpath)
+    if not os.path.exists(fpath):
+        return jsonify({"error": "Windows installer not found on platform"}), 404
+    return send_file(fpath, mimetype="text/plain")
 
 
 # ── Self-enrollment (agent calls this with deployment token) ──────────────────

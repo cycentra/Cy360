@@ -100,15 +100,88 @@ download_pkg \
     "${WAZUH_BASE_MAC}/wazuh-agent-${WV}.arm64.pkg" \
     "cy360-agent-${CV}-arm64.pkg" || ERRORS=$((ERRORS+1))
 
-# ── Set permissions ───────────────────────────────────────────────────────────
+# ── Set Wazuh package permissions ─────────────────────────────────────────────
 chmod 644 "${DEST_DIR}/cy360-agent-${CV}"* 2>/dev/null || true
 chown www-data:www-data "${DEST_DIR}" 2>/dev/null || true
 chown www-data:www-data "${DEST_DIR}/cy360-agent-${CV}"* 2>/dev/null || true
 
 echo
 if [[ $ERRORS -eq 0 ]]; then
-    ok "All agent packages downloaded successfully → ${DEST_DIR}"
+    ok "All Wazuh agent packages downloaded successfully → ${DEST_DIR}"
 else
-    warn "${ERRORS} package(s) failed to download. Check connectivity to packages.wazuh.com"
-    exit 1
+    warn "${ERRORS} Wazuh package(s) failed. Check connectivity to packages.wazuh.com"
 fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CyEDR Agent Packages
+# Built by agent-packages/build-edr-packages.sh and staged here.
+# Naming scheme: cyedr-agent-VERSION-ARCH.EXT
+# ═══════════════════════════════════════════════════════════════════════════════
+EDR_DEST_DIR="${DEST_DIR}/edr"
+mkdir -p "$EDR_DEST_DIR"
+
+info ""
+info "CyEDR package staging check"
+info "EDR packages dir: ${EDR_DEST_DIR}"
+
+EDR_ERRORS=0
+EDR_PRESENT=0
+
+# Expected CyEDR package filenames for this version
+declare -a EDR_PACKAGES=(
+    "cyedr-agent-linux-x86_64"
+    "cyedr-agent-linux-aarch64"
+    "cyedr-agent-macos-intel64"
+    "cyedr-agent-macos-arm64"
+    "cyedr-agent-${CV}-amd64.deb"
+    "cyedr-agent-${CV}-arm64.deb"
+    "cyedr-agent-${CV}-x86_64.rpm"
+    "cyedr-agent-${CV}-aarch64.rpm"
+    "cyedr-agent-${CV}-intel64.pkg"
+    "cyedr-agent-${CV}-arm64.pkg"
+    "cyedr-agent-${CV}-x64.msi"
+    "cyedr-agent-${CV}-arm64.msi"
+)
+
+for pkg in "${EDR_PACKAGES[@]}"; do
+    if [[ -f "${EDR_DEST_DIR}/${pkg}" ]]; then
+        ok "Present: $pkg"
+        EDR_PRESENT=$((EDR_PRESENT+1))
+    else
+        warn "Missing: $pkg  (run agent-packages/build-edr-packages.sh to build)"
+        EDR_ERRORS=$((EDR_ERRORS+1))
+    fi
+done
+
+# Copy YARA rules + Sysmon assets if present in source tree
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+for asset in \
+    "${REPO_ROOT}/CYSIEM-Config/sysmon/cycentra_sysmon_config.xml" \
+    "${REPO_ROOT}/CYSIEM-Config/yara/cycentra.yar"; do
+    if [[ -f "$asset" ]]; then
+        cp -f "$asset" "${EDR_DEST_DIR}/"
+        ok "Staged: $(basename "$asset")"
+    fi
+done
+
+# Stage CySIEM install script (used by --with-cysiem flag)
+if [[ -f "${REPO_ROOT}/scripts/agent-installer.sh" ]]; then
+    cp -f "${REPO_ROOT}/scripts/agent-installer.sh" "${EDR_DEST_DIR}/cysiem-install.sh"
+    chmod 644 "${EDR_DEST_DIR}/cysiem-install.sh"
+    ok "Staged: cysiem-install.sh"
+fi
+
+chmod -R 644 "${EDR_DEST_DIR}"/* 2>/dev/null || true
+chmod 755 "${EDR_DEST_DIR}"
+chown -R www-data:www-data "${EDR_DEST_DIR}" 2>/dev/null || true
+
+echo
+if [[ $EDR_ERRORS -gt 0 ]]; then
+    warn "${EDR_ERRORS} CyEDR package(s) missing — run: sudo bash agent-packages/build-edr-packages.sh ${CV}"
+else
+    ok "All ${EDR_PRESENT} CyEDR packages present → ${EDR_DEST_DIR}"
+fi
+
+echo
+[[ $ERRORS -gt 0 ]] && exit 1
+exit 0

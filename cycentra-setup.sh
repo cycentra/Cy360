@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.101 -- 2026-06-27 21:31 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.102 -- 2026-06-28 08:38 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -2334,6 +2334,44 @@ NGINX_OIDC_PY
             warn "nginx reload failed after OPTIONS patch — check: nginx -t"
     fi
 
+    # ── Inject /edr-packages/ nginx location if missing (idempotent) ────────────
+    # Serves pre-built CyEDR agent binaries (.deb/.rpm/.msi/.pkg + standalone exe).
+    # Built by agent-packages/build-edr-packages.sh; stored in the edr/ subdirectory.
+    if [[ -f "$_NGINX_MOD" ]] && ! grep -q '/edr-packages/' "$_NGINX_MOD" 2>/dev/null; then
+        python3 - "$_NGINX_MOD" << 'EDR_PKG_NGINX_PY'
+import sys, re
+path = sys.argv[1]
+with open(path) as f:
+    text = f.read()
+
+block = (
+    "    # ── CyEDR agent package distribution — served directly by nginx ──\n"
+    "    location /edr-packages/ {\n"
+    "        alias /var/lib/cycentra-agent-packages/edr/;\n"
+    "        autoindex off;\n"
+    "        add_header Content-Disposition \"attachment\" always;\n"
+    "        add_header X-Content-Type-Options \"nosniff\" always;\n"
+    "        add_header Cache-Control \"no-store, must-revalidate\" always;\n"
+    "    }\n"
+)
+
+anchor = "    location /     { try_files"
+if "/edr-packages/" not in text and anchor in text:
+    idx = text.find(anchor)
+    text = text[:idx] + block + text[idx:]
+    with open(path, "w") as f:
+        f.write(text)
+    print("nginx cy360: /edr-packages/ location block injected")
+else:
+    print("nginx cy360: /edr-packages/ already present or anchor not found")
+EDR_PKG_NGINX_PY
+        nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
+            success "nginx: /edr-packages/ location block added and reloaded" || \
+            warn "nginx reload failed after edr-packages injection — check: nginx -t"
+    else
+        [[ -f "$_NGINX_MOD" ]] && success "nginx: /edr-packages/ location already configured"
+    fi
+
     # ── Inject /agent-packages/ nginx location if missing (idempotent) ──────────
     # Fresh installs already have this block from the heredoc above.
     # Updates on existing servers need it injected into the live config.
@@ -3346,18 +3384,23 @@ if [[ -d "/var/ossec" ]]; then
         fi
 
         # 2c. isolate-host active-response blocks (python3 for clean multi-line insert)
-        if ! grep -qF '<rules_id>101000,101001' "$_OSSEC_LIVE"; then
+        # rules_id 101000,101010,101030,101031 — Wazuh + CyEDR anti-tamper triggers only.
+        # 101001 (auditd ptrace/memfd) removed: CyEDR owns process injection detection.
+        # 101011 (Sysmon CreateRemoteThread) removed: Wazuh no longer receives Sysmon events.
+        if ! grep -qF '<rules_id>101000,101010,101030,101031' "$_OSSEC_LIVE"; then
             python3 - "$_OSSEC_LIVE" << 'PYEOF'
 import sys
 path = sys.argv[1]
 with open(path) as f:
     content = f.read()
 AR_BLOCK = (
-    "\n  <!-- CyCentra 360 XDR: local isolation — anti-tamper + fileless + Windows kernel tamper -->\n"
+    "\n  <!-- CyCentra 360 XDR: local isolation — agent anti-tamper\n"
+    "       101000: auditd Wazuh tamper | 101010: Windows Wazuh service stop\n"
+    "       101030: auditd CyEDR tamper | 101031: Windows CyEDR service stop -->\n"
     "  <active-response>\n"
     "    <command>isolate-host</command>\n"
     "    <location>local</location>\n"
-    "    <rules_id>101000,101001,101010,101011</rules_id>\n"
+    "    <rules_id>101000,101010,101030,101031</rules_id>\n"
     "    <timeout>600</timeout>\n"
     "    <disabled>no</disabled>\n"
     "  </active-response>\n\n"
@@ -3385,12 +3428,18 @@ PYEOF
             info "isolate-host active-response blocks injected into ossec.conf"
         fi
 
-        # 2d. Upgrade existing isolate-host local AR block to include Windows kernel rules
-        if grep -qF '101000,101001</rules_id>' "$_OSSEC_LIVE" \
-           && ! grep -qF '101010' "$_OSSEC_LIVE"; then
-            sed -i 's|<rules_id>101000,101001</rules_id>|<rules_id>101000,101001,101010,101011</rules_id>|' "$_OSSEC_LIVE"
-            info "isolate-host AR block updated to include Windows kernel tamper rules (101010,101011)"
-        fi
+        # 2d. Migrate stale AR rule_id sets from prior installs to the current canonical set.
+        # Old sets that predate CyEDR migration contained 101001 (auditd injection — now CyEDR)
+        # and 101011 (Sysmon CreateRemoteThread — now CyEDR). Replace all known stale variants.
+        for _stale in \
+            '101000,101001</rules_id>' \
+            '101000,101001,101010,101011</rules_id>' \
+            '101000,101010,101011</rules_id>'; do
+            if grep -qF "$_stale" "$_OSSEC_LIVE"; then
+                sed -i "s|<rules_id>${_stale%<*}|<rules_id>101000,101010,101030,101031</rules_id>|g" "$_OSSEC_LIVE"
+                info "isolate-host AR block migrated: $_stale → 101000,101010,101030,101031"
+            fi
+        done
 
         # 2e. Remove stale custom-llm.py integration block
         if grep -q 'custom-llm\.py' "$_OSSEC_LIVE"; then
@@ -3607,16 +3656,17 @@ MISPCRON
         success "MISP sync cron installed → $MISP_CRON (runs every hour)"
     fi
 
-    # ── Sysmon Windows deployment package ────────────────────────────────────
-    # Pre-populate /opt/cycentra/sysmon/ with cycentra_sysmon_config.xml so
-    # operators can copy the directory to Windows endpoints immediately after install,
-    # without having to run integrate_sysmon.sh first. PS1 scripts are added by
-    # integrate_sysmon.sh when Sysmon integration is enabled.
+    # ── CyEDR: stage Sysmon config for platform download endpoint ────────────
+    # cycentra_sysmon_config.xml is now served by the Flask backend at:
+    #   GET /api/edr/installer/sysmon-config
+    # cyedr-install.ps1 downloads it from there during Windows endpoint enrollment.
+    # We still stage it to /opt/cycentra/sysmon/ so the backend can serve it,
+    # but operators no longer need to copy it manually — cyedr-install.ps1 handles that.
     _SYSMON_PKG="/opt/cycentra/sysmon"
     if [[ -f "$CONFIG_SRC/sysmon/cycentra_sysmon_config.xml" ]]; then
         mkdir -p "$_SYSMON_PKG"
         cp "$CONFIG_SRC/sysmon/cycentra_sysmon_config.xml" "$_SYSMON_PKG/"
-        success "cycentra_sysmon_config.xml staged to $_SYSMON_PKG"
+        success "cycentra_sysmon_config.xml staged to $_SYSMON_PKG (served via /api/edr/installer/sysmon-config)"
     fi
 
     # ── Reload Wazuh after config/decoder/agent changes ───────────────────────
@@ -3625,12 +3675,16 @@ MISPCRON
              success "wazuh-manager reloaded with new rules/decoders/agent config"; } \
         || warn "Wazuh config validation failed — fix errors before reloading"
 
-    info "Post-install manual steps for cloud telemetry:"
+    info "Post-install manual steps:"
     info "  1. Edit /var/ossec/etc/ossec.conf — replace PLACEHOLDER_ values in cloud wodles,"
     info "     then change <disabled>yes</disabled> → <disabled>no</disabled>"
     info "  2. GeoIP DB is refreshed automatically every month (MAXMIND_KEY is pre-configured)"
-    info "  3. Sysmon: copy /opt/cycentra/sysmon/ to Windows endpoints + run deploy_sysmon.ps1"
-    info "  4. Audit policy: run apply_audit_policy.ps1 on Domain Controllers"
+    info "  3. Deploy CyEDR on endpoints (Sysmon/auditd/ULS now managed by CyEDR, not Wazuh):"
+    info "       Linux/macOS: curl -fsSL https://<platform>/cyedr-install.sh | sudo bash -s -- --token <TOKEN> --platform <URL>"
+    info "       Windows:     .\\cyedr-install.ps1 -Token <TOKEN> -Platform <URL>"
+    info "       Add --with-cysiem to also install the Wazuh (CySIEM) agent on the same endpoint"
+    info "  4. Audit policy for Domain Controllers: run scripts/cyedr-install.ps1 or"
+    info "     copy /opt/cycentra/sysmon/apply_audit_policy.ps1 to the DC and run as Domain Admin"
     info "  5. Agent config: agent.conf is deployed automatically above (pushed to agents via remoted)"
     info "     To update agent.conf post-install: sudo bash scripts/deploy_agent_config.sh"
 
