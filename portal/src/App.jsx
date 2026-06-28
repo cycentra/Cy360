@@ -90,6 +90,7 @@ import EdrResponsePage       from './pages/edr/EdrResponsePage.jsx';
 import EdrPoliciesPage       from './pages/edr/EdrPoliciesPage.jsx';
 import EdrAgentInstallerPage from './pages/edr/EdrAgentInstallerPage.jsx';
 import EdrEndpointDetailPage from './pages/edr/EdrEndpointDetailPage.jsx';
+import EdrYaraRulesPage      from './pages/edr/EdrYaraRulesPage.jsx';
 
 // ── Scan History Dropdown ─────────────────────────────────────────────────────
 
@@ -427,6 +428,7 @@ export default function App() {
             {activeTab==="edr-response"   && <EdrResponsePage />}
             {activeTab==="edr-policies"   && <EdrPoliciesPage />}
             {activeTab==="edr-installer"  && <EdrAgentInstallerPage />}
+            {activeTab==="edr-yara-rules" && <EdrYaraRulesPage />}
             {activeTab==="edr-endpoint-detail" && <EdrEndpointDetailPage agentId={selectedEdrAgent} />}
 
           </div>

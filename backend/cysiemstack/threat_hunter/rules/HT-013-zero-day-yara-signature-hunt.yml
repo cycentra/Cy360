@@ -1,0 +1,23 @@
+id: HT-013
+name: "Zero-Day YARA Signature Match (24h window)"
+description: >
+  Detects any YARA rule signature match on an endpoint within the last 24 hours.
+  Unlike HT-004 (which requires 3 recurring malware alerts over 7 days), this rule
+  fires on a SINGLE confirmed YARA match — appropriate for zero-day scenarios where
+  even one hit warrants immediate investigation.
+  Sources: Wazuh native YARA integration, CyEDR RUN_SCAN command results
+  (ingested into the alerts table as category='malware', rule_desc LIKE '%yara%').
+severity: critical
+confidence: 0.88
+window_hours: 24
+mitre:
+  - T1204.002
+  - T1059
+  - T1566.001
+  - T1203
+frameworks: [nis2, iso27001, nist_csf, soc2, pci_dss, gdpr]
+conditions:
+  - category: malware
+    rule_desc_contains: "yara"
+    min_count: 1
+    same_field: agent_id

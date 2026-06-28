@@ -1,7 +1,12 @@
-# CyCentra 360 Agent — Troubleshooting Guide
+# CyCentra 360 — CySIEM Agent Troubleshooting Guide
 
-Agent issues fall into three stages: **download**, **registration** (port 1515), and **connection** (port 1514).
+CySIEM Agent issues fall into three stages: **download**, **registration** (port 1515), and **connection** (port 1514).
 Identify which stage is failing before taking action.
+
+> **Installer reference:** Download the Agent Manager script from **Settings → Agent Installer**.
+> It auto-detects whether the agent is installed and offers install / upgrade / uninstall from a single menu.
+> Non-interactive flags: `--install`, `--upgrade`, `--uninstall-cysiem`, `--uninstall-cyedr`, `--uninstall` (all).
+> Windows: `.\\agent-installer.ps1 -Action <action>`.
 
 ---
 
@@ -97,7 +102,7 @@ Windows (edit `C:\Program Files (x86)\ossec-agent\ossec.conf`):
   ...
 </server>
 ```
-Then restart: `NET STOP Wazuh && NET START Wazuh`
+Then restart: `NET STOP WazuhSvc && NET START WazuhSvc`
 
 **Server-side permanent fix:** Ensure `CY360_PUBLIC_IP` is set in `/opt/cycentra/.env`.
 The setup script auto-detects and writes this on every `--update`.
@@ -118,7 +123,7 @@ systemctl restart cycentra
 ERROR: (1208): Unable to connect to enrollment service at '[2606:4700:...]:1515'
 ```
 
-**Cause:** The manager hostname resolves to a Cloudflare IPv6 address. Wazuh ports are TCP
+**Cause:** The manager hostname resolves to a Cloudflare IPv6 address. CySIEM Agent ports are TCP
 and not proxied by Cloudflare.
 
 **Fix:** Use the server's direct IP:
@@ -203,7 +208,7 @@ ssh -p 2026 root@<SERVER_IP> "tail -50 /var/ossec/logs/ossec.log"
 
 ---
 
-## Checking Agent Status on the Endpoint
+## Checking CySIEM Agent Status on the Endpoint
 
 macOS / Linux:
 ```bash
@@ -222,7 +227,7 @@ grep -A3 "<server>" /var/ossec/etc/ossec.conf        # Linux
 
 Windows (elevated PowerShell):
 ```powershell
-Get-Service Wazuh
+Get-Service WazuhSvc
 Get-Content "C:\Program Files (x86)\ossec-agent\client.keys"
 ```
 
@@ -240,9 +245,39 @@ Get-Content "C:\Program Files (x86)\ossec-agent\client.keys"
 # Remove a stale agent entry (then re-register on endpoint)
 echo 'y' | /var/ossec/bin/manage_agents -r AGENT_ID
 
-# Restart Wazuh manager (needed after removing agents)
+# Restart CySIEM manager (needed after removing agents)
 /var/ossec/bin/wazuh-control restart
 ```
+
+---
+
+## Uninstalling the CySIEM Agent
+
+Use the Agent Manager script (download from **Settings → Agent Installer**):
+
+```bash
+# Linux / macOS — interactive menu (detects what's installed)
+sudo bash agent-installer.sh
+
+# Linux / macOS — non-interactive
+sudo bash agent-installer.sh --uninstall-cysiem    # CySIEM Agent only
+sudo bash agent-installer.sh --uninstall-cyedr     # CyEDR Agent only
+sudo bash agent-installer.sh --uninstall           # all CyCentra agents
+```
+
+```powershell
+# Windows PowerShell (elevated) — non-interactive
+.\agent-installer.ps1 -Action uninstall-cysiem
+.\agent-installer.ps1 -Action uninstall-cyedr
+.\agent-installer.ps1 -Action uninstall
+```
+
+**What the uninstall does:**
+- Stops and disables the agent service (`wazuh-agent` / `WazuhSvc`)
+- Removes the package via DEB/RPM purge (Linux) or MSI uninstall (Windows)
+- Removes `/var/ossec` (Linux) / `/Library/Ossec` (macOS) / `ossec-agent` dir (Windows)
+- Removes the `cy360-baseline.rules` auditd file and reloads auditd
+- Removes Sysmon on Windows (if it was installed by the CySIEM Agent script)
 
 ---
 

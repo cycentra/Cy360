@@ -1,9 +1,10 @@
 # CyEDR — Architecture, Capabilities & Roadmap
 
-**Document version:** 1.0  
+**Document version:** 2.0  
 **Date:** 2026-06-28  
-**Status:** Platform complete · Sensor pending  
-**Audience:** Engineering, Product, Security Architecture
+**Status:** Phase 1 (Python Bridge) COMPLETE and deployed · Native kernel sensor planned Phase 2+  
+**Audience:** Engineering, Product, Security Architecture  
+**Companion doc:** [CYEDR_TECHNICAL_REFERENCE.md](CYEDR_TECHNICAL_REFERENCE.md) — Installation, API, troubleshooting, DB schema
 
 ---
 
@@ -599,11 +600,21 @@ Some EDR vendors offer OEM licensing of their sensor component. The platform (ma
 
 If CyCentra 360 pursues building the sensor natively, the recommended phased approach:
 
-### Phase 1 — Wazuh Bridge (Months 1–2, Recommended First Step)
+### Phase 1 — Python Bridge Sensor (COMPLETE as of v1.0.5+)
 
-Wire the existing Wazuh agent as the sensor source. Translate Wazuh Sysmon events (process, network, file, registry) into `TelemetryEnvelope` format and push to `POST /api/edr/telemetry`. This immediately gives CyEDR real telemetry from any endpoint that already has a Wazuh agent deployed. No kernel development required.
+The Python bridge (`agent/cyedr_agent.py`) is the implemented Phase 1 sensor. It reads OS-native event sources in user space:
 
-Deliverable: CyEDR detections firing in the platform from real endpoint data.
+- **Linux:** tails `/var/log/audit/audit.log`, filters `cy360_edr_*` keys (auditd rules deployed by installer)
+- **macOS:** runs `log stream` subprocess, subscribes to `kernel`, `endpointsecurity`, and `process` subsystems
+- **Windows:** subscribes to `Microsoft-Windows-Sysmon/Operational` event channel via `win32evtlog` (Sysmon deployed by installer)
+
+This gives 60–75% of kernel-level EDR telemetry without requiring driver development. The bridge is a standalone PyInstaller binary — no Python installation required on endpoints.
+
+**Delivered capabilities:** All 19 heuristic triggers, confidence matrix, asset multipliers, SIEM pipeline injection, 7 response actions (iptables/pf/WFP isolation, KILL_PROCESS, QUARANTINE_FILE, ROLLBACK, RUN_SCAN, COLLECT_FORENSICS, BLOCK_HASH), policy engine, deployment tokens, anti-tamper watchdog, IOC cache.
+
+**Limitation vs native kernel sensor:** Event delivery is slightly delayed (log file polling vs real-time kernel callback). Process injection and hollowing detection is auditd/Sysmon-based rather than direct kernel memory inspection. Network isolation is OS firewall-based rather than WFP callout or eBPF network hook.
+
+Deliverable: CyEDR detections firing from real endpoint data. FULLY SHIPPED.
 
 ### Phase 2 — Native Linux Sensor (Months 3–10)
 

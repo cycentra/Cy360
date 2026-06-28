@@ -727,8 +727,124 @@ def command_complete(agent_id, cmd_id):
             update_agent_isolation(CYCENTRA_DB_URL, agent_id, "isolated")
         elif action == "UNISOLATE":
             update_agent_isolation(CYCENTRA_DB_URL, agent_id, "normal")
+        elif action == "RUN_SCAN":
+            _ingest_yara_scan_result(agent_id, cmd_id, result)
 
     return jsonify({"status": "recorded"})
+
+
+def _ingest_yara_scan_result(agent_id: str, cmd_id: str, result: dict | str) -> None:
+    """
+    Parse RUN_SCAN result from the agent and write YARA matches to:
+      1. edr_detections (for EDR Detections page)
+      2. alerts table (for threat hunter HT-013/HT-014 sweep + SIEM correlation)
+
+    The agent returns result as a string: "YARA scan complete. Matches:\nRULENAME /path/to/file\n..."
+    or as {"output": "...", "matches": [{"rule": ..., "path": ...}]}.
+    """
+    if not result:
+        return
+
+    # Normalise to string
+    raw_output = result if isinstance(result, str) else (
+        result.get("output") or result.get("matches_text") or json.dumps(result)
+    )
+    # Structured matches take priority
+    structured = result.get("matches") if isinstance(result, dict) else None
+
+    if not structured:
+        # Parse text format: "RULENAME /path/to/file"
+        structured = []
+        for line in raw_output.splitlines():
+            line = line.strip()
+            if not line or line.startswith("YARA scan"):
+                continue
+            parts = line.split(None, 1)
+            if len(parts) == 2:
+                structured.append({"rule": parts[0], "path": parts[1]})
+            elif len(parts) == 1:
+                structured.append({"rule": parts[0], "path": "unknown"})
+
+    if not structured:
+        return  # no matches — nothing to ingest
+
+    # Determine if this is a custom rule hit (rule name contains 'custom_yara' prefix
+    # OR came from the custom.yar file — agent tags these in the result)
+    is_custom = isinstance(result, dict) and result.get("source") == "custom_yara"
+
+    try:
+        conn = _db()
+        # Fetch agent hostname for the alert record
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT hostname, agent_ip FROM edr_agents WHERE agent_id=%s",
+                [agent_id],
+            )
+            ag = cur.fetchone() or {}
+            hostname = ag.get("hostname", agent_id)
+            agent_ip = ag.get("agent_ip", "")
+
+        now = datetime.now(timezone.utc)
+        rule_desc_prefix = "custom_yara" if is_custom else "yara"
+
+        for match in structured:
+            rule_name = match.get("rule", "UNKNOWN_RULE")
+            file_path = match.get("path", "unknown")
+            det_id    = str(uuid.uuid4())
+            event_uuid = f"yara-{cmd_id}-{det_id[:8]}"
+
+            # 1. Write to edr_detections
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO edr_detections
+                      (id, agent_id, event_uuid, severity, score, rule_desc,
+                       event_category, file_path, raw_envelope)
+                    VALUES (%s,%s,%s,'critical',95,%s,'malware',%s,%s)
+                    ON CONFLICT (event_uuid) DO NOTHING
+                    """,
+                    [
+                        det_id, agent_id, event_uuid,
+                        f"{rule_desc_prefix} match: {rule_name}",
+                        file_path,
+                        json.dumps({"cmd_id": cmd_id, "match": match, "source": "RUN_SCAN"}),
+                    ],
+                )
+
+            # 2. Write to alerts table so threat hunter (HT-013/HT-014) can sweep it
+            # Rule ID 100210 = CyEDR YARA match (custom range, picked up by MALWARE_RULE_IDS)
+            alert_rule_id = 100210 if not is_custom else 100211
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO alerts
+                      (wazuh_id, timestamp, agent_id, agent_name, agent_ip,
+                       rule_id, rule_desc, rule_level, base_score,
+                       category, file_path, full_alert)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,12,9.5,'malware',%s,%s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    [
+                        event_uuid, now, agent_id, hostname, agent_ip,
+                        alert_rule_id,
+                        f"{rule_desc_prefix} match: {rule_name} in {file_path}",
+                        file_path,
+                        json.dumps({
+                            "rule": {"id": str(alert_rule_id), "level": 12,
+                                     "description": f"YARA match: {rule_name}",
+                                     "groups": ["malware", "yara"]},
+                            "agent": {"id": agent_id, "name": hostname},
+                            "data": {"yara_rule": rule_name, "file_path": file_path,
+                                     "source": "CyEDR_RUN_SCAN", "is_custom": is_custom},
+                        }),
+                    ],
+                )
+
+        conn.commit()
+        conn.close()
+        _log.info("Ingested %d YARA matches from agent %s (cmd %s)", len(structured), agent_id, cmd_id)
+    except Exception as exc:
+        _log.error("_ingest_yara_scan_result failed for agent %s: %s", agent_id, exc)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1314,3 +1430,337 @@ def self_enroll_agent():
         "enrollment_token": token,
         "message":          "Agent enrolled successfully",
     }), 201
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CUSTOM YARA RULES — Zero-Day / Threat Intel Hunting
+# Admins upload analyst-authored YARA rules. Agents fetch merged ruleset on
+# their hourly IOC sync. Fleet-scan pushes RUN_SCAN to all active agents.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+for _yp in ("/yara-rules/custom", "/yara-rules/custom/<rule_id>",
+            "/yara-rules/custom/<rule_id>/activate",
+            "/yara-rules/custom/<rule_id>/deactivate",
+            "/fleet-scan", "/installer/custom-yara"):
+    edr_bp.add_url_rule(
+        _yp,
+        endpoint=f"opts_yara_{_yp.replace('/','_').replace('<','').replace('>','')}",
+        view_func=lambda **_: add_cors_headers(make_response("", 204)),
+        methods=["OPTIONS"],
+    )
+
+
+@edr_bp.route("/yara-rules/custom", methods=["GET"])
+@require_viewer
+def list_custom_yara_rules():
+    """Return all custom YARA rules with metadata and match counts."""
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, name, threat_name, mitre_id, author, active,
+                       created_at, updated_at, last_deployed, match_count,
+                       LENGTH(rule_text) AS rule_size
+                FROM edr_custom_yara_rules
+                ORDER BY created_at DESC
+            """)
+            rules = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return jsonify({"rules": rules, "total": len(rules)})
+    except psycopg2.Error as exc:
+        _log.error("list_custom_yara_rules DB error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+
+
+@edr_bp.route("/yara-rules/custom", methods=["POST"])
+@require_admin
+def create_custom_yara_rule():
+    """
+    Upload a new custom YARA rule.
+
+    Body: { name, threat_name, rule_text, mitre_id?, author? }
+
+    The rule_text must be valid YARA syntax. The platform validates it with
+    the yara Python bindings before storing.
+    """
+    body        = request.get_json(force=True, silent=True) or {}
+    name        = (body.get("name") or "").strip()
+    threat_name = (body.get("threat_name") or "").strip()
+    rule_text   = (body.get("rule_text") or "").strip()
+    mitre_id    = (body.get("mitre_id") or "").strip() or None
+    author      = session.get("user_email", "unknown")
+
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    if not threat_name:
+        return jsonify({"error": "threat_name is required"}), 400
+    if not rule_text:
+        return jsonify({"error": "rule_text is required"}), 400
+
+    # Validate YARA syntax before storing
+    try:
+        import yara
+        yara.compile(source=rule_text)
+    except ImportError:
+        pass  # yara-python not installed on platform host — skip validation
+    except Exception as exc:
+        return jsonify({"error": f"Invalid YARA syntax: {exc}"}), 400
+
+    rule_id = str(uuid.uuid4())
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO edr_custom_yara_rules
+                  (id, name, threat_name, mitre_id, rule_text, author)
+                VALUES (%s,%s,%s,%s,%s,%s)
+                RETURNING id, name, threat_name, active, created_at
+                """,
+                [rule_id, name, threat_name, mitre_id, rule_text, author],
+            )
+            row = dict(cur.fetchone())
+        conn.commit()
+        conn.close()
+    except psycopg2.Error as exc:
+        _log.error("create_custom_yara_rule DB error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+
+    auth_event(author, "yara_rule_create", f"Created custom YARA rule: {name} (threat: {threat_name})")
+    return jsonify(row), 201
+
+
+@edr_bp.route("/yara-rules/custom/<rule_id>", methods=["GET"])
+@require_viewer
+def get_custom_yara_rule(rule_id):
+    """Return full detail including rule_text for a single custom YARA rule."""
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM edr_custom_yara_rules WHERE id = %s",
+                [rule_id],
+            )
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({"error": "Rule not found"}), 404
+        return jsonify(dict(row))
+    except psycopg2.Error as exc:
+        _log.error("get_custom_yara_rule DB error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+
+
+@edr_bp.route("/yara-rules/custom/<rule_id>", methods=["PUT"])
+@require_admin
+def update_custom_yara_rule(rule_id):
+    """Update name, threat_name, mitre_id, or rule_text of a custom YARA rule."""
+    body = request.get_json(force=True, silent=True) or {}
+    fields, vals = [], []
+    for col in ("name", "threat_name", "mitre_id", "rule_text"):
+        if col in body:
+            if col == "rule_text":
+                try:
+                    import yara
+                    yara.compile(source=body[col])
+                except ImportError:
+                    pass
+                except Exception as exc:
+                    return jsonify({"error": f"Invalid YARA syntax: {exc}"}), 400
+            fields.append(f"{col} = %s")
+            vals.append(body[col])
+    if not fields:
+        return jsonify({"error": "No updatable fields provided"}), 400
+    fields.append("updated_at = NOW()")
+    vals.append(rule_id)
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE edr_custom_yara_rules SET {', '.join(fields)} WHERE id = %s RETURNING id",
+                vals,
+            )
+            if not cur.fetchone():
+                conn.close()
+                return jsonify({"error": "Rule not found"}), 404
+        conn.commit()
+        conn.close()
+    except psycopg2.Error as exc:
+        _log.error("update_custom_yara_rule DB error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+    auth_event(session.get("user_email", ""), "yara_rule_update", f"Updated YARA rule {rule_id}")
+    return jsonify({"updated": rule_id})
+
+
+@edr_bp.route("/yara-rules/custom/<rule_id>", methods=["DELETE"])
+@require_admin
+def delete_custom_yara_rule(rule_id):
+    """Permanently remove a custom YARA rule."""
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM edr_custom_yara_rules WHERE id = %s RETURNING name",
+                [rule_id],
+            )
+            row = cur.fetchone()
+        conn.commit()
+        conn.close()
+        if not row:
+            return jsonify({"error": "Rule not found"}), 404
+    except psycopg2.Error as exc:
+        _log.error("delete_custom_yara_rule DB error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+    auth_event(session.get("user_email", ""), "yara_rule_delete", f"Deleted YARA rule {rule_id}: {row['name']}")
+    return jsonify({"deleted": rule_id})
+
+
+@edr_bp.route("/yara-rules/custom/<rule_id>/activate", methods=["POST"])
+@require_admin
+def activate_yara_rule(rule_id):
+    """Enable a previously deactivated custom YARA rule."""
+    return _set_yara_active(rule_id, True)
+
+
+@edr_bp.route("/yara-rules/custom/<rule_id>/deactivate", methods=["POST"])
+@require_admin
+def deactivate_yara_rule(rule_id):
+    """Disable a custom YARA rule without deleting it."""
+    return _set_yara_active(rule_id, False)
+
+
+def _set_yara_active(rule_id: str, active: bool):
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE edr_custom_yara_rules SET active=%s, updated_at=NOW() WHERE id=%s RETURNING id",
+                [active, rule_id],
+            )
+            if not cur.fetchone():
+                conn.close()
+                return jsonify({"error": "Rule not found"}), 404
+        conn.commit()
+        conn.close()
+    except psycopg2.Error as exc:
+        _log.error("set_yara_active DB error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+    state = "activated" if active else "deactivated"
+    auth_event(session.get("user_email", ""), f"yara_rule_{state}", f"YARA rule {rule_id} {state}")
+    return jsonify({"rule_id": rule_id, "active": active})
+
+
+@edr_bp.route("/installer/custom-yara", methods=["GET"])
+@require_agent_token
+def installer_custom_yara(agent_id):
+    """
+    Agent-facing: return all active custom YARA rules merged into one text block.
+    Agents poll this on their hourly IOC sync cycle and write the result to
+    {edr_home}/custom.yar. The RUN_SCAN handler then compiles and applies both
+    cycentra.yar and custom.yar.
+    """
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, threat_name, rule_text
+                FROM edr_custom_yara_rules
+                WHERE active = TRUE
+                ORDER BY created_at ASC
+                """,
+            )
+            rows = cur.fetchall()
+            # stamp last_deployed for every active rule
+            if rows:
+                cur.execute(
+                    "UPDATE edr_custom_yara_rules SET last_deployed=NOW() WHERE active=TRUE",
+                )
+        conn.commit()
+        conn.close()
+    except psycopg2.Error as exc:
+        _log.error("installer_custom_yara DB error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+
+    if not rows:
+        return "/* CyCentra: no active custom YARA rules */\n", 200, {"Content-Type": "text/plain"}
+
+    parts = [
+        "/* CyCentra Custom YARA Rules — auto-generated */",
+        f"/* Rules: {len(rows)} | Generated: {datetime.now(timezone.utc).isoformat()} */",
+        "",
+    ]
+    for row in rows:
+        parts.append(f"/* Rule: {row['name']} | Threat: {row['threat_name']} | ID: {row['id']} */")
+        parts.append(row["rule_text"].strip())
+        parts.append("")
+
+    return "\n".join(parts), 200, {"Content-Type": "text/plain"}
+
+
+@edr_bp.route("/fleet-scan", methods=["POST"])
+@require_analyst
+def fleet_scan():
+    """
+    Push a RUN_SCAN command to all currently active EDR agents simultaneously.
+
+    Body (optional): { scan_path, yara_rules, reason }
+
+    Returns: { queued, agents, scan_id }
+
+    This is the zero-day response trigger: an analyst writes a custom YARA rule,
+    uploads it via POST /api/edr/yara-rules/custom, then calls this endpoint to
+    scan the entire fleet without waiting for the next scheduled hunt cycle.
+    """
+    body      = request.get_json(force=True, silent=True) or {}
+    scan_path = body.get("scan_path", "/")
+    yara_set  = body.get("yara_rules", "all")
+    reason    = body.get("reason", "on-demand fleet scan")
+    issued_by = session.get("user_email", "system")
+
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT agent_id, hostname FROM edr_agents WHERE status='active'",
+            )
+            agents = [dict(r) for r in cur.fetchall()]
+        conn.close()
+    except psycopg2.Error as exc:
+        _log.error("fleet_scan agent query error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+
+    if not agents:
+        return jsonify({"queued": 0, "agents": [], "message": "No active agents found"}), 200
+
+    scan_id = str(uuid.uuid4())
+    queued  = []
+    for ag in agents:
+        try:
+            queue_response_command(
+                CYCENTRA_DB_URL,
+                ag["agent_id"],
+                "RUN_SCAN",
+                {
+                    "scan_path":  scan_path,
+                    "yara_rules": yara_set,
+                    "scan_id":    scan_id,
+                    "reason":     reason,
+                },
+                issued_by,
+                auto_triggered=False,
+            )
+            queued.append(ag["agent_id"])
+        except Exception as exc:
+            _log.warning("fleet_scan: failed to queue for agent %s: %s", ag["agent_id"], exc)
+
+    auth_event(
+        issued_by, "fleet_scan_triggered",
+        f"Fleet scan {scan_id} queued for {len(queued)}/{len(agents)} agents. Reason: {reason}",
+    )
+    return jsonify({
+        "scan_id": scan_id,
+        "queued":  len(queued),
+        "agents":  queued,
+        "message": f"RUN_SCAN queued for {len(queued)} active agents",
+    })

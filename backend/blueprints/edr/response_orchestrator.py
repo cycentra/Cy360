@@ -124,6 +124,21 @@ def ensure_tables(db_url: str) -> None:
     );
     CREATE INDEX IF NOT EXISTS idx_edr_cmd_agent  ON edr_response_commands(agent_id, status);
     CREATE INDEX IF NOT EXISTS idx_edr_cmd_status ON edr_response_commands(status, issued_at DESC);
+
+    CREATE TABLE IF NOT EXISTS edr_custom_yara_rules (
+        id              TEXT PRIMARY KEY,
+        name            TEXT NOT NULL,
+        threat_name     TEXT NOT NULL,
+        mitre_id        TEXT,
+        rule_text       TEXT NOT NULL,
+        author          TEXT,
+        active          BOOLEAN DEFAULT TRUE,
+        created_at      TIMESTAMPTZ DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ DEFAULT NOW(),
+        last_deployed   TIMESTAMPTZ,
+        match_count     INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_edr_yara_active ON edr_custom_yara_rules(active, created_at DESC);
     """
     try:
         conn = _get_db(db_url)

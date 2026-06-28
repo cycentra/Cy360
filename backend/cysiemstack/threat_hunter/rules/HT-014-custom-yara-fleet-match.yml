@@ -1,0 +1,23 @@
+id: HT-014
+name: "Custom YARA Rule Fleet Match (48h window)"
+description: >
+  Hunts for matches from analyst-authored custom YARA rules pushed via the
+  CyCentra Custom Threat Hunting module. Fires when the same custom YARA rule
+  matches on 2 or more distinct endpoints within 48 hours — indicating a
+  campaign-level spread rather than a single isolated hit.
+  A single-endpoint hit is already a critical finding via HT-013; this rule
+  surfaces lateral spread of zero-day artefacts across the fleet.
+severity: critical
+confidence: 0.92
+window_hours: 48
+mitre:
+  - T1204.002
+  - T1570
+  - T1021
+  - T1203
+frameworks: [nis2, iso27001, nist_csf, soc2, pci_dss, dora, gdpr]
+conditions:
+  - category: malware
+    rule_desc_contains: "custom_yara"
+    min_count: 2
+    same_field: src_ip

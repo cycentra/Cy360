@@ -1,3 +1,48 @@
+## v1.0.103 -- 2026-06-28
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.103 -- 2026-06-28
+
+### Improvements
+
+**Settings → Agent Installer — Smart CySIEM Agent Manager**
+
+The Settings > Agent Installer tab has been redesigned from a download-only page into a full agent lifecycle manager.
+
+**Smart detection on every run:**
+- The downloaded script now detects whether the CySIEM Agent and CyEDR Agent are already installed before doing anything.
+- If neither is installed → installs silently.
+- If either is already installed → presents an interactive menu: `1) Upgrade  2) Uninstall CySIEM  3) Uninstall CyEDR  4) Uninstall ALL  0) Cancel`.
+
+**Non-interactive flags (for automation/MDM):**
+
+| Platform | Install | Upgrade | Remove CySIEM | Remove CyEDR | Remove all |
+|----------|---------|---------|---------------|--------------|------------|
+| Linux/macOS | `--install` | `--upgrade` | `--uninstall-cysiem` | `--uninstall-cyedr` | `--uninstall` |
+| Windows | `-Action install` | `-Action upgrade` | `-Action uninstall-cysiem` | `-Action uninstall-cyedr` | `-Action uninstall` |
+
+**Uninstall removes cleanly:**
+- CySIEM Agent: stops service, purges DEB/RPM package, removes `/var/ossec`, cleans `cy360-baseline.rules` audit file, removes Sysmon on Windows.
+- CyEDR Agent: stops `cyedr-agent` + `cyedr-watchdog`, removes systemd units, removes `/opt/cycentra/edr`, cleans `60-cyedr.rules` audit file.
+
+**CySIEM branding throughout:**
+- All user-facing product references now say "CySIEM Agent" instead of "Wazuh". Internal package/binary names (`wazuh-agent`, `wazuh-control`) are unchanged as they are the actual on-disk names.
+- API response key renamed: `wazuh_manager` → `cysiem_manager` in `GET /api/system/agent-packages`.
+
+**EDR callout added:**
+- The page now shows an info banner directing CyEDR deployments to Endpoint Defence → Agent Installer, which handles both CyEDR and the optional CySIEM co-install in a single run.
+
+#### Files changed
+- `backend/blueprints/system/routes.py` — `_INSTALLER_SH`, `_INSTALLER_PS1` rewritten; `wazuh_manager` → `cysiem_manager` in both route functions and JSON response
+- `portal/src/pages/settings/SystemSettingsPage.jsx` — `AgentInstallerTab`: EDR callout, CySIEM labels, smart installer description, uninstall quick-reference section
+
+---
+
 ## v1.0.102 -- 2026-06-28
 
 ### Improvements

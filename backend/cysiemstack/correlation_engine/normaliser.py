@@ -29,7 +29,7 @@ except Exception:
 SSH_RULE_IDS     = {5715, 5716, 5718, 5719, 5720, 5710, 5711, 2502}
 AUTH_RULE_IDS    = {18100, 18101, 18102, 18103, 18104, 5400, 5500, 5502}
 FIM_RULE_IDS     = set(range(550, 600)) | {2904}
-MALWARE_RULE_IDS = {554, 87105, 87106, 100200, 100201}
+MALWARE_RULE_IDS = {554, 87105, 87106, 100200, 100201, 100210, 100211}
 WEB_RULE_IDS     = set(range(31100, 31200)) | set(range(30100, 30200))
 SCAN_RULE_IDS    = {40001, 40002, 40003}
 # Wazuh SCA (Security Configuration Assessment) rule IDs — policy scan results

@@ -1580,7 +1580,7 @@ function McpTab() {
       </div>
       <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, marginBottom: 24, lineHeight: 1.6 }}>
         The Security MCP bridge exposes{" "}
-        <strong style={{ color: "rgba(255,255,255,0.5)" }}>{tools.length} SIEM, UEBA, and Wazuh tools</strong>{" "}
+        <strong style={{ color: "rgba(255,255,255,0.5)" }}>{tools.length} SIEM, UEBA, and CySIEM tools</strong>{" "}
         to external AI clients (Claude Desktop, OpenAI Agents SDK, custom LLM toolchains).
         It runs inside the <code style={{ color: "#4d9eff", fontFamily: "monospace" }}>cysiemstack-engine</code>{" "}
         process — no separate service or extra port required.
@@ -3595,7 +3595,7 @@ const PLATFORM_MATRIX = [
 ];
 
 function AgentInstallerTab() {
-  const [pkgInfo,   setPkgInfo]   = useState(null);   // {version, server_url, packages}
+  const [pkgInfo,   setPkgInfo]   = useState(null);
   const [loading,   setLoading]   = useState(true);
   const [loadErr,   setLoadErr]   = useState(null);
   const [dlMsg,     setDlMsg]     = useState(null);
@@ -3611,7 +3611,7 @@ function AgentInstallerTab() {
   }, []);
 
   const handleDownload = (fmt) => {
-    setDlMsg({ ok: null, text: "Preparing installer…" });
+    setDlMsg({ ok: null, text: "Preparing script…" });
     const url = `${API_BASE}/api/system/agent-installer?format=${fmt}`;
     const link = document.createElement("a");
     link.href = url;
@@ -3623,10 +3623,9 @@ function AgentInstallerTab() {
     setTimeout(() => setDlMsg(null), 4000);
   };
 
-  const serverUrl    = pkgInfo?.server_url    || "—";
-  const wazuhManager = pkgInfo?.wazuh_manager || "—";
-  const version      = pkgInfo?.version       || "—";
-  const packages     = pkgInfo?.packages      || [];
+  const serverUrl     = pkgInfo?.server_url     || "—";
+  const cySIEMManager = pkgInfo?.cysiem_manager || "—";
+  const version       = pkgInfo?.version        || "—";
 
   const versionGroups = (() => {
     if (!pkgList.length) return [];
@@ -3639,7 +3638,7 @@ function AgentInstallerTab() {
     });
     return Object.values(map).sort((a, b) => b.maxModified - a.maxModified);
   })();
-  const displayGroups  = versionGroups.slice(0, 3);
+  const displayGroups   = versionGroups.slice(0, 3);
   const olderGroupCount = Math.max(0, versionGroups.length - 3);
 
   return (
@@ -3649,7 +3648,7 @@ function AgentInstallerTab() {
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
         <span style={{ fontSize: 18 }}>📦</span>
         <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
-          Universal Agent Installer
+          CySIEM Agent Manager
         </div>
         {!loading && version !== "—" && (
           <span style={{ background: "rgba(0,229,160,0.08)", color: "rgba(0,229,160,0.7)", border: "1px solid rgba(0,229,160,0.2)", borderRadius: 4, padding: "2px 8px", fontSize: 10, fontFamily: "monospace" }}>
@@ -3657,10 +3656,22 @@ function AgentInstallerTab() {
           </span>
         )}
       </div>
-      <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, marginBottom: 24, lineHeight: 1.7 }}>
-        Download a single installer script — it auto-detects your OS and CPU architecture,
-        connects to this CyCentra 360 server, downloads the matching agent package,
-        and registers the agent automatically. No manual configuration required.
+      <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, marginBottom: 16, lineHeight: 1.7 }}>
+        Download the Agent Manager script — it auto-detects your OS and architecture.
+        If the CySIEM Agent is <strong style={{ color: "rgba(255,255,255,0.5)" }}>not installed</strong>, it installs it.
+        If it is <strong style={{ color: "rgba(255,255,255,0.5)" }}>already installed</strong>, it prompts you to upgrade or uninstall.
+        Pass <code style={{ color: "rgba(0,229,160,0.7)", fontFamily: "monospace" }}>--uninstall</code> to remove agents non-interactively.
+      </div>
+
+      {/* EDR callout */}
+      <div style={{ background: "rgba(0,229,160,0.04)", border: "1px solid rgba(0,229,160,0.2)", borderRadius: 5, padding: "10px 14px", marginBottom: 20, display: "flex", gap: 10, alignItems: "flex-start" }}>
+        <span style={{ color: "#00e5a0", fontSize: 15, lineHeight: 1.3 }}>ℹ</span>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, lineHeight: 1.7 }}>
+          Deploying <strong style={{ color: "rgba(255,255,255,0.65)" }}>CyEDR</strong> (behavioural detection + automated response)?
+          Use <strong style={{ color: "rgba(255,255,255,0.65)" }}>Endpoint Defence → Agent Installer</strong> instead — it installs
+          CyEDR and optionally adds the CySIEM Agent in a single run. This page is for
+          CySIEM-only deployments.
+        </div>
       </div>
 
       {/* Server info */}
@@ -3668,15 +3679,15 @@ function AgentInstallerTab() {
         <div style={{ ...LABEL, marginBottom: 10 }}>Pre-configured Server</div>
         <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
           <div>
-            <div style={{ ...LABEL, marginBottom: 3, fontSize: 9 }}>Download URL</div>
+            <div style={{ ...LABEL, marginBottom: 3, fontSize: 9 }}>Package Download URL</div>
             <code style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 12 }}>
               {loading ? "Loading…" : `${serverUrl}/agent-packages/`}
             </code>
           </div>
           <div>
-            <div style={{ ...LABEL, marginBottom: 3, fontSize: 9 }}>Agent Registration</div>
+            <div style={{ ...LABEL, marginBottom: 3, fontSize: 9 }}>CySIEM Manager</div>
             <code style={{ color: "#4d9eff", fontFamily: "monospace", fontSize: 12 }}>
-              {loading ? "Loading…" : wazuhManager}
+              {loading ? "Loading…" : cySIEMManager}
             </code>
           </div>
         </div>
@@ -3689,7 +3700,7 @@ function AgentInstallerTab() {
 
       {/* Download buttons */}
       <div style={{ ...CARD, marginBottom: 16 }}>
-        <div style={{ ...LABEL, marginBottom: 14 }}>Download Installer</div>
+        <div style={{ ...LABEL, marginBottom: 14 }}>Download Agent Manager Script</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
 
           {/* Linux + macOS */}
@@ -3702,8 +3713,8 @@ function AgentInstallerTab() {
               </div>
             </div>
             <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, marginBottom: 14, lineHeight: 1.6 }}>
-              Bash script — supports RPM, DEB, and macOS PKG.
-              Run with <code style={{ color: "#00e5a0", fontFamily: "monospace" }}>sudo bash agent-installer.sh</code>
+              Bash script — detects existing agents and prompts install / upgrade / uninstall.
+              Supports RPM, DEB, and macOS PKG.
             </div>
             <button
               onClick={() => handleDownload("unix")}
@@ -3721,8 +3732,8 @@ function AgentInstallerTab() {
               </div>
             </div>
             <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, marginBottom: 14, lineHeight: 1.6 }}>
-              PowerShell script — supports MSI 32-bit and 64-bit.
-              Run in an elevated PowerShell session.
+              PowerShell script — detects existing agents and prompts install / upgrade / uninstall.
+              Supports MSI 32-bit and 64-bit.
             </div>
             <button
               onClick={() => handleDownload("windows")}
@@ -3744,15 +3755,15 @@ function AgentInstallerTab() {
         <div style={{ ...LABEL, marginBottom: 14 }}>Quick-Start Guide</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {[
-            { step: "1", os: "Linux", icon: "🐧", cmds: [
+            { step: "1", os: "Linux — install / upgrade", icon: "🐧", cmds: [
               "chmod +x agent-installer.sh",
               "sudo ./agent-installer.sh",
             ]},
-            { step: "2", os: "macOS", icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 814 1000" width="14" height="14" fill="rgba(255,255,255,0.7)"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76 0-103.7 40.8-165.9 40.8s-105-37.6-162.2-103c-82.5-95-166.3-243.7-166.3-384.3 0-179.6 116.5-274.7 230.8-274.7 62 0 113.4 40.8 150.7 40.8 35.7 0 92-43.2 161.2-43.2 25.8 0 108.2 2.6 168.9 80.2zm-198.5-160.8c31.1-36.9 53.1-88.1 53.1-139.3 0-7.1-.6-14.3-1.9-20.1-50.6 1.9-110.8 33.7-147.1 75.8-28.5 32.4-55.1 83.6-55.1 135.5 0 7.8 1.3 15.6 1.9 18.1 3.2.6 8.4 1.3 13.6 1.3 45.4 0 102.5-30.4 135.5-71.3z"/></svg>, cmds: [
+            { step: "2", os: "macOS — install / upgrade", icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 814 1000" width="14" height="14" fill="rgba(255,255,255,0.7)"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76 0-103.7 40.8-165.9 40.8s-105-37.6-162.2-103c-82.5-95-166.3-243.7-166.3-384.3 0-179.6 116.5-274.7 230.8-274.7 62 0 113.4 40.8 150.7 40.8 35.7 0 92-43.2 161.2-43.2 25.8 0 108.2 2.6 168.9 80.2zm-198.5-160.8c31.1-36.9 53.1-88.1 53.1-139.3 0-7.1-.6-14.3-1.9-20.1-50.6 1.9-110.8 33.7-147.1 75.8-28.5 32.4-55.1 83.6-55.1 135.5 0 7.8 1.3 15.6 1.9 18.1 3.2.6 8.4 1.3 13.6 1.3 45.4 0 102.5-30.4 135.5-71.3z"/></svg>, cmds: [
               "chmod +x agent-installer.sh",
               "sudo ./agent-installer.sh",
             ]},
-            { step: "3", os: "Windows (PowerShell)", icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 88" width="14" height="14"><path fill="#f25022" d="M0 0h42v42H0z"/><path fill="#7fba00" d="M46 0h42v42H46z"/><path fill="#00a4ef" d="M0 46h42v42H0z"/><path fill="#ffb900" d="M46 46h42v42H46z"/></svg>, cmds: [
+            { step: "3", os: "Windows — install / upgrade", icon: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 88" width="14" height="14"><path fill="#f25022" d="M0 0h42v42H0z"/><path fill="#7fba00" d="M46 0h42v42H46z"/><path fill="#00a4ef" d="M0 46h42v42H0z"/><path fill="#ffb900" d="M46 46h42v42H46z"/></svg>, cmds: [
               "Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force",
               ".\\agent-installer.ps1",
             ]},
@@ -3767,6 +3778,47 @@ function AgentInstallerTab() {
               ))}
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* Uninstall reference */}
+      <div style={{ ...CARD, marginBottom: 16, borderColor: "rgba(255,107,107,0.15)" }}>
+        <div style={{ ...LABEL, marginBottom: 10, color: "rgba(255,107,107,0.75)" }}>Remove Agents (Non-interactive)</div>
+        <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, marginBottom: 14, lineHeight: 1.7 }}>
+          The same script handles removal. Run interactively and choose <em>Uninstall</em> from the menu,
+          or pass a flag to skip prompts. The script detects which agents are present and skips anything not installed.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div style={{ background: "rgba(255,107,107,0.03)", border: "1px solid rgba(255,107,107,0.1)", borderRadius: 4, padding: "12px 14px" }}>
+            <div style={{ color: "rgba(255,107,107,0.7)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", marginBottom: 8 }}>Linux / macOS</div>
+            {[
+              "# Remove CySIEM Agent only",
+              "sudo bash agent-installer.sh --uninstall-cysiem",
+              "",
+              "# Remove CyEDR Agent only",
+              "sudo bash agent-installer.sh --uninstall-cyedr",
+              "",
+              "# Remove all CyCentra agents",
+              "sudo bash agent-installer.sh --uninstall",
+            ].map((line, i) => (
+              <pre key={i} style={{ background: line.startsWith("#") ? "transparent" : "rgba(0,0,0,0.3)", borderRadius: line.startsWith("#") ? 0 : 3, padding: line.startsWith("#") ? "2px 0" : "5px 10px", fontFamily: "monospace", fontSize: 10, color: line.startsWith("#") ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.65)", margin: "0 0 3px 0", overflowX: "auto" }}>{line || " "}</pre>
+            ))}
+          </div>
+          <div style={{ background: "rgba(255,107,107,0.03)", border: "1px solid rgba(255,107,107,0.1)", borderRadius: 4, padding: "12px 14px" }}>
+            <div style={{ color: "rgba(255,107,107,0.7)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", marginBottom: 8 }}>Windows (PowerShell)</div>
+            {[
+              "# Remove CySIEM Agent only",
+              ".\\agent-installer.ps1 -Action uninstall-cysiem",
+              "",
+              "# Remove CyEDR Agent only",
+              ".\\agent-installer.ps1 -Action uninstall-cyedr",
+              "",
+              "# Remove all CyCentra agents",
+              ".\\agent-installer.ps1 -Action uninstall",
+            ].map((line, i) => (
+              <pre key={i} style={{ background: line.startsWith("#") ? "transparent" : "rgba(0,0,0,0.3)", borderRadius: line.startsWith("#") ? 0 : 3, padding: line.startsWith("#") ? "2px 0" : "5px 10px", fontFamily: "monospace", fontSize: 10, color: line.startsWith("#") ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.65)", margin: "0 0 3px 0", overflowX: "auto" }}>{line || " "}</pre>
+            ))}
+          </div>
         </div>
       </div>
 

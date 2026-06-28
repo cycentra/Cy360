@@ -721,22 +721,52 @@ class ResponseExecutor:
         return "No rollback action available for current configuration"
 
     # ── RUN_SCAN ──
-    def _run_scan(self, params: dict) -> str:
-        path = params.get("scan_path", "/")
+    def _run_scan(self, params: dict) -> dict:
+        path       = params.get("scan_path", "/")
         yara_bin   = self._cfg.yara_binary
         yara_rules = self._cfg.yara_rules
 
-        if not os.path.exists(yara_rules):
-            return "YARA rules not found — scan skipped"
         if not shutil.which(yara_bin) and not os.path.exists(yara_bin):
-            return "YARA binary not found — scan skipped"
+            return {"output": "YARA binary not found — scan skipped", "matches": [], "source": "bundled"}
 
-        result = subprocess.run(
-            [yara_bin, "-r", yara_rules, path],
-            capture_output=True, text=True, timeout=300
-        )
-        matches = result.stdout.strip()
-        return f"YARA scan complete. Matches:\n{matches}" if matches else "YARA scan: no matches"
+        # Collect rule files: bundled cycentra.yar + custom.yar (if present)
+        rule_files = []
+        if yara_rules and os.path.exists(yara_rules):
+            rule_files.append(("bundled", yara_rules))
+        custom_yar = os.path.join(self._cfg.edr_home, "custom.yar")
+        if os.path.exists(custom_yar) and os.path.getsize(custom_yar) > 0:
+            rule_files.append(("custom_yara", custom_yar))
+
+        if not rule_files:
+            return {"output": "No YARA rules available — scan skipped", "matches": [], "source": "none"}
+
+        all_matches = []
+        source_tag  = "bundled"
+        for source, rules_path in rule_files:
+            try:
+                result = subprocess.run(
+                    [yara_bin, "-r", rules_path, path],
+                    capture_output=True, text=True, timeout=300,
+                )
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split(None, 1)
+                    all_matches.append({
+                        "rule":   parts[0],
+                        "path":   parts[1] if len(parts) > 1 else "unknown",
+                        "source": source,
+                    })
+                    if source == "custom_yara":
+                        source_tag = "custom_yara"
+            except subprocess.TimeoutExpired:
+                logger.warning("YARA scan timed out for %s with %s", path, rules_path)
+            except Exception as exc:
+                logger.warning("YARA scan error (%s): %s", source, exc)
+
+        summary = f"YARA scan complete. {len(all_matches)} match(es) in {path}."
+        return {"output": summary, "matches": all_matches, "source": source_tag}
 
     # ── COLLECT_FORENSICS ──
     def _collect_forensics(self, params: dict) -> str:
@@ -852,17 +882,39 @@ class Heartbeat(threading.Thread):
 
 # ── IOC refresh loop ───────────────────────────────────────────────────────────
 class IOCRefresher(threading.Thread):
-    INTERVAL = 3600  # refresh IOC cache every hour
+    INTERVAL = 3600  # refresh IOC cache + custom YARA rules every hour
 
-    def __init__(self, ioc: IOCCache, http: requests.Session, platform_url: str):
+    def __init__(self, ioc: IOCCache, http: requests.Session, platform_url: str,
+                 edr_home: str, agent_id: str):
         super().__init__(daemon=True, name="IOCRefresher")
-        self._ioc = ioc
-        self._http = http
-        self._url  = platform_url
+        self._ioc      = ioc
+        self._http     = http
+        self._url      = platform_url
+        self._edr_home = edr_home
+        self._agent_id = agent_id
+
+    def _refresh_custom_yara(self):
+        """Fetch active custom YARA rules from the platform and write to custom.yar."""
+        try:
+            resp = self._http.get(
+                f"{self._url}/api/edr/installer/custom-yara",
+                timeout=30,
+            )
+            if resp.ok:
+                out_path = os.path.join(self._edr_home, "custom.yar")
+                os.makedirs(self._edr_home, exist_ok=True)
+                with open(out_path, "w") as f:
+                    f.write(resp.text)
+                logger.debug("Custom YARA rules refreshed (%d bytes)", len(resp.text))
+            else:
+                logger.debug("Custom YARA fetch returned %s", resp.status_code)
+        except Exception as exc:
+            logger.warning("Custom YARA refresh failed: %s", exc)
 
     def run(self):
         while not _STOP_EVENT.is_set():
             self._ioc.refresh(self._http, self._url)
+            self._refresh_custom_yara()
             _STOP_EVENT.wait(self.INTERVAL)
 
 
@@ -952,7 +1004,7 @@ def main():
         TelemetrySender(ev_queue, http, cfg),
         CommandPoller(http, cfg, executor),
         Heartbeat(http, cfg),
-        IOCRefresher(ioc, http, cfg.platform_url),
+        IOCRefresher(ioc, http, cfg.platform_url, cfg.edr_home, cfg.agent_id),
     ]
 
     for t in threads:
