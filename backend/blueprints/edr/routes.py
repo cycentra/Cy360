@@ -1390,8 +1390,7 @@ def installer_cysiem_msi():
 @edr_bp.route("/installer/unix", methods=["GET"])
 def installer_unix_script():
     """Serve the CyEDR Unix installer shell script (no auth — public endpoint)."""
-    fpath = os.path.join(os.path.dirname(__file__), "../../../../scripts/cyedr-install.sh")
-    fpath = os.path.realpath(fpath)
+    fpath = os.path.join(_EDR_PKG_DIR, "cyedr-install.sh")
     if not os.path.exists(fpath):
         return jsonify({"error": "Unix installer not found on platform"}), 404
     return send_file(fpath, mimetype="text/x-shellscript")
@@ -1400,8 +1399,7 @@ def installer_unix_script():
 @edr_bp.route("/installer/win", methods=["GET"])
 def installer_win_script():
     """Serve the CyEDR Windows PowerShell installer (no auth — public endpoint)."""
-    fpath = os.path.join(os.path.dirname(__file__), "../../../../scripts/cyedr-install.ps1")
-    fpath = os.path.realpath(fpath)
+    fpath = os.path.join(_EDR_PKG_DIR, "cyedr-install.ps1")
     if not os.path.exists(fpath):
         return jsonify({"error": "Windows installer not found on platform"}), 404
     return send_file(fpath, mimetype="text/plain")
