@@ -9,7 +9,7 @@
 React 19 + Vite single-page application. 55+ pages/components across all platform modules. No TypeScript (plain JSX). Deployed as Docker container with Express static server.
 
 **Key Files:**
-- `App.jsx` (471 lines — EXCEEDS 120-line limit ⚠️)
+- `App.jsx` (101 lines ✅ — was 471 lines; decomposed 2026-06-29)
 - `core/constants.js` — `API_BASE`, `CYSCAN_URL`, `BASE_API_URL`
 - `core/adapter.js` — `adaptCyCentraJSON()`
 - `core/auth.js` — Auth state management
@@ -29,7 +29,7 @@ Dashboard, SIEM Feed, SIEM Incidents, UEBA, Threat Hunting, ASM Scan, Scan Histo
 
 | # | Test | Result | Detail |
 |---|------|--------|--------|
-| A1.01 | `App.jsx` ≤ 120 lines | ❌ FAIL | Actual: 471 lines — BLOCKING |
+| A1.01 | `App.jsx` ≤ 120 lines | ✅ PASS | Actual: 101 lines (fixed 2026-06-29; 4 components extracted) |
 | A1.02 | `BASE_API_URL` or `API_BASE` exported in constants.js | ✅ PASS | `API_BASE = ""` (same-origin) |
 | A1.03 | `CYSCAN_URL` exported | ✅ PASS | `https://cyasm.${_BASE_DOMAIN}` |
 | A1.04 | `adaptCyCentraJSON` exported from adapter.js | ✅ PASS | Line 130 |
@@ -40,7 +40,7 @@ Dashboard, SIEM Feed, SIEM Incidents, UEBA, Threat Hunting, ASM Scan, Scan Histo
 | A1.09 | No circular imports | MANUAL | Build required |
 | A1.10 | dist/index.html exists | MANUAL | Build required |
 
-**BLOCKING FAILURE: `App.jsx` is 471 lines, limit is 120. This constitutes a Suite 01 (1.12) and Suite 08 (8.06) blocking failure. Remediation: decompose `App.jsx` into sub-components.**
+**RESOLVED 2026-06-29:** `App.jsx` reduced from 471 → 101 lines. Four components extracted: `PageErrorBoundary.jsx`, `ScanHistoryDropdown.jsx`, `AppTopBar.jsx`, `AppRouter.jsx`. Suite 01 (1.12) and Suite 08 (8.06) now pass.
 
 ---
 

@@ -245,14 +245,27 @@ function SummaryCharts({ hosts, posture, riskScores }) {
 // ── HOST POSTURE TABLE (tab 1) ─────────────────────────────────────────────────
 function HostsTab({ hosts, loading, error, posture, onRefresh, refreshing, seeding,
                     statusFilter, setStatusFilter, sortBy, setSortBy,
-                    search, setSearch, page, setPage, total, onSelectHost }) {
+                    search, setSearch, page, setPage, total, onSelectHost, onRemoveHost }) {
   const PER_PAGE = 50;
+  const [removing, setRemoving] = useState(null);
   const filtered = search
     ? hosts.filter(h =>
         (h.agent_name || "").toLowerCase().includes(search.toLowerCase()) ||
         (h.agent_ip || "").includes(search)
       )
     : hosts;
+
+  const handleRemove = async (e, host) => {
+    e.stopPropagation();
+    const isActive = host.wazuh_status === "active";
+    const msg = isActive
+      ? `FORCE REMOVE active agent "${host.agent_name || host.agent_id}"?\n\nThis will:\n• Immediately disconnect the agent\n• Delete it from Wazuh permanently\n• Purge its posture data\n\nUse this only for rogue or decommissioned endpoints. Cannot be undone.`
+      : `Remove "${host.agent_name || host.agent_id}" from Wazuh and posture cache?\n\nThis cannot be undone.`;
+    if (!window.confirm(msg)) return;
+    setRemoving(host.agent_id);
+    await onRemoveHost(host.agent_id);
+    setRemoving(null);
+  };
 
   return (
     <div>
@@ -306,7 +319,7 @@ function HostsTab({ hosts, loading, error, posture, onRefresh, refreshing, seedi
       }}>
         <div style={{
           display: "grid",
-          gridTemplateColumns: "28px 1fr 90px 56px 76px 60px 76px 96px",
+          gridTemplateColumns: "28px 1fr 90px 56px 76px 60px 76px 96px 32px",
           gap: 8, padding: "8px 14px",
           background: "rgba(255,255,255,0.03)",
           borderBottom: "1px solid rgba(255,255,255,0.06)",
@@ -314,7 +327,7 @@ function HostsTab({ hosts, loading, error, posture, onRefresh, refreshing, seedi
         }}>
           <div />
           <div>HOST</div><div>POSTURE</div><div>GRADE</div>
-          <div>RISK</div><div>VULNS</div><div>INCIDENTS</div><div>LAST SEEN</div>
+          <div>RISK</div><div>VULNS</div><div>INCIDENTS</div><div>LAST SEEN</div><div />
         </div>
 
         {loading ? (
@@ -339,14 +352,16 @@ function HostsTab({ hosts, loading, error, posture, onRefresh, refreshing, seedi
               ? new Date(host.last_keepalive).toLocaleString("en-US",
                   { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
               : "—";
+            const isRemoving = removing === host.agent_id;
             return (
-              <div key={host.agent_id} onClick={() => onSelectHost(host.agent_id)}
+              <div key={host.agent_id} onClick={() => !isRemoving && onSelectHost(host.agent_id)}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "28px 1fr 90px 56px 76px 60px 76px 96px",
-                  gap: 8, padding: "10px 14px", cursor: "pointer",
+                  gridTemplateColumns: "28px 1fr 90px 56px 76px 60px 76px 96px 32px",
+                  gap: 8, padding: "10px 14px", cursor: isRemoving ? "default" : "pointer",
                   borderBottom: "1px solid rgba(255,255,255,0.04)",
                   alignItems: "center", transition: "background 0.15s",
+                  opacity: isRemoving ? 0.4 : 1,
                 }}
                 onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.03)"}
                 onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
@@ -392,6 +407,29 @@ function HostsTab({ hosts, loading, error, posture, onRefresh, refreshing, seedi
                   {host.incident_count > 0 ? `${host.incident_count}` : "—"}
                 </div>
                 <div style={{ fontSize: 10, color: "#555" }}>{lastSeen}</div>
+                <div style={{ display: "flex", justifyContent: "center" }}>
+                  {host.agent_id !== "000" && (
+                    <button
+                      onClick={e => handleRemove(e, host)}
+                      disabled={isRemoving}
+                      title={host.wazuh_status === "active"
+                        ? "Force remove active agent (rogue / decommissioned)"
+                        : "Remove disconnected host from Wazuh and posture cache"}
+                      style={{
+                        background: "transparent",
+                        border: host.wazuh_status === "active"
+                          ? "1px solid rgba(255,140,0,0.35)"
+                          : "1px solid rgba(255,59,59,0.3)",
+                        borderRadius: 3,
+                        color: host.wazuh_status === "active" ? "#ff8c00" : "#ff3b3b",
+                        fontSize: 11, lineHeight: 1,
+                        padding: "2px 5px", cursor: "pointer", opacity: isRemoving ? 0.4 : 0.5,
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.opacity = "1"}
+                      onMouseLeave={e => e.currentTarget.style.opacity = "0.5"}
+                    >✕</button>
+                  )}
+                </div>
               </div>
             );
           })
@@ -655,6 +693,14 @@ export function HostIntelligencePage() {
     setRefreshing(false);
   };
 
+  const handleRemoveHost = async (agentId) => {
+    try {
+      await fetch(`${API}/hosts/${agentId}`, { method: "DELETE", credentials: "include" });
+      setHosts(prev => prev.filter(h => h.agent_id !== agentId));
+      setTotal(prev => Math.max(0, prev - 1));
+    } catch {}
+  };
+
   return (
     <div style={{ color: "#e8eaed", fontFamily: "monospace" }}>
         {/* Header */}
@@ -684,7 +730,7 @@ export function HostIntelligencePage() {
             { id: "hosts",    label: "🖥  Hosts & Posture" },
             { id: "risk",     label: "⚡  Entity Risk Scores" },
             { id: "groups",   label: "⬡  Agent Groups" },
-            { id: "policies", label: "🔒  Endpoint Policies" },
+            { id: "policies", label: "⚡  Response Playbooks" },
           ].map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               style={{
@@ -711,6 +757,7 @@ export function HostIntelligencePage() {
             search={search} setSearch={setSearch}
             page={page} setPage={setPage} total={total}
             onSelectHost={setSelected}
+            onRemoveHost={handleRemoveHost}
           />
         )}
         {tab === "risk" && (

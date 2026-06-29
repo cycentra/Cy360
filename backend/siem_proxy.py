@@ -1508,6 +1508,45 @@ def _refresh_host_cache_sync():
                 _deduped[_aid] = _info
     all_agents = _deduped
 
+    # ── IP-based dedup: same physical machine re-enrolled under a new hostname ──
+    # Wazuh creates a new agent_id when the OS hostname changes (e.g. mac.home →
+    # Deepaks-MacBook-Air.local on a different network). Detect groups that share
+    # an IP address and keep only the one with the most recent lastKeepAlive;
+    # delete the stale entry from Wazuh so it doesn't re-appear on the next sync.
+    _ip_groups: dict[str, list] = {}
+    for _aid, _info in all_agents.items():
+        _ip = (_info.get("ip") or "").strip()
+        if not _ip or _ip in ("127.0.0.1", "any", ""):
+            continue
+        _ip_groups.setdefault(_ip, []).append(_aid)
+
+    for _ip, _aids in _ip_groups.items():
+        if len(_aids) < 2:
+            continue
+        # Sort by lastKeepAlive descending — most recent first
+        def _ka(aid):
+            raw = all_agents[aid].get("last_keepalive") or ""
+            return raw if raw else ""
+        _aids_sorted = sorted(_aids, key=_ka, reverse=True)
+        _winner = _aids_sorted[0]
+        for _stale in _aids_sorted[1:]:
+            _logger.info(
+                "[host-refresh] IP dedup: removing stale agent %s (%s) superseded by %s (%s) on IP %s",
+                _stale, all_agents[_stale].get("name"), _winner, all_agents[_winner].get("name"), _ip,
+            )
+            del all_agents[_stale]
+            # Remove from Wazuh so it doesn't re-register automatically
+            if token and _stale in wazuh_agents and _stale != "000":
+                try:
+                    _req.delete(
+                        f"{WAZUH_API_URL}/agents",
+                        headers={"Authorization": f"Bearer {token}"},
+                        params={"agents_list": _stale, "status": "all", "older_than": "0s"},
+                        timeout=10, verify=False,
+                    )
+                except Exception as _exc:
+                    _logger.warning("[host-refresh] could not delete stale agent %s from Wazuh: %s", _stale, _exc)
+
     if not all_agents:
         _logger.warning("[host-refresh] no agents found (wazuh=%d, db=%d)",
                         len(wazuh_agents), len(db_agents))
@@ -1821,6 +1860,50 @@ def siem_hosts_refresh():
                         "message": "Host posture refresh and threat hunts running in background"})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+
+@siem_bp.route("/hosts/<agent_id>", methods=["OPTIONS"])
+def siem_host_options(agent_id):
+    from core.helpers import add_cors_headers
+    return add_cors_headers(make_response('', 204))
+
+
+@siem_bp.route("/hosts/<agent_id>", methods=["DELETE"])
+@require_siem_admin
+def siem_host_delete(agent_id):
+    """
+    Remove a Wazuh agent from the manager and purge it from host_posture_cache.
+    Refuses to delete agent 000 (the manager itself).
+    Admin-only — this is a permanent destructive operation.
+    """
+    if agent_id == "000":
+        return jsonify({"error": "Cannot delete the Wazuh manager node"}), 400
+
+    token = _wazuh_auth_token()
+    errors = []
+
+    # Delete from Wazuh
+    if token:
+        r = _wz(token, "DELETE", "/agents",
+                 params={"agents_list": agent_id, "status": "all", "older_than": "0s"})
+        if r is None or r.status_code not in (200, 404):
+            errors.append(f"Wazuh delete returned {r.status_code if r else 'no response'}")
+    else:
+        errors.append("Wazuh auth unavailable — agent not removed from Wazuh")
+
+    # Always purge from posture cache regardless of Wazuh result
+    try:
+        conn = _corr_conn()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM host_posture_cache WHERE agent_id = %s", [agent_id])
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        errors.append(f"Cache purge failed: {exc}")
+
+    if errors:
+        return jsonify({"status": "partial", "errors": errors, "agent_id": agent_id}), 207
+    return jsonify({"status": "deleted", "agent_id": agent_id})
 
 
 @siem_bp.route("/hosts/<agent_id>", methods=["GET"])

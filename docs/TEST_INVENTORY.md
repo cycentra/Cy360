@@ -24,7 +24,7 @@
 | 12 | AI Investigation Engine | 6-phase engine | 132 | YES |
 | 13 | Wazuh Kernel + VirusTotal | Config + TI integration | 110 | YES |
 
-**Total tracked test items: 1381+** (981+ pytest + 400 suite checks)
+**Total tracked test items: 1400+** (1000+ pytest + 400 suite checks) | All blocking failures resolved 2026-06-29
 
 ### Module Test Documents (Phase 1 — Feature Mapping)
 
@@ -90,15 +90,15 @@ File: `tests/01-smoke-validation.sh` | Always runs on every trigger.
 
 File: `tests/02-unit-tests.sh` | Runs on any Python change.
 
-### 02-A: Correlation Rules — `tests/unit/test_correlation_rules.py` (438 tests)
+### 02-A: Correlation Rules — `tests/unit/test_correlation_rules.py` (446 tests)
 
 #### Registry Integrity (8 tests)
 | # | Test Item | Pass Criteria |
 |---|-----------|--------------|
-| 2.01 | Rule count | `len(ALL_RULES) >= 55` |
+| 2.01 | Rule count | `len(ALL_RULES) == 56` |
 | 2.02 | All IDs start with CR- | No rule_id without `CR-` prefix |
 | 2.03 | Unique IDs | No duplicates in ALL_RULES |
-| 2.04 | Sequential IDs | IDs are CR-001 through CR-055 with no gaps |
+| 2.04 | Sequential IDs | IDs are CR-001 through CR-056 with no gaps |
 | 2.05 | Valid severity values | All severities in {low, medium, high, critical} |
 | 2.06 | Non-empty tactics | No rule has empty tactics list |
 | 2.07 | Name and description present | Every rule has non-empty name and description |
@@ -295,9 +295,9 @@ File: `tests/06-correlation-accuracy.sh` + `tests/unit/test_correlation_rules.py
 
 | # | Test Item | Pass Criteria |
 |---|-----------|--------------|
-| 6.01 | ALL_RULES count | Exactly 55 entries |
+| 6.01 | ALL_RULES count | Exactly 56 entries |
 | 6.02 | All IDs unique | No duplicates |
-| 6.03 | All IDs sequential | CR-001 through CR-055, no gaps |
+| 6.03 | All IDs sequential | CR-001 through CR-056, no gaps |
 | 6.04 | All IDs start with CR- | No exceptions |
 | 6.05 | Empty list safety | `match([])` → None for all 55 rules |
 | 6.06 | Null-field safety | `match([null_alert])` → None or valid dict, never raises |
@@ -402,4 +402,4 @@ These behaviors are surprising but correct — tests encode them explicitly to p
 
 ---
 
-*Last updated: 2026-06-19 | Test count: 677+ (576 pytest + 101 suite checks)*
+*Last updated: 2026-06-29 | Test count: 1400+ (1000+ pytest + 400 suite checks) | Manual test guide: `tests/MANUAL_TEST_GUIDE.md`*
