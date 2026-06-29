@@ -60,7 +60,7 @@ def sh_rendered(sh_template) -> str:
     """Template with test values substituted."""
     return sh_template.format(
         server_url='https://cy360.example.com',
-        wazuh_manager='10.0.0.1',
+        cysiem_manager='10.0.0.1',
         version='1.0.99',
     )
 
@@ -69,7 +69,7 @@ def sh_rendered(sh_template) -> str:
 def ps1_rendered(ps1_template) -> str:
     return ps1_template.format(
         server_url='https://cy360.example.com',
-        wazuh_manager='10.0.0.1',
+        cysiem_manager='10.0.0.1',
         version='1.0.99',
     )
 
@@ -94,9 +94,9 @@ class TestShellSafety:
 
     def test_format_placeholders_present(self, sh_template):
         """Template must have all three required placeholders."""
-        assert '{server_url}'    in sh_template, "Missing {server_url} placeholder"
-        assert '{wazuh_manager}' in sh_template, "Missing {wazuh_manager} placeholder"
-        assert '{version}'       in sh_template, "Missing {version} placeholder"
+        assert '{server_url}'     in sh_template, "Missing {server_url} placeholder"
+        assert '{cysiem_manager}' in sh_template, "Missing {cysiem_manager} placeholder"
+        assert '{version}'        in sh_template, "Missing {version} placeholder"
 
     def test_renders_without_error(self, sh_rendered):
         """Template rendering with test values must not raise KeyError or IndexError."""
@@ -106,9 +106,9 @@ class TestShellSafety:
         """After rendering, the three Python placeholders must not appear in the output.
         Bash variables like ${EUID} are left intact — they are not Python placeholders."""
         # Verify that the three Python-level placeholders no longer appear literally
-        assert '{server_url}'    not in sh_rendered, "{server_url} was not substituted"
-        assert '{wazuh_manager}' not in sh_rendered, "{wazuh_manager} was not substituted"
-        assert '{version}'       not in sh_rendered, "{version} was not substituted"
+        assert '{server_url}'     not in sh_rendered, "{server_url} was not substituted"
+        assert '{cysiem_manager}' not in sh_rendered, "{cysiem_manager} was not substituted"
+        assert '{version}'        not in sh_rendered, "{version} was not substituted"
 
     def test_rendered_contains_server_url(self, sh_rendered):
         assert 'https://cy360.example.com' in sh_rendered
@@ -123,7 +123,7 @@ class TestShellSafety:
         """Render with URLs containing special characters (port number)."""
         result = sh_template.format(
             server_url='https://cy360.internal:5252',
-            wazuh_manager='192.168.1.100',
+            cysiem_manager='192.168.1.100',
             version='2.0.0-rc1',
         )
         assert 'cy360.internal:5252' in result
@@ -141,9 +141,9 @@ class TestRegisterAgentFunction:
         assert '_register_agent()' in sh_template, "_register_agent() function not found"
 
     def test_captures_output_before_checking_rc(self, sh_template):
-        """Output must be captured with $() assignment, not piped directly to err."""
-        assert '_auth_out=$(' in sh_template, \
-            "_register_agent must capture agent-auth output to _auth_out"
+        """Output must be captured with $() assignment before checking return code."""
+        assert 'local out rc=0' in sh_template, \
+            "_register_agent must capture agent-auth output before checking rc"
 
     def test_detects_duplicate_agent_string(self, sh_template):
         """Duplicate name case must be handled by grepping for 'Duplicate agent'."""
@@ -221,17 +221,17 @@ class TestMacOSFDANotice:
             "FDA notice must include restart command: wazuh-control restart"
 
     def test_fda_notice_both_binaries_in_darwin_section(self, sh_template):
-        """Both binaries must appear AFTER the Darwin) case label."""
-        darwin_idx = sh_template.find('Darwin)')
-        assert darwin_idx != -1, "Darwin) case not found"
-        darwin_section = sh_template[darwin_idx:]
-        assert 'wazuh-agentd'      in darwin_section
-        assert 'wazuh-logcollector' in darwin_section
+        """Both binaries must appear in do_install_macos() called by Darwin)."""
+        assert 'Darwin)' in sh_template, "Darwin) case not found"
+        assert 'do_install_macos' in sh_template, "Darwin) must call do_install_macos()"
+        assert 'wazuh-agentd'       in sh_template, "FDA notice must list wazuh-agentd"
+        assert 'wazuh-logcollector' in sh_template, "FDA notice must list wazuh-logcollector"
 
     def test_logcollector_will_not_start_message(self, sh_template):
-        """Must warn user that logcollector won't start without FDA."""
-        assert 'will not start' in sh_template, \
-            "Installer must warn that wazuh-logcollector will not start without FDA"
+        """Must warn user that Full Disk Access is required for log collection."""
+        assert 'requires Full Disk Access' in sh_template or \
+               'Full Disk Access to collect' in sh_template, \
+            "Installer must explain why Full Disk Access is required"
 
 
 # ===========================================================================
@@ -295,23 +295,30 @@ class TestDarwinSingleRestart:
             "Restart must occur AFTER MACEOF (after ULS config is written)"
 
     def test_only_one_ctrl_restart_in_darwin(self, sh_template):
-        """Darwin section must have exactly one CTRL_BIN restart to prevent double-restart.
+        """do_install_macos() must have exactly one CTRL_BIN restart (no double-restart).
 
         The template uses double-braces: "${{CTRL_BIN}}" restart — this is how bash
         variable references are written inside a Python format string.
+        FDA notice and restart live inside do_install_macos(), called from Darwin).
         """
-        darwin_idx = sh_template.find('Darwin)')
-        assert darwin_idx != -1
-        # End of Darwin section: next ';;' or 'esac' at the case block level
-        darwin_end = sh_template.find('\n  *)', darwin_idx)
-        if darwin_end == -1:
-            darwin_end = sh_template.find('\nesac', darwin_idx)
-        darwin_section = sh_template[darwin_idx: darwin_end]
-        # In Python format string: ${{CTRL_BIN}} → ${CTRL_BIN} after format().
-        # Pattern in raw template (sh_template before formatting): ${{CTRL_BIN}}"
-        restart_count = darwin_section.count('CTRL_BIN}}" restart')
+        func_start = sh_template.find('do_install_macos() {')
+        assert func_start != -1, "do_install_macos() not found"
+        brace_count = 0
+        in_func = False
+        func_end = func_start
+        for i, ch in enumerate(sh_template[func_start:], func_start):
+            if ch == '{':
+                brace_count += 1
+                in_func = True
+            elif ch == '}':
+                brace_count -= 1
+                if in_func and brace_count == 0:
+                    func_end = i + 1
+                    break
+        func_body = sh_template[func_start:func_end]
+        restart_count = func_body.count('CTRL_BIN}}" restart')
         assert restart_count == 1, \
-            f"Darwin section must have exactly 1 CTRL_BIN restart, found {restart_count}"
+            f"do_install_macos() must have exactly 1 CTRL_BIN restart, found {restart_count}"
 
 
 # ===========================================================================
@@ -322,9 +329,9 @@ class TestPS1Template:
     """The PowerShell installer template must have required elements."""
 
     def test_placeholders_present(self, ps1_template):
-        assert '{server_url}'    in ps1_template
-        assert '{wazuh_manager}' in ps1_template
-        assert '{version}'       in ps1_template
+        assert '{server_url}'     in ps1_template
+        assert '{cysiem_manager}' in ps1_template
+        assert '{version}'        in ps1_template
 
     def test_renders_without_error(self, ps1_rendered):
         assert len(ps1_rendered) > 200

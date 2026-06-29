@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Suite 11 — Resource Monitor End-to-End Tests
 

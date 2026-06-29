@@ -10,18 +10,55 @@
 
 | Suite | Name | Type | Items | Blocking |
 |-------|------|------|-------|----------|
-| 01 | Smoke & Validation | Static analysis | 8 | YES |
-| 02 | Unit Tests | pytest (576) + structural | 600+ | YES |
+| 01 | Smoke & Validation | Static analysis | 15 | YES |
+| 02 | Unit Tests | pytest (885+) + structural | 981+ | YES |
 | 03 | API Contract | HTTP assertions | 9 | YES |
-| 04 | OWASP Security | Security scan | 9 | YES (A01/A03/A07) |
+| 04 | OWASP Security | Security scan | 18 | YES (A01/A03/A07) |
 | 05 | Load & Performance | Concurrency | 5 | WARNING only |
-| 06 | Correlation Accuracy | Rule logic | 12 | YES |
-| 07 | ASM Module Tests | Module contract | 7 | YES |
+| 06 | Correlation Accuracy | Rule logic | 17 | YES |
+| 07 | ASM Module Tests | Module contract | 8 | YES |
 | 08 | Frontend Build | Build pipeline | 10 | YES |
-| 09 | Infrastructure | Shell/CI/release | 8 | YES |
-| 10 | End-to-End Integration | Auth lifecycle | 9 | YES |
+| 09 | Infrastructure | Shell/CI/release | 9 | YES |
+| 10 | End-to-End Integration | Auth lifecycle | 10 | YES |
+| 11 | Resource Monitor E2E | Script/Decoder/Rule/CR-056 | 58 | YES |
+| 12 | AI Investigation Engine | 6-phase engine | 132 | YES |
+| 13 | Wazuh Kernel + VirusTotal | Config + TI integration | 110 | YES |
 
-**Total tracked test items: 677+** (576 pytest + 101 suite checks)
+**Total tracked test items: 1381+** (981+ pytest + 400 suite checks)
+
+### Module Test Documents (Phase 1 — Feature Mapping)
+
+Per-module documents covering scope, AI-executable test results, and manual test suites live in `tests/modules/`:
+
+| Doc | Module | AI Tests | Manual Tests |
+|-----|--------|----------|--------------|
+| M01-Auth.md | Authentication (OAuth) | 10 | 5 |
+| M02-OIDC.md | OIDC Identity Provider | 12 | 6 |
+| M03-RBAC.md | Role-Based Access Control | 10 | 3 |
+| M04-ASM.md | Attack Surface Management | 10 | 6 |
+| M05-SIEM-Correlation.md | CySIEM Correlation (56 rules) | 20 | 6 |
+| M06-UEBA.md | UEBA (17+3 detectors) | 94 | 5 |
+| M07-GRC-Compliance.md | GRC / Compliance (6 frameworks) | 11 | 9 |
+| M08-Cases.md | Case Management (CyCases) | 7 | 8 |
+| M09-EDR.md | EDR / CyEDR | 7 | 6 |
+| M10-Platform.md | Platform Management | 6 | 4 |
+| M11-Marketplace.md | Marketplace | 5 | 4 |
+| M12-Integrations.md | Integration Health Monitor | 22 | 4 |
+| M13-Backup.md | Backup & Restore | 5 | 4 |
+| M14-Audit.md | Audit Trail | 6 | 5 |
+| M15-Scheduler.md | Background Scheduler | 6 | 4 |
+| M16-SSO.md | Single Sign-On | 13 | 6 |
+| M17-Benchmark.md | Security Benchmark | 5 | 4 |
+| M18-AgentInstaller.md | Agent Installer (Bash/PS1) | 49 | 5 |
+| M19-ResourceMonitor.md | Resource Monitor (CYSIEM) | 39 | 6 |
+| M20-Frontend-Portal.md | React Frontend (55+ pages) | 10 | 12 |
+| M21-Infrastructure.md | Setup Script & CI/CD | 8 | 6 |
+| M22-ThreatIntel.md | Threat Intelligence (MISP/VT/etc) | 31 | 5 |
+| M23-Investigation.md | AI Investigation Engine | 132 | 5 |
+| M24-WazuhKernelTelemetry.md | Wazuh Kernel Telemetry | 63 | 5 |
+| M25-LicenseValidator.md | License Validator | 6 | 4 |
+| M26-ThreatHunting.md | Threat Hunting | 5 | 5 |
+| M27-SMTP-Alerts.md | SMTP Alerting | 5 | 5 |
 
 ---
 

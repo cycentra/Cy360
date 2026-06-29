@@ -4884,9 +4884,9 @@ _uninstall_cysiem() {{
     systemctl disable cy360-agent 2>/dev/null || systemctl disable wazuh-agent 2>/dev/null || true
     if [[ "$OS" == Linux ]]; then
         command -v dpkg &>/dev/null && \
-            { dpkg --purge cy360-agent 2>/dev/null || dpkg --purge wazuh-agent 2>/dev/null || true; }
+            {{ dpkg --purge cy360-agent 2>/dev/null || dpkg --purge wazuh-agent 2>/dev/null || true; }}
         command -v rpm &>/dev/null && ! command -v dpkg &>/dev/null && \
-            { rpm -e cy360-agent 2>/dev/null || rpm -e wazuh-agent 2>/dev/null || true; }
+            {{ rpm -e cy360-agent 2>/dev/null || rpm -e wazuh-agent 2>/dev/null || true; }}
         rm -rf /var/ossec 2>/dev/null || true
         rm -f /etc/audit/rules.d/cy360-baseline.rules 2>/dev/null || true
         command -v augenrules &>/dev/null && augenrules --load 2>/dev/null || true
@@ -5009,7 +5009,7 @@ do_install_linux() {{
 AUDITEOF
 
     command -v augenrules &>/dev/null && augenrules --load 2>/dev/null || \
-        { command -v auditctl &>/dev/null && auditctl -R /etc/audit/rules.d/cy360-baseline.rules 2>/dev/null || true; }
+        {{ command -v auditctl &>/dev/null && auditctl -R /etc/audit/rules.d/cy360-baseline.rules 2>/dev/null || true; }}
     systemctl enable auditd 2>/dev/null || true
     systemctl restart auditd 2>/dev/null || true
 

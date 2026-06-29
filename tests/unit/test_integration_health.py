@@ -238,20 +238,20 @@ class TestCheckMisp:
 
     def test_skipped_when_get_misp_config_returns_none(self):
         import blueprints.integrations.health as h
-        with patch("blueprints.integrations.health.get_misp_config", return_value=None):
+        with patch("core.helpers.get_misp_config", return_value=None):
             result = h.check_misp()
         assert result["status"] == "skipped"
 
     def test_skipped_when_mode_is_disabled(self):
         import blueprints.integrations.health as h
-        with patch("blueprints.integrations.health.get_misp_config",
+        with patch("core.helpers.get_misp_config",
                    return_value={"mode": "disabled", "url": "https://misp.local", "apiKey": "k"}):
             result = h.check_misp()
         assert result["status"] == "skipped"
 
     def test_ok_when_version_endpoint_returns_200(self):
         import blueprints.integrations.health as h
-        with patch("blueprints.integrations.health.get_misp_config",
+        with patch("core.helpers.get_misp_config",
                    return_value={"mode": "cloud", "url": "https://misp.local", "apiKey": "k"}), \
              patch("requests.get", return_value=_http_ok(200)):
             result = h.check_misp()
@@ -260,7 +260,7 @@ class TestCheckMisp:
 
     def test_down_when_version_endpoint_returns_401(self):
         import blueprints.integrations.health as h
-        with patch("blueprints.integrations.health.get_misp_config",
+        with patch("core.helpers.get_misp_config",
                    return_value={"mode": "local", "url": "https://misp.local", "apiKey": "k"}), \
              patch("requests.get", return_value=_http_ok(401)):
             result = h.check_misp()
@@ -270,7 +270,7 @@ class TestCheckMisp:
     def test_down_when_connection_refused(self):
         import blueprints.integrations.health as h
         import requests as req_module
-        with patch("blueprints.integrations.health.get_misp_config",
+        with patch("core.helpers.get_misp_config",
                    return_value={"mode": "local", "url": "https://misp.local", "apiKey": "k"}), \
              patch("requests.get", side_effect=req_module.exceptions.ConnectionError("refused")):
             result = h.check_misp()
