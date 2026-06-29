@@ -342,12 +342,13 @@ def _opt_heartbeat(agent_id):
 @require_agent_token
 def agent_heartbeat(agent_id):
     """
-    Agent-facing: update last_seen and version.
-    Body: { version, agent_ip }
+    Agent-facing: update last_seen, version, and optionally ingest ARP neighbors.
+    Body: { version, agent_ip, arp_neighbors?: [{ip, mac}] }
     """
-    body    = request.get_json(force=True, silent=True) or {}
-    version = body.get("version", "")
-    ip      = body.get("agent_ip", "")
+    body      = request.get_json(force=True, silent=True) or {}
+    version   = body.get("version", "")
+    ip        = body.get("agent_ip", "")
+    neighbors = body.get("arp_neighbors", [])
     try:
         conn = _db()
         with conn.cursor() as cur:
@@ -364,6 +365,20 @@ def agent_heartbeat(agent_id):
         conn.close()
     except psycopg2.Error as exc:
         _log.error("heartbeat DB error: %s", exc)
+
+    # Feed ARP neighbors into ITAM network_assets (non-blocking, best-effort)
+    if neighbors:
+        try:
+            from blueprints.itam.routes import ingest_arp_neighbors
+            import threading
+            threading.Thread(
+                target=ingest_arp_neighbors,
+                args=(agent_id, neighbors),
+                daemon=True,
+            ).start()
+        except Exception as exc:
+            _log.debug("ITAM ARP ingest skipped: %s", exc)
+
     return jsonify({"status": "ok"})
 
 
@@ -401,6 +416,23 @@ def ingest_telemetry(agent_id):
                 continue
             # Stamp the source agent_id from the URL path (authoritative)
             envelope["endpoint_uuid"] = agent_id
+
+            # Shadow AI events are governance — route to ITAM, skip SIEM pipeline
+            if envelope.get("event_category") == "shadow_ai":
+                try:
+                    from blueprints.itam.routes import ingest_shadow_ai
+                    raw = envelope.get("raw") or {}
+                    ingest_shadow_ai(
+                        agent_id=agent_id,
+                        hostname=envelope.get("hostname", ""),
+                        ai_tool=raw.get("ai_tool", raw.get("process_name", "unknown")),
+                        process_name=raw.get("process_name", ""),
+                        severity="medium",
+                    )
+                except Exception as _e:
+                    _log.debug("shadow_ai ingest error: %s", _e)
+                continue  # do not store as edr_detection
+
             alert = normalise_telemetry(envelope)
             if alert is None:
                 continue

@@ -196,6 +196,8 @@ HEURISTIC_TRIGGERS = {
     # --- Credential triggers ---
     "credential_dump":         45,
     "password_spray":          25,
+    # --- Shadow AI / governance triggers (low score — informational, not threat) ---
+    "shadow_ai_process":       5,
 }
 
 # Regex patterns mapped to trigger names (evaluated against raw event text)
@@ -214,6 +216,104 @@ PATTERN_MAP = [
     (r"(?i)(cmd\.exe|powershell|wscript|cscript).*(chrome|firefox|winword|excel)\.exe", "script_from_browser"),
     (r"(?i)(sc\.exe.*(create|config)|PSEXESVC|PsExec.*\\\\)",            "new_service"),
 ]
+
+# Known local/desktop AI processes to detect as Shadow AI
+SHADOW_AI_PROCESSES = [
+    "ollama", "lm_studio", "lmstudio", "jan", "gpt4all",
+    "koboldcpp", "kobold_cpp", "text-generation-webui", "textgenwebui",
+    "llamafile", "llama.cpp", "llama-server", "llama-cpp",
+    "comfyui", "stable-diffusion-webui", "invokeai",
+    "whisper", "localai", "localai-server",
+    "open-webui", "msty", "chatbox",
+]
+
+# Regex to detect shadow AI process names in event text
+_SHADOW_AI_RE = r"(?i)(" + "|".join(SHADOW_AI_PROCESSES) + r")[\s\"'\\\/]"
+
+
+PATTERN_MAP.append((_SHADOW_AI_RE, "shadow_ai_process"))
+
+
+def _check_shadow_ai_processes(cfg: "Config", http: "requests.Session") -> None:
+    """
+    Scan running process list for known local AI tool executables.
+    Sends a shadow_ai telemetry event for each match found.
+    Runs once per heartbeat cycle (every 60s).
+    """
+    if not psutil:
+        return
+    found: set[str] = set()
+    try:
+        for proc in psutil.process_iter(["name", "exe", "cmdline"]):
+            try:
+                pname = (proc.info.get("name") or "").lower()
+                exe   = (proc.info.get("exe") or "").lower()
+                cmd   = " ".join(proc.info.get("cmdline") or []).lower()
+                for ai_proc in SHADOW_AI_PROCESSES:
+                    if ai_proc in pname or ai_proc in exe or ai_proc in cmd:
+                        found.add(ai_proc)
+                        break
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+    except Exception as e:
+        logger.debug("shadow_ai_check error: %s", e)
+        return
+
+    for tool in found:
+        try:
+            envelope = {
+                "timestamp":         datetime.utcnow().isoformat() + "Z",
+                "endpoint_uuid":     cfg.agent_id,
+                "os_type":           cfg.os_type,
+                "hostname":          cfg.hostname,
+                "event_uuid":        str(uuid.uuid4()),
+                "event_category":    "shadow_ai",
+                "confidence_score":  5,
+                "triggered_heuristics": ["shadow_ai_process"],
+                "asset_type":        cfg.asset_type,
+                "raw":               {"process_name": tool, "ai_tool": tool},
+            }
+            http.post(
+                f"{cfg.platform_url}/api/edr/telemetry",
+                json=envelope, timeout=10,
+            )
+            logger.info("Shadow AI detected: %s", tool)
+        except Exception as e:
+            logger.debug("shadow_ai telemetry error: %s", e)
+
+
+def _collect_arp_neighbors() -> list[dict]:
+    """
+    Collect local ARP table entries.
+    Returns list of {ip, mac} dicts for all reachable neighbors.
+    Cross-platform: uses `arp -a` output parsing.
+    """
+    import re as _re
+    neighbors: list[dict] = []
+    _SKIP = {"127.", "0.0.0.0", "255.", "224.", "<incomplete>", "ff:ff"}
+    try:
+        result = subprocess.run(
+            ["arp", "-a"], capture_output=True, text=True, timeout=10
+        )
+        # Parse: Windows: "hostname (1.2.3.4) at aa-bb-cc-dd-ee-ff"
+        #        Linux:   "1.2.3.4 ether aa:bb:cc:dd:ee:ff"
+        #        macOS:   "hostname (1.2.3.4) at aa:bb:cc:dd:ee:ff"
+        for line in result.stdout.splitlines():
+            ip_match  = _re.search(r"\((\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\)", line)
+            if not ip_match:
+                ip_match = _re.search(r"^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", line)
+            mac_match = _re.search(r"([0-9a-fA-F]{2}[:\-][0-9a-fA-F]{2}[:\-][0-9a-fA-F]{2}"
+                                   r"[:\-][0-9a-fA-F]{2}[:\-][0-9a-fA-F]{2}[:\-][0-9a-fA-F]{2})", line)
+            if not ip_match:
+                continue
+            ip  = ip_match.group(1)
+            mac = mac_match.group(1).upper() if mac_match else ""
+            if any(ip.startswith(s) for s in _SKIP) or any(s in mac for s in _SKIP):
+                continue
+            neighbors.append({"ip": ip, "mac": mac})
+    except Exception as e:
+        logger.debug("arp collection error: %s", e)
+    return neighbors
 
 
 def score_event(text: str, ioc: IOCCache, asset_type: str,
@@ -873,11 +973,20 @@ class Heartbeat(threading.Thread):
             payload["cpu_percent"]  = psutil.cpu_percent(interval=1)
             payload["mem_percent"]  = psutil.virtual_memory().percent
             payload["disk_percent"] = psutil.disk_usage("/").percent
+
+        # ARP neighbor discovery — feeds ITAM network_assets table
+        neighbors = _collect_arp_neighbors()
+        if neighbors:
+            payload["arp_neighbors"] = neighbors
+
         self._http.post(
             f"{self._cfg.platform_url}/api/edr/agents/{self._cfg.agent_id}/heartbeat",
             json=payload, timeout=10
         )
-        logger.debug("Heartbeat sent")
+        logger.debug("Heartbeat sent (neighbors=%d)", len(neighbors))
+
+        # Shadow AI process scan — sends telemetry for each detected AI tool
+        _check_shadow_ai_processes(self._cfg, self._http)
 
 
 # ── IOC refresh loop ───────────────────────────────────────────────────────────

@@ -385,6 +385,12 @@ def init_scheduler(app) -> None:
     except Exception as _comp_exc:
         log.warning("scheduler: compliance enrichment job registration failed: %s", _comp_exc)
 
+    try:
+        from cy_comp.services.itam_bridge import register_itam_scheduler
+        register_itam_scheduler(_scheduler)
+    except Exception as _itam_exc:
+        log.warning("scheduler: ITAM compliance sync job registration failed: %s", _itam_exc)
+
     # ── Integration health monitor (always on, interval from env/config) ───────
     try:
         from blueprints.integrations.health import run_all_checks as _health_check

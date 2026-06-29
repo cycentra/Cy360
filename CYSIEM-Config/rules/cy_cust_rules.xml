@@ -473,6 +473,47 @@
   </rule>
 
   <!-- ================================================================== -->
+  <!-- ================================================================== -->
+  <!-- SHADOW AI DETECTION — IDs 101040–101041                          -->
+  <!-- Applies to Wazuh-enrolled hosts WITHOUT CyEDR.                  -->
+  <!-- CyEDR hosts detect Shadow AI via process scan → telemetry API.  -->
+  <!-- These rules catch DNS/network-level AI tool usage from the       -->
+  <!-- Wazuh/Sysmon event stream (EventID 22 and EventID 3).           -->
+  <!-- Level 6: informational/governance — NOT active_response group.  -->
+  <!-- ================================================================== -->
+
+  <!-- SAI-001: DNS query to known AI API domain (Sysmon EventID 22)
+       Sysmon EventID 22 DnsQuery base SID: 61650 (Wazuh built-in).
+       Captures: api.openai.com, api.anthropic.com, gemini, mistral,
+       groq, together.ai, openrouter, perplexity, cohere.
+       Low level (6) — informational. Feeds ITAM Shadow AI monitor. -->
+  <rule id="101040" level="6">
+    <if_sid>61650</if_sid>
+    <field name="data.win.eventdata.queryName" type="pcre2">(?i)(api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com|api\.mistral\.ai|api\.groq\.com|api\.together\.xyz|openrouter\.ai|api\.perplexity\.ai|api\.cohere\.ai|api\.replicate\.com)</field>
+    <description>Shadow AI: DNS query to AI API service from $(agent.name) ($(data.win.eventdata.image)) — governance alert</description>
+    <group>shadow_ai,governance,</group>
+  </rule>
+
+  <!-- SAI-002: Outbound network connection to known AI API host (Sysmon EventID 3)
+       Sysmon EventID 3 NetworkConnect base SID: 61603 (Wazuh built-in).
+       Captures processes connecting to AI API endpoints over HTTPS (443). -->
+  <rule id="101041" level="6">
+    <if_sid>61603</if_sid>
+    <field name="data.win.eventdata.destinationHostname" type="pcre2">(?i)(api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com|api\.mistral\.ai|api\.groq\.com|api\.together\.xyz|openrouter\.ai|api\.perplexity\.ai|api\.cohere\.ai)</field>
+    <description>Shadow AI: outbound connection to AI API from $(agent.name) process $(data.win.eventdata.image) — governance alert</description>
+    <group>shadow_ai,governance,</group>
+  </rule>
+
+  <!-- SAI-003: Local AI service port open on internal host
+       Ollama (11434), LM Studio (1234), Jan.ai (3001), Text-gen-webui (7860).
+       Detected via agent port-open command output or Wazuh active checks. -->
+  <rule id="101042" level="7">
+    <if_sid>0</if_sid>
+    <match>:11434|:1234|:7860|port 11434|port 1234|port 7860|ollama serve|lm-studio.*server|text-generation-webui</match>
+    <description>Shadow AI: local LLM service detected on $(agent.name) — unauthorised AI server may be running</description>
+    <group>shadow_ai,governance,</group>
+  </rule>
+
   <!-- CyEDR AGENT ANTI-TAMPER — IDs 101030–101031                       -->
   <!-- Mirrors cy360_wazuh_tamper rules (101000, 101010) for CyEDR.      -->
   <!-- ================================================================== -->

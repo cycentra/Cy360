@@ -1,3 +1,99 @@
+## v1.0.106 -- 2026-06-29
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.106 -- 2026-06-29
+
+### New Feature: ITAM — IT Asset Management Module
+
+**Network Asset Inventory with EDR/SIEM Coverage Gap Analysis**
+
+CyCentra 360 now includes a full IT Asset Management module accessible under the new **ASSET MANAGEMENT** sidebar section. It surfaces every device on your network, shows which ones have CyEDR or CySIEM coverage, and highlights the gap — all in one place.
+
+#### Three Discovery Sources (additive, all active simultaneously)
+
+| Source | Trigger | Priority |
+|---|---|---|
+| **CMDB CSV Import** | Admin uploads CSV | Highest — overwrites all fields |
+| **ARP Neighbors** | CyEDR heartbeat (every 60s) | Auto — fills empty fields only |
+| **nmap Subnet Scan** | Admin on-demand | On-demand — fills empty fields |
+
+All three sources populate the same `network_assets` table. After every ingest, a cross-reference job links each asset to its CyEDR agent and CySIEM host entry by IP address.
+
+#### Asset Coverage Dashboard
+
+- KPI row: Total Assets · EDR Covered (%) · SIEM Covered · Uncovered · IoT Devices · Shadow AI
+- Coverage progress bar with color coding (green ≥80%, amber ≥50%, red <50%)
+- Asset type breakdown by category (workstations, servers, printers, cameras, IoT, etc.)
+- CMDB import + subnet scan trigger buttons (admin)
+- Tab filter: All / Uncovered / EDR Covered
+- Paginated asset table with search by IP, hostname, vendor
+
+#### IoT Device Registry
+
+Discovered devices without a CyEDR or CySIEM agent are automatically classified using:
+- **OUI vendor lookup** — 60+ MAC address prefixes mapped to vendor and category
+- **Port fingerprinting** — RTSP (cameras), IPP (printers), MQTT (smart devices), Modbus (industrial), BACnet (HVAC)
+- **Risk scoring** — composite 0–100 score based on telnet exposure, no-TLS management, industrial protocols, and default credentials
+- **Default credential probing** — optional, requires `ITAM_PROBE_CREDS=true`
+
+Risk tiers: LOW / MEDIUM / HIGH / CRITICAL. Clicking a device row expands its risk factors.
+
+#### Shadow AI Monitor
+
+Enterprises face a growing challenge from unauthorized AI tools installed by employees. CyCentra 360 now detects Shadow AI through three layers:
+
+- **L1 — CyEDR process scan**: 25 known local AI processes monitored on every heartbeat (ollama, lm_studio, jan, gpt4all, koboldcpp, comfyui, stable-diffusion-webui, localai, and more)
+- **L2 — Wazuh Sysmon DNS** (Windows): Rules 101040/101041 fire on DNS queries and network connections to AI API endpoints
+- **L3 — Local AI port detection**: Rule 101042 detects processes listening on Ollama (11434), LM Studio (1234), and WebUI (7860) ports
+
+Shadow AI events are **governance-only** — they do not create SIEM alerts or EDR detections. They are routed directly to the ITAM Shadow AI findings table.
+
+**Approved AI Whitelist**: Admins maintain an enterprise whitelist of sanctioned AI tools. Whitelisted tools do not generate findings. The list is refreshed to all CyEDR agents hourly.
+
+**Finding workflow**: Open → Approve / Escalate / Suppress / Reopen. All actions are logged.
+
+#### Compliance Auto-Feed
+
+The ITAM bridge (6-hour APScheduler job) automatically feeds coverage data to the GRC compliance module:
+- **NIST CSF** `ID.AM-1`, **ISO 27001** `A.8.1`, **DORA** `Art.8`, **NIS2** `Art.21` — asset inventory evidence
+- **EU AI Act** `Art.28`, **ISO 42001** — Shadow AI governance evidence
+- Auto-raises a `medium` compliance finding when EDR coverage drops below 50%
+
+#### Files changed
+
+- `backend/blueprints/itam/__init__.py` — New package
+- `backend/blueprints/itam/routes.py` — Full blueprint: 20 routes, `init_itam_tables()`, ingest helpers, cross-ref
+- `backend/blueprints/itam/network_discovery.py` — CMDB CSV parser, ARP parser, nmap runner
+- `backend/blueprints/itam/iot_classifier.py` — OUI table, port signatures, risk scoring, default cred probe
+- `backend/cy_comp/services/itam_bridge.py` — Compliance auto-feed + APScheduler registration
+- `backend/core/config.py` — Added `ITAM_SUBNET`, `ITAM_IOT_PORTS`, `ITAM_PROBE_CREDS`
+- `backend/app.py` — Registered `itam_bp`, `init_itam_tables`
+- `backend/blueprints/scheduler/routes.py` — Registered `itam_compliance_sync` job
+- `backend/blueprints/edr/routes.py` — Heartbeat extended: ARP ingest + Shadow AI intercept
+- `agent/cyedr_agent.py` — ARP collection + Shadow AI process scan added to heartbeat cycle
+- `CYSIEM-Config/rules/cy_cust_rules.xml` — Rules 101040, 101041, 101042 (Shadow AI)
+- `portal/src/pages/itam/index.jsx` — Asset Coverage Dashboard
+- `portal/src/pages/itam/IotRegistryPage.jsx` — IoT Device Registry
+- `portal/src/pages/itam/ShadowAiPage.jsx` — Shadow AI Monitor + Whitelist
+- `portal/src/sidebar/navConfig.jsx` — ASSET MANAGEMENT section (3 items)
+- `portal/src/components/AppRouter.jsx` — Routes for itam-coverage, itam-iot, itam-shadow-ai
+- `docs/ITAM_MODULE.md` — Full reference document
+
+#### New env vars (add to `/opt/cycentra/.env`)
+
+```bash
+ITAM_SUBNET=192.168.1.0/24       # required for nmap scan
+ITAM_IOT_PORTS=22,23,80,443,554,631,8080,8443,8883,9100,161,502,1883,4840,47808
+ITAM_PROBE_CREDS=false            # set true to enable default cred probing
+```
+
+---
+
 ## v1.0.105 -- 2026-06-29
 
 ### Improvements

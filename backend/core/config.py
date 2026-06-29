@@ -242,6 +242,17 @@ EDR_AUTO_ISOLATE_SCORE  = float(os.environ.get("EDR_AUTO_ISOLATE_SCORE", "90"))
 # gRPC collector listen address (for future native agent transport).
 EDR_GRPC_LISTEN         = os.environ.get("EDR_GRPC_LISTEN", "0.0.0.0:50051")
 
+# ── ITAM — IT Asset Management ────────────────────────────────────────────────
+# Internal subnet for nmap-based asset discovery (CIDR notation).
+# Leave empty to disable active scanning; discovery still works via ARP+CMDB.
+ITAM_SUBNET       = os.environ.get("ITAM_SUBNET", "")
+# Comma-separated ports for IoT-focused nmap scans.
+ITAM_IOT_PORTS    = os.environ.get("ITAM_IOT_PORTS",
+                                    "22,23,80,443,554,631,8080,8443,8883,9100,161,502,1883,4840,47808")
+# Set to "true" to enable HTTP default-credential probing on IoT discovery.
+# Disabled by default — only enable in authorized pen-test / assessment contexts.
+ITAM_PROBE_CREDS  = os.environ.get("ITAM_PROBE_CREDS", "false").lower() == "true"
+
 # ── Flask session cookie settings ─────────────────────────────────────────────
 COOKIE_SETTINGS = {
     "SESSION_COOKIE_SECURE":    True,

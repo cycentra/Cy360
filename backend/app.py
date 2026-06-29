@@ -1,6 +1,6 @@
 from flask import Flask
 
-from core.config  import SECRET_KEY, COOKIE_SETTINGS
+from core.config  import SECRET_KEY, COOKIE_SETTINGS, CYCENTRA_DB_URL
 from core.helpers import add_cors_headers
 
 from blueprints.auth.oauth          import auth_bp
@@ -19,6 +19,7 @@ from blueprints.comp.routes         import comp_bp
 from blueprints.cases.routes        import cases_bp
 from blueprints.integrations.routes import integrations_bp
 from blueprints.edr.routes          import edr_bp, init_edr
+from blueprints.itam.routes         import itam_bp, init_itam_tables
 from siem_proxy                     import siem_bp
 
 try: from tenant_manager import validate_tenant
@@ -32,9 +33,11 @@ def create_app() -> Flask:
 
     for bp in (auth_bp, oidc_bp, rbac_bp, platform_bp, asm_bp, siem_bp, system_bp,
                backup_bp, scheduler_bp, marketplace_bp, audit_bp, sso_bp, benchmark_bp,
-               comp_bp, cases_bp, integrations_bp, edr_bp):
+               comp_bp, cases_bp, integrations_bp, edr_bp, itam_bp):
         app.register_blueprint(bp)
     init_edr(app)
+    try: init_itam_tables(CYCENTRA_DB_URL)
+    except Exception as _e: pass
 
     try:
         from cy_comp.models import ensure_tables

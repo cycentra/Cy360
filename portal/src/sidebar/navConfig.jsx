@@ -89,6 +89,14 @@ export function buildNavSections({ installedModules = {}, data = null }) {
       ],
     },
     {
+      section: "ASSET MANAGEMENT",
+      items: [
+        { id: "itam-coverage",  label: "Asset Coverage",    icon: <span style={{ fontSize: 13 }}>🖥️</span>,  accent: "#00e5a0" },
+        { id: "itam-iot",       label: "IoT Registry",      icon: <span style={{ fontSize: 13 }}>📡</span>,  accent: "#f5c518" },
+        { id: "itam-shadow-ai", label: "Shadow AI Monitor", icon: <span style={{ fontSize: 13 }}>🤖</span>,  accent: "#ff8c00" },
+      ],
+    },
+    {
       section: "SECURITY COMPLIANCE",
       items: [
         { id: "comp-dashboard",  label: "GRC Posture",          icon: SvgComp,   accent: "#00e5a0" },
