@@ -233,7 +233,7 @@
 - **ARP-based discovery** — Only discovers devices that have communicated with an EDR-enrolled host. Isolated segments will not appear.
 - **IoT risk scoring** — Works well for standard IT environments. Do NOT run active nmap/credential probing on OT/ICS networks without explicit authorization.
 - **Agent-less SSH/WinRM** — Requires network access + credentials. Not recommended for production PCI-DSS hosts without change advisory board approval.
-- **NVD CVE lookup** — Keyword-based, not CPE-matched. Expect false positives on common package names. Use EPSS/exploit-available flag to prioritise once added.
+- **NVD CVE lookup** — Keyword-based, not CPE-matched. Expect false positives on common package names. Use the **EPSS score** and **KEV badge** (both live as of v1.0.108) to prioritise truly dangerous CVEs over theoretical ones.
 
 ### ❌ Do not position as replacement for
 
@@ -275,9 +275,9 @@
 | Item | Effort | Value |
 |---|---|---|
 | Browser-based Shadow AI detection via corp proxy | 2 weeks | Catches ChatGPT-via-browser (80% of real SaaS AI usage) |
-| NVD CPE matching (precise version correlation) | 2 weeks | Reduces CVE false positives significantly |
 | Passive device discovery via Zeek/pcap | 4+ weeks | Required for OT/ICS environments |
 | Bi-directional ServiceNow CMDB sync | 3 weeks | Enterprise integration requirement |
+| WMI over DCOM (no WinRM) for Windows hosts | 2 weeks | Covers Windows without WinRM enabled |
 
 ---
 
