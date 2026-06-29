@@ -138,6 +138,17 @@ def _parse_nvd_response(data: dict) -> list[dict]:
     return cves
 
 
+def _try_local_nvd(conn: Any, name: str, version: str) -> list[dict] | None:
+    """Return CVEs from the local NVD mirror, or None if the mirror isn't populated."""
+    try:
+        from blueprints.itam.nvd_mirror import is_mirror_populated, lookup_cves_local
+        if not is_mirror_populated(conn):
+            return None
+        return lookup_cves_local(conn, name, version)
+    except Exception:
+        return None
+
+
 def enrich_asset_cves(
     conn: Any,
     asset_id: int,
@@ -169,17 +180,22 @@ def enrich_asset_cves(
             version = row["version"] or ""
             keyword = f"{name} {version}".strip()
 
-            try:
-                resp = http.get(
-                    _NVD_BASE,
-                    params={"keywordSearch": keyword, "resultsPerPage": 10},
-                    headers=headers,
-                )
-                resp.raise_for_status()
-                cves = _parse_nvd_response(resp.json())
-            except Exception as exc:
-                log.warning("NVD lookup failed for %s %s: %s", name, version, exc)
-                cves = []
+            # Try local NVD mirror first — avoids rate limits entirely
+            cves = _try_local_nvd(conn, name, version)
+            if cves is not None:
+                pass  # mirror hit — skip API call
+            else:
+                try:
+                    resp = http.get(
+                        _NVD_BASE,
+                        params={"keywordSearch": keyword, "resultsPerPage": 10},
+                        headers=headers,
+                    )
+                    resp.raise_for_status()
+                    cves = _parse_nvd_response(resp.json())
+                except Exception as exc:
+                    log.warning("NVD lookup failed for %s %s: %s", name, version, exc)
+                    cves = []
 
             cve_count = len(cves)
             highest = "none"

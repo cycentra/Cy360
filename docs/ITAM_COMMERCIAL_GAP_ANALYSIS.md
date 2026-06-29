@@ -1,6 +1,6 @@
 # ITAM Module — Commercial Gap Analysis
 
-> CyCentra 360 v1.0.107 · Last updated 2026-06-30
+> CyCentra 360 v1.0.108 · Last updated 2026-06-30
 >
 > This document is an honest, engineering-level assessment of the ITAM module's current capabilities
 > versus commercially mature products (Axonius, Armis, Claroty, Netskope, Qualys CSAM).
@@ -12,14 +12,15 @@
 
 | Domain | Current Maturity | Commercial Benchmark |
 |---|---|---|
-| Network Asset Inventory | **55%** — functional, missing depth | Axonius, Qualys CSAM |
+| Network Asset Inventory | **72%** — SNMP + mDNS + Cloud added | Axonius, Qualys CSAM |
 | EDR/SIEM Coverage Gap | **85%** — production-ready | Built for this platform |
-| IoT Device Registry | **20%** — awareness-only | Armis, Claroty, Forescout |
+| IoT Device Registry | **30%** — mDNS passive discovery added | Armis, Claroty, Forescout |
 | Shadow AI — Local Process | **70%** — effective for on-prem AI | Proprietary (rare in market) |
 | Shadow AI — SaaS/Web | **40%** — DNS + network layer added | Netskope, Zscaler CASB |
-| Agent-less Deep Inventory | **60%** — SSH/WinRM implemented | Qualys Cloud Agent, Tenable |
-| Software Inventory | **55%** — installed, NVD lookup active | Qualys, Tenable, Rapid7 |
-| CVE Correlation | **45%** — NVD API, rate-limited | Full Tenable/Qualys scanners |
+| Agent-less Deep Inventory | **75%** — SNMP + credential profiles added | Qualys Cloud Agent, Tenable |
+| Software Inventory | **70%** — local NVD mirror + EPSS + KEV | Qualys, Tenable, Rapid7 |
+| CVE Correlation | **70%** — offline NVD + CISA KEV catalog | Full Tenable/Qualys scanners |
+| Cloud Asset Discovery | **65%** — AWS EC2 + Azure VMs implemented | Axonius, Qualys TotalCloud |
 | Compliance Auto-Feed | **55%** — 6 controls, bridge pattern solid | Vanta, Drata, Hyperproof |
 
 ---
@@ -45,10 +46,10 @@
 
 | Gap | Commercial Example | Effort to Build |
 |---|---|---|
-| **SNMP polling** — collect sysDescr, ifTable, arp table, device model from routers/switches without SSH | Qualys, SolarWinds | Medium — add pysnmp + scheduler |
+| ✅ **SNMP polling** — collect sysDescr, ifTable, arp table, device model from routers/switches without SSH | Qualys, SolarWinds | ✅ Done in v1.0.108 |
 | **Agent-less WMI direct** without WinRM — for Windows hosts that don't have WinRM enabled (uses DCOM) | Qualys Cloud Agent | High — impacket WMI is complex |
 | **Passive traffic analysis** — discover assets without scanning, just by watching network flows | Axonius, Armis | Very High — requires pcap tap or mirror port |
-| **Cloud asset discovery** — AWS EC2, Azure VMs, GCP instances, S3 buckets via cloud APIs | Axonius, Qualys TotalCloud | Medium per cloud — 3 separate integrations |
+| ✅ **Cloud asset discovery** — AWS EC2 + Azure VMs via cloud APIs | Axonius, Qualys TotalCloud | ✅ Done in v1.0.108 (AWS + Azure) |
 | **Container/Kubernetes inventory** — Docker containers, K8s pods, image layers | Prisma Cloud, Aqua | High — K8s API integration needed |
 | **Asset ownership mapping** — business unit, department, owner email per asset | ServiceNow CMDB | Low-Medium — add owner fields + LDAP lookup |
 | **Asset lifecycle management** — procurement date, end-of-life, retirement workflow | ServiceNow | Medium — new state machine + UI |
@@ -82,7 +83,7 @@
 | **CVE per device model/firmware** — look up CVEs against specific camera/printer/switch firmware | Claroty, Forescout | High — requires NVD CPE matching on device model strings | Medium |
 | **Network segmentation analysis** — flag when IoT device talks to unexpected segments | Armis, Cisco Cyber Vision | Very High — needs traffic metadata per flow | Low |
 | **Firmware extraction / analysis** — unpack and scan device firmware images | Finite State, Centrifuge | Very High — separate product category | Low |
-| **mDNS/SSDP/LLDP passive discovery** — discover devices from broadcast protocols passively | Forescout | Medium — add scapy/zeroconf listener | Medium |
+| ✅ **mDNS/SSDP passive discovery** — discover devices from broadcast protocols passively | Forescout | ✅ Done in v1.0.108 — zeroconf listener, 19 service types | Medium |
 | **802.1X integration** — trigger quarantine VLAN on risk-score threshold | Forescout | High — RADIUS integration needed | Low |
 | **Industrial protocol anomaly detection** — detect unusual Modbus/DNP3 commands | Claroty, Nozomi | Very High — deep packet inspection at protocol level | Low |
 
@@ -147,12 +148,12 @@
 | Gap | Commercial Example | Effort to Build | Priority |
 |---|---|---|---|
 | **SSH key rotation / credential vault** — per-asset SSH key stored in Infisical/Azure KV, not global env var | Qualys, CyberArk integration | Medium — Infisical integration pattern exists | High |
-| **Scheduled deep scan** — auto re-scan assets every N days | All CSAM tools | Low — APScheduler job targeting uncovered/stale assets | High |
-| **SNMP agent-less** — router/switch/firewall inventory without SSH | Qualys, SolarWinds | Medium — pysnmp integration | Medium |
+| ✅ **Scheduled deep scan** — auto re-scan assets every N days | All CSAM tools | ✅ Done in v1.0.108 — ITAM_DEEP_SCAN_INTERVAL_DAYS | High |
+| ✅ **SNMP agent-less** — router/switch/firewall inventory without SSH | Qualys, SolarWinds | ✅ Done in v1.0.108 — pysnmp-lextudio | Medium |
 | **WMI over DCOM** (no WinRM) — for Windows hosts where WinRM is not enabled | Qualys Cloud Agent | High — impacket wmiquery | Medium |
 | **AWS SSM Run Command** — inventory cloud EC2 instances without direct SSH | AWS Systems Manager integration | Medium — boto3 + SSM | Medium |
-| **Scan progress visibility** — show % completion and which host is currently being scanned | Most tools | Low — WebSocket or polling endpoint | Low |
-| **Per-scan credential profiles** — save multiple named credential profiles (Dev VLAN / Prod VLAN) | Qualys, Tenable | Low-Medium — credential_profiles table | Medium |
+| ✅ **Scan progress/status visibility** — show scan_status badge per asset | Most tools | ✅ Done in v1.0.108 — scan_status field + UI badge | Low |
+| ✅ **Per-subnet credential profiles** — save named credential sets per CIDR | Qualys, Tenable | ✅ Done in v1.0.108 — itam_credential_profiles table + API | Medium |
 | **macOS agent-less via MDM** — leverage JAMF/Mosyle API for inventory without SSH | JAMF | High — JAMF API integration | Low |
 
 ---
@@ -179,9 +180,9 @@
 |---|---|---|---|
 | **Authenticated vulnerability scanning** — actually probe the host for exploitability, not just keyword match | Tenable, Qualys, Rapid7 | Very High — full vulnerability scanner is a separate product category | Low |
 | **NVD CPE matching** — use Common Platform Enumeration for precise product version matching instead of keyword search | Tenable, Qualys | High — build local CPE dictionary, match package name → CPE | High |
-| **Local NVD mirror** — download and cache NVD JSON feeds locally, avoid API rate limits entirely | Most enterprise scanners | Medium — cron job downloads NVD feeds, build local SQLite/PG index | High |
-| **Exploit availability flag** — mark CVEs with known public exploits (ExploitDB, Metasploit) | Qualys TruRisk, Tenable VPR | Medium — EPSS score API + ExploitDB lookup | Medium |
-| **EPSS score** — probability-of-exploitation score (0-1) from FIRST.org | Tenable, Qualys | Low — single API call per CVE from api.first.org/graphql | High |
+| ✅ **Local NVD mirror** — download and cache NVD feeds locally, eliminates rate limits | Most enterprise scanners | ✅ Done in v1.0.108 — nvd_cves PG table, daily incremental + weekly full sync | High |
+| ✅ **EPSS score** — probability-of-exploitation score (0-1) from FIRST.org per CVE | Tenable, Qualys | ✅ Done in v1.0.108 — api.first.org batch fetch, stored in software_inventory | High |
+| ✅ **CISA KEV flag** — mark actively exploited CVEs from CISA Known Exploited Vulnerabilities | Tenable, Qualys, Rapid7 | ✅ Done in v1.0.108 — kev_catalog table, daily sync, KEV badge in asset detail | High |
 | **Patch management integration** — know if a patch is available and auto-remediate | Qualys Patch Management | Very High — separate product category | Low |
 | **SBOM generation** — Software Bill of Materials export (CycloneDX/SPDX) | Dependency-Track | Medium — generate from software_inventory table | Medium |
 | **Container image scanning** — scan Docker images pulled on a host | Trivy, Snyk, Grype | High — Trivy can be called as a subprocess | Medium |
@@ -246,25 +247,28 @@
 
 ## Prioritised Enhancement Roadmap
 
-### Sprint 1 — High impact, low effort
+### Sprint 1 — ✅ Completed in v1.0.108
+
+| Item | Status | Value Delivered |
+|---|---|---|
+| ✅ Local NVD mirror (nvd_cves PG table, daily/weekly sync) | Done | Eliminates NVD rate limits entirely |
+| ✅ EPSS score per CVE from api.first.org (batch 100) | Done | Prioritise exploitable CVEs vs. theoretical |
+| ✅ CISA KEV flag (kev_catalog, daily sync) | Done | Instantly identify actively exploited CVEs |
+| ✅ Scheduled CVE refresh (nightly APScheduler) | Done | Keeps CVE data current without manual trigger |
+| ✅ Per-subnet credential profiles (itam_credential_profiles) | Done | Named credential sets per CIDR subnet |
+| ✅ SNMP polling (pysnmp-lextudio, sysDescr/ifTable) | Done | Inventories routers/switches/firewalls |
+| ✅ mDNS passive discovery (zeroconf, 19 service types) | Done | Discovers printers/cameras/IoT passively |
+| ✅ Cloud asset discovery (AWS EC2 + Azure VMs) | Done | Hybrid environment coverage |
+| ✅ Scan status badge per asset (scan_status field + UI) | Done | Visibility into scan progress |
+
+### Sprint 2 — Next priorities
 
 | Item | Effort | Value |
 |---|---|---|
-| Local NVD mirror (download feeds, build PG index) | 3 days | Eliminates rate-limit problem, enables CPE matching |
-| EPSS score per CVE from api.first.org | 1 day | Prioritise exploitable CVEs vs. theoretical |
-| Scheduled deep scan (APScheduler, every N days) | 1 day | Keeps inventory fresh without manual trigger |
-| Per-asset SSH credential profiles | 2 days | Removes global-cred security risk |
-| Real-time new asset alert | 1 day | Alert rule when unknown IP first appears |
-
-### Sprint 2 — Medium effort, high value
-
-| Item | Effort | Value |
-|---|---|---|
-| SNMP polling for network devices | 5 days | Covers routers/switches/firewalls agent-lessly |
-| mDNS/SSDP passive discovery | 3 days | Discover IoT without active scanning |
+| Real-time new asset alert (APScheduler + alert rule) | 1 day | Alert when unknown IP first appears |
 | IEEE OUI full database import (50k+ entries) | 2 days | Massively improves IoT vendor identification |
-| Cloud asset discovery (AWS EC2 + Azure VMs) | 5 days per cloud | Critical for hybrid environments |
 | SBOM export (CycloneDX format) | 3 days | Regulatory / supply chain requirement |
+| NVD CPE matching (precise version correlation) | 1 week | Reduces CVE false positives significantly |
 
 ### Sprint 3 — Complex, strategic
 
@@ -277,6 +281,22 @@
 
 ---
 
+## Appendix: New API Endpoints (v1.0.108)
+
+| Endpoint | Method | RBAC | Purpose |
+|---|---|---|---|
+| `/api/itam/assets/<id>/snmp-scan` | POST | analyst+ | Trigger SNMP poll on network device |
+| `/api/itam/assets/<id>/scan-status` | GET | viewer+ | Get current scan_status + scan_error |
+| `/api/itam/assets/<id>/exploit-intel` | GET | viewer+ | EPSS scores + KEV status for asset's CVEs |
+| `/api/itam/cloud-sync` | POST | admin | Trigger AWS EC2 + Azure VM sync |
+| `/api/itam/cloud-sync/status` | GET | viewer+ | Cloud source counts and config status |
+| `/api/itam/credential-profiles` | GET/POST | analyst+/admin | List or create per-subnet credential profiles |
+| `/api/itam/credential-profiles/<id>` | PUT/DELETE | admin | Update or delete a credential profile |
+| `/api/itam/nvd-mirror/status` | GET | viewer+ | NVD mirror stats: CVE count, last sync dates |
+| `/api/itam/nvd-mirror/sync` | POST | analyst+ | Trigger incremental NVD sync (last 8 days) |
+| `/api/itam/nvd-mirror/full-sync` | POST | admin | Trigger full NVD sync from start_year (hours) |
+| `/api/itam/nvd-mirror/kev-sync` | POST | analyst+ | Sync CISA Known Exploited Vulnerabilities |
+
 ## Appendix: New API Endpoints (v1.0.107)
 
 | Endpoint | Method | RBAC | Purpose |
@@ -287,6 +307,33 @@
 | `/api/itam/assets/<id>/enrich-cves` | POST | analyst+ | Trigger NVD CVE lookup for asset's software |
 | `/api/itam/shadow-ai/dns-watchlist` | GET | viewer+ | Return the full 70+ domain watchlist with categories |
 | `/api/itam/shadow-ai/dns-ingest` | POST | bearer/session | Receive DNS-detected Shadow AI findings from network monitor or CyEDR |
+
+## Appendix: New Environment Variables (v1.0.108)
+
+```bash
+# SNMP polling
+ITAM_SNMP_COMMUNITY=public      # SNMPv2c community string
+ITAM_SNMP_PORT=161              # SNMP UDP port
+
+# mDNS passive discovery
+ITAM_MDNS_ENABLED=false         # Set true to start zeroconf listener at startup
+
+# Refresh intervals
+ITAM_DEEP_SCAN_INTERVAL_DAYS=7  # Re-run deep scan every N days (APScheduler)
+ITAM_CVE_REFRESH_INTERVAL_DAYS=1 # Re-enrich stale CVE data nightly
+
+# AWS EC2 cloud discovery
+AWS_REGIONS=us-east-1,eu-west-1 # Comma-separated AWS regions to scan
+AWS_ACCESS_KEY_ID=              # IAM access key (ec2:DescribeInstances permission)
+AWS_SECRET_ACCESS_KEY=
+AWS_SESSION_TOKEN=              # Optional — for temporary credentials / STS
+
+# Azure VM cloud discovery
+AZURE_SUBSCRIPTION_ID=          # Azure subscription UUID
+AZURE_CLIENT_ID=                # Service principal app ID
+AZURE_CLIENT_SECRET=            # Service principal secret
+AZURE_TENANT_ID=                # Azure AD tenant ID
+```
 
 ## Appendix: New Environment Variables (v1.0.107)
 

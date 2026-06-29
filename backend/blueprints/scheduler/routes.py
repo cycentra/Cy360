@@ -338,6 +338,127 @@ def _add_to_apscheduler(sched, job: dict) -> None:
         log.error("scheduler: failed to register job %s: %s", job.get("id"), e)
 
 
+def _register_itam_phase3_jobs(sched) -> None:
+    """Register all ITAM Phase 3 background maintenance jobs."""
+    from apscheduler.triggers.cron     import CronTrigger
+    from apscheduler.triggers.interval import IntervalTrigger
+    from core.config import (CYCENTRA_DB_URL, NVD_API_KEY,
+                             ITAM_DEEP_SCAN_INTERVAL_DAYS, ITAM_CVE_REFRESH_INTERVAL_DAYS,
+                             AWS_ACCESS_KEY_ID, AWS_REGIONS, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
+                             AZURE_SUBSCRIPTION_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID,
+                             ITAM_SNMP_COMMUNITY, ITAM_SNMP_PORT)
+
+    def _nvd_incremental():
+        import psycopg2, psycopg2.extras
+        try:
+            from blueprints.itam.nvd_mirror import sync_nvd_incremental, ensure_nvd_tables
+            c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+            ensure_nvd_tables(c)
+            n = sync_nvd_incremental(c, NVD_API_KEY)
+            log.info("[NVD-SCHED] incremental: %d CVEs upserted", n)
+            c.close()
+        except Exception as e:
+            log.warning("[NVD-SCHED] incremental error: %s", e)
+
+    def _nvd_full():
+        import psycopg2, psycopg2.extras
+        try:
+            from blueprints.itam.nvd_mirror import sync_nvd_full, ensure_nvd_tables
+            c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+            ensure_nvd_tables(c)
+            n = sync_nvd_full(c, NVD_API_KEY, start_year=2020)
+            log.info("[NVD-SCHED] full sync: %d CVEs upserted", n)
+            c.close()
+        except Exception as e:
+            log.warning("[NVD-SCHED] full sync error: %s", e)
+
+    def _kev_sync():
+        import psycopg2, psycopg2.extras
+        try:
+            from blueprints.itam.exploit_intel import sync_kev_catalog, ensure_exploit_tables
+            c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+            ensure_exploit_tables(c)
+            n = sync_kev_catalog(c)
+            log.info("[KEV-SCHED] synced %d entries", n)
+            c.close()
+        except Exception as e:
+            log.warning("[KEV-SCHED] sync error: %s", e)
+
+    def _cve_refresh():
+        """Re-enrich assets where CVE data is stale (cve_count=0 and last_scanned > N days)."""
+        import psycopg2, psycopg2.extras
+        try:
+            from blueprints.itam.software_inventory import enrich_asset_cves
+            c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+            with c.cursor() as cur:
+                cur.execute("""
+                    SELECT DISTINCT asset_id FROM software_inventory
+                    WHERE cve_count = 0
+                      AND last_scanned < NOW() - INTERVAL '1 day'
+                    LIMIT 20
+                """)
+                asset_ids = [r["asset_id"] for r in cur.fetchall()]
+            for aid in asset_ids:
+                try:
+                    enrich_asset_cves(c, aid, NVD_API_KEY)
+                except Exception:
+                    pass
+            log.info("[CVE-SCHED] refreshed %d assets", len(asset_ids))
+            c.close()
+        except Exception as e:
+            log.warning("[CVE-SCHED] refresh error: %s", e)
+
+    def _cloud_sync():
+        import psycopg2, psycopg2.extras
+        try:
+            c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+            if AWS_ACCESS_KEY_ID and AWS_REGIONS:
+                from blueprints.itam.cloud_discovery import sync_aws_assets
+                r = sync_aws_assets(c, AWS_REGIONS, AWS_ACCESS_KEY_ID,
+                                    AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN)
+                log.info("[CLOUD-SCHED] AWS: %s", r)
+            if AZURE_SUBSCRIPTION_ID:
+                from blueprints.itam.cloud_discovery import sync_azure_assets
+                r = sync_azure_assets(c, AZURE_SUBSCRIPTION_ID, AZURE_CLIENT_ID,
+                                      AZURE_CLIENT_SECRET, AZURE_TENANT_ID)
+                log.info("[CLOUD-SCHED] Azure: %s", r)
+            c.close()
+        except Exception as e:
+            log.warning("[CLOUD-SCHED] sync error: %s", e)
+
+    try:
+        # NVD incremental — daily at 03:00 UTC
+        sched.add_job(_nvd_incremental, CronTrigger(hour=3, minute=0),
+                      id="itam_nvd_incremental", name="NVD CVE Incremental Sync",
+                      replace_existing=True, misfire_grace_time=3600)
+
+        # NVD full — weekly on Sunday at 01:00 UTC
+        sched.add_job(_nvd_full, CronTrigger(day_of_week="sun", hour=1, minute=0),
+                      id="itam_nvd_full_sync", name="NVD CVE Full Sync (Weekly)",
+                      replace_existing=True, misfire_grace_time=7200)
+
+        # CISA KEV — daily at 01:30 UTC
+        sched.add_job(_kev_sync, CronTrigger(hour=1, minute=30),
+                      id="itam_kev_sync", name="CISA KEV Catalog Sync",
+                      replace_existing=True, misfire_grace_time=1800)
+
+        # CVE re-enrichment — nightly at 02:00 UTC
+        sched.add_job(_cve_refresh, CronTrigger(hour=2, minute=0),
+                      id="itam_cve_refresh", name="ITAM CVE Re-Enrichment",
+                      replace_existing=True, misfire_grace_time=3600)
+
+        # Cloud sync — every 4 hours (only if cloud credentials configured)
+        if AWS_ACCESS_KEY_ID or AZURE_SUBSCRIPTION_ID:
+            sched.add_job(_cloud_sync, IntervalTrigger(hours=4),
+                          id="itam_cloud_sync", name="Cloud Asset Discovery Sync",
+                          replace_existing=True, misfire_grace_time=600)
+            log.info("scheduler: ITAM cloud sync registered (every 4h)")
+
+        log.info("scheduler: ITAM Phase 3 jobs registered (NVD/KEV/CVE/Cloud)")
+    except Exception as e:
+        log.warning("scheduler: ITAM Phase 3 job registration failed: %s", e)
+
+
 def init_scheduler(app) -> None:
     """Called from app factory. Tries to acquire the lock and start scheduler."""
     global _scheduler, _scheduler_owner
@@ -396,6 +517,19 @@ def init_scheduler(app) -> None:
         _start_dns_monitor_if_enabled()
     except Exception as _dns_exc:
         log.warning("scheduler: ITAM DNS monitor startup failed: %s", _dns_exc)
+
+    # ── ITAM Phase 3 background jobs ──────────────────────────────────────────
+    _register_itam_phase3_jobs(_scheduler)
+
+    # ── mDNS passive discovery (startup, if enabled) ──────────────────────────
+    try:
+        from core.config import ITAM_MDNS_ENABLED
+        if ITAM_MDNS_ENABLED:
+            from blueprints.itam.mdns_discovery import start_mdns_discovery
+            start_mdns_discovery()
+            log.info("scheduler: mDNS passive discovery started")
+    except Exception as _mdns_exc:
+        log.warning("scheduler: mDNS discovery startup failed: %s", _mdns_exc)
 
     # ── Integration health monitor (always on, interval from env/config) ───────
     try:

@@ -29,7 +29,10 @@ from core.helpers import add_cors_headers, auth_event
 from core.config import (CYCENTRA_DB_URL, ITAM_SUBNET, ITAM_IOT_PORTS, ITAM_PROBE_CREDS,
                          ITAM_SSH_USERNAME, ITAM_SSH_PASSWORD, ITAM_SSH_KEY_PATH, ITAM_SSH_PORT,
                          ITAM_WINRM_USERNAME, ITAM_WINRM_PASSWORD, ITAM_WINRM_PORT, ITAM_WINRM_SSL,
-                         NVD_API_KEY, ITAM_DNS_MONITOR_PORT, ITAM_DNS_MONITOR_ENABLED, ITAM_DNS_UPSTREAM)
+                         NVD_API_KEY, ITAM_DNS_MONITOR_PORT, ITAM_DNS_MONITOR_ENABLED, ITAM_DNS_UPSTREAM,
+                         ITAM_SNMP_COMMUNITY, ITAM_SNMP_PORT, ITAM_MDNS_ENABLED,
+                         AWS_REGIONS, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
+                         AZURE_SUBSCRIPTION_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID)
 
 from .iot_classifier import oui_lookup, classify_ports, compute_risk_score, is_iot_candidate
 from .network_discovery import parse_cmdb_csv, upsert_assets, parse_arp_neighbors, run_nmap_discovery
@@ -157,16 +160,62 @@ def init_itam_tables(db_url: str) -> None:
               UNIQUE(tool_name, department)
             )
         """)
+        # Columns added by Phase 2 (agentless scan + cloud discovery)
+        for col_name, col_def in [
+            ("os_info",          "TEXT"),
+            ("discovery_source", "TEXT DEFAULT 'manual'"),
+            ("is_managed",       "BOOLEAN DEFAULT FALSE"),
+            ("scan_status",      "VARCHAR(20) DEFAULT 'idle'"),
+            ("scan_error",       "TEXT"),
+        ]:
+            cur.execute(
+                f"ALTER TABLE network_assets ADD COLUMN IF NOT EXISTS {col_name} {col_def};"
+            )
+
+        # Per-subnet credential profiles for agentless scanning
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS itam_credential_profiles (
+              id             SERIAL PRIMARY KEY,
+              name           TEXT NOT NULL,
+              subnet_cidr    TEXT NOT NULL,
+              ssh_username   TEXT,
+              ssh_key_path   TEXT,
+              ssh_port       INTEGER DEFAULT 22,
+              winrm_username TEXT,
+              winrm_port     INTEGER DEFAULT 5985,
+              winrm_ssl      BOOLEAN DEFAULT FALSE,
+              snmp_community TEXT DEFAULT 'public',
+              snmp_port      INTEGER DEFAULT 161,
+              created_at     TIMESTAMPTZ DEFAULT NOW(),
+              updated_at     TIMESTAMPTZ DEFAULT NOW(),
+              UNIQUE(subnet_cidr)
+            )
+        """)
+
         # Indexes
         for stmt in [
             "CREATE INDEX IF NOT EXISTS idx_network_assets_ip ON network_assets(ip_address)",
             "CREATE INDEX IF NOT EXISTS idx_network_assets_type ON network_assets(asset_type)",
             "CREATE INDEX IF NOT EXISTS idx_network_assets_edr ON network_assets(edr_agent_id)",
+            "CREATE INDEX IF NOT EXISTS idx_network_assets_source ON network_assets(discovery_source)",
             "CREATE INDEX IF NOT EXISTS idx_iot_devices_risk ON iot_devices(risk_score DESC)",
             "CREATE INDEX IF NOT EXISTS idx_shadow_ai_status ON shadow_ai_findings(status)",
             "CREATE INDEX IF NOT EXISTS idx_shadow_ai_tool ON shadow_ai_findings(ai_tool)",
         ]:
             cur.execute(stmt)
+
+        # Bootstrap NVD + KEV tables so routes work even before first sync
+        try:
+            from blueprints.itam.nvd_mirror import ensure_nvd_tables
+            ensure_nvd_tables(conn)
+        except Exception as _e:
+            _log.debug("nvd_mirror init skipped: %s", _e)
+        try:
+            from blueprints.itam.exploit_intel import ensure_exploit_tables
+            ensure_exploit_tables(conn)
+        except Exception as _e:
+            _log.debug("exploit_intel init skipped: %s", _e)
+
     conn.commit()
     conn.close()
     _log.info("ITAM tables initialised")
@@ -799,10 +848,12 @@ def ingest_arp_neighbors(agent_id: str, neighbors: list[dict]) -> int:
 # ── Ingest: Shadow AI finding from EDR telemetry ─────────────────────────────
 
 def ingest_shadow_ai(agent_id: str, hostname: str, ai_tool: str,
-                     process_name: str, severity: str = "medium") -> None:
+                     process_name: str, severity: str = "medium",
+                     detection_method: str = "process") -> None:
     """
-    Called by EDR telemetry handler when event_category == 'shadow_ai'.
-    Stores finding only if tool is not on the whitelist for ALL or any department.
+    Called by EDR telemetry handler when event_category == 'shadow_ai',
+    and by the DNS monitor / agent DNS journal parser.
+    Stores finding only if tool is not on the whitelist.
     """
     try:
         conn = _db()
@@ -818,9 +869,9 @@ def ingest_shadow_ai(agent_id: str, hostname: str, ai_tool: str,
             cur.execute("""
                 INSERT INTO shadow_ai_findings
                   (agent_id, hostname, ai_tool, detection_layer, detail, severity, status)
-                VALUES (%s,%s,%s,'process',%s::jsonb,%s,'open')
+                VALUES (%s,%s,%s,%s,%s::jsonb,%s,'open')
                 ON CONFLICT DO NOTHING
-            """, [agent_id, hostname, ai_tool,
+            """, [agent_id, hostname, ai_tool, detection_method,
                   json.dumps({"process_name": process_name}),
                   severity])
         conn.commit(); conn.close()
@@ -1015,9 +1066,9 @@ def agentless_deep_scan(asset_id):
                 c.commit()
                 count = upsert_software(c, asset_id, result.get("packages", []))
                 enrich_asset_cves(c, asset_id, NVD_API_KEY)
-                log.info("[ITAM] deep-scan %s: %s packages upserted, method=%s", ip, count, result.get("method"))
+                _log.info("[ITAM] deep-scan %s: %s packages upserted, method=%s", ip, count, result.get("method"))
             else:
-                log.warning("[ITAM] deep-scan %s failed: %s", ip, result.get("error"))
+                _log.warning("[ITAM] deep-scan %s failed: %s", ip, result.get("error"))
         finally:
             c.close()
 
@@ -1093,7 +1144,7 @@ def enrich_cves(asset_id):
         c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
         try:
             total = enrich_asset_cves(c, asset_id, NVD_API_KEY)
-            log.info("[ITAM] CVE enrichment asset_id=%s: %s vulns found", asset_id, total)
+            _log.info("[ITAM] CVE enrichment asset_id=%s: %s vulns found", asset_id, total)
         finally:
             c.close()
 
@@ -1169,7 +1220,450 @@ def _start_dns_monitor_if_enabled():
                 detection_method="dns_network",
             )
         except Exception as e:
-            log.debug("[ITAM-DNS] callback error: %s", e)
+            _log.debug("[ITAM-DNS] callback error: %s", e)
 
     start_network_dns_monitor(ITAM_DNS_MONITOR_PORT, ITAM_DNS_UPSTREAM, _callback)
-    log.info("[ITAM-DNS] Network DNS monitor enabled on port %d", ITAM_DNS_MONITOR_PORT)
+    _log.info("[ITAM-DNS] Network DNS monitor enabled on port %d", ITAM_DNS_MONITOR_PORT)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 3 — SNMP, Cloud Discovery, Credential Profiles, NVD Mirror, KEV
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── SNMP scan ─────────────────────────────────────────────────────────────────
+
+@itam_bp.route("/assets/<int:asset_id>/snmp-scan", methods=["POST", "OPTIONS"])
+def snmp_scan_asset(asset_id):
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    email = session.get("user_email")
+    if not email:
+        return jsonify({"error": "Unauthorized"}), 401
+    if get_user_role(email) not in ("admin", "analyst"):
+        return jsonify({"error": "Forbidden"}), 403
+
+    body      = request.get_json(silent=True) or {}
+    community = body.get("community", ITAM_SNMP_COMMUNITY)
+    port      = int(body.get("port", ITAM_SNMP_PORT))
+
+    conn = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, ip_address FROM network_assets WHERE id=%s", [asset_id])
+            asset = cur.fetchone()
+    finally:
+        conn.close()
+
+    if not asset:
+        return jsonify({"error": "Asset not found"}), 404
+    ip = str(asset["ip_address"])
+
+    def _do_snmp():
+        from blueprints.itam.snmp_scanner import snmp_scan
+        c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            with c.cursor() as cur:
+                cur.execute("UPDATE network_assets SET scan_status='scanning' WHERE id=%s", [asset_id])
+            c.commit()
+            result = snmp_scan(ip, community=community, port=port)
+            if result.get("error"):
+                with c.cursor() as cur:
+                    cur.execute(
+                        "UPDATE network_assets SET scan_status='error', scan_error=%s WHERE id=%s",
+                        [result["error"], asset_id])
+                c.commit()
+                return
+            # Write discovered info back to network_assets
+            with c.cursor() as cur:
+                cur.execute("""
+                    UPDATE network_assets SET
+                        hostname    = COALESCE(NULLIF(%s,''), hostname),
+                        vendor      = COALESCE(NULLIF(%s,''), vendor),
+                        notes       = COALESCE(NULLIF(%s,''), notes),
+                        os_info     = COALESCE(NULLIF(%s,'{}'), os_info),
+                        scan_status = 'ok',
+                        scan_error  = NULL,
+                        last_seen   = NOW()
+                    WHERE id=%s
+                """, [
+                    result.get("sys_name", ""),
+                    result.get("vendor", ""),
+                    result.get("sys_description", "")[:500] if result.get("sys_description") else "",
+                    json.dumps({"sys_description": result.get("sys_description", ""),
+                                "device_type": result.get("device_type", ""),
+                                "sys_location": result.get("sys_location", ""),
+                                "uptime_seconds": result.get("uptime_seconds", 0)}),
+                    asset_id,
+                ])
+            c.commit()
+            _log.info("[ITAM-SNMP] %s: %s interfaces discovered, type=%s",
+                      ip, len(result.get("interfaces", [])), result.get("device_type"))
+        except Exception as exc:
+            _log.warning("[ITAM-SNMP] scan error for %s: %s", ip, exc)
+            try:
+                with c.cursor() as cur:
+                    cur.execute(
+                        "UPDATE network_assets SET scan_status='error', scan_error=%s WHERE id=%s",
+                        [str(exc), asset_id])
+                c.commit()
+            except Exception:
+                pass
+        finally:
+            c.close()
+
+    threading.Thread(target=_do_snmp, daemon=True).start()
+    return jsonify({"status": "scanning", "asset_id": asset_id, "ip": ip})
+
+
+@itam_bp.route("/assets/<int:asset_id>/scan-status", methods=["GET", "OPTIONS"])
+def asset_scan_status(asset_id):
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, scan_status, scan_error, last_seen, last_deep_scan "
+                "FROM network_assets WHERE id=%s", [asset_id])
+            row = cur.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify(dict(row))
+    except psycopg2.Error as exc:
+        return jsonify({"error": "Database error"}), 500
+
+
+# ── Cloud sync ────────────────────────────────────────────────────────────────
+
+@itam_bp.route("/cloud-sync", methods=["POST", "OPTIONS"])
+def cloud_sync():
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    email = session.get("user_email")
+    if not email:
+        return jsonify({"error": "Unauthorized"}), 401
+    if get_user_role(email) != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+
+    body = request.get_json(silent=True) or {}
+    provider = body.get("provider", "all")   # "aws", "azure", "all"
+
+    def _sync():
+        c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            results = {}
+            if provider in ("aws", "all") and AWS_ACCESS_KEY_ID and AWS_REGIONS:
+                from blueprints.itam.cloud_discovery import sync_aws_assets
+                results["aws"] = sync_aws_assets(
+                    c, AWS_REGIONS, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN)
+            if provider in ("azure", "all") and AZURE_SUBSCRIPTION_ID:
+                from blueprints.itam.cloud_discovery import sync_azure_assets
+                results["azure"] = sync_azure_assets(
+                    c, AZURE_SUBSCRIPTION_ID, AZURE_CLIENT_ID,
+                    AZURE_CLIENT_SECRET, AZURE_TENANT_ID)
+            if results:
+                _crossref_agents_conn(c)
+            _log.info("[ITAM-CLOUD] sync complete: %s", results)
+        except Exception as exc:
+            _log.error("[ITAM-CLOUD] sync error: %s", exc)
+        finally:
+            c.close()
+
+    threading.Thread(target=_sync, daemon=True).start()
+    auth_event(email, "itam_cloud_sync", f"Cloud sync triggered (provider={provider})")
+    return jsonify({"status": "syncing", "provider": provider})
+
+
+@itam_bp.route("/cloud-sync/status", methods=["GET", "OPTIONS"])
+def cloud_sync_status():
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT discovery_source, COUNT(*) AS n,
+                       MAX(last_seen) AS last_synced
+                FROM network_assets
+                WHERE discovery_source IN ('aws', 'azure')
+                GROUP BY discovery_source
+            """)
+            rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return jsonify({
+            "cloud_sources": rows,
+            "aws_configured":   bool(AWS_ACCESS_KEY_ID and AWS_REGIONS),
+            "azure_configured": bool(AZURE_SUBSCRIPTION_ID),
+        })
+    except psycopg2.Error:
+        return jsonify({"error": "Database error"}), 500
+
+
+# ── Credential Profiles ────────────────────────────────────────────────────────
+
+@itam_bp.route("/credential-profiles", methods=["GET", "POST", "OPTIONS"])
+def credential_profiles():
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if request.method == "GET":
+        if _role() not in ("admin", "analyst"):
+            return jsonify({"error": "Forbidden"}), 403
+        try:
+            conn = _db()
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, name, subnet_cidr, ssh_username, ssh_port,
+                           winrm_username, winrm_port, winrm_ssl,
+                           snmp_community, snmp_port, created_at, updated_at
+                    FROM itam_credential_profiles ORDER BY subnet_cidr
+                """)
+                rows = [dict(r) for r in cur.fetchall()]
+            conn.close()
+            return jsonify({"profiles": rows})
+        except psycopg2.Error:
+            return jsonify({"error": "Database error"}), 500
+
+    # POST — create
+    if _role() != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+    body = request.get_json(silent=True) or {}
+    name        = (body.get("name") or "").strip()
+    subnet_cidr = (body.get("subnet_cidr") or "").strip()
+    if not name or not subnet_cidr:
+        return jsonify({"error": "name and subnet_cidr are required"}), 400
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO itam_credential_profiles
+                    (name, subnet_cidr, ssh_username, ssh_key_path, ssh_port,
+                     winrm_username, winrm_port, winrm_ssl,
+                     snmp_community, snmp_port)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (subnet_cidr) DO UPDATE SET
+                    name=EXCLUDED.name, ssh_username=EXCLUDED.ssh_username,
+                    ssh_key_path=EXCLUDED.ssh_key_path, ssh_port=EXCLUDED.ssh_port,
+                    winrm_username=EXCLUDED.winrm_username,
+                    winrm_port=EXCLUDED.winrm_port, winrm_ssl=EXCLUDED.winrm_ssl,
+                    snmp_community=EXCLUDED.snmp_community, snmp_port=EXCLUDED.snmp_port,
+                    updated_at=NOW()
+                RETURNING id
+            """, [name, subnet_cidr,
+                  body.get("ssh_username", ""),
+                  body.get("ssh_key_path", ""),
+                  int(body.get("ssh_port", 22)),
+                  body.get("winrm_username", ""),
+                  int(body.get("winrm_port", 5985)),
+                  bool(body.get("winrm_ssl", False)),
+                  body.get("snmp_community", "public"),
+                  int(body.get("snmp_port", 161))])
+            row = cur.fetchone()
+        conn.commit(); conn.close()
+        auth_event(session.get("user_email"), "itam_cred_profile_create",
+                   f"Profile '{name}' for {subnet_cidr}")
+        return jsonify({"id": row["id"]}), 201
+    except psycopg2.Error as exc:
+        _log.error("credential_profiles POST error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+
+
+@itam_bp.route("/credential-profiles/<int:prof_id>", methods=["PUT", "DELETE", "OPTIONS"])
+def credential_profile(prof_id):
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+    if _role() != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+
+    if request.method == "DELETE":
+        try:
+            conn = _db()
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM itam_credential_profiles WHERE id=%s RETURNING id", [prof_id])
+                if not cur.fetchone():
+                    conn.close(); return jsonify({"error": "Not found"}), 404
+            conn.commit(); conn.close()
+            return jsonify({"ok": True})
+        except psycopg2.Error:
+            return jsonify({"error": "Database error"}), 500
+
+    # PUT
+    body = request.get_json(silent=True) or {}
+    allowed = {"name", "ssh_username", "ssh_key_path", "ssh_port",
+               "winrm_username", "winrm_port", "winrm_ssl",
+               "snmp_community", "snmp_port"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if not updates:
+        return jsonify({"error": "No valid fields"}), 400
+    updates["updated_at"] = "NOW()"
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            set_clause = ", ".join(
+                f"{k}=NOW()" if v == "NOW()" else f"{k}=%s"
+                for k, v in updates.items()
+            )
+            vals = [v for v in updates.values() if v != "NOW()"]
+            cur.execute(
+                f"UPDATE itam_credential_profiles SET {set_clause} WHERE id=%s RETURNING id",
+                vals + [prof_id])
+            if not cur.fetchone():
+                conn.close(); return jsonify({"error": "Not found"}), 404
+        conn.commit(); conn.close()
+        return jsonify({"ok": True})
+    except psycopg2.Error as exc:
+        _log.error("credential_profile PUT error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+
+
+# ── NVD Mirror & CISA KEV ─────────────────────────────────────────────────────
+
+@itam_bp.route("/nvd-mirror/status", methods=["GET", "OPTIONS"])
+def nvd_mirror_status():
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        from blueprints.itam.nvd_mirror import is_mirror_populated
+        conn = _db()
+        with conn.cursor() as cur:
+            populated = is_mirror_populated(conn)
+            cur.execute("SELECT COUNT(*) AS n FROM nvd_cves")
+            total_cves = cur.fetchone()["n"]
+            cur.execute("""
+                SELECT last_incremental_sync, last_full_sync
+                FROM nvd_sync_state WHERE id=1
+            """)
+            row = cur.fetchone() or {}
+            cur.execute("SELECT COUNT(*) AS n FROM kev_catalog")
+            kev_count = cur.fetchone()["n"]
+        conn.close()
+        return jsonify({
+            "populated":              populated,
+            "total_cves":             total_cves,
+            "kev_catalog_entries":    kev_count,
+            "last_incremental_sync":  row.get("last_incremental_sync"),
+            "last_full_sync":         row.get("last_full_sync"),
+            "api_key_configured":     bool(NVD_API_KEY),
+        })
+    except Exception as exc:
+        _log.warning("nvd_mirror_status error: %s", exc)
+        return jsonify({"populated": False, "total_cves": 0, "kev_catalog_entries": 0})
+
+
+@itam_bp.route("/nvd-mirror/sync", methods=["POST", "OPTIONS"])
+def nvd_mirror_sync():
+    """Trigger incremental NVD sync (last 8 days)."""
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    email = session.get("user_email")
+    if not email:
+        return jsonify({"error": "Unauthorized"}), 401
+    if get_user_role(email) not in ("admin", "analyst"):
+        return jsonify({"error": "Forbidden"}), 403
+
+    def _sync():
+        from blueprints.itam.nvd_mirror import sync_nvd_incremental, ensure_nvd_tables
+        c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            ensure_nvd_tables(c)
+            n = sync_nvd_incremental(c, NVD_API_KEY)
+            _log.info("[NVD] incremental sync done: %d CVEs upserted", n)
+        except Exception as exc:
+            _log.error("[NVD] incremental sync error: %s", exc)
+        finally:
+            c.close()
+
+    threading.Thread(target=_sync, daemon=True).start()
+    auth_event(email, "nvd_mirror_sync", "NVD incremental sync triggered")
+    return jsonify({"status": "syncing", "type": "incremental"})
+
+
+@itam_bp.route("/nvd-mirror/full-sync", methods=["POST", "OPTIONS"])
+def nvd_mirror_full_sync():
+    """Trigger a full NVD sync (admin only — can take hours without API key)."""
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    email = session.get("user_email")
+    if not email:
+        return jsonify({"error": "Unauthorized"}), 401
+    if get_user_role(email) != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+
+    body       = request.get_json(silent=True) or {}
+    start_year = int(body.get("start_year", 2020))
+
+    def _full():
+        from blueprints.itam.nvd_mirror import sync_nvd_full, ensure_nvd_tables
+        c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            ensure_nvd_tables(c)
+            n = sync_nvd_full(c, NVD_API_KEY, start_year=start_year)
+            _log.info("[NVD] full sync done: %d CVEs upserted (from %d)", n, start_year)
+        except Exception as exc:
+            _log.error("[NVD] full sync error: %s", exc)
+        finally:
+            c.close()
+
+    threading.Thread(target=_full, daemon=True).start()
+    auth_event(email, "nvd_mirror_full_sync", f"NVD full sync triggered from {start_year}")
+    return jsonify({"status": "syncing", "type": "full", "start_year": start_year,
+                    "note": "Full sync may take 30-60 min without NVD_API_KEY"})
+
+
+@itam_bp.route("/nvd-mirror/kev-sync", methods=["POST", "OPTIONS"])
+def kev_sync():
+    """Sync CISA Known Exploited Vulnerabilities catalog."""
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    email = session.get("user_email")
+    if not email:
+        return jsonify({"error": "Unauthorized"}), 401
+    if get_user_role(email) not in ("admin", "analyst"):
+        return jsonify({"error": "Forbidden"}), 403
+
+    def _kev():
+        from blueprints.itam.exploit_intel import sync_kev_catalog, ensure_exploit_tables
+        c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            ensure_exploit_tables(c)
+            n = sync_kev_catalog(c)
+            _log.info("[KEV] synced %d entries", n)
+        except Exception as exc:
+            _log.error("[KEV] sync error: %s", exc)
+        finally:
+            c.close()
+
+    threading.Thread(target=_kev, daemon=True).start()
+    auth_event(email, "kev_sync", "CISA KEV sync triggered")
+    return jsonify({"status": "syncing", "source": "CISA Known Exploited Vulnerabilities"})
+
+
+@itam_bp.route("/assets/<int:asset_id>/exploit-intel", methods=["GET", "OPTIONS"])
+def asset_exploit_intel(asset_id):
+    """Get EPSS scores and KEV status for an asset's software."""
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        from blueprints.itam.exploit_intel import get_asset_risk_intel, ensure_exploit_tables
+        conn = _db()
+        ensure_exploit_tables(conn)
+        intel = get_asset_risk_intel(conn, asset_id)
+        conn.close()
+        return jsonify(intel)
+    except Exception as exc:
+        _log.warning("asset_exploit_intel error: %s", exc)
+        return jsonify({"asset_id": asset_id, "kev_count": 0, "kev_packages": [],
+                        "highest_epss": 0.0, "ransomware_risk": False})

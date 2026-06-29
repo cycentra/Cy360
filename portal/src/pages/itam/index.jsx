@@ -37,6 +37,18 @@ const SOURCE_LABEL = {
   nmap:       "Scan",
   edr_agent:  "EDR",
   siem_agent: "SIEM",
+  aws:        "AWS",
+  azure:      "Azure",
+};
+
+const SOURCE_COLOR = {
+  manual:     "#9aa0b0",
+  arp_report: "#00c4ff",
+  nmap:       "#f5c518",
+  edr_agent:  "#00e5a0",
+  siem_agent: "#4d9eff",
+  aws:        "#ff9900",
+  azure:      "#0089d6",
 };
 
 function KpiCard({ label, value, sub, color, bg }) {
@@ -115,7 +127,8 @@ function AssetTable({ assets, loading, onViewAsset }) {
                   : <span style={{ color: "#333", fontSize: 10 }}>—</span>}
               </td>
               <td style={{ padding: "9px 12px" }}>
-                <Badge label={SOURCE_LABEL[a.source] || a.source} color="#555"/>
+                <Badge label={SOURCE_LABEL[a.discovery_source || a.source] || (a.discovery_source || a.source)}
+                       color={SOURCE_COLOR[a.discovery_source || a.source] || "#555"}/>
               </td>
               <td style={{ padding: "9px 12px" }}>
                 {a.vuln_count > 0
@@ -271,9 +284,13 @@ export default function ItamCoveragePage({ onViewAsset }) {
           <CoverageBar pct={cov.coverage_pct || 0}/>
           <div style={{ display: "flex", gap: 24, marginTop: 12, flexWrap: "wrap" }}>
             {Object.entries(cov.sources || {}).map(([src, n]) => (
-              <div key={src} style={{ fontSize: 11 }}>
-                <span style={{ color: "#555" }}>{SOURCE_LABEL[src] || src}: </span>
-                <span style={{ color: "#9aa0b0", fontWeight: 600 }}>{n}</span>
+              <div key={src} style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{
+                  display: "inline-block", width: 6, height: 6, borderRadius: "50%",
+                  background: SOURCE_COLOR[src] || "#555",
+                }}/>
+                <span style={{ color: "#666" }}>{SOURCE_LABEL[src] || src}</span>
+                <span style={{ color: "#9aa0b0", fontWeight: 700 }}>{n}</span>
               </div>
             ))}
           </div>

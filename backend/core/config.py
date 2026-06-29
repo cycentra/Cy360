@@ -271,6 +271,29 @@ ITAM_DNS_MONITOR_PORT    = int(os.environ.get("ITAM_DNS_MONITOR_PORT", "5454"))
 ITAM_DNS_MONITOR_ENABLED = os.environ.get("ITAM_DNS_MONITOR_ENABLED", "false").lower() == "true"
 ITAM_DNS_UPSTREAM        = os.environ.get("ITAM_DNS_UPSTREAM", "8.8.8.8")
 
+# Scheduled refresh intervals
+ITAM_DEEP_SCAN_INTERVAL_DAYS = int(os.environ.get("ITAM_DEEP_SCAN_INTERVAL_DAYS", "7"))
+ITAM_CVE_REFRESH_INTERVAL_DAYS = int(os.environ.get("ITAM_CVE_REFRESH_INTERVAL_DAYS", "1"))
+
+# SNMP polling (Phase 3)
+ITAM_SNMP_COMMUNITY = os.environ.get("ITAM_SNMP_COMMUNITY", "public")
+ITAM_SNMP_PORT      = int(os.environ.get("ITAM_SNMP_PORT", "161"))
+
+# mDNS/SSDP passive discovery (Phase 3)
+ITAM_MDNS_ENABLED = os.environ.get("ITAM_MDNS_ENABLED", "false").lower() == "true"
+
+# Cloud asset discovery — AWS EC2 (Phase 3)
+AWS_REGIONS           = [r.strip() for r in os.environ.get("AWS_REGIONS", "").split(",") if r.strip()]
+AWS_ACCESS_KEY_ID     = os.environ.get("AWS_ACCESS_KEY_ID", "")
+AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+AWS_SESSION_TOKEN     = os.environ.get("AWS_SESSION_TOKEN", "")
+
+# Cloud asset discovery — Azure VMs (Phase 3)
+AZURE_SUBSCRIPTION_ID = os.environ.get("AZURE_SUBSCRIPTION_ID", "")
+AZURE_CLIENT_ID       = os.environ.get("AZURE_CLIENT_ID", "")
+AZURE_CLIENT_SECRET   = os.environ.get("AZURE_CLIENT_SECRET", "")
+AZURE_TENANT_ID       = os.environ.get("AZURE_TENANT_ID", "")
+
 # ── Flask session cookie settings ─────────────────────────────────────────────
 COOKIE_SETTINGS = {
     "SESSION_COOKIE_SECURE":    True,

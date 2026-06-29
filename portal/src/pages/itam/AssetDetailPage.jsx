@@ -46,15 +46,18 @@ function HwPill({ label, value }) {
 }
 
 export default function AssetDetailPage({ assetId, onBack }) {
-  const [detail,   setDetail]   = useState(null);
-  const [software, setSoftware] = useState([]);
-  const [swTotal,  setSwTotal]  = useState(0);
-  const [swPage,   setSwPage]   = useState(1);
-  const [sevFlt,   setSevFlt]   = useState("");
-  const [scanning, setScanning] = useState(false);
-  const [scanMsg,  setScanMsg]  = useState("");
-  const [enriching,setEnriching]= useState(false);
-  const [loading,  setLoading]  = useState(true);
+  const [detail,    setDetail]    = useState(null);
+  const [software,  setSoftware]  = useState([]);
+  const [swTotal,   setSwTotal]   = useState(0);
+  const [swPage,    setSwPage]    = useState(1);
+  const [sevFlt,    setSevFlt]    = useState("");
+  const [scanning,  setScanning]  = useState(false);
+  const [snmpScan,  setSnmpScan]  = useState(false);
+  const [scanMsg,   setScanMsg]   = useState("");
+  const [enriching, setEnriching] = useState(false);
+  const [scanStatus,setScanStatus]= useState(null);
+  const [exploitIntel, setExploitIntel] = useState(null);
+  const [loading,   setLoading]   = useState(true);
 
   const PER_PAGE = 50;
 
@@ -66,6 +69,20 @@ export default function AssetDetailPage({ assetId, onBack }) {
     setLoading(false);
   };
 
+  const loadScanStatus = async () => {
+    try {
+      const r = await fetch(`/api/itam/assets/${assetId}/scan-status`);
+      if (r.ok) setScanStatus(await r.json());
+    } catch {}
+  };
+
+  const loadExploitIntel = async () => {
+    try {
+      const r = await fetch(`/api/itam/assets/${assetId}/exploit-intel`);
+      if (r.ok) setExploitIntel(await r.json());
+    } catch {}
+  };
+
   const loadSoftware = useCallback(async () => {
     const params = new URLSearchParams({ page: swPage, per_page: PER_PAGE });
     if (sevFlt) params.set("severity", sevFlt);
@@ -75,7 +92,7 @@ export default function AssetDetailPage({ assetId, onBack }) {
     } catch {}
   }, [assetId, swPage, sevFlt]);
 
-  useEffect(() => { loadDetail(); }, [assetId]);
+  useEffect(() => { loadDetail(); loadScanStatus(); loadExploitIntel(); }, [assetId]);
   useEffect(() => { loadSoftware(); }, [loadSoftware]);
 
   const triggerDeepScan = async () => {
@@ -96,8 +113,21 @@ export default function AssetDetailPage({ assetId, onBack }) {
       const r = await fetch(`/api/itam/assets/${assetId}/enrich-cves`, { method: "POST" });
       const d = await r.json();
       setScanMsg(r.ok ? "CVE enrichment started — NVD rate limit: ~50 packages/30s with API key" : (d.error || "Failed"));
+      if (r.ok) setTimeout(() => { loadSoftware(); loadExploitIntel(); }, 45000);
     } catch { setScanMsg("Network error"); }
     setEnriching(false);
+  };
+
+  const triggerSnmpScan = async () => {
+    setSnmpScan(true); setScanMsg("");
+    try {
+      const r = await fetch(`/api/itam/assets/${assetId}/snmp-scan`, { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+      const d = await r.json();
+      setScanMsg(r.ok ? "SNMP scan started — results in ~10s" : (d.error || "SNMP scan failed"));
+      if (r.ok) setTimeout(() => { loadDetail(); loadScanStatus(); }, 12000);
+    } catch { setScanMsg("Network error"); }
+    setSnmpScan(false);
   };
 
   if (loading) return <div style={{ color: "#555", padding: 32, textAlign: "center" }}>Loading…</div>;
@@ -117,21 +147,40 @@ export default function AssetDetailPage({ assetId, onBack }) {
             border: BORDER, borderRadius: 6, padding: "5px 12px", background: "transparent",
             color: "#9aa0b0", fontSize: 12, cursor: "pointer" }}>← Back</button>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>
+            <div style={{ fontSize: 18, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
               {detail?.hostname || detail?.ip_address}
+              {scanStatus?.scan_status && scanStatus.scan_status !== "idle" && (
+                <span style={{
+                  fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 4,
+                  background: scanStatus.scan_status === "ok" ? `${ACCENT}18`
+                            : scanStatus.scan_status === "error" ? "rgba(255,59,59,0.14)"
+                            : "rgba(245,197,24,0.14)",
+                  color: scanStatus.scan_status === "ok" ? ACCENT
+                       : scanStatus.scan_status === "error" ? "#ff3b3b" : "#f5c518",
+                  border: `1px solid ${scanStatus.scan_status === "ok" ? ACCENT
+                            : scanStatus.scan_status === "error" ? "#ff3b3b" : "#f5c518"}44`,
+                  letterSpacing: 0.5, textTransform: "uppercase",
+                }}>{scanStatus.scan_status}</span>
+              )}
             </div>
-            <div style={{ fontSize: 11, color: "#555", marginFamily: "monospace" }}>
+            <div style={{ fontSize: 11, color: "#555", fontFamily: "monospace" }}>
               {detail?.ip_address} · Last deep scan: {detail?.last_deep_scan
                 ? new Date(detail.last_deep_scan).toLocaleString() : "Never"}
             </div>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={triggerDeepScan} disabled={scanning} style={{
             border: `1px solid ${ACCENT}44`, borderRadius: 6, padding: "6px 14px",
             fontSize: 11, fontWeight: 600, color: ACCENT, background: `${ACCENT}08`,
             cursor: scanning ? "not-allowed" : "pointer" }}>
             {scanning ? "Scanning…" : "🔍 Deep Scan (SSH/WinRM)"}
+          </button>
+          <button onClick={triggerSnmpScan} disabled={snmpScan} style={{
+            border: "1px solid #7c82ff44", borderRadius: 6, padding: "6px 14px",
+            fontSize: 11, fontWeight: 600, color: "#7c82ff", background: "rgba(124,130,255,0.06)",
+            cursor: snmpScan ? "not-allowed" : "pointer" }}>
+            {snmpScan ? "Polling…" : "📡 SNMP Scan"}
           </button>
           {sw.total > 0 && (
             <button onClick={triggerEnrich} disabled={enriching} style={{
@@ -180,6 +229,36 @@ export default function AssetDetailPage({ assetId, onBack }) {
                   <div style={{ fontSize: 10, color: "#555" }}>{label}</div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* KEV risk banner */}
+          {exploitIntel?.kev_count > 0 && (
+            <div style={{ marginBottom: 14, padding: "10px 16px", borderRadius: 8,
+              background: "rgba(255,59,59,0.08)", border: "1px solid #ff3b3b44",
+              display: "flex", alignItems: "center", gap: 12 }}>
+              <span style={{ fontSize: 20 }}>🚨</span>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#ff3b3b" }}>
+                  {exploitIntel.kev_count} Known Exploited Vulnerabilities (CISA KEV)
+                  {exploitIntel.ransomware_risk && <span style={{ marginLeft: 8, fontSize: 10,
+                    color: "#ff8c00", border: "1px solid #ff8c0044", padding: "1px 6px", borderRadius: 4 }}>
+                    Ransomware Risk
+                  </span>}
+                </div>
+                <div style={{ fontSize: 11, color: "#9aa0b0", marginTop: 2 }}>
+                  Affected: {exploitIntel.kev_packages?.slice(0, 5).join(", ")}
+                  {exploitIntel.kev_packages?.length > 5 ? ` +${exploitIntel.kev_packages.length - 5} more` : ""}
+                </div>
+              </div>
+              {exploitIntel.highest_epss > 0 && (
+                <div style={{ marginLeft: "auto", textAlign: "right" }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: "#ff8c00" }}>
+                    {(exploitIntel.highest_epss * 100).toFixed(1)}%
+                  </div>
+                  <div style={{ fontSize: 10, color: "#555" }}>Highest EPSS</div>
+                </div>
+              )}
             </div>
           )}
 
@@ -249,7 +328,7 @@ export default function AssetDetailPage({ assetId, onBack }) {
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead>
                       <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-                        {["Package", "Version", "Vendor", "Manager", "CVEs", "Severity"].map(h => (
+                        {["Package", "Version", "Vendor", "Manager", "CVEs", "Severity", "EPSS", "KEV"].map(h => (
                           <th key={h} style={{ padding: "7px 12px", textAlign: "left", color: "#555", fontSize: 10, fontWeight: 600 }}>{h}</th>
                         ))}
                       </tr>
@@ -269,6 +348,15 @@ export default function AssetDetailPage({ assetId, onBack }) {
                             {pkg.cve_count || 0}
                           </td>
                           <td style={{ padding: "7px 12px" }}><SevBadge sev={pkg.highest_severity}/></td>
+                          <td style={{ padding: "7px 12px", fontSize: 11, color: pkg.epss_score > 0.5 ? "#ff3b3b" : pkg.epss_score > 0.1 ? "#ff8c00" : "#555" }}>
+                            {pkg.epss_score ? `${(pkg.epss_score * 100).toFixed(1)}%` : "—"}
+                          </td>
+                          <td style={{ padding: "7px 12px" }}>
+                            {pkg.is_kev && (
+                              <span style={{ fontSize: 9, fontWeight: 700, color: "#ff3b3b",
+                                border: "1px solid #ff3b3b44", padding: "1px 5px", borderRadius: 4 }}>KEV</span>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

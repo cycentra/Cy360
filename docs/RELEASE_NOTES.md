@@ -1,8 +1,95 @@
-## v1.0.107 -- 2026-06-29
+## v1.0.108 -- 2026-06-29
 
 ### Improvements
 
   - Stability and performance improvements.
+
+---
+
+## v1.0.108 -- 2026-06-30
+
+### New Features — ITAM Phase 3: Intelligence & Scale
+
+**Local NVD Mirror (Offline CVE Database)**
+
+CyCentra now maintains a local PostgreSQL mirror of the full NVD CVE database:
+- `nvd_cves` table stores all CVE IDs, severity, CVSS score, and description
+- Daily incremental sync (last 8 days) and weekly full sync via APScheduler
+- CVE enrichment now uses local mirror first — eliminates NVD API rate limits entirely
+- Manual triggers available: `POST /api/itam/nvd-mirror/sync` and `/full-sync`
+
+**CISA Known Exploited Vulnerabilities (KEV)**
+
+Integrates the CISA KEV catalog to identify CVEs that are actively being exploited in the wild:
+- `kev_catalog` table synced daily at 01:30 UTC
+- KEV flag on every vulnerable package in the Asset Detail software table
+- Per-asset `GET /api/itam/assets/<id>/exploit-intel` returns KEV count, affected packages, ransomware risk
+- `POST /api/itam/nvd-mirror/kev-sync` for on-demand sync
+
+**EPSS Exploitation Probability Scores**
+
+Every CVE is now enriched with its EPSS score (0–1) from FIRST.org — the probability that the vulnerability will be exploited in the next 30 days:
+- Batch API fetch (100 CVEs per call) via api.first.org
+- EPSS % displayed per package in the software inventory table
+- Color-coded: >50% = red, >10% = orange, else grey
+
+**SNMP Network Device Polling**
+
+Discover and inventory routers, switches, firewalls, and other SNMP-capable devices without SSH:
+- SNMP v2c via `pysnmp-lextudio`
+- Collects sysDescr, sysName, sysLocation, sysUpTime, ifTable (up to 24 interfaces)
+- Device type inference: Cisco/Juniper/FortiGate/HP ProCurve/Aruba/Ubiquiti/Axis
+- Per-asset scan button: "📡 SNMP Scan" in Asset Detail; API: `POST /api/itam/assets/<id>/snmp-scan`
+
+**mDNS/SSDP Passive Device Discovery**
+
+Discover printers, IP cameras, smart TVs, AirPlay/Chromecast/HAPS devices without active scanning:
+- zeroconf library listening on 19 service types (`_printer._tcp`, `_ipp._tcp`, `_hap._tcp`, `_airplay._tcp`, `_googlecast._tcp`, `_axis-video._tcp`, etc.)
+- Optional at startup: `ITAM_MDNS_ENABLED=true`
+- Feeds directly into `network_assets` with `discovery_source='mdns'`
+
+**Cloud Asset Discovery (AWS EC2 + Azure VMs)**
+
+Sync your cloud infrastructure into the ITAM asset database automatically:
+- **AWS**: boto3 EC2 describe_instances across multiple regions, picks up Name/Environment/Team tags
+- **Azure**: azure-mgmt-compute list_all() with NIC/IP resolution via azure-mgmt-network
+- Both respect CMDB priority (cloud data never overwrites manually-curated CMDB entries)
+- Auto-sync every 4 hours via APScheduler (when credentials configured)
+- Cloud source badges in Coverage Dashboard (orange=AWS, blue=Azure)
+- Manual trigger: `POST /api/itam/cloud-sync`
+
+**Per-Subnet Credential Profiles**
+
+Named credential sets tied to specific CIDR subnets — replaces the single global SSH/WinRM config:
+- `itam_credential_profiles` table with CIDR, SSH, WinRM, and SNMP credentials
+- Full CRUD API: `GET/POST /api/itam/credential-profiles`, `PUT/DELETE /api/itam/credential-profiles/<id>`
+- Admin-only management
+
+**Scheduled Background Jobs (5 new APScheduler jobs)**
+
+| Job | Schedule | Purpose |
+|---|---|---|
+| `itam_nvd_incremental` | Daily 03:00 UTC | Sync NVD CVEs modified in last 8 days |
+| `itam_nvd_full_sync` | Weekly Sunday 01:00 UTC | Full NVD sync from 2020 |
+| `itam_kev_sync` | Daily 01:30 UTC | Sync CISA KEV catalog |
+| `itam_cve_refresh` | Daily 02:00 UTC | Re-enrich assets with stale CVE data |
+| `itam_cloud_sync` | Every 4 hours | AWS/Azure asset sync (if configured) |
+
+### UI Improvements
+
+- **Asset Detail**: scan status badge (idle/scanning/ok/error), SNMP Scan button, EPSS % column, KEV badge column, ransomware risk banner
+- **Coverage Dashboard**: color-coded source dots (AWS=orange, Azure=blue, EDR=green, ARP=cyan)
+- Source badges now show `discovery_source` field (AWS/Azure/mDNS) correctly
+
+### Files Added (v1.0.108)
+- `backend/blueprints/itam/cloud_discovery.py` — AWS EC2 + Azure VM sync
+- `backend/blueprints/itam/snmp_scanner.py` — SNMP v2c polling
+- `backend/blueprints/itam/mdns_discovery.py` — mDNS/SSDP passive discovery
+- `backend/blueprints/itam/nvd_mirror.py` — Local NVD CVE cache
+- `backend/blueprints/itam/exploit_intel.py` — EPSS + CISA KEV
+
+### New Environment Variables (v1.0.108)
+See `docs/ITAM_COMMERCIAL_GAP_ANALYSIS.md` for full list.
 
 ---
 
