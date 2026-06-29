@@ -253,6 +253,24 @@ ITAM_IOT_PORTS    = os.environ.get("ITAM_IOT_PORTS",
 # Disabled by default — only enable in authorized pen-test / assessment contexts.
 ITAM_PROBE_CREDS  = os.environ.get("ITAM_PROBE_CREDS", "false").lower() == "true"
 
+# Agentless SSH deep inventory (Item 2)
+ITAM_SSH_USERNAME = os.environ.get("ITAM_SSH_USERNAME", "")
+ITAM_SSH_PASSWORD = os.environ.get("ITAM_SSH_PASSWORD", "")
+ITAM_SSH_KEY_PATH = os.environ.get("ITAM_SSH_KEY_PATH", "")  # path to private key file
+ITAM_SSH_PORT     = int(os.environ.get("ITAM_SSH_PORT", "22"))
+ITAM_WINRM_USERNAME = os.environ.get("ITAM_WINRM_USERNAME", "")
+ITAM_WINRM_PASSWORD = os.environ.get("ITAM_WINRM_PASSWORD", "")
+ITAM_WINRM_PORT     = int(os.environ.get("ITAM_WINRM_PORT", "5985"))
+ITAM_WINRM_SSL      = os.environ.get("ITAM_WINRM_SSL", "false").lower() == "true"
+
+# CVE enrichment via NVD API 2.0 (Item 3)
+NVD_API_KEY       = os.environ.get("NVD_API_KEY", "")  # free key from nvd.nist.gov/developers/request-an-api-key
+
+# Network DNS monitor for Shadow AI (Item 1)
+ITAM_DNS_MONITOR_PORT    = int(os.environ.get("ITAM_DNS_MONITOR_PORT", "5454"))
+ITAM_DNS_MONITOR_ENABLED = os.environ.get("ITAM_DNS_MONITOR_ENABLED", "false").lower() == "true"
+ITAM_DNS_UPSTREAM        = os.environ.get("ITAM_DNS_UPSTREAM", "8.8.8.8")
+
 # ── Flask session cookie settings ─────────────────────────────────────────────
 COOKIE_SETTINGS = {
     "SESSION_COOKIE_SECURE":    True,

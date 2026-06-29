@@ -1,3 +1,94 @@
+## v1.0.107 -- 2026-06-29
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.107 -- 2026-06-30
+
+### New Features — ITAM Phase 2: Depth & Maturity
+
+**Agent-less SSH/WinRM Deep Inventory**
+
+CyCentra 360 can now connect to any network host without a CyEDR or CySIEM agent to collect deep inventory data — OS version, hardware specs, all installed packages, running services, listening ports, and local users.
+
+- **Linux/macOS**: SSH connection using key-based or password auth (`paramiko`)
+- **Windows**: WinRM/PowerShell remoting with NTLM auth (`pywinrm`)
+- Triggered per-asset from the new Asset Detail page or via `POST /api/itam/assets/<id>/deep-scan`
+- Global default credentials configured in `/opt/cycentra/.env` (`ITAM_SSH_USERNAME`, `ITAM_WINRM_USERNAME`, etc.)
+- Per-scan credential override supported in request body for one-off scans
+
+**Software Inventory with CVE Correlation**
+
+After every deep scan, installed packages are stored in `software_inventory` and enriched with CVEs from the NVD API 2.0:
+
+- Package managers supported: deb (apt), rpm (yum/dnf), brew (macOS), Windows Registry
+- CVSSv3.1 → v3.0 → v2 severity parsed per CVE
+- Vulnerability count and highest severity shown directly in the Asset Coverage dashboard table
+- Per-asset software inventory page: paginated, severity-filtered, CVE count per package
+- `POST /api/itam/assets/<id>/enrich-cves` triggers enrichment on-demand
+- Configurable NVD API key (`NVD_API_KEY`) — free tier: 5 req/30s; with key: 50 req/30s
+
+**Shadow AI Detection — DNS & Network Layer (Item 1 Enhancement)**
+
+Expanded from process-scan-only to three detection layers:
+
+1. **Process scan** (existing) — 25 known local AI process names
+2. **DNS journal monitoring** (new, Linux/macOS) — CyEDR parses systemd-resolved / mDNSResponder logs every 60s for AI SaaS domain queries. Findings sent to `POST /api/itam/shadow-ai/dns-ingest`
+3. **Network DNS monitor** (new, optional) — dnslib-based forwarding resolver on CyCentra server (port 5454). Set CyCentra as secondary DNS in DHCP to catch ALL devices without an agent. Enable with `ITAM_DNS_MONITOR_ENABLED=true`
+4. **Sysmon rules expanded** — rules 101040/101041 now cover 65+ AI SaaS domains (was 10)
+
+AI domain watchlist expanded to 70+ domains across 30+ providers: OpenAI, Anthropic, Gemini, Mistral, Groq, DeepSeek, xAI/Grok, Stability AI, Midjourney, Runway, ElevenLabs, Character AI, HuggingFace, Replicate, OpenRouter, Coze, Amazon Bedrock, IBM WatsonX, GitHub Copilot, and more.
+
+**Asset Detail Page**
+
+New drill-down page reachable by clicking any asset row in the Coverage Dashboard:
+- OS info panel (name, version, architecture)
+- Hardware summary (CPU cores/model, RAM, disk)
+- Running services and local user accounts
+- Full software inventory table with CVE counts and severity badges
+- Deep Scan trigger (SSH/WinRM) and CVE enrichment trigger
+
+**New API Endpoints**
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/itam/assets/<id>/deep-scan` | Trigger SSH/WinRM scan |
+| `GET /api/itam/assets/<id>/detail` | Per-asset hardware/OS/software summary |
+| `GET /api/itam/assets/<id>/software` | Paginated software inventory |
+| `POST /api/itam/assets/<id>/enrich-cves` | Trigger NVD CVE lookup |
+| `GET /api/itam/shadow-ai/dns-watchlist` | Full AI domain watchlist (70+ domains) |
+| `POST /api/itam/shadow-ai/dns-ingest` | Receive DNS-detected Shadow AI findings |
+
+#### Files changed
+
+- `backend/blueprints/itam/agentless_scanner.py` — New: SSH + WinRM discovery engine
+- `backend/blueprints/itam/software_inventory.py` — New: software DB + NVD CVE lookup
+- `backend/blueprints/itam/dns_shadow_ai.py` — New: 70+ domain watchlist + DNS forwarding resolver
+- `backend/blueprints/itam/routes.py` — 6 new routes, DNS monitor startup hook
+- `backend/core/config.py` — 9 new env vars (SSH/WinRM/NVD/DNS)
+- `backend/blueprints/scheduler/routes.py` — DNS monitor startup registration
+- `backend/requirements.txt` — Added paramiko, pywinrm, dnslib
+- `agent/cyedr_agent.py` — DNS journal monitoring (Linux/macOS, 70+ domain watchlist)
+- `CYSIEM-Config/rules/cy_cust_rules.xml` — Rules 101040/101041 expanded to 65+ AI domains
+- `portal/src/pages/itam/AssetDetailPage.jsx` — New: per-asset detail + software inventory UI
+- `portal/src/pages/itam/index.jsx` — Vuln count column, clickable rows → asset detail
+- `portal/src/components/AppRouter.jsx` — Route for itam-asset-detail
+- `docs/ITAM_COMMERCIAL_GAP_ANALYSIS.md` — New: comprehensive gap analysis vs. commercial products
+
+#### New env vars
+
+```bash
+ITAM_SSH_USERNAME=          ITAM_SSH_PASSWORD=      ITAM_SSH_KEY_PATH=
+ITAM_SSH_PORT=22            ITAM_WINRM_USERNAME=    ITAM_WINRM_PASSWORD=
+ITAM_WINRM_PORT=5985        ITAM_WINRM_SSL=false    NVD_API_KEY=
+ITAM_DNS_MONITOR_ENABLED=false  ITAM_DNS_MONITOR_PORT=5454  ITAM_DNS_UPSTREAM=8.8.8.8
+```
+
+---
+
 ## v1.0.106 -- 2026-06-29
 
 ### Improvements

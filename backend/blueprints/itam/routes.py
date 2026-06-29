@@ -26,7 +26,10 @@ from flask import Blueprint, jsonify, request, session, make_response
 
 from blueprints.rbac.manager import get_user_role
 from core.helpers import add_cors_headers, auth_event
-from core.config import CYCENTRA_DB_URL, ITAM_SUBNET, ITAM_IOT_PORTS, ITAM_PROBE_CREDS
+from core.config import (CYCENTRA_DB_URL, ITAM_SUBNET, ITAM_IOT_PORTS, ITAM_PROBE_CREDS,
+                         ITAM_SSH_USERNAME, ITAM_SSH_PASSWORD, ITAM_SSH_KEY_PATH, ITAM_SSH_PORT,
+                         ITAM_WINRM_USERNAME, ITAM_WINRM_PASSWORD, ITAM_WINRM_PORT, ITAM_WINRM_SSL,
+                         NVD_API_KEY, ITAM_DNS_MONITOR_PORT, ITAM_DNS_MONITOR_ENABLED, ITAM_DNS_UPSTREAM)
 
 from .iot_classifier import oui_lookup, classify_ports, compute_risk_score, is_iot_candidate
 from .network_discovery import parse_cmdb_csv, upsert_assets, parse_arp_neighbors, run_nmap_discovery
@@ -941,3 +944,232 @@ def _classify_iot_from_assets(conn, assets: list[dict]) -> None:
                   json.dumps(open_ports), default_creds, risk,
                   json.dumps(factors)])
     conn.commit()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ITEM 2 — Agentless SSH/WinRM deep inventory
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@itam_bp.route("/assets/<int:asset_id>/deep-scan", methods=["POST", "OPTIONS"])
+def agentless_deep_scan(asset_id):
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    email = session.get("user_email")
+    if not email:
+        return jsonify({"error": "Unauthorized"}), 401
+    if get_user_role(email) not in ("admin", "analyst"):
+        return jsonify({"error": "Forbidden"}), 403
+
+    body = request.get_json(silent=True) or {}
+    credentials = {
+        "ssh_username": body.get("ssh_username") or ITAM_SSH_USERNAME,
+        "ssh_password": body.get("ssh_password") or ITAM_SSH_PASSWORD,
+        "ssh_key_path": body.get("ssh_key_path") or ITAM_SSH_KEY_PATH,
+        "ssh_port":     body.get("ssh_port", ITAM_SSH_PORT),
+        "winrm_username": body.get("winrm_username") or ITAM_WINRM_USERNAME,
+        "winrm_password": body.get("winrm_password") or ITAM_WINRM_PASSWORD,
+        "winrm_port":     body.get("winrm_port", ITAM_WINRM_PORT),
+        "winrm_ssl":      body.get("winrm_ssl", ITAM_WINRM_SSL),
+    }
+
+    conn = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, ip_address, hostname FROM network_assets WHERE id=%s", [asset_id])
+            asset = cur.fetchone()
+        if not asset:
+            return jsonify({"error": "Asset not found"}), 404
+        ip = str(asset["ip_address"])
+    finally:
+        conn.close()
+
+    def _do_scan():
+        from blueprints.itam.agentless_scanner import detect_and_scan
+        from blueprints.itam.software_inventory import (
+            ensure_software_tables, upsert_software, enrich_asset_cves, get_asset_software_summary
+        )
+        c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            ensure_software_tables(c)
+            result = detect_and_scan(ip, credentials)
+            if result.get("status") == "ok":
+                hw = result.get("hardware", {})
+                with c.cursor() as cur:
+                    cur.execute("""
+                        UPDATE network_assets SET
+                            hostname       = COALESCE(NULLIF(%s,''), hostname),
+                            os_info        = %s,
+                            hardware_info  = %s::jsonb,
+                            services       = %s::jsonb,
+                            local_users    = %s::jsonb,
+                            last_deep_scan = NOW()
+                        WHERE id = %s
+                    """, [
+                        result.get("hostname", ""),
+                        json.dumps(result.get("os_info", {})),
+                        json.dumps(hw),
+                        json.dumps(result.get("services", [])),
+                        json.dumps(result.get("local_users", [])),
+                        asset_id,
+                    ])
+                c.commit()
+                count = upsert_software(c, asset_id, result.get("packages", []))
+                enrich_asset_cves(c, asset_id, NVD_API_KEY)
+                log.info("[ITAM] deep-scan %s: %s packages upserted, method=%s", ip, count, result.get("method"))
+            else:
+                log.warning("[ITAM] deep-scan %s failed: %s", ip, result.get("error"))
+        finally:
+            c.close()
+
+    t = threading.Thread(target=_do_scan, daemon=True)
+    t.start()
+    return jsonify({"status": "scanning", "asset_id": asset_id, "ip": ip})
+
+
+@itam_bp.route("/assets/<int:asset_id>/detail", methods=["GET", "OPTIONS"])
+def asset_detail(asset_id):
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    from blueprints.itam.software_inventory import get_asset_software_summary
+    conn = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        summary = get_asset_software_summary(conn, asset_id)
+    finally:
+        conn.close()
+    return jsonify(summary)
+
+
+@itam_bp.route("/assets/<int:asset_id>/software", methods=["GET", "OPTIONS"])
+def asset_software(asset_id):
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    page     = max(1, int(request.args.get("page", 1)))
+    per_page = min(200, int(request.args.get("per_page", 50)))
+    sev_flt  = request.args.get("severity", "")
+    offset   = (page - 1) * per_page
+
+    conn = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        with conn.cursor() as cur:
+            where = "WHERE asset_id=%s"
+            params: list = [asset_id]
+            if sev_flt:
+                where += " AND highest_severity=%s"
+                params.append(sev_flt)
+            cur.execute(f"SELECT COUNT(*) AS n FROM software_inventory {where}", params)
+            total = cur.fetchone()["n"]
+            cur.execute(
+                f"SELECT id,name,version,vendor,package_manager,cve_count,highest_severity,cves,last_scanned "
+                f"FROM software_inventory {where} ORDER BY cve_count DESC, name LIMIT %s OFFSET %s",
+                params + [per_page, offset],
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+            for r in rows:
+                if r.get("last_scanned"):
+                    r["last_scanned"] = r["last_scanned"].isoformat()
+    finally:
+        conn.close()
+    return jsonify({"software": rows, "total": total, "page": page, "per_page": per_page})
+
+
+@itam_bp.route("/assets/<int:asset_id>/enrich-cves", methods=["POST", "OPTIONS"])
+def enrich_cves(asset_id):
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    email = session.get("user_email")
+    if not email:
+        return jsonify({"error": "Unauthorized"}), 401
+    if get_user_role(email) not in ("admin", "analyst"):
+        return jsonify({"error": "Forbidden"}), 403
+
+    def _enrich():
+        from blueprints.itam.software_inventory import enrich_asset_cves
+        c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            total = enrich_asset_cves(c, asset_id, NVD_API_KEY)
+            log.info("[ITAM] CVE enrichment asset_id=%s: %s vulns found", asset_id, total)
+        finally:
+            c.close()
+
+    threading.Thread(target=_enrich, daemon=True).start()
+    return jsonify({"status": "enriching", "asset_id": asset_id,
+                    "note": "NVD rate limit: ~50 packages/30s with API key, ~5/30s without"})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ITEM 1 — DNS Shadow AI: watchlist API + network DNS ingest
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@itam_bp.route("/shadow-ai/dns-watchlist", methods=["GET", "OPTIONS"])
+def dns_watchlist():
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+    from blueprints.itam.dns_shadow_ai import get_watchlist
+    return jsonify({"domains": get_watchlist(), "total": len(get_watchlist())})
+
+
+@itam_bp.route("/shadow-ai/dns-ingest", methods=["POST", "OPTIONS"])
+def dns_shadow_ai_ingest():
+    """
+    Called by the network DNS monitor when an AI domain query is detected.
+    Also called by CyEDR agent (Linux/macOS) for journal-based DNS findings.
+    Body: {query_domain, client_ip, matched_domain, hostname (optional)}
+    """
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    # Allow both session auth (UI tests) and bearer token (agent/monitor)
+    auth_header = request.headers.get("Authorization", "")
+    if not session.get("user_email") and not auth_header.startswith("Bearer "):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    body = request.get_json(silent=True) or {}
+    query_domain  = body.get("query_domain", "")
+    client_ip     = body.get("client_ip", "")
+    matched       = body.get("matched_domain", query_domain)
+    hostname      = body.get("hostname", "")
+    agent_id      = body.get("agent_id", "")
+    detection_method = body.get("detection_method", "dns")
+
+    if not query_domain:
+        return jsonify({"error": "query_domain required"}), 400
+
+    ingest_shadow_ai(
+        agent_id=agent_id or client_ip,
+        hostname=hostname or client_ip,
+        ai_tool=matched,
+        process_name=query_domain,
+        severity="medium",
+        detection_method=detection_method,
+    )
+    return jsonify({"status": "ingested", "domain": matched})
+
+
+def _start_dns_monitor_if_enabled():
+    """Called from scheduler/routes.py after app startup if ITAM_DNS_MONITOR_ENABLED=true."""
+    if not ITAM_DNS_MONITOR_ENABLED:
+        return
+    from blueprints.itam.dns_shadow_ai import start_network_dns_monitor
+
+    def _callback(query_domain: str, client_ip: str, matched: str):
+        try:
+            ingest_shadow_ai(
+                agent_id=client_ip,
+                hostname=client_ip,
+                ai_tool=matched,
+                process_name=query_domain,
+                severity="medium",
+                detection_method="dns_network",
+            )
+        except Exception as e:
+            log.debug("[ITAM-DNS] callback error: %s", e)
+
+    start_network_dns_monitor(ITAM_DNS_MONITOR_PORT, ITAM_DNS_UPSTREAM, _callback)
+    log.info("[ITAM-DNS] Network DNS monitor enabled on port %d", ITAM_DNS_MONITOR_PORT)

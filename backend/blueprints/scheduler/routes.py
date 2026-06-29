@@ -391,6 +391,12 @@ def init_scheduler(app) -> None:
     except Exception as _itam_exc:
         log.warning("scheduler: ITAM compliance sync job registration failed: %s", _itam_exc)
 
+    try:
+        from blueprints.itam.routes import _start_dns_monitor_if_enabled
+        _start_dns_monitor_if_enabled()
+    except Exception as _dns_exc:
+        log.warning("scheduler: ITAM DNS monitor startup failed: %s", _dns_exc)
+
     # ── Integration health monitor (always on, interval from env/config) ───────
     try:
         from blueprints.integrations.health import run_all_checks as _health_check

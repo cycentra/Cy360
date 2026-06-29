@@ -282,6 +282,91 @@ def _check_shadow_ai_processes(cfg: "Config", http: "requests.Session") -> None:
             logger.debug("shadow_ai telemetry error: %s", e)
 
 
+def _check_shadow_ai_dns(cfg: "Config", http: "requests.Session") -> None:
+    """
+    Monitor DNS query logs for SaaS AI domain access.
+    Linux: parses systemd-resolved journal.
+    macOS: parses mDNSResponder log stream.
+    Windows: handled by Sysmon EventID 22 — skipped here.
+    Sends dns-detection findings to /api/itam/shadow-ai/dns-ingest.
+    """
+    if cfg.os_type == "WINDOWS":
+        return  # Windows coverage comes from Sysmon EventID 22
+
+    AI_DNS_WATCHLIST = [
+        "openai.com", "api.openai.com", "chatgpt.com", "anthropic.com", "api.anthropic.com",
+        "claude.ai", "gemini.google.com", "generativelanguage.googleapis.com",
+        "aiplatform.googleapis.com", "aistudio.google.com", "vertex.ai",
+        "huggingface.co", "api-inference.huggingface.co", "mistral.ai", "api.mistral.ai",
+        "cohere.com", "api.cohere.ai", "perplexity.ai", "api.perplexity.ai",
+        "together.ai", "api.together.ai", "groq.com", "api.groq.com",
+        "fireworks.ai", "deepinfra.com", "deepseek.com", "api.deepseek.com",
+        "x.ai", "api.x.ai", "stability.ai", "api.stability.ai",
+        "midjourney.com", "runwayml.com", "runway.com", "elevenlabs.io", "api.elevenlabs.io",
+        "character.ai", "poe.com", "you.com", "replicate.com", "api.replicate.com",
+        "openrouter.ai", "coze.com", "ollama.ai", "ollama.com", "lmstudio.ai",
+        "watsonx.ai", "copilot.microsoft.com", "api.githubcopilot.com",
+    ]
+
+    def _is_ai(domain: str) -> str | None:
+        d = domain.lower().rstrip(".")
+        for suffix in AI_DNS_WATCHLIST:
+            if d == suffix or d.endswith("." + suffix):
+                return suffix
+        return None
+
+    def _read_linux() -> list[str]:
+        try:
+            import subprocess
+            r = subprocess.run(
+                ["journalctl", "-u", "systemd-resolved",
+                 "--since=70 seconds ago", "--no-pager", "--output=cat", "-q"],
+                capture_output=True, text=True, timeout=8,
+            )
+            return r.stdout.splitlines()
+        except Exception:
+            return []
+
+    def _read_macos() -> list[str]:
+        try:
+            import subprocess
+            r = subprocess.run(
+                ["log", "show", "--predicate", 'process == "mDNSResponder"',
+                 "--last", "70s", "--style", "syslog"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return r.stdout.splitlines()
+        except Exception:
+            return []
+
+    lines = _read_linux() if cfg.os_type == "LINUX" else _read_macos()
+    hits: set[str] = set()
+    for line in lines:
+        for part in line.split():
+            stripped = part.strip("()[],.;:'\"")
+            matched = _is_ai(stripped)
+            if matched:
+                hits.add(matched)
+
+    for domain in hits:
+        try:
+            http.post(
+                f"{cfg.platform_url}/api/itam/shadow-ai/dns-ingest",
+                json={
+                    "query_domain": domain,
+                    "client_ip": cfg.agent_ip or "",
+                    "matched_domain": domain,
+                    "hostname": cfg.hostname,
+                    "agent_id": cfg.agent_id,
+                    "detection_method": "dns_journal",
+                },
+                timeout=8,
+            )
+            logger.info("Shadow AI DNS detected: %s", domain)
+        except Exception as e:
+            logger.debug("shadow_ai_dns ingest error: %s", e)
+
+
 def _collect_arp_neighbors() -> list[dict]:
     """
     Collect local ARP table entries.
@@ -987,6 +1072,8 @@ class Heartbeat(threading.Thread):
 
         # Shadow AI process scan — sends telemetry for each detected AI tool
         _check_shadow_ai_processes(self._cfg, self._http)
+        # Shadow AI DNS journal scan — Linux/macOS journal-based SaaS AI detection
+        _check_shadow_ai_dns(self._cfg, self._http)
 
 
 # ── IOC refresh loop ───────────────────────────────────────────────────────────

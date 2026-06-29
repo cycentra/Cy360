@@ -31,12 +31,14 @@ import EdrYaraRulesPage                 from '../pages/edr/EdrYaraRulesPage.jsx'
 import ItamCoveragePage                 from '../pages/itam/index.jsx';
 import IotRegistryPage                  from '../pages/itam/IotRegistryPage.jsx';
 import ShadowAiPage                     from '../pages/itam/ShadowAiPage.jsx';
+import AssetDetailPage                  from '../pages/itam/AssetDetailPage.jsx';
 
 export function AppRouter({ activeTab, user, assets, data, stats, installedModules,
   scanHistory, selectedScanId, onScanSelect, onScanComplete,
   setActiveTab, setSelectedAsset, setShowImport,
   onInstallModule, onUninstallModule,
-  casesIncidentId, setCasesIncidentId, selectedEdrAgent, setSelectedEdrAgent }) {
+  casesIncidentId, setCasesIncidentId, selectedEdrAgent, setSelectedEdrAgent,
+  selectedItamAsset, setSelectedItamAsset }) {
 
   const nav = (tab, opts) => {
     if (tab === "cases" && opts?.incidentId) { setCasesIncidentId(opts.incidentId); setActiveTab("cases-detail"); }
@@ -78,9 +80,10 @@ export function AppRouter({ activeTab, user, assets, data, stats, installedModul
       {activeTab==="edr-installer"  && <EdrAgentInstallerPage/>}
       {activeTab==="edr-yara-rules" && <EdrYaraRulesPage/>}
       {activeTab==="edr-endpoint-detail" && <EdrEndpointDetailPage agentId={selectedEdrAgent}/>}
-      {activeTab==="itam-coverage"  && <ItamCoveragePage/>}
+      {activeTab==="itam-coverage"  && <ItamCoveragePage onViewAsset={id => { setSelectedItamAsset(id); setActiveTab("itam-asset-detail"); }}/>}
       {activeTab==="itam-iot"       && <IotRegistryPage/>}
       {activeTab==="itam-shadow-ai" && <ShadowAiPage/>}
+      {activeTab==="itam-asset-detail" && <AssetDetailPage assetId={selectedItamAsset} onBack={() => setActiveTab("itam-coverage")}/>}
     </>
   );
 }

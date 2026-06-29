@@ -482,34 +482,36 @@
   <!-- Level 6: informational/governance — NOT active_response group.  -->
   <!-- ================================================================== -->
 
-  <!-- SAI-001: DNS query to known AI API domain (Sysmon EventID 22)
+  <!-- SAI-001: DNS query to known AI SaaS domain (Sysmon EventID 22)
        Sysmon EventID 22 DnsQuery base SID: 61650 (Wazuh built-in).
-       Captures: api.openai.com, api.anthropic.com, gemini, mistral,
-       groq, together.ai, openrouter, perplexity, cohere.
-       Low level (6) — informational. Feeds ITAM Shadow AI monitor. -->
+       Expanded to 60+ AI providers: OpenAI, Anthropic, Gemini, Mistral,
+       Groq, Together, Perplexity, Cohere, DeepSeek, xAI, Stability,
+       Midjourney, Runway, ElevenLabs, Character AI, HuggingFace, etc.
+       Low level (6) — governance only. Feeds ITAM Shadow AI monitor. -->
   <rule id="101040" level="6">
     <if_sid>61650</if_sid>
-    <field name="data.win.eventdata.queryName" type="pcre2">(?i)(api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com|api\.mistral\.ai|api\.groq\.com|api\.together\.xyz|openrouter\.ai|api\.perplexity\.ai|api\.cohere\.ai|api\.replicate\.com)</field>
-    <description>Shadow AI: DNS query to AI API service from $(agent.name) ($(data.win.eventdata.image)) — governance alert</description>
+    <field name="data.win.eventdata.queryName" type="pcre2">(?i)(openai\.com|chatgpt\.com|oai\.azure\.com|openai\.azure\.com|anthropic\.com|claude\.ai|gemini\.google\.com|generativelanguage\.googleapis\.com|aiplatform\.googleapis\.com|aistudio\.google\.com|vertex\.ai|makersuite\.google\.com|llama-api\.com|huggingface\.co|api-inference\.huggingface\.co|mistral\.ai|cohere\.com|cohere\.ai|perplexity\.ai|together\.ai|api\.together\.xyz|groq\.com|fireworks\.ai|anyscale\.com|deepinfra\.com|deepseek\.com|x\.ai|grok\.x\.ai|stability\.ai|midjourney\.com|runwayml\.com|runway\.com|elevenlabs\.io|writesonic\.com|jasper\.ai|copy\.ai|character\.ai|neo\.character\.ai|poe\.com|you\.com|phind\.com|replicate\.com|openrouter\.ai|coze\.com|venice\.ai|ollama\.ai|ollama\.com|lmstudio\.ai|watsonx\.ai|us-south\.ml\.cloud\.ibm\.com|copilot\.microsoft\.com|api\.githubcopilot\.com|grammarly\.com)</field>
+    <description>Shadow AI: DNS query to AI SaaS domain from $(agent.name) (process: $(data.win.eventdata.image)) — governance alert</description>
     <group>shadow_ai,governance,</group>
   </rule>
 
-  <!-- SAI-002: Outbound network connection to known AI API host (Sysmon EventID 3)
+  <!-- SAI-002: Outbound network connection to known AI SaaS host (Sysmon EventID 3)
        Sysmon EventID 3 NetworkConnect base SID: 61603 (Wazuh built-in).
-       Captures processes connecting to AI API endpoints over HTTPS (443). -->
+       Captures processes making HTTPS connections to AI API endpoints. -->
   <rule id="101041" level="6">
     <if_sid>61603</if_sid>
-    <field name="data.win.eventdata.destinationHostname" type="pcre2">(?i)(api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com|api\.mistral\.ai|api\.groq\.com|api\.together\.xyz|openrouter\.ai|api\.perplexity\.ai|api\.cohere\.ai)</field>
-    <description>Shadow AI: outbound connection to AI API from $(agent.name) process $(data.win.eventdata.image) — governance alert</description>
+    <field name="data.win.eventdata.destinationHostname" type="pcre2">(?i)(openai\.com|chatgpt\.com|anthropic\.com|claude\.ai|generativelanguage\.googleapis\.com|gemini\.google\.com|aiplatform\.googleapis\.com|llama-api\.com|huggingface\.co|mistral\.ai|cohere\.com|perplexity\.ai|together\.ai|groq\.com|fireworks\.ai|deepinfra\.com|deepseek\.com|x\.ai|stability\.ai|runwayml\.com|runway\.com|elevenlabs\.io|character\.ai|poe\.com|replicate\.com|openrouter\.ai|coze\.com|venice\.ai|ollama\.ai|watsonx\.ai|copilot\.microsoft\.com|api\.githubcopilot\.com)</field>
+    <description>Shadow AI: outbound connection to AI SaaS from $(agent.name) process $(data.win.eventdata.image) — governance alert</description>
     <group>shadow_ai,governance,</group>
   </rule>
 
-  <!-- SAI-003: Local AI service port open on internal host
-       Ollama (11434), LM Studio (1234), Jan.ai (3001), Text-gen-webui (7860).
-       Detected via agent port-open command output or Wazuh active checks. -->
+  <!-- SAI-003: Local AI service port detected on internal host
+       Ollama (11434), LM Studio (1234), Jan.ai (3001), Text-gen-webui (7860),
+       LocalAI (8080 — ambiguous), Open WebUI (3000), Msty (4891).
+       Detected via agent telemetry or Wazuh active response port checks. -->
   <rule id="101042" level="7">
     <if_sid>0</if_sid>
-    <match>:11434|:1234|:7860|port 11434|port 1234|port 7860|ollama serve|lm-studio.*server|text-generation-webui</match>
+    <match>:11434|:1234|:7860|:3001|:4891|port 11434|port 1234|port 7860|port 3001|port 4891|ollama serve|lm-studio.*server|text-generation-webui|localai.*server|open-webui</match>
     <description>Shadow AI: local LLM service detected on $(agent.name) — unauthorised AI server may be running</description>
     <group>shadow_ai,governance,</group>
   </rule>

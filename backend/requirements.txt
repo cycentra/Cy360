@@ -26,6 +26,11 @@ numpy>=1.24
 Pillow>=10.0
 psutil>=5.9
 
+# ── ITAM agentless discovery + DNS monitor ────────────────────────────────────
+paramiko>=3.0.0          # SSH-based agentless inventory (Linux/macOS targets)
+pywinrm>=0.4.3           # WinRM/PowerShell remoting (Windows targets)
+dnslib>=0.9.23           # DNS forwarding resolver for network-level Shadow AI detection
+
 # ── Secrets backends (optional — install only what you use) ───────────────────
 # Azure Key Vault + Azure Arc Managed Identity
 azure-identity>=1.15.0

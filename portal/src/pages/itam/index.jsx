@@ -77,7 +77,7 @@ function Badge({ label, color }) {
   );
 }
 
-function AssetTable({ assets, loading }) {
+function AssetTable({ assets, loading, onViewAsset }) {
   if (loading) return <div style={{ color: "#555", padding: 32, textAlign: "center" }}>Loading…</div>;
   if (!assets.length) return <div style={{ color: "#555", padding: 32, textAlign: "center" }}>No assets found.</div>;
   return (
@@ -85,14 +85,16 @@ function AssetTable({ assets, loading }) {
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
         <thead>
           <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-            {["IP Address", "Hostname", "Vendor", "Type", "EDR", "SIEM", "Source", "Last Seen"].map(h => (
+            {["IP Address", "Hostname", "Vendor", "Type", "EDR", "SIEM", "Source", "Vulns", "Last Seen"].map(h => (
               <th key={h} style={{ textAlign: "left", padding: "8px 12px", color: "#555", fontWeight: 600, fontSize: 10, letterSpacing: 0.5 }}>{h}</th>
             ))}
           </tr>
         </thead>
         <tbody>
           {assets.map((a, i) => (
-            <tr key={a.id || i} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", transition: "background 0.1s" }}
+            <tr key={a.id || i}
+              onClick={() => a.id && onViewAsset && onViewAsset(a.id)}
+              style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", cursor: a.id ? "pointer" : "default" }}
               onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.025)"}
               onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
               <td style={{ padding: "9px 12px", fontFamily: "monospace", color: ACCENT }}>{a.ip_address}</td>
@@ -115,6 +117,13 @@ function AssetTable({ assets, loading }) {
               <td style={{ padding: "9px 12px" }}>
                 <Badge label={SOURCE_LABEL[a.source] || a.source} color="#555"/>
               </td>
+              <td style={{ padding: "9px 12px" }}>
+                {a.vuln_count > 0
+                  ? <span style={{ fontWeight: 700, color: a.highest_cve_severity === "critical" ? "#ff3b3b" : a.highest_cve_severity === "high" ? "#ff8c00" : "#f5c518" }}>
+                      {a.vuln_count} {a.highest_cve_severity}
+                    </span>
+                  : <span style={{ color: "#333", fontSize: 10 }}>—</span>}
+              </td>
               <td style={{ padding: "9px 12px", color: "#555", fontSize: 11 }}>
                 {a.last_seen ? new Date(a.last_seen).toLocaleString() : "—"}
               </td>
@@ -126,7 +135,7 @@ function AssetTable({ assets, loading }) {
   );
 }
 
-export default function ItamCoveragePage() {
+export default function ItamCoveragePage({ onViewAsset }) {
   const [coverage,      setCoverage]      = useState(null);
   const [assets,        setAssets]        = useState([]);
   const [total,         setTotal]         = useState(0);
@@ -322,7 +331,7 @@ export default function ItamCoveragePage() {
 
       {/* Asset table */}
       <div style={{ background: CARD_BG, border: BORDER, borderRadius: 12, overflow: "hidden" }}>
-        <AssetTable assets={assets} loading={loading}/>
+        <AssetTable assets={assets} loading={loading} onViewAsset={onViewAsset}/>
         {total > PER_PAGE && (
           <div style={{ display: "flex", justifyContent: "center", gap: 8, padding: 16 }}>
             <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
