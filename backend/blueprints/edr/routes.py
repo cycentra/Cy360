@@ -765,6 +765,58 @@ def run_scan(agent_id):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# COMMAND HISTORY (UI-facing, viewer+)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@edr_bp.route("/response/<agent_id>/commands", methods=["OPTIONS"])
+def _opt_cmd_history(agent_id):
+    return add_cors_headers(make_response("", 204))
+
+
+@edr_bp.route("/response/<agent_id>/commands", methods=["GET"])
+@require_viewer
+def agent_command_history(agent_id):
+    """Return the last 50 response commands issued for an agent (UI-facing)."""
+    limit = min(int(request.args.get("limit", 50)), 200)
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, action, parameters, status, issued_by,
+                       issued_at, acknowledged_at, completed_at,
+                       result, auto_triggered
+                FROM edr_response_commands
+                WHERE agent_id = %s
+                ORDER BY issued_at DESC
+                LIMIT %s
+                """,
+                [agent_id, limit],
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        # Serialise timestamps and jsonb
+        for r in rows:
+            for ts_col in ("issued_at", "acknowledged_at", "completed_at"):
+                if r.get(ts_col):
+                    r[ts_col] = r[ts_col].isoformat()
+            if r.get("parameters") and isinstance(r["parameters"], str):
+                try:
+                    r["parameters"] = json.loads(r["parameters"])
+                except Exception:
+                    pass
+            if r.get("result") and isinstance(r["result"], str):
+                try:
+                    r["result"] = json.loads(r["result"])
+                except Exception:
+                    pass
+        return jsonify({"commands": rows})
+    except Exception as exc:
+        _log.error("agent_command_history error: %s", exc)
+        return jsonify({"error": "Failed to fetch command history"}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # AGENT-FACING COMMAND POLLING
 # ═══════════════════════════════════════════════════════════════════════════════
 
