@@ -1,3 +1,11 @@
+## v1.0.119 -- 2026-06-30
+
+### Bug Fixes
+
+  - edr): save enrollment_token to config and use for agent auth
+
+---
+
 ## v1.0.118 -- 2026-06-30
 
 ### Improvements
