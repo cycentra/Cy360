@@ -478,17 +478,20 @@ enroll_agent() {
             \"gateway_mac\": \"$GW_MAC\"
         }") || die "Enrollment failed — check network connectivity to $PLATFORM_URL"
 
-    # Extract agent_id from response
+    # Extract agent_id and enrollment_token from response
     AGENT_ID=$(echo "$ENROLL_RESPONSE" | grep -o '"agent_id":"[^"]*"' | cut -d'"' -f4)
+    ENROLLMENT_TOKEN=$(echo "$ENROLL_RESPONSE" | grep -o '"enrollment_token":"[^"]*"' | cut -d'"' -f4)
     [[ -z "$AGENT_ID" ]] && die "Enrollment response did not include agent_id: $ENROLL_RESPONSE"
+    [[ -z "$ENROLLMENT_TOKEN" ]] && die "Enrollment response did not include enrollment_token: $ENROLL_RESPONSE"
 
-    # Persist agent_id into config
+    # Persist agent_id and enrollment_token into config
     python3 - << PYINLINE
 import json
 cfg_path = "$EDR_HOME/config.json"
 with open(cfg_path) as f:
     cfg = json.load(f)
 cfg["agent_id"] = "$AGENT_ID"
+cfg["enrollment_token"] = "$ENROLLMENT_TOKEN"
 with open(cfg_path, "w") as f:
     json.dump(cfg, f, indent=2)
 PYINLINE

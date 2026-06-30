@@ -58,6 +58,7 @@ class Config:
             d = json.load(f)
         self.platform_url       = d["platform_url"].rstrip("/")
         self.deploy_token       = d["deploy_token"]
+        self.enrollment_token   = d.get("enrollment_token", d["deploy_token"])
         self.agent_id           = d.get("agent_id", "")
         self.asset_type         = d.get("asset_type", "workstation")
         self.hostname           = d.get("hostname", socket.gethostname())
@@ -1314,7 +1315,7 @@ def main():
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT,  handle_signal)
 
-    http = build_http_session(cfg.deploy_token)
+    http = build_http_session(cfg.enrollment_token)
     ensure_enrolled(cfg, http)
 
     ioc      = IOCCache(cfg.ioc_cache)

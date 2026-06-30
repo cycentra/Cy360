@@ -3669,6 +3669,22 @@ MISPCRON
         success "cycentra_sysmon_config.xml staged to $_SYSMON_PKG (served via /api/edr/installer/sysmon-config)"
     fi
 
+    # Stage CyEDR installer scripts and agent to the package directory
+    # served by Flask at /api/edr/installer/{unix,win,agent-py}
+    _EDR_PKG="/var/lib/cycentra-agent-packages/edr"
+    mkdir -p "$_EDR_PKG"
+    for _src in \
+        "$_SCRIPT_DIR/scripts/cyedr-install.sh" \
+        "$_SCRIPT_DIR/scripts/cyedr-install.ps1" \
+        "$_SCRIPT_DIR/agent/cyedr_agent.py"; do
+        if [[ -f "$_src" ]]; then
+            cp "$_src" "$_EDR_PKG/"
+            success "Staged $(basename "$_src") → $_EDR_PKG/"
+        else
+            warn "CyEDR file not found, skipping: $_src"
+        fi
+    done
+
     # ── Reload Wazuh after config/decoder/agent changes ───────────────────────
     /var/ossec/bin/wazuh-analysisd -t 2>/dev/null \
         && { systemctl reload wazuh-manager 2>/dev/null || systemctl restart wazuh-manager 2>/dev/null; \
