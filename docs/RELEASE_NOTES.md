@@ -1,3 +1,15 @@
+## v1.0.121 -- 2026-06-30
+
+### Bug Fixes
+
+  - edr): guarantee pip deps land in root's Python path during install
+  - edr): retire previous enrollments on re-enroll by same hostname
+  - edr): pip install to root home so LaunchDaemon can import deps
+  - edr): detect pip --break-system-packages support before using it
+  - edr): install Python deps with --break-system-packages for macOS
+
+---
+
 ## v1.0.120 -- 2026-06-30
 
 ### Bug Fixes
