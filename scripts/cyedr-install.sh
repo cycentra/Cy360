@@ -76,7 +76,7 @@ parse_args() {
     done
     [[ -z "$DEPLOY_TOKEN" ]] && die "Missing --token <DEPLOY_TOKEN>"
     [[ -z "$PLATFORM_URL" ]] && die "Missing --platform <URL>"
-    $SILENT && [[ -z "$WITH_CYSIEM" ]] && WITH_CYSIEM="no"
+    if [[ "$SILENT" == "true" ]] && [[ -z "$WITH_CYSIEM" ]]; then WITH_CYSIEM="no"; fi
 }
 
 # ── Platform detection ─────────────────────────────────────────────────────────
@@ -140,6 +140,8 @@ install_packages_macos() {
 }
 
 # ── Deploy CyEDR agent ─────────────────────────────────────────────────────────
+PYTHON_MODE=false   # set to true when falling back to python3 launcher
+
 deploy_agent() {
     info "Creating CyEDR installation directory: $EDR_HOME"
     mkdir -p "$EDR_HOME/"{rules,ioc_cache,quarantine,logs,yara_rules}
@@ -157,16 +159,16 @@ deploy_agent() {
     if curl -fsSL --max-time 60 \
         -H "Authorization: Bearer $DEPLOY_TOKEN" \
         "$BUNDLE_URL" \
-        -o "$EDR_HOME/cyedr-agent"; then
+        -o "$EDR_HOME/cyedr-agent" 2>/dev/null; then
         chmod 750 "$EDR_HOME/cyedr-agent"
         ok "Agent binary downloaded"
     else
         # Air-gap fallback: look for binary alongside the installer script
-        warn "Platform download failed — scanning for local bundle..."
+        warn "Pre-built binary not available for ${OS_KEY}/${AGENT_ARCH} — trying Python fallback..."
         SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || true
         local FALLBACK=""
         for try_path in \
-            "${SCRIPT_DIR}/cyedr-agent-linux-${AGENT_ARCH}" \
+            "${SCRIPT_DIR}/cyedr-agent-${OS_KEY,,}-${AGENT_ARCH}" \
             "${SCRIPT_DIR}/../agent/cyedr-agent" \
             "/tmp/cyedr-agent"; do
             [[ -f "$try_path" ]] && { FALLBACK="$try_path"; break; }
@@ -176,7 +178,25 @@ deploy_agent() {
             chmod 750 "$EDR_HOME/cyedr-agent"
             warn "Using local bundle: $FALLBACK"
         else
-            die "Cannot obtain cyedr-agent binary. Check network to $PLATFORM_URL or place the binary as ${SCRIPT_DIR}/cyedr-agent-linux-${AGENT_ARCH}"
+            # Python-mode fallback: download agent script and run with python3
+            PYTHON_BIN="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+            if [[ -n "$PYTHON_BIN" ]]; then
+                info "Installing in Python mode using $PYTHON_BIN..."
+                if curl -fsSL --max-time 60 \
+                    -H "Authorization: Bearer $DEPLOY_TOKEN" \
+                    "$PLATFORM_URL/api/edr/installer/agent-py" \
+                    -o "$EDR_HOME/cyedr_agent.py" 2>/dev/null; then
+                    chmod 640 "$EDR_HOME/cyedr_agent.py"
+                    # Install pip dependencies for the agent
+                    "$PYTHON_BIN" -m pip install --quiet psutil requests pyyaml 2>/dev/null || true
+                    PYTHON_MODE=true
+                    ok "Agent script installed (Python mode: $PYTHON_BIN)"
+                else
+                    die "Cannot obtain CyEDR agent (binary or script). Check your deployment token and network to $PLATFORM_URL"
+                fi
+            else
+                die "Cannot obtain cyedr-agent binary and python3 is not available. Install Python 3 or contact support."
+            fi
         fi
     fi
 
@@ -278,6 +298,13 @@ AUDISP
 install_systemd_service() {
     info "Installing CyEDR systemd service..."
 
+    local EXEC_START
+    if [[ "$PYTHON_MODE" == "true" ]]; then
+        EXEC_START="$PYTHON_BIN $EDR_HOME/cyedr_agent.py --config $EDR_HOME/config.json"
+    else
+        EXEC_START="$EDR_HOME/cyedr-agent --config $EDR_HOME/config.json"
+    fi
+
     cat > /etc/systemd/system/cyedr-agent.service << SVCFILE
 [Unit]
 Description=CyCentra 360 EDR Agent
@@ -291,7 +318,7 @@ Type=simple
 User=root
 Group=root
 WorkingDirectory=$EDR_HOME
-ExecStart=$EDR_HOME/cyedr-agent --config $EDR_HOME/config.json
+ExecStart=$EXEC_START
 Restart=always
 RestartSec=10
 StandardOutput=append:$EDR_HOME/logs/cyedr_agent.log
@@ -344,6 +371,19 @@ install_launchdaemon() {
     info "Installing CyEDR LaunchDaemon (macOS)..."
     local PLIST="/Library/LaunchDaemons/com.cycentra.edr.plist"
 
+    # Build ProgramArguments based on binary vs Python mode
+    local PROG_ARGS
+    if [[ "$PYTHON_MODE" == "true" ]]; then
+        PROG_ARGS="    <string>$PYTHON_BIN</string>
+        <string>$EDR_HOME/cyedr_agent.py</string>
+        <string>--config</string>
+        <string>$EDR_HOME/config.json</string>"
+    else
+        PROG_ARGS="    <string>$EDR_HOME/cyedr-agent</string>
+        <string>--config</string>
+        <string>$EDR_HOME/config.json</string>"
+    fi
+
     cat > "$PLIST" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -354,10 +394,7 @@ install_launchdaemon() {
     <string>com.cycentra.edr</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$EDR_HOME/cyedr-agent</string>
-        <string>--config</string>
-        <string>$EDR_HOME/config.json</string>
-    </array>
+        $PROG_ARGS
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>

@@ -1272,7 +1272,8 @@ def _require_deploy_token():
 for _ap in ("/installer/agent-bundle", "/installer/sysmon-config",
             "/installer/sysmon-exe", "/installer/yara-rules",
             "/installer/yara-exe", "/installer/cysiem-script",
-            "/installer/cysiem-msi", "/installer/unix", "/installer/win"):
+            "/installer/cysiem-msi", "/installer/unix", "/installer/win",
+            "/installer/agent-py"):
     edr_bp.add_url_rule(
         _ap,
         endpoint=f"opts_asset_{_ap.replace('/','_').replace('-','_')}",
@@ -1403,6 +1404,23 @@ def installer_win_script():
     if not os.path.exists(fpath):
         return jsonify({"error": "Windows installer not found on platform"}), 404
     return send_file(fpath, mimetype="text/plain")
+
+
+@edr_bp.route("/installer/agent-py", methods=["GET"])
+def installer_agent_py():
+    """Serve cyedr_agent.py for Python-mode fallback (no pre-built binary needed)."""
+    err = _require_deploy_token()
+    if err:
+        return err
+    candidates = [
+        os.path.join(_EDR_PKG_DIR, "cyedr_agent.py"),
+        os.path.join(os.path.dirname(__file__), "../../..", "agent", "cyedr_agent.py"),
+    ]
+    for fpath in candidates:
+        fpath = os.path.realpath(fpath)
+        if os.path.exists(fpath):
+            return send_file(fpath, mimetype="text/x-python")
+    return jsonify({"error": "cyedr_agent.py not staged on platform"}), 404
 
 
 # ── Self-enrollment (agent calls this with deployment token) ──────────────────
