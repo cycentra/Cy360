@@ -540,6 +540,24 @@ def assets_list():
             for r in rows:
                 if r.get("ip_address"):
                     r["ip_address"] = str(r["ip_address"])
+                # Derive vendor/type from os_fingerprint when still unknown
+                os_fp = (r.get("os_fingerprint") or "").lower()
+                if not r.get("vendor") or r["vendor"] in ("Unknown", ""):
+                    if "windows" in os_fp:
+                        r["vendor"] = "Microsoft"
+                    elif "darwin" in os_fp or "macos" in os_fp or "mac os" in os_fp:
+                        r["vendor"] = "Apple"
+                    elif "linux" in os_fp or "ubuntu" in os_fp or "debian" in os_fp or "centos" in os_fp or "rhel" in os_fp:
+                        r["vendor"] = "Linux"
+                if r.get("asset_type") in (None, "unknown", ""):
+                    if "windows" in os_fp:
+                        r["asset_type"] = "workstation"
+                    elif "darwin" in os_fp or "macos" in os_fp:
+                        r["asset_type"] = "workstation"
+                    elif "linux" in os_fp:
+                        r["asset_type"] = "server"
+                    elif r.get("source") == "arp_report":
+                        r["asset_type"] = "network_device"
         conn.close()
         return jsonify({"assets": rows, "total": total, "page": page, "per_page": per_page})
     except psycopg2.Error as exc:
@@ -1403,7 +1421,7 @@ def _crossref_agents_conn(conn) -> None:
         cur.execute("""
             INSERT INTO network_assets
               (ip_address, hostname, siem_agent_id, source, discovery_source,
-               asset_type, os_fingerprint)
+               asset_type, vendor, os_fingerprint)
             SELECT
               hpc.ip::inet,
               hpc.agent_name,
@@ -1416,6 +1434,12 @@ def _crossref_agents_conn(conn) -> None:
                 WHEN hpc.os_platform ILIKE '%darwin%'  THEN 'workstation'
                 ELSE 'unknown'
               END,
+              CASE
+                WHEN hpc.os_platform ILIKE '%windows%' THEN 'Microsoft'
+                WHEN hpc.os_platform ILIKE '%linux%'   THEN 'Linux'
+                WHEN hpc.os_platform ILIKE '%darwin%'  THEN 'Apple'
+                ELSE NULL
+              END,
               hpc.os_platform
             FROM host_posture_cache hpc
             WHERE hpc.ip IS NOT NULL AND hpc.ip NOT IN ('any', '127.0.0.1', '0.0.0.0')
@@ -1425,6 +1449,7 @@ def _crossref_agents_conn(conn) -> None:
               asset_type       = CASE WHEN network_assets.asset_type IN ('unknown','')
                                       THEN EXCLUDED.asset_type
                                       ELSE network_assets.asset_type END,
+              vendor           = COALESCE(network_assets.vendor, EXCLUDED.vendor),
               os_fingerprint   = COALESCE(network_assets.os_fingerprint, EXCLUDED.os_fingerprint),
               discovery_source = CASE WHEN network_assets.discovery_source IN ('manual','')
                                       THEN 'siem_agent'
