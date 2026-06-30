@@ -81,6 +81,10 @@ function TokenCard({ token, onRevoke }) {
   const usageText   = token.max_uses > 0
     ? `${token.used_count}/${token.max_uses} uses`
     : `${token.used_count} uses (unlimited)`;
+  const tokenPreview = token.token ? `${token.token.slice(0, 8)}…${token.token.slice(-4)}` : "••••••••";
+  const copyToken = () => {
+    if (token.token) navigator.clipboard.writeText(token.token).catch(() => {});
+  };
 
   return (
     <div style={{
@@ -99,6 +103,16 @@ function TokenCard({ token, onRevoke }) {
           <div style={{ fontSize: 11, color: "#444", marginTop: 2 }}>
             Created by {token.created_by} · {new Date(token.created_at).toLocaleString()}
           </div>
+          {!token.revoked && token.token && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+              <code style={{ fontSize: 11, color: "#888", background: "rgba(255,255,255,0.04)", padding: "2px 7px", borderRadius: 4, letterSpacing: "0.03em" }}>
+                {tokenPreview}
+              </code>
+              <button onClick={copyToken} style={{ border: "1px solid #333", borderRadius: 4, background: "transparent", color: "#00e5a0", fontSize: 10, padding: "2px 8px", cursor: "pointer" }}>
+                Copy value
+              </button>
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{
@@ -120,12 +134,13 @@ function TokenCard({ token, onRevoke }) {
 
 // ── Create token modal ─────────────────────────────────────────────────────
 function CreateTokenModal({ onClose, onCreate }) {
-  const [label,   setLabel]   = useState("Production deployment");
-  const [osType,  setOsType]  = useState("any");
-  const [maxUses, setMaxUses] = useState(0);
-  const [expires, setExpires] = useState(0);
-  const [busy,    setBusy]    = useState(false);
-  const [err,     setErr]     = useState("");
+  const [label,     setLabel]     = useState("Production deployment");
+  const [osType,    setOsType]    = useState("any");
+  const [maxUses,   setMaxUses]   = useState(0);
+  const [expires,   setExpires]   = useState(0);
+  const [busy,      setBusy]      = useState(false);
+  const [err,       setErr]       = useState("");
+  const [createdTok, setCreatedTok] = useState(null);
 
   const submit = async () => {
     setBusy(true); setErr("");
@@ -137,14 +152,35 @@ function CreateTokenModal({ onClose, onCreate }) {
       });
       if (!res.ok) throw new Error((await res.json()).error || res.status);
       const tok = await res.json();
+      setCreatedTok(tok);
       onCreate(tok);
-      onClose();
     } catch (e) {
       setErr(e.message);
     } finally {
       setBusy(false);
     }
   };
+
+  if (createdTok) {
+    return (
+      <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999 }}>
+        <div style={{ background:"#12182b", border:"1px solid #00e5a066", borderRadius:12, padding:28, maxWidth:520, width:"90%" }}>
+          <div style={{ fontSize:15, fontWeight:700, color:"#00e5a0", marginBottom:8 }}>Token Created</div>
+          <div style={{ fontSize:12, color:"#888", marginBottom:16 }}>Copy this token value now — it is the secret used in install commands. The portal shows only the first/last characters afterwards.</div>
+          <div style={{ background:"rgba(0,229,160,0.06)", border:"1px solid #00e5a033", borderRadius:8, padding:"12px 16px", marginBottom:16 }}>
+            <div style={{ fontSize:10, color:"#555", marginBottom:6, letterSpacing:1 }}>TOKEN VALUE — COPY NOW</div>
+            <code style={{ fontSize:13, color:"#00e5a0", wordBreak:"break-all", lineHeight:1.6 }}>{createdTok.token}</code>
+          </div>
+          <button onClick={() => navigator.clipboard.writeText(createdTok.token).catch(()=>{})} style={{ border:"none", borderRadius:6, background:"#00e5a0", color:"#0a0e1a", fontWeight:700, padding:"7px 18px", cursor:"pointer", width:"100%", marginBottom:10 }}>
+            Copy Token Value
+          </button>
+          <button onClick={onClose} style={{ border:"1px solid #333", borderRadius:6, background:"transparent", color:"#888", padding:"7px 18px", cursor:"pointer", width:"100%" }}>
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const inp = {
     background: "rgba(255,255,255,0.05)", border: BORDER, borderRadius: 6,

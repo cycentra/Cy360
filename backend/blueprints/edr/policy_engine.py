@@ -420,7 +420,7 @@ def list_deployment_tokens(db_url: str) -> list[dict]:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id,label,os_type,created_by,created_at,expires_at,used_count,max_uses,revoked "
+                "SELECT id,token,label,os_type,created_by,created_at,expires_at,used_count,max_uses,revoked "
                 "FROM edr_deployment_tokens ORDER BY created_at DESC"
             )
             rows = [dict(r) for r in cur.fetchall()]
