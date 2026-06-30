@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cycentra-backend"
-version = "1.0.129"
+version = "1.0.130"
 description = "CyCentra 360 — Flask backend + CySIEMStack correlation engine"
 requires-python = ">=3.12"
 dynamic = ["dependencies"]
@@ -40,4 +40,4 @@ exclude = [
 
 # Non-Python files that ship inside the wheel
 [tool.setuptools.package-data]
-"*" = ["*.json", "*.yaml", "*.yml", "*.html", "*.txt", "*.sql", "*.xml", "*.sh", "*.png", "*.svg", "*.ico", "*.webp"]
+"*" = ["*.json", "*.yaml", "*.yml", "*.html", "*.txt", "*.sql", "*.xml", "*.sh", "*.png", "*.svg", "*.ico", "*.webp", "*.csv"]

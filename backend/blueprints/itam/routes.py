@@ -19,6 +19,7 @@ import json
 import logging
 import threading
 import uuid
+from pathlib import Path
 from datetime import datetime, timezone
 from functools import wraps
 
@@ -397,6 +398,35 @@ def itam_settings():
         return jsonify({"error": "Database error"}), 500
 
 
+# ── OUI vendor DB refresh ─────────────────────────────────────────────────────
+
+@itam_bp.route("/oui/refresh", methods=["POST", "OPTIONS"])
+def oui_refresh():
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+    if get_user_role(session["user_email"]) != "admin":
+        return jsonify({"error": "Forbidden"}), 403
+    return _do_oui_refresh()
+
+
+def _do_oui_refresh():
+    """Re-read OUI CSV from the installed package path and hot-reload in-memory DB."""
+    from .iot_classifier import reload_oui_db, _OUI_CSV_CANDIDATES
+    for csv_path in _OUI_CSV_CANDIDATES:
+        if csv_path.exists():
+            try:
+                content = csv_path.read_text(encoding="utf-8", errors="replace")
+                count = reload_oui_db(content)
+                _log.info("OUI DB refreshed from %s: %d entries", csv_path, count)
+                return jsonify({"ok": True, "entries": count, "source": str(csv_path)})
+            except Exception as exc:
+                _log.error("OUI refresh failed (%s): %s", csv_path, exc)
+                return jsonify({"error": str(exc)}), 500
+    return jsonify({"error": "oui_vendors.csv not found — run cycentra-setup.sh --update"}), 404
+
+
 # ── Coverage ──────────────────────────────────────────────────────────────────
 
 @itam_bp.route("/coverage", methods=["GET"])
@@ -572,9 +602,9 @@ def assets_list():
                     elif src == "siem_agent":
                         r["vendor"] = "SIEM Agent"
                     elif src == "arp_report":
-                        # Use OUI prefix from MAC as last-resort identifier
-                        mac = (r.get("mac_address") or "").upper().replace(":", "").replace("-", "")
-                        r["vendor"] = f"OUI {mac[:2]}:{mac[2:4]}:{mac[4:6]}" if len(mac) >= 6 else "ARP Device"
+                        mac = r.get("mac_address") or ""
+                        vendor_name, _ = oui_lookup(mac)
+                        r["vendor"] = vendor_name if vendor_name and vendor_name != "Unknown" else "Network Device"
                 if r.get("asset_type") in (None, "unknown", ""):
                     if "windows" in os_fp:
                         r["asset_type"] = "workstation"

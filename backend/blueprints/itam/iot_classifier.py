@@ -17,8 +17,12 @@ Risk scoring (0-100):
   - Outbound non-standard traffic      +5
 """
 from __future__ import annotations
-import socket
+import csv
+import io
 import logging
+import socket
+import threading
+from pathlib import Path
 
 _log = logging.getLogger(__name__)
 
@@ -295,16 +299,72 @@ DEFAULT_CREDS: dict[str, list[tuple[str, str]]] = {
 }
 
 
+# ── IEEE OUI database (35 k+ entries, loaded from local CSV) ─────────────────
+_OUI_LOCK = threading.Lock()
+_oui_db: dict[str, str] = {}   # 6-char hex prefix → vendor name
+
+_OUI_CSV_CANDIDATES = [
+    Path(__file__).resolve().parent / "data" / "oui_vendors.csv",  # installed wheel path
+]
+
+
+def _parse_oui_csv(text: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    try:
+        for row in csv.DictReader(io.StringIO(text)):
+            prefix = (row.get("Assignment") or "").upper().strip()
+            vendor = (row.get("Organization Name") or "").strip().replace("\\,", ",")
+            if len(prefix) == 6 and vendor:
+                result[prefix] = vendor
+    except Exception as exc:
+        _log.warning("OUI CSV parse error: %s", exc)
+    return result
+
+
+def _try_load_csv() -> None:
+    for path in _OUI_CSV_CANDIDATES:
+        if path.exists():
+            try:
+                db = _parse_oui_csv(path.read_text(encoding="utf-8", errors="replace"))
+                if db:
+                    with _OUI_LOCK:
+                        _oui_db.update(db)
+                    _log.info("IEEE OUI DB: %d entries loaded from %s", len(db), path)
+                    return
+            except Exception as exc:
+                _log.warning("OUI CSV load failed (%s): %s", path, exc)
+
+
+def reload_oui_db(content: str) -> int:
+    """Hot-reload the in-memory OUI DB from CSV text. Returns entry count."""
+    db = _parse_oui_csv(content)
+    if db:
+        with _OUI_LOCK:
+            _oui_db.clear()
+            _oui_db.update(db)
+        _log.info("IEEE OUI DB hot-reloaded: %d entries", len(db))
+    return len(db)
+
+
+_try_load_csv()
+
+
 def oui_lookup(mac: str) -> tuple[str, str]:
-    """
-    Given a MAC address (any separator), return (vendor, device_category).
-    Returns ('Unknown', 'unknown') if not found.
+    """Return (vendor, device_category) for a MAC address.
+
+    Priority: curated OUI_TABLE (has category) → IEEE CSV DB → ('Unknown', 'unknown').
     """
     if not mac:
         return "Unknown", "unknown"
-    clean = mac.upper().replace(":", "").replace("-", "").replace(".", "")
+    clean  = mac.upper().replace(":", "").replace("-", "").replace(".", "")
     prefix = clean[:6]
-    return OUI_TABLE.get(prefix, ("Unknown", "unknown"))
+    if prefix in OUI_TABLE:
+        return OUI_TABLE[prefix]
+    with _OUI_LOCK:
+        vendor = _oui_db.get(prefix)
+    if vendor:
+        return vendor, "unknown"
+    return "Unknown", "unknown"
 
 
 def classify_ports(open_ports: list[dict]) -> tuple[str, int]:
