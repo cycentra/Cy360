@@ -4924,7 +4924,7 @@ _uninstall_cyedr() {{
 
 download_pkg() {{
     local pkg="$1" dest="${{TMPDIR_DL}}/$1"
-    info "Downloading ${{pkg}} ..."
+    info "Downloading ${{pkg}} ..." >&2
     if command -v curl &>/dev/null; then
         curl -fsSL --retry 3 --retry-delay 2 -o "${{dest}}" "${{PKG_BASE}}/${{pkg}}" \
             || err "Download failed: ${{PKG_BASE}}/${{pkg}}"
@@ -4934,7 +4934,7 @@ download_pkg() {{
     else
         err "curl or wget is required"
     fi
-    ok "Downloaded ${{pkg}}"
+    ok "Downloaded ${{pkg}}" >&2
     echo "${{dest}}"
 }}
 

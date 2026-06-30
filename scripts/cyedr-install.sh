@@ -387,6 +387,8 @@ install_launchdaemon() {
         <string>$EDR_HOME/config.json</string>"
     fi
 
+    mkdir -p "$EDR_HOME/logs"
+
     cat > "$PLIST" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -398,6 +400,7 @@ install_launchdaemon() {
     <key>ProgramArguments</key>
     <array>
         $PROG_ARGS
+    </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -423,7 +426,8 @@ PLIST
 
     chown root:wheel "$PLIST"
     chmod 644 "$PLIST"
-    launchctl load -w "$PLIST" 2>/dev/null || true
+    # bootstrap is the modern API (macOS 13+); fall back to legacy load for older systems
+    launchctl bootstrap system "$PLIST" 2>/dev/null || launchctl load -w "$PLIST" 2>/dev/null || true
     ok "LaunchDaemon installed: com.cycentra.edr"
 }
 
@@ -563,9 +567,9 @@ start_agent() {
             warn "cyedr-agent failed to start — check: journalctl -u cyedr-agent -n 50"
         fi
     else
-        launchctl start com.cycentra.edr 2>/dev/null || true
+        launchctl kickstart -k system/com.cycentra.edr 2>/dev/null || launchctl start com.cycentra.edr 2>/dev/null || true
         sleep 2
-        if launchctl list | grep -q "com.cycentra.edr"; then
+        if launchctl print system/com.cycentra.edr 2>/dev/null | grep -q "state ="; then
             ok "CyEDR agent is running (macOS)"
         else
             warn "CyEDR agent may not be running — check: $EDR_HOME/logs/cyedr_agent.log"
