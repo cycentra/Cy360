@@ -97,139 +97,6 @@ function Badge({ label, color }) {
 
 // ── Scan Settings Panel ───────────────────────────────────────────────────────
 
-function ScanSettingsPanel({ userRole, onSettingsSaved }) {
-  const [open,    setOpen]    = useState(false);
-  const [subnet,  setSubnet]  = useState("");
-  const [ports,   setPorts]   = useState("");
-  const [saving,  setSaving]  = useState(false);
-  const [msg,     setMsg]     = useState(null);
-  const loaded = useRef(false);
-
-  const load = useCallback(async () => {
-    try {
-      const r = await fetch("/api/itam/settings");
-      if (r.ok) {
-        const d = await r.json();
-        setSubnet(d.scan_subnet || "");
-        setPorts(d.iot_ports || "");
-        loaded.current = true;
-        if (onSettingsSaved) onSettingsSaved(d.scan_subnet || "");
-      }
-    } catch {}
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => { load(); }, [load]);
-
-  const save = async () => {
-    setSaving(true); setMsg(null);
-    try {
-      const r = await fetch("/api/itam/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scan_subnet: subnet.trim(), iot_ports: ports.trim() }),
-      });
-      const d = await r.json();
-      if (r.ok) {
-        setMsg({ ok: true, text: "Settings saved" });
-        if (onSettingsSaved) onSettingsSaved(subnet.trim());
-      } else {
-        setMsg({ ok: false, text: d.error || "Save failed" });
-      }
-    } catch { setMsg({ ok: false, text: "Network error" }); }
-    setSaving(false);
-  };
-
-  const isAdmin = userRole === "admin";
-
-  return (
-    <div style={{ background: CARD_BG, border: BORDER, borderRadius: 12, marginBottom: 20, overflow: "hidden" }}>
-      {/* Header row — always visible */}
-      <div
-        onClick={() => setOpen(o => !o)}
-        style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-          padding: "12px 18px", cursor: "pointer", userSelect: "none" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 14 }}>⚙️</span>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "#9aa0b0", letterSpacing: 0.5 }}>SCAN SETTINGS</span>
-          {subnet
-            ? <span style={{ fontSize: 10, fontFamily: "monospace", color: ACCENT,
-                border: `1px solid ${ACCENT}44`, padding: "1px 7px", borderRadius: 4 }}>{subnet}</span>
-            : <span style={{ fontSize: 10, color: "#ff8c00",
-                border: "1px solid #ff8c0044", padding: "1px 7px", borderRadius: 4 }}>
-                ⚠ No subnet configured
-              </span>}
-        </div>
-        <span style={{ color: "#555", fontSize: 12 }}>{open ? "▲" : "▼"}</span>
-      </div>
-
-      {open && (
-        <div style={{ padding: "16px 18px", borderTop: BORDER }}>
-          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
-            <div style={{ flex: "1 1 220px" }}>
-              <div style={{ fontSize: 10, color: "#555", marginBottom: 5, letterSpacing: 0.5 }}>
-                SCAN SUBNET (CIDR) *
-              </div>
-              <input
-                value={subnet}
-                onChange={e => setSubnet(e.target.value)}
-                placeholder="e.g. 192.168.1.0/24"
-                disabled={!isAdmin}
-                style={{
-                  width: "100%", background: "rgba(255,255,255,0.04)", border: BORDER, borderRadius: 6,
-                  padding: "7px 10px", fontSize: 12, fontFamily: "monospace",
-                  color: isAdmin ? "#c0c8d8" : "#666", outline: "none", boxSizing: "border-box",
-                  cursor: isAdmin ? "text" : "not-allowed",
-                }}
-              />
-              <div style={{ fontSize: 10, color: "#444", marginTop: 3 }}>
-                Used by "Subnet Scan" and "Run IoT Scan"
-              </div>
-            </div>
-            <div style={{ flex: "2 1 320px" }}>
-              <div style={{ fontSize: 10, color: "#555", marginBottom: 5, letterSpacing: 0.5 }}>
-                IOT SCAN PORTS (comma-separated)
-              </div>
-              <input
-                value={ports}
-                onChange={e => setPorts(e.target.value)}
-                placeholder="22,23,80,443,554,8080,8883,161,502..."
-                disabled={!isAdmin}
-                style={{
-                  width: "100%", background: "rgba(255,255,255,0.04)", border: BORDER, borderRadius: 6,
-                  padding: "7px 10px", fontSize: 11, fontFamily: "monospace",
-                  color: isAdmin ? "#c0c8d8" : "#666", outline: "none", boxSizing: "border-box",
-                  cursor: isAdmin ? "text" : "not-allowed",
-                }}
-              />
-            </div>
-            {isAdmin && (
-              <button onClick={save} disabled={saving || !subnet.trim()} style={{
-                flexShrink: 0, border: `1px solid ${ACCENT}44`, borderRadius: 6,
-                padding: "7px 18px", fontSize: 11, fontWeight: 700, color: ACCENT,
-                background: `${ACCENT}10`, cursor: saving || !subnet.trim() ? "not-allowed" : "pointer",
-                opacity: !subnet.trim() ? 0.5 : 1,
-              }}>{saving ? "Saving…" : "Save"}</button>
-            )}
-          </div>
-          {!isAdmin && (
-            <div style={{ marginTop: 10, fontSize: 11, color: "#555" }}>
-              Admin role required to change scan settings.
-            </div>
-          )}
-          {msg && (
-            <div style={{ marginTop: 10, fontSize: 11,
-              color: msg.ok ? ACCENT : "#ff3b3b",
-              background: msg.ok ? `${ACCENT}10` : "rgba(255,59,59,0.08)",
-              border: `1px solid ${msg.ok ? ACCENT : "#ff3b3b"}33`,
-              borderRadius: 5, padding: "5px 10px", display: "inline-block" }}>
-              {msg.text}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function AssetTable({ assets, loading, onViewAsset }) {
   if (loading) return <div style={{ color: "#555", padding: 32, textAlign: "center" }}>Loading…</div>;
@@ -620,6 +487,12 @@ export default function ItamCoveragePage({ onViewAsset, user }) {
   const [importResult,     setImportResult]     = useState(null);
   const [scanMsg,          setScanMsg]          = useState("");
   const [configuredSubnet, setConfiguredSubnet] = useState("");
+  // Load configured subnet silently so scan button can use it
+  useEffect(() => {
+    fetch("/api/itam/settings").then(r => r.ok ? r.json() : null).then(d => {
+      if (d?.scan_subnet) setConfiguredSubnet(d.scan_subnet);
+    }).catch(() => {});
+  }, []);
 
   const PER_PAGE = 50;
 
@@ -729,12 +602,6 @@ export default function ItamCoveragePage({ onViewAsset, user }) {
           {scanMsg}
         </div>
       )}
-
-      {/* Scan Settings */}
-      <ScanSettingsPanel
-        userRole={user?.role}
-        onSettingsSaved={subnet => setConfiguredSubnet(subnet)}
-      />
 
       {/* KPI Row */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 24 }}>

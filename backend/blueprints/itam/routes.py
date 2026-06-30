@@ -330,6 +330,9 @@ def itam_settings():
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
 
+    _CRED_KEYS = {"ssh_username", "ssh_password", "ssh_key_path", "ssh_port",
+                  "winrm_username", "winrm_password", "winrm_port", "winrm_ssl"}
+
     if request.method == "GET":
         try:
             conn = _db()
@@ -337,10 +340,20 @@ def itam_settings():
                 cur.execute("SELECT key, value FROM itam_settings")
                 rows = {r["key"]: r["value"] for r in cur.fetchall()}
             conn.close()
-            return jsonify({
-                "scan_subnet":  rows.get("scan_subnet", ITAM_SUBNET or ""),
-                "iot_ports":    rows.get("iot_ports",   ITAM_IOT_PORTS),
-            })
+            resp = {
+                "scan_subnet":    rows.get("scan_subnet", ITAM_SUBNET or ""),
+                "iot_ports":      rows.get("iot_ports",   ITAM_IOT_PORTS),
+                "ssh_username":   rows.get("ssh_username",  ITAM_SSH_USERNAME or ""),
+                "ssh_key_path":   rows.get("ssh_key_path",  ITAM_SSH_KEY_PATH or ""),
+                "ssh_port":       rows.get("ssh_port",      str(ITAM_SSH_PORT) if ITAM_SSH_PORT else "22"),
+                "winrm_username": rows.get("winrm_username", ITAM_WINRM_USERNAME or ""),
+                "winrm_port":     rows.get("winrm_port",     str(ITAM_WINRM_PORT) if ITAM_WINRM_PORT else "5985"),
+                "winrm_ssl":      rows.get("winrm_ssl",      "true" if ITAM_WINRM_SSL else "false"),
+                # Return masked sentinel so the frontend knows a password is stored
+                "ssh_password":   "•STORED•" if (rows.get("ssh_password") or ITAM_SSH_PASSWORD) else "",
+                "winrm_password": "•STORED•" if (rows.get("winrm_password") or ITAM_WINRM_PASSWORD) else "",
+            }
+            return jsonify(resp)
         except psycopg2.Error as exc:
             _log.error("itam_settings GET error: %s", exc)
             return jsonify({"error": "Database error"}), 500
@@ -349,8 +362,12 @@ def itam_settings():
     if _role() != "admin":
         return jsonify({"error": "Admin role required"}), 403
     body = request.get_json(silent=True) or {}
-    allowed = {"scan_subnet", "iot_ports"}
+    allowed = {"scan_subnet", "iot_ports"} | _CRED_KEYS
     updates = {k: str(v).strip() for k, v in body.items() if k in allowed and v is not None}
+    # Never store the masked sentinel back — ignore unchanged password fields
+    for pw_key in ("ssh_password", "winrm_password"):
+        if updates.get(pw_key) == "•STORED•" or updates.get(pw_key) == "":
+            updates.pop(pw_key, None)
     if not updates:
         return jsonify({"error": "No valid settings provided"}), 400
 
@@ -540,8 +557,9 @@ def assets_list():
             for r in rows:
                 if r.get("ip_address"):
                     r["ip_address"] = str(r["ip_address"])
-                # Derive vendor/type from os_fingerprint when still unknown
+                # Derive vendor/type from os_fingerprint or source when still unknown
                 os_fp = (r.get("os_fingerprint") or "").lower()
+                src   = r.get("source") or r.get("discovery_source") or ""
                 if not r.get("vendor") or r["vendor"] in ("Unknown", ""):
                     if "windows" in os_fp:
                         r["vendor"] = "Microsoft"
@@ -549,6 +567,14 @@ def assets_list():
                         r["vendor"] = "Apple"
                     elif "linux" in os_fp or "ubuntu" in os_fp or "debian" in os_fp or "centos" in os_fp or "rhel" in os_fp:
                         r["vendor"] = "Linux"
+                    elif src == "edr_agent":
+                        r["vendor"] = "EDR Agent"
+                    elif src == "siem_agent":
+                        r["vendor"] = "SIEM Agent"
+                    elif src == "arp_report":
+                        # Use OUI prefix from MAC as last-resort identifier
+                        mac = (r.get("mac_address") or "").upper().replace(":", "").replace("-", "")
+                        r["vendor"] = f"OUI {mac[:2]}:{mac[2:4]}:{mac[4:6]}" if len(mac) >= 6 else "ARP Device"
                 if r.get("asset_type") in (None, "unknown", ""):
                     if "windows" in os_fp:
                         r["asset_type"] = "workstation"
@@ -556,7 +582,7 @@ def assets_list():
                         r["asset_type"] = "workstation"
                     elif "linux" in os_fp:
                         r["asset_type"] = "server"
-                    elif r.get("source") == "arp_report":
+                    elif src == "arp_report":
                         r["asset_type"] = "network_device"
         conn.close()
         return jsonify({"assets": rows, "total": total, "page": page, "per_page": per_page})
@@ -1536,19 +1562,33 @@ def agentless_deep_scan(asset_id):
         return jsonify({"error": "Forbidden"}), 403
 
     body = request.get_json(silent=True) or {}
-    # Keys must match what detect_and_scan() / ssh_deep_scan() / winrm_deep_scan() expect
+
+    # Load stored credentials from DB (override env vars; body overrides DB)
+    try:
+        _sc = _db()
+        with _sc.cursor() as _cur:
+            _cur.execute("SELECT key, value FROM itam_settings WHERE key IN "
+                         "('ssh_username','ssh_password','ssh_key_path','ssh_port',"
+                         "'winrm_username','winrm_password','winrm_port','winrm_ssl')")
+            _stored = {r["key"]: r["value"] for r in _cur.fetchall()}
+        _sc.close()
+    except Exception:
+        _stored = {}
+
+    def _cred(body_key, db_key, env_val):
+        return body.get(body_key) or _stored.get(db_key) or env_val or ""
+
     credentials = {
-        "username":    body.get("ssh_username") or ITAM_SSH_USERNAME,
-        "password":    body.get("ssh_password") or ITAM_SSH_PASSWORD,
-        "key_path":    body.get("ssh_key_path") or ITAM_SSH_KEY_PATH,
-        "ssh_port":    body.get("ssh_port", ITAM_SSH_PORT),
-        "winrm_port":  body.get("winrm_port", ITAM_WINRM_PORT),
-        "use_ssl":     body.get("winrm_ssl", ITAM_WINRM_SSL),
-        # Also keep the original names so credential_profiles path works
-        "winrm_username": body.get("winrm_username") or ITAM_WINRM_USERNAME,
-        "winrm_password": body.get("winrm_password") or ITAM_WINRM_PASSWORD,
+        "username":       _cred("ssh_username",  "ssh_username",  ITAM_SSH_USERNAME),
+        "password":       _cred("ssh_password",  "ssh_password",  ITAM_SSH_PASSWORD),
+        "key_path":       _cred("ssh_key_path",  "ssh_key_path",  ITAM_SSH_KEY_PATH),
+        "ssh_port":       int(body.get("ssh_port") or _stored.get("ssh_port") or ITAM_SSH_PORT or 22),
+        "winrm_port":     int(body.get("winrm_port") or _stored.get("winrm_port") or ITAM_WINRM_PORT or 5985),
+        "use_ssl":        (body.get("winrm_ssl") or _stored.get("winrm_ssl") or str(ITAM_WINRM_SSL)).lower() in ("true","1","yes"),
+        "winrm_username": _cred("winrm_username", "winrm_username", ITAM_WINRM_USERNAME),
+        "winrm_password": _cred("winrm_password", "winrm_password", ITAM_WINRM_PASSWORD),
     }
-    # WinRM may use separate credentials; fall back to SSH creds if not set
+    # WinRM falls back to SSH creds if not set
     if not credentials["winrm_username"]:
         credentials["winrm_username"] = credentials["username"]
     if not credentials["winrm_password"]:

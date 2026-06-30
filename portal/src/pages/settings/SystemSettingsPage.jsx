@@ -3592,22 +3592,49 @@ function AssetMgmtSettingsTab() {
   const CARD  = { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "20px 24px", marginBottom: 20 };
   const LABEL = { color: "rgba(255,255,255,0.62)", fontSize: 10, letterSpacing: "1.5px", fontFamily: "monospace", textTransform: "uppercase", marginBottom: 8 };
   const INPUT = { background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, color: "rgba(255,255,255,0.8)", fontFamily: "monospace", fontSize: 12, padding: "8px 12px", width: "100%", boxSizing: "border-box", outline: "none" };
+  const HINT  = { color: "rgba(255,255,255,0.2)", fontSize: 10, marginTop: 4, fontFamily: "monospace" };
 
+  // Scan settings
   const [subnet,     setSubnet]     = useState("");
   const [ports,      setPorts]      = useState("");
+  // SSH creds
+  const [sshUser,    setSshUser]    = useState("");
+  const [sshPass,    setSshPass]    = useState("");
+  const [sshKey,     setSshKey]     = useState("");
+  const [sshPort,    setSshPort]    = useState("22");
+  // WinRM creds
+  const [winUser,    setWinUser]    = useState("");
+  const [winPass,    setWinPass]    = useState("");
+  const [winPort,    setWinPort]    = useState("5985");
+  const [winSsl,     setWinSsl]     = useState(false);
+
   const [loading,    setLoading]    = useState(true);
-  const [saving,     setSaving]     = useState(false);
-  const [saveMsg,    setSaveMsg]    = useState(null);
+  const [scanSaving, setScanSaving] = useState(false);
+  const [credSaving, setCredSaving] = useState(false);
+  const [scanMsg,    setScanMsg]    = useState(null);
+  const [credMsg,    setCredMsg]    = useState(null);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/itam/settings`, { credentials: "include" })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(d => { setSubnet(d.scan_subnet || ""); setPorts(d.iot_ports || ""); setLoading(false); })
+      .then(d => {
+        setSubnet(d.scan_subnet  || "");
+        setPorts(d.iot_ports     || "");
+        setSshUser(d.ssh_username  || "");
+        setSshPass(d.ssh_password  || "");   // "•STORED•" sentinel if already saved
+        setSshKey(d.ssh_key_path   || "");
+        setSshPort(d.ssh_port      || "22");
+        setWinUser(d.winrm_username || "");
+        setWinPass(d.winrm_password || "");
+        setWinPort(d.winrm_port    || "5985");
+        setWinSsl(d.winrm_ssl === "true");
+        setLoading(false);
+      })
       .catch(() => setLoading(false));
   }, []);
 
-  const handleSave = async () => {
-    setSaving(true); setSaveMsg(null);
+  const saveScan = async () => {
+    setScanSaving(true); setScanMsg(null);
     try {
       const r = await fetch(`${API_BASE}/api/itam/settings`, {
         method: "PUT", credentials: "include",
@@ -3615,16 +3642,72 @@ function AssetMgmtSettingsTab() {
         body: JSON.stringify({ scan_subnet: subnet.trim(), iot_ports: ports.trim() }),
       });
       const d = await r.json();
-      if (r.ok) setSaveMsg({ ok: true,  text: "Settings saved." });
-      else       setSaveMsg({ ok: false, text: d.error || "Save failed." });
-    } catch { setSaveMsg({ ok: false, text: "Request failed." }); }
-    finally { setSaving(false); setTimeout(() => setSaveMsg(null), 4000); }
+      setScanMsg(r.ok ? { ok: true, text: "Saved." } : { ok: false, text: d.error || "Save failed." });
+    } catch { setScanMsg({ ok: false, text: "Request failed." }); }
+    finally { setScanSaving(false); setTimeout(() => setScanMsg(null), 4000); }
   };
+
+  const saveCreds = async () => {
+    setCredSaving(true); setCredMsg(null);
+    const body = {
+      ssh_username:   sshUser.trim(),
+      ssh_key_path:   sshKey.trim(),
+      ssh_port:       sshPort.trim(),
+      winrm_username: winUser.trim(),
+      winrm_port:     winPort.trim(),
+      winrm_ssl:      winSsl ? "true" : "false",
+    };
+    // Only send passwords if user typed a new value (not the sentinel)
+    if (sshPass && sshPass !== "•STORED•") body.ssh_password = sshPass;
+    if (winPass && winPass !== "•STORED•") body.winrm_password = winPass;
+    try {
+      const r = await fetch(`${API_BASE}/api/itam/settings`, {
+        method: "PUT", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (r.ok) {
+        setCredMsg({ ok: true, text: "Credentials saved." });
+        // Re-fetch to get updated sentinel values
+        fetch(`${API_BASE}/api/itam/settings`, { credentials: "include" })
+          .then(r2 => r2.ok ? r2.json() : null)
+          .then(d2 => { if (d2) { setSshPass(d2.ssh_password || ""); setWinPass(d2.winrm_password || ""); } });
+      } else {
+        setCredMsg({ ok: false, text: d.error || "Save failed." });
+      }
+    } catch { setCredMsg({ ok: false, text: "Request failed." }); }
+    finally { setCredSaving(false); setTimeout(() => setCredMsg(null), 5000); }
+  };
+
+  const SaveBtn = ({ onClick, saving, label }) => (
+    <button onClick={onClick} disabled={saving}
+      style={{ background: "rgba(0,229,160,0.1)", border: "1px solid rgba(0,229,160,0.35)", color: "#00e5a0",
+        borderRadius: 4, padding: "8px 20px", fontFamily: "monospace", fontSize: 11, fontWeight: 700,
+        letterSpacing: "1px", cursor: saving ? "default" : "pointer", textTransform: "uppercase" }}>
+      {saving ? "Saving…" : label}
+    </button>
+  );
+  const Msg = ({ msg }) => msg ? (
+    <span style={{ fontSize: 11, fontFamily: "monospace", color: msg.ok ? "#00e5a0" : "#ff6b6b" }}>
+      {msg.ok ? "✓" : "✗"} {msg.text}
+    </span>
+  ) : null;
+  const Field = ({ label, value, onChange, placeholder, hint, type = "text", accentColor = "#00e5a0" }) => (
+    <div>
+      <div style={{ color: accentColor === "#00e5a0" ? "rgba(0,229,160,0.6)" : "rgba(77,158,255,0.6)",
+        fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", marginBottom: 5 }}>
+        {label}
+      </div>
+      <input type={type} style={{ ...INPUT, borderColor: accentColor === "#00e5a0" ? "rgba(0,229,160,0.15)" : "rgba(77,158,255,0.15)" }}
+        value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} autoComplete="off" />
+      {hint && <div style={HINT}>{hint}</div>}
+    </div>
+  );
 
   return (
     <div style={{ maxWidth: 760 }}>
 
-      {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
         <span style={{ fontSize: 18 }}>🖥️</span>
         <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
@@ -3632,122 +3715,86 @@ function AssetMgmtSettingsTab() {
         </div>
       </div>
       <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 12, marginBottom: 24, lineHeight: 1.7 }}>
-        Configure discovery scan targets and agentless deep-scan credentials for the ITAM module.
+        Configure discovery scan scope and agentless deep-scan credentials.
       </div>
 
-      {/* ── Section 1: Discovery Scan Settings ── */}
-      <div style={{ ...CARD }}>
-        <div style={{ ...LABEL }}>Discovery Scan Settings</div>
-        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, marginBottom: 20, lineHeight: 1.7 }}>
-          These settings control the subnet scanned during <strong style={{ color: "rgba(255,255,255,0.5)" }}>Asset Coverage → Subnet Scan</strong> and
-          the ports used for IoT detection. Changes take effect on the next scan.
-        </div>
+      {loading ? (
+        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace", padding: 20 }}>Loading…</div>
+      ) : (<>
 
-        {loading ? (
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>Loading…</div>
-        ) : (
+        {/* ── Section 1: Scan Settings ── */}
+        <div style={{ ...CARD }}>
+          <div style={{ ...LABEL }}>Discovery Scan Settings</div>
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, marginBottom: 20, lineHeight: 1.7 }}>
+            Subnet scanned by <strong style={{ color: "rgba(255,255,255,0.5)" }}>Asset Coverage → Subnet Scan</strong> and
+            ports used for IoT detection. Takes effect on the next scan.
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div>
-              <div style={{ ...LABEL, marginBottom: 5 }}>Scan Subnet (CIDR)</div>
-              <input
-                style={INPUT}
-                placeholder="e.g. 192.168.1.0/24"
-                value={subnet}
-                onChange={e => setSubnet(e.target.value)}
-              />
-              <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, marginTop: 5, fontFamily: "monospace" }}>
-                Leave blank to use the <code style={{ color: "rgba(0,229,160,0.4)" }}>ITAM_SUBNET</code> environment variable.
-              </div>
-            </div>
-            <div>
-              <div style={{ ...LABEL, marginBottom: 5 }}>IoT Detection Ports</div>
-              <input
-                style={INPUT}
-                placeholder="e.g. 22,23,80,443,554,631,8080,8883,9100,161,502,47808"
-                value={ports}
-                onChange={e => setPorts(e.target.value)}
-              />
-              <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, marginTop: 5, fontFamily: "monospace" }}>
-                Comma-separated port numbers for nmap IoT probe. Leave blank for defaults.
-              </div>
-            </div>
+            <Field label="Scan Subnet (CIDR)" value={subnet} onChange={setSubnet}
+              placeholder="e.g. 192.168.1.0/24"
+              hint={<>Leave blank to use the <code style={{ color: "rgba(0,229,160,0.5)" }}>ITAM_SUBNET</code> env var.</>} />
+            <Field label="IoT Detection Ports" value={ports} onChange={setPorts}
+              placeholder="22,23,80,443,554,631,8080,8883,9100,161,502,47808"
+              hint="Comma-separated nmap probe ports. Leave blank for defaults." />
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                style={{ background: "rgba(0,229,160,0.1)", border: "1px solid rgba(0,229,160,0.35)", color: "#00e5a0", borderRadius: 4, padding: "8px 20px", fontFamily: "monospace", fontSize: 11, fontWeight: 700, letterSpacing: "1px", cursor: saving ? "default" : "pointer", textTransform: "uppercase" }}>
-                {saving ? "Saving…" : "Save Settings"}
-              </button>
-              {saveMsg && (
-                <span style={{ fontSize: 11, fontFamily: "monospace", color: saveMsg.ok ? "#00e5a0" : "#ff6b6b" }}>
-                  {saveMsg.ok ? "✓" : "✗"} {saveMsg.text}
-                </span>
-              )}
+              <SaveBtn onClick={saveScan} saving={scanSaving} label="Save Scan Settings" />
+              <Msg msg={scanMsg} />
             </div>
           </div>
-        )}
-      </div>
-
-      {/* ── Section 2: Deep Scan Credentials (env-var reference) ── */}
-      <div style={{ ...CARD }}>
-        <div style={{ ...LABEL }}>Deep Scan Credentials</div>
-        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, marginBottom: 18, lineHeight: 1.7 }}>
-          These must be set as environment variables on the CyCentra 360 server (in{" "}
-          <code style={{ color: "rgba(0,229,160,0.5)", fontFamily: "monospace" }}>/opt/cycentra/.env</code>).
-          They cannot be edited here for security — credentials are never stored in the database.
         </div>
 
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", marginBottom: 10 }}>
-            SSH — Linux / macOS targets
+        {/* ── Section 2: SSH Credentials ── */}
+        <div style={{ ...CARD }}>
+          <div style={{ ...LABEL }}>Deep Scan — SSH Credentials</div>
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, marginBottom: 20, lineHeight: 1.7 }}>
+            Used for agentless deep scans on <strong style={{ color: "rgba(255,255,255,0.5)" }}>Linux / macOS</strong> targets.
+            Stored encrypted in the platform database. Leave a password field blank to keep the existing value.
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            {[
-              { v: "ITAM_SSH_USERNAME",  desc: "Login username" },
-              { v: "ITAM_SSH_PASSWORD",  desc: "Password (use key_path instead where possible)" },
-              { v: "ITAM_SSH_KEY_PATH",  desc: "Absolute path to private key on the server" },
-              { v: "ITAM_SSH_PORT",      desc: "Port (default: 22)" },
-            ].map(({ v, desc }) => (
-              <div key={v} style={{ background: "rgba(0,0,0,0.2)", borderRadius: 4, padding: "9px 14px" }}>
-                <code style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 11, display: "block", marginBottom: 2 }}>{v}</code>
-                <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 10 }}>{desc}</span>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <Field label="Username" value={sshUser} onChange={setSshUser} placeholder="root or admin" />
+            <Field label="Password" value={sshPass} onChange={setSshPass} placeholder="Leave blank to keep existing"
+              type="password" hint={sshPass === "•STORED•" ? "Password already stored — type to replace" : ""} />
+            <Field label="Private Key Path (on server)" value={sshKey} onChange={setSshKey}
+              placeholder="/opt/cycentra/id_rsa" hint="Absolute path to SSH private key on the Cy360 server" />
+            <Field label="SSH Port" value={sshPort} onChange={setSshPort} placeholder="22" hint="Default: 22" />
+          </div>
+        </div>
+
+        {/* ── Section 3: WinRM Credentials ── */}
+        <div style={{ ...CARD }}>
+          <div style={{ ...LABEL }}>Deep Scan — WinRM Credentials</div>
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, marginBottom: 20, lineHeight: 1.7 }}>
+            Used for agentless deep scans on <strong style={{ color: "rgba(255,255,255,0.5)" }}>Windows</strong> targets.
+            Falls back to SSH credentials if left blank.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <Field label="Username" value={winUser} onChange={setWinUser} placeholder="Administrator"
+              accentColor="#4d9eff" />
+            <Field label="Password" value={winPass} onChange={setWinPass} placeholder="Leave blank to keep existing"
+              type="password" accentColor="#4d9eff"
+              hint={winPass === "•STORED•" ? "Password already stored — type to replace" : ""} />
+            <Field label="WinRM Port" value={winPort} onChange={setWinPort} placeholder="5985"
+              hint="5985 = HTTP, 5986 = HTTPS" accentColor="#4d9eff" />
+            <div>
+              <div style={{ color: "rgba(77,158,255,0.6)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", marginBottom: 8 }}>
+                Use HTTPS (SSL)
               </div>
-            ))}
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input type="checkbox" checked={winSsl} onChange={e => setWinSsl(e.target.checked)}
+                  style={{ width: 14, height: 14, accentColor: "#4d9eff" }} />
+                <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 12 }}>
+                  {winSsl ? "HTTPS (port 5986)" : "HTTP (port 5985)"}
+                </span>
+              </label>
+            </div>
+          </div>
+          <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 12 }}>
+            <SaveBtn onClick={saveCreds} saving={credSaving} label="Save Credentials" />
+            <Msg msg={credMsg} />
           </div>
         </div>
 
-        <div>
-          <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", marginBottom: 10 }}>
-            WinRM — Windows targets
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            {[
-              { v: "ITAM_WINRM_USERNAME", desc: "Windows login username" },
-              { v: "ITAM_WINRM_PASSWORD", desc: "Windows login password" },
-              { v: "ITAM_WINRM_PORT",     desc: "Port (default: 5985)" },
-              { v: "ITAM_WINRM_SSL",      desc: "Use HTTPS: true / false" },
-            ].map(({ v, desc }) => (
-              <div key={v} style={{ background: "rgba(0,0,0,0.2)", borderRadius: 4, padding: "9px 14px" }}>
-                <code style={{ color: "#4d9eff", fontFamily: "monospace", fontSize: 11, display: "block", marginBottom: 2 }}>{v}</code>
-                <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 10 }}>{desc}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* callout */}
-      <div style={{ background: "rgba(0,229,160,0.04)", border: "1px solid rgba(0,229,160,0.15)", borderRadius: 5, padding: "12px 16px", display: "flex", gap: 10, alignItems: "flex-start" }}>
-        <span style={{ color: "#00e5a0", fontSize: 15, lineHeight: 1.3 }}>ℹ</span>
-        <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, lineHeight: 1.8 }}>
-          To pass credentials for a <em>single</em> scan without setting env vars, use the Asset Detail page
-          and enter them in the Deep Scan form, or POST directly to{" "}
-          <code style={{ color: "rgba(0,229,160,0.6)", fontFamily: "monospace" }}>/api/itam/assets/{"<id>"}/deep-scan</code>{" "}
-          with <code style={{ color: "rgba(0,229,160,0.6)", fontFamily: "monospace" }}>ssh_username</code>,{" "}
-          <code style={{ color: "rgba(0,229,160,0.6)", fontFamily: "monospace" }}>ssh_password</code>, etc. in the JSON body.
-        </div>
-      </div>
-
+      </>)}
     </div>
   );
 }
