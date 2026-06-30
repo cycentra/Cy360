@@ -168,9 +168,10 @@ deploy_agent() {
         # Air-gap fallback: look for binary alongside the installer script
         warn "Pre-built binary not available for ${OS_KEY}/${AGENT_ARCH} — trying Python fallback..."
         SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || true
-        local FALLBACK=""
+        local FALLBACK="" OS_KEY_LOWER
+        OS_KEY_LOWER="$(echo "$OS_KEY" | tr '[:upper:]' '[:lower:]')"
         for try_path in \
-            "${SCRIPT_DIR}/cyedr-agent-${OS_KEY,,}-${AGENT_ARCH}" \
+            "${SCRIPT_DIR}/cyedr-agent-${OS_KEY_LOWER}-${AGENT_ARCH}" \
             "${SCRIPT_DIR}/../agent/cyedr-agent" \
             "/tmp/cyedr-agent"; do
             [[ -f "$try_path" ]] && { FALLBACK="$try_path"; break; }
@@ -516,7 +517,7 @@ maybe_install_cysiem() {
         echo ""
         local CHOICE
         read -r -t 60 -p "Install CySIEM agent alongside CyEDR? [y/N]: " CHOICE || CHOICE="n"
-        [[ "${CHOICE,,}" != "y" && "${CHOICE,,}" != "yes" ]] && { info "CySIEM skipped."; return; }
+        case "$CHOICE" in [Yy]|[Yy][Ee][Ss]) ;; *) info "CySIEM skipped."; return ;; esac
         WITH_CYSIEM="yes"
     fi
 
