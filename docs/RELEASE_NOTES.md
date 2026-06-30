@@ -1,3 +1,11 @@
+## v1.0.120 -- 2026-06-30
+
+### Bug Fixes
+
+  - edr): official OS SVGs in fleet, skip re-enrollment on reinstall
+
+---
+
 ## v1.0.119 -- 2026-06-30
 
 ### Bug Fixes
