@@ -1516,6 +1516,12 @@ def self_enroll_agent():
     try:
         conn = _db()
         with conn.cursor() as cur:
+            # Retire any previous enrollments for the same hostname so Fleet
+            # never shows duplicate cards for the same physical endpoint.
+            cur.execute(
+                "DELETE FROM edr_agents WHERE hostname=%s AND agent_id!=%s",
+                [hostname, agent_id],
+            )
             cur.execute(
                 """
                 INSERT INTO edr_agents
