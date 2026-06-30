@@ -5,12 +5,19 @@
  * state, open detection count, and quick-action buttons for analyst+.
  */
 import React, { useEffect, useState, useCallback } from "react";
+import { AppleLogo, WindowsLogo, LinuxLogo } from "../../components/OsLogo.jsx";
 
 const CARD_BG     = "rgba(255,255,255,0.03)";
 const CARD_BORDER = "1px solid rgba(255,255,255,0.07)";
 const ACCENT      = "#00e5a0";
 
-const OS_ICONS = { WINDOWS: "🪟", LINUX: "🐧", MACOS: "🍎", UNKNOWN: "💻" };
+function OsIcon({ os_type }) {
+  const props = { size: 20 };
+  if (os_type === "MACOS")   return <AppleLogo   {...props} color="#b0b8c8" />;
+  if (os_type === "WINDOWS") return <WindowsLogo {...props} />;
+  if (os_type === "LINUX")   return <LinuxLogo   {...props} />;
+  return <span style={{ fontSize: 18 }}>💻</span>;
+}
 
 const ASSET_COLORS = {
   domain_controller: "#ff3b3b",
@@ -47,7 +54,7 @@ function AgentCard({ agent, onAction }) {
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 18 }}>{OS_ICONS[agent.os_type] || "💻"}</span>
+          <OsIcon os_type={agent.os_type} />
           <div>
             <div style={{ fontWeight: 700, color: "#e8eaf0", fontSize: 14 }}>{agent.hostname}</div>
             <div style={{ fontSize: 11, color: "#666", fontFamily: "monospace" }}>{agent.agent_id.slice(0, 8)}…</div>

@@ -433,6 +433,19 @@ PLIST
 
 # ── Enroll with platform ───────────────────────────────────────────────────────
 enroll_agent() {
+    # Skip enrollment if a valid agent_id + enrollment_token already exist in config
+    if [[ -f "$EDR_HOME/config.json" ]]; then
+        local _existing_id _existing_tok
+        _existing_id=$(python3 -c "import json,sys; d=json.load(open('$EDR_HOME/config.json')); print(d.get('agent_id',''))" 2>/dev/null || true)
+        _existing_tok=$(python3 -c "import json,sys; d=json.load(open('$EDR_HOME/config.json')); print(d.get('enrollment_token',''))" 2>/dev/null || true)
+        if [[ -n "$_existing_id" && -n "$_existing_tok" ]]; then
+            AGENT_ID="$_existing_id"
+            ENROLLMENT_TOKEN="$_existing_tok"
+            ok "Re-using existing enrollment — Agent ID: $AGENT_ID"
+            return
+        fi
+    fi
+
     info "Enrolling with CyCentra 360 platform..."
     HOSTNAME="$(hostname -f 2>/dev/null || hostname)"
 
