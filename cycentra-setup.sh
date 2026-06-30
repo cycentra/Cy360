@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.123 -- 2026-06-30 15:20 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.124 -- 2026-06-30 15:22 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -2601,7 +2601,7 @@ PIP_ROOT_USER_ACTION=ignore pip3 install \
     --upgrade \
     ${_PIP_BSP} \
     --ignore-installed \
-    -q \
+    -qq \
     && success "Installed: ${PKG_NAME}==${PKG_VER}" \
     || { error "Package install failed — check wheel download and dependencies"; \
          ERRORS+=("pip install failed"); }
