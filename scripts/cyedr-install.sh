@@ -190,17 +190,28 @@ deploy_agent() {
                     "$PLATFORM_URL/api/edr/installer/agent-py" \
                     -o "$EDR_HOME/cyedr_agent.py" 2>/dev/null; then
                     chmod 640 "$EDR_HOME/cyedr_agent.py"
-                    # Install pip dependencies for the agent
-                    # Use HOME=/root so pip installs into root's site-packages,
-                    # not the invoking user's home — LaunchDaemon/systemd run as root.
-                    local _pip_cmd="env HOME=/root $PYTHON_BIN -m pip install --quiet"
+                    # Install pip dependencies into root's Python path so they are
+                    # accessible when the agent runs as root under LaunchDaemon/systemd.
+                    # sudo preserves the invoking user's HOME, so pip would normally
+                    # install into the user's ~/Library — root can't see those packages.
+                    # We force HOME to root's real home directory to fix this.
+                    local _root_home
+                    _root_home="$(eval echo ~root 2>/dev/null)" || _root_home="/root"
+                    [[ -z "$_root_home" || "$_root_home" == "~root" ]] && _root_home="/root"
+                    info "Installing Python dependencies for CyEDR agent..."
+                    local _pip_base="env HOME=$_root_home $PYTHON_BIN -m pip install --quiet"
                     if "$PYTHON_BIN" -m pip install --help 2>&1 | grep -q 'break-system-packages'; then
-                        $_pip_cmd --break-system-packages psutil requests pyyaml 2>/dev/null || true
+                        $_pip_base --break-system-packages psutil requests pyyaml 2>/dev/null \
+                            || $_pip_base psutil requests pyyaml 2>/dev/null || true
                     else
-                        $_pip_cmd psutil requests pyyaml 2>/dev/null || true
+                        $_pip_base psutil requests pyyaml 2>/dev/null || true
                     fi
-                    "$PYTHON_BIN" -c "import requests" 2>/dev/null \
-                        || warn "Python deps install failed — agent may not start; run: sudo -H $PYTHON_BIN -m pip install requests psutil pyyaml"
+                    # Verify importable in the same environment the daemon will use
+                    if env HOME="$_root_home" "$PYTHON_BIN" -c "import requests, psutil, yaml" 2>/dev/null; then
+                        ok "Python dependencies installed"
+                    else
+                        die "Python dependencies could not be installed for $PYTHON_BIN. Try: sudo -H $PYTHON_BIN -m pip install requests psutil pyyaml"
+                    fi
                     PYTHON_MODE=true
                     ok "Agent script installed (Python mode: $PYTHON_BIN)"
                 else
