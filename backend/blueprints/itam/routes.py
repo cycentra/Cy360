@@ -241,6 +241,15 @@ def init_itam_tables(db_url: str) -> None:
         ]:
             cur.execute(stmt)
 
+        # Settings key-value store for UI-configurable scan parameters
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS itam_settings (
+              key        TEXT PRIMARY KEY,
+              value      TEXT NOT NULL,
+              updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+
         # Bootstrap NVD + KEV tables so routes work even before first sync
         try:
             from blueprints.itam.nvd_mirror import ensure_nvd_tables
@@ -256,6 +265,99 @@ def init_itam_tables(db_url: str) -> None:
     conn.commit()
     conn.close()
     _log.info("ITAM tables initialised")
+
+
+# ── Settings helpers ──────────────────────────────────────────────────────────
+
+def _get_itam_setting(conn, key: str) -> str | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT value FROM itam_settings WHERE key=%s", [key])
+        row = cur.fetchone()
+    return row["value"] if row else None
+
+
+def _resolve_subnet() -> str:
+    """Return subnet from DB settings, falling back to env var."""
+    try:
+        conn = _db()
+        val = _get_itam_setting(conn, "scan_subnet")
+        conn.close()
+        if val:
+            return val
+    except Exception:
+        pass
+    return ITAM_SUBNET
+
+
+def _resolve_iot_ports() -> str:
+    try:
+        conn = _db()
+        val = _get_itam_setting(conn, "iot_ports")
+        conn.close()
+        if val:
+            return val
+    except Exception:
+        pass
+    return ITAM_IOT_PORTS
+
+
+# ── ITAM Settings ─────────────────────────────────────────────────────────────
+
+@itam_bp.route("/settings", methods=["GET", "PUT", "OPTIONS"])
+def itam_settings():
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+
+    if request.method == "GET":
+        try:
+            conn = _db()
+            with conn.cursor() as cur:
+                cur.execute("SELECT key, value FROM itam_settings")
+                rows = {r["key"]: r["value"] for r in cur.fetchall()}
+            conn.close()
+            return jsonify({
+                "scan_subnet":  rows.get("scan_subnet", ITAM_SUBNET or ""),
+                "iot_ports":    rows.get("iot_ports",   ITAM_IOT_PORTS),
+            })
+        except psycopg2.Error as exc:
+            _log.error("itam_settings GET error: %s", exc)
+            return jsonify({"error": "Database error"}), 500
+
+    # PUT — admin only
+    if _role() != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+    body = request.get_json(silent=True) or {}
+    allowed = {"scan_subnet", "iot_ports"}
+    updates = {k: str(v).strip() for k, v in body.items() if k in allowed and v is not None}
+    if not updates:
+        return jsonify({"error": "No valid settings provided"}), 400
+
+    # Validate subnet if present
+    if "scan_subnet" in updates and updates["scan_subnet"]:
+        try:
+            import ipaddress as _ip
+            _ip.ip_network(updates["scan_subnet"], strict=False)
+        except ValueError:
+            return jsonify({"error": "Invalid subnet — must be CIDR notation e.g. 192.168.1.0/24"}), 400
+
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            for key, value in updates.items():
+                cur.execute("""
+                    INSERT INTO itam_settings (key, value, updated_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()
+                """, [key, value])
+        conn.commit()
+        conn.close()
+        auth_event(session.get("user_email"), "itam_settings_update", str(updates))
+        return jsonify({"ok": True, "updated": list(updates.keys())})
+    except psycopg2.Error as exc:
+        _log.error("itam_settings PUT error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
 
 
 # ── Coverage ──────────────────────────────────────────────────────────────────
@@ -503,12 +605,12 @@ def assets_scan():
         return jsonify({"error": "Admin role required"}), 403
 
     body   = request.get_json(silent=True) or {}
-    subnet = body.get("subnet", ITAM_SUBNET)
+    subnet = body.get("subnet") or _resolve_subnet()
     if not subnet:
-        return jsonify({"error": "No subnet configured. Set ITAM_SUBNET in .env or pass subnet in body."}), 400
+        return jsonify({"error": "No subnet configured. Set it in Asset Coverage > Scan Settings."}), 400
 
     def _run():
-        assets = run_nmap_discovery(subnet, ITAM_IOT_PORTS)
+        assets = run_nmap_discovery(subnet, _resolve_iot_ports())
         if assets:
             try:
                 conn = _db()
@@ -650,12 +752,14 @@ def iot_scan():
         return jsonify({"error": "Analyst or admin role required"}), 403
 
     body   = request.get_json(silent=True) or {}
-    subnet = body.get("subnet", ITAM_SUBNET)
+    subnet = body.get("subnet") or _resolve_subnet()
     if not subnet:
-        return jsonify({"error": "No subnet configured"}), 400
+        return jsonify({"error": "No subnet configured. Set it in Asset Coverage > Scan Settings."}), 400
+
+    iot_ports = _resolve_iot_ports()
 
     def _run():
-        assets = run_nmap_discovery(subnet, ITAM_IOT_PORTS)
+        assets = run_nmap_discovery(subnet, iot_ports)
         if assets:
             try:
                 conn = _db()

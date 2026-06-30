@@ -26,9 +26,10 @@ export default function App() {
     handleUninstallModule, handleScanComplete, handleScanSelect,
   } = useAppState();
 
-  const [showCyMind,       setShowCyMind]       = useState(false);
-  const [casesIncidentId,  setCasesIncidentId]  = useState(null);
-  const [selectedEdrAgent, setSelectedEdrAgent] = useState(null);
+  const [showCyMind,        setShowCyMind]        = useState(false);
+  const [casesIncidentId,   setCasesIncidentId]   = useState(null);
+  const [selectedEdrAgent,  setSelectedEdrAgent]  = useState(null);
+  const [selectedItamAsset, setSelectedItamAsset] = useState(null);
 
   useEffect(() => {
     if (!allowedPages) return;
@@ -72,7 +73,8 @@ export default function App() {
                 setActiveTab={setActiveTab} setSelectedAsset={setSelectedAsset} setShowImport={setShowImport}
                 onInstallModule={handleInstallModule} onUninstallModule={handleUninstallModule}
                 casesIncidentId={casesIncidentId} setCasesIncidentId={setCasesIncidentId}
-                selectedEdrAgent={selectedEdrAgent} setSelectedEdrAgent={setSelectedEdrAgent}/>
+                selectedEdrAgent={selectedEdrAgent} setSelectedEdrAgent={setSelectedEdrAgent}
+                selectedItamAsset={selectedItamAsset} setSelectedItamAsset={setSelectedItamAsset}/>
             </div>
           </PageErrorBoundary>
         </div>

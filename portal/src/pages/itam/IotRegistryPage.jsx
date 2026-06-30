@@ -58,15 +58,16 @@ function KpiCard({ label, value, color }) {
 }
 
 export default function IotRegistryPage() {
-  const [devices,   setDevices]   = useState([]);
-  const [summary,   setSummary]   = useState(null);
-  const [total,     setTotal]     = useState(0);
-  const [page,      setPage]      = useState(1);
-  const [riskMin,   setRiskMin]   = useState(0);
-  const [scanning,  setScanning]  = useState(false);
-  const [scanMsg,   setScanMsg]   = useState("");
-  const [loading,   setLoading]   = useState(true);
-  const [selected,  setSelected]  = useState(null);
+  const [devices,          setDevices]          = useState([]);
+  const [summary,          setSummary]          = useState(null);
+  const [total,            setTotal]            = useState(0);
+  const [page,             setPage]             = useState(1);
+  const [riskMin,          setRiskMin]          = useState(0);
+  const [scanning,         setScanning]         = useState(false);
+  const [scanMsg,          setScanMsg]          = useState("");
+  const [loading,          setLoading]          = useState(true);
+  const [selected,         setSelected]         = useState(null);
+  const [configuredSubnet, setConfiguredSubnet] = useState("");
 
   const PER_PAGE = 50;
 
@@ -88,16 +89,24 @@ export default function IotRegistryPage() {
     setLoading(false);
   }, [page, riskMin]);
 
-  useEffect(() => { loadSummary(); }, []);
+  const loadSettings = async () => {
+    try {
+      const r = await fetch("/api/itam/settings");
+      if (r.ok) { const d = await r.json(); setConfiguredSubnet(d.scan_subnet || ""); }
+    } catch {}
+  };
+
+  useEffect(() => { loadSummary(); loadSettings(); }, []);
   useEffect(() => { loadDevices(); }, [loadDevices]);
 
   const handleScan = async () => {
     setScanning(true); setScanMsg("");
     try {
+      const body = configuredSubnet ? { subnet: configuredSubnet } : {};
       const r = await fetch("/api/itam/iot/scan", { method: "POST",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const d = await r.json();
-      setScanMsg(r.ok ? `IoT scan started for ${d.subnet || "configured subnet"}` : (d.error || "Scan failed"));
+      setScanMsg(r.ok ? `IoT scan started for ${d.subnet}` : (d.error || "Scan failed"));
       if (r.ok) setTimeout(() => { loadSummary(); loadDevices(); }, 10000);
     } catch { setScanMsg("Network error"); }
     setScanning(false);
@@ -127,10 +136,28 @@ export default function IotRegistryPage() {
         </button>
       </div>
 
+      {!configuredSubnet && (
+        <div style={{ marginBottom: 14, padding: "8px 14px", borderRadius: 6,
+          background: "rgba(255,140,0,0.08)", border: "1px solid #ff8c0044",
+          fontSize: 12, color: "#ff8c00" }}>
+          ⚠ No subnet configured — go to <strong>Asset Coverage &gt; Scan Settings</strong> to set your network CIDR before scanning.
+        </div>
+      )}
+      {configuredSubnet && (
+        <div style={{ marginBottom: 14, padding: "6px 12px", borderRadius: 6,
+          background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.2)",
+          fontSize: 11, color: "#9aa0b0", display: "inline-flex", alignItems: "center", gap: 6 }}>
+          Scanning subnet: <span style={{ fontFamily: "monospace", color: ACCENT }}>{configuredSubnet}</span>
+          <span style={{ color: "#555", fontSize: 10 }}>— edit in Asset Coverage &gt; Scan Settings</span>
+        </div>
+      )}
       {scanMsg && (
-        <div style={{ marginBottom: 16, padding: "8px 14px", borderRadius: 6,
-          background: "rgba(245,197,24,0.1)", border: "1px solid #f5c51844",
-          fontSize: 12, color: "#f5c518" }}>{scanMsg}</div>
+        <div style={{ marginBottom: 16, marginTop: configuredSubnet ? 8 : 0, padding: "8px 14px", borderRadius: 6,
+          background: scanMsg.includes("failed") || scanMsg.includes("error") ? "rgba(255,59,59,0.1)" : "rgba(245,197,24,0.1)",
+          border: `1px solid ${scanMsg.includes("failed") || scanMsg.includes("error") ? "#ff3b3b" : "#f5c518"}44`,
+          fontSize: 12, color: scanMsg.includes("failed") || scanMsg.includes("error") ? "#ff3b3b" : "#f5c518" }}>
+          {scanMsg}
+        </div>
       )}
 
       {/* KPI row */}

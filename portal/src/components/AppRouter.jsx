@@ -80,7 +80,7 @@ export function AppRouter({ activeTab, user, assets, data, stats, installedModul
       {activeTab==="edr-installer"  && <EdrAgentInstallerPage/>}
       {activeTab==="edr-yara-rules" && <EdrYaraRulesPage/>}
       {activeTab==="edr-endpoint-detail" && <EdrEndpointDetailPage agentId={selectedEdrAgent}/>}
-      {activeTab==="itam-coverage"  && <ItamCoveragePage onViewAsset={id => { setSelectedItamAsset(id); setActiveTab("itam-asset-detail"); }}/>}
+      {activeTab==="itam-coverage"  && <ItamCoveragePage user={user} onViewAsset={id => { setSelectedItamAsset(id); setActiveTab("itam-asset-detail"); }}/>}
       {activeTab==="itam-iot"       && <IotRegistryPage/>}
       {activeTab==="itam-shadow-ai" && <ShadowAiPage/>}
       {activeTab==="itam-asset-detail" && <AssetDetailPage assetId={selectedItamAsset} onBack={() => setActiveTab("itam-coverage")}/>}
