@@ -262,6 +262,17 @@ def init_itam_tables(db_url: str) -> None:
         except Exception as _e:
             _log.debug("exploit_intel init skipped: %s", _e)
 
+        # Backfill discovery_source from source for rows where discovery_source
+        # was never set (defaults to 'manual' even for EDR/SIEM auto-registered assets)
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE network_assets
+                SET discovery_source = source
+                WHERE (discovery_source IS NULL OR discovery_source = 'manual')
+                  AND source IS DISTINCT FROM 'manual'
+            """)
+            _log.info("ITAM: backfilled discovery_source for %d rows", cur.rowcount)
+
     conn.commit()
     conn.close()
     _log.info("ITAM tables initialised")
@@ -488,10 +499,30 @@ def assets_list():
             cur.execute(f"""
                 SELECT na.*,
                        ea.hostname AS edr_hostname, ea.status AS edr_status,
-                       hpc.agent_name AS siem_hostname
+                       hpc.agent_name AS siem_hostname,
+                       COALESCE(sv.vuln_count, 0) AS vuln_count,
+                       sv.highest_severity AS highest_cve_severity
                 FROM network_assets na
                 LEFT JOIN edr_agents ea ON ea.agent_id = na.edr_agent_id
                 LEFT JOIN host_posture_cache hpc ON hpc.agent_id = na.siem_agent_id
+                LEFT JOIN (
+                    SELECT asset_id,
+                           SUM(cve_count) AS vuln_count,
+                           CASE MAX(CASE highest_severity
+                               WHEN 'critical' THEN 4
+                               WHEN 'high'     THEN 3
+                               WHEN 'medium'   THEN 2
+                               WHEN 'low'      THEN 1
+                               ELSE 0 END)
+                           WHEN 4 THEN 'critical'
+                           WHEN 3 THEN 'high'
+                           WHEN 2 THEN 'medium'
+                           WHEN 1 THEN 'low'
+                           ELSE NULL END AS highest_severity
+                    FROM software_inventory
+                    WHERE cve_count > 0
+                    GROUP BY asset_id
+                ) sv ON sv.asset_id = na.id
                 {where}
                 ORDER BY na.last_seen DESC
                 LIMIT %s OFFSET %s
@@ -1271,28 +1302,80 @@ def _crossref_agents_conn(conn) -> None:
         """)
         # Auto-populate new edr_agents into network_assets if not already there
         cur.execute("""
-            INSERT INTO network_assets (ip_address, hostname, asset_type, edr_agent_id, source)
-            SELECT ea.agent_ip::inet, ea.hostname, ea.asset_type, ea.agent_id, 'edr_agent'
+            INSERT INTO network_assets
+              (ip_address, hostname, asset_type, edr_agent_id, source, discovery_source,
+               vendor, os_fingerprint)
+            SELECT
+              ea.agent_ip::inet,
+              ea.hostname,
+              CASE ea.os_type
+                WHEN 'linux'   THEN 'server'
+                WHEN 'windows' THEN 'workstation'
+                WHEN 'darwin'  THEN 'workstation'
+                ELSE COALESCE(NULLIF(ea.asset_type,'unknown'), 'unknown')
+              END,
+              ea.agent_id,
+              'edr_agent',
+              'edr_agent',
+              CASE ea.os_type
+                WHEN 'linux'   THEN 'Linux'
+                WHEN 'windows' THEN 'Microsoft'
+                WHEN 'darwin'  THEN 'Apple'
+                ELSE NULL
+              END,
+              ea.os_type
             FROM edr_agents ea
             WHERE ea.agent_ip IS NOT NULL AND ea.agent_ip <> ''
             ON CONFLICT (ip_address) DO UPDATE SET
-              edr_agent_id = EXCLUDED.edr_agent_id,
-              hostname     = COALESCE(network_assets.hostname, EXCLUDED.hostname),
-              asset_type   = CASE WHEN network_assets.asset_type='unknown'
-                                  THEN EXCLUDED.asset_type
-                                  ELSE network_assets.asset_type END,
-              last_seen    = NOW()
+              edr_agent_id     = EXCLUDED.edr_agent_id,
+              hostname         = COALESCE(network_assets.hostname, EXCLUDED.hostname),
+              asset_type       = CASE WHEN network_assets.asset_type IN ('unknown','')
+                                      THEN EXCLUDED.asset_type
+                                      ELSE network_assets.asset_type END,
+              vendor           = COALESCE(network_assets.vendor, EXCLUDED.vendor),
+              os_fingerprint   = COALESCE(network_assets.os_fingerprint, EXCLUDED.os_fingerprint),
+              discovery_source = CASE WHEN network_assets.discovery_source IN ('manual','')
+                                      THEN 'edr_agent'
+                                      ELSE network_assets.discovery_source END,
+              source           = CASE WHEN network_assets.source IN ('manual','')
+                                      THEN 'edr_agent'
+                                      ELSE network_assets.source END,
+              last_seen        = NOW()
         """)
         # Auto-populate SIEM hosts
         cur.execute("""
-            INSERT INTO network_assets (ip_address, hostname, siem_agent_id, source)
-            SELECT hpc.ip::inet, hpc.agent_name, hpc.agent_id, 'siem_agent'
+            INSERT INTO network_assets
+              (ip_address, hostname, siem_agent_id, source, discovery_source,
+               asset_type, os_fingerprint)
+            SELECT
+              hpc.ip::inet,
+              hpc.agent_name,
+              hpc.agent_id,
+              'siem_agent',
+              'siem_agent',
+              CASE
+                WHEN hpc.os_platform ILIKE '%windows%' THEN 'workstation'
+                WHEN hpc.os_platform ILIKE '%linux%'   THEN 'server'
+                WHEN hpc.os_platform ILIKE '%darwin%'  THEN 'workstation'
+                ELSE 'unknown'
+              END,
+              hpc.os_platform
             FROM host_posture_cache hpc
             WHERE hpc.ip IS NOT NULL AND hpc.ip NOT IN ('any', '127.0.0.1', '0.0.0.0')
             ON CONFLICT (ip_address) DO UPDATE SET
-              siem_agent_id = EXCLUDED.siem_agent_id,
-              hostname      = COALESCE(network_assets.hostname, EXCLUDED.hostname),
-              last_seen     = NOW()
+              siem_agent_id    = EXCLUDED.siem_agent_id,
+              hostname         = COALESCE(network_assets.hostname, EXCLUDED.hostname),
+              asset_type       = CASE WHEN network_assets.asset_type IN ('unknown','')
+                                      THEN EXCLUDED.asset_type
+                                      ELSE network_assets.asset_type END,
+              os_fingerprint   = COALESCE(network_assets.os_fingerprint, EXCLUDED.os_fingerprint),
+              discovery_source = CASE WHEN network_assets.discovery_source IN ('manual','')
+                                      THEN 'siem_agent'
+                                      ELSE network_assets.discovery_source END,
+              source           = CASE WHEN network_assets.source IN ('manual','')
+                                      THEN 'siem_agent'
+                                      ELSE network_assets.source END,
+              last_seen        = NOW()
         """)
     conn.commit()
 

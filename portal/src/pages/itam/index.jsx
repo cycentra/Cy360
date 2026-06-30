@@ -32,13 +32,16 @@ const ASSET_TYPE_COLORS = {
 };
 
 const SOURCE_LABEL = {
-  manual:     "CMDB",
+  manual:     "Manual",
   arp_report: "ARP",
   nmap:       "Scan",
   edr_agent:  "EDR",
   siem_agent: "SIEM",
   aws:        "AWS",
   azure:      "Azure",
+  mdns:       "mDNS",
+  snmp:       "SNMP",
+  cloud:      "Cloud",
 };
 
 const SOURCE_COLOR = {
@@ -49,6 +52,9 @@ const SOURCE_COLOR = {
   siem_agent: "#4d9eff",
   aws:        "#ff9900",
   azure:      "#0089d6",
+  mdns:       "#b06eff",
+  snmp:       "#e67e22",
+  cloud:      "#1abc9c",
 };
 
 function KpiCard({ label, value, sub, color, bg }) {
@@ -263,8 +269,15 @@ function AssetTable({ assets, loading, onViewAsset }) {
                   : <span style={{ color: "#333", fontSize: 10 }}>—</span>}
               </td>
               <td style={{ padding: "9px 12px" }}>
-                <Badge label={SOURCE_LABEL[a.discovery_source || a.source] || (a.discovery_source || a.source)}
-                       color={SOURCE_COLOR[a.discovery_source || a.source] || "#555"}/>
+                {(() => {
+                  const src = a.source && a.source !== "manual"
+                    ? a.source
+                    : (a.discovery_source || a.source || "manual");
+                  return (
+                    <Badge label={SOURCE_LABEL[src] || src}
+                           color={SOURCE_COLOR[src] || "#555"}/>
+                  );
+                })()}
               </td>
               <td style={{ padding: "9px 12px" }}>
                 {a.vuln_count > 0

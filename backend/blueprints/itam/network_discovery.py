@@ -113,25 +113,27 @@ def upsert_assets(conn, assets: list[dict], source: str = "manual") -> int:
                 cur.execute("""
                     INSERT INTO network_assets
                       (ip_address, mac_address, hostname, vendor, asset_type,
-                       source, notes, tags, last_seen, first_seen)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                       source, discovery_source, notes, tags, last_seen, first_seen)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
                     ON CONFLICT (ip_address) DO UPDATE SET
-                      mac_address  = COALESCE(NULLIF(EXCLUDED.mac_address,''), network_assets.mac_address),
-                      hostname     = COALESCE(NULLIF(EXCLUDED.hostname,''),    network_assets.hostname),
-                      vendor       = COALESCE(NULLIF(EXCLUDED.vendor,''),      network_assets.vendor),
-                      asset_type   = CASE WHEN EXCLUDED.asset_type <> 'unknown'
-                                          THEN EXCLUDED.asset_type
-                                          ELSE network_assets.asset_type END,
-                      notes        = COALESCE(NULLIF(EXCLUDED.notes,''),       network_assets.notes),
-                      tags         = EXCLUDED.tags,
-                      source       = 'manual',
-                      last_seen    = NOW()
+                      mac_address      = COALESCE(NULLIF(EXCLUDED.mac_address,''), network_assets.mac_address),
+                      hostname         = COALESCE(NULLIF(EXCLUDED.hostname,''),    network_assets.hostname),
+                      vendor           = COALESCE(NULLIF(EXCLUDED.vendor,''),      network_assets.vendor),
+                      asset_type       = CASE WHEN EXCLUDED.asset_type <> 'unknown'
+                                             THEN EXCLUDED.asset_type
+                                             ELSE network_assets.asset_type END,
+                      notes            = COALESCE(NULLIF(EXCLUDED.notes,''),       network_assets.notes),
+                      tags             = EXCLUDED.tags,
+                      source           = 'manual',
+                      discovery_source = 'manual',
+                      last_seen        = NOW()
                 """, (
                     a["ip_address"],
                     a.get("mac_address") or None,
                     a.get("hostname") or None,
                     a.get("vendor") or None,
                     a.get("asset_type", "unknown"),
+                    "manual",
                     "manual",
                     a.get("notes") or None,
                     tags,
@@ -140,24 +142,29 @@ def upsert_assets(conn, assets: list[dict], source: str = "manual") -> int:
                 # Non-manual: only fill fields that are currently empty
                 cur.execute("""
                     INSERT INTO network_assets
-                      (ip_address, mac_address, hostname, vendor, asset_type, source, last_seen, first_seen)
-                    VALUES (%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                      (ip_address, mac_address, hostname, vendor, asset_type,
+                       source, discovery_source, last_seen, first_seen)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
                     ON CONFLICT (ip_address) DO UPDATE SET
-                      mac_address  = COALESCE(network_assets.mac_address, NULLIF(EXCLUDED.mac_address,'')),
-                      hostname     = COALESCE(network_assets.hostname,    NULLIF(EXCLUDED.hostname,'')),
-                      vendor       = COALESCE(network_assets.vendor,      NULLIF(EXCLUDED.vendor,'')),
-                      asset_type   = CASE WHEN network_assets.asset_type IN ('unknown','')
-                                          THEN EXCLUDED.asset_type
-                                          ELSE network_assets.asset_type END,
-                      source       = CASE WHEN network_assets.source = 'manual'
-                                          THEN 'manual' ELSE EXCLUDED.source END,
-                      last_seen    = NOW()
+                      mac_address      = COALESCE(network_assets.mac_address, NULLIF(EXCLUDED.mac_address,'')),
+                      hostname         = COALESCE(network_assets.hostname,    NULLIF(EXCLUDED.hostname,'')),
+                      vendor           = COALESCE(network_assets.vendor,      NULLIF(EXCLUDED.vendor,'')),
+                      asset_type       = CASE WHEN network_assets.asset_type IN ('unknown','')
+                                             THEN EXCLUDED.asset_type
+                                             ELSE network_assets.asset_type END,
+                      source           = CASE WHEN network_assets.source = 'manual'
+                                             THEN 'manual' ELSE EXCLUDED.source END,
+                      discovery_source = CASE WHEN network_assets.discovery_source IN ('manual','')
+                                             THEN EXCLUDED.discovery_source
+                                             ELSE network_assets.discovery_source END,
+                      last_seen        = NOW()
                 """, (
                     a["ip_address"],
                     a.get("mac_address") or None,
                     a.get("hostname") or None,
                     a.get("vendor") or None,
                     a.get("asset_type", "unknown"),
+                    source,
                     source,
                 ))
             count += 1
