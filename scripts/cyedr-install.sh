@@ -543,7 +543,8 @@ maybe_install_cysiem() {
 # ── Lock down file permissions ─────────────────────────────────────────────────
 harden_permissions() {
     info "Hardening CyEDR file permissions..."
-    chown -R root:root "$EDR_HOME"
+    local _grp; _grp="$(if [[ "$OS_KEY" == "MACOS" ]]; then echo wheel; else echo root; fi)"
+    chown -R "root:${_grp}" "$EDR_HOME"
     chmod -R 750 "$EDR_HOME"
     chmod 700 "$EDR_HOME/quarantine"
     chmod 600 "$EDR_HOME/config.json"
