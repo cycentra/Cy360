@@ -532,9 +532,7 @@ maybe_install_cysiem() {
         || die "Failed to download CySIEM installer from $INSTALLER_URL"
     chmod +x "$TMP_INSTALLER"
 
-    # The Wazuh installer already handles OS detection + enrollment.
-    # Pass the deployment token so it can authenticate to the manager.
-    bash "$TMP_INSTALLER" --edr-token "$DEPLOY_TOKEN" || \
+    bash "$TMP_INSTALLER" --install || \
         warn "CySIEM installer returned non-zero exit code — check $TMP_INSTALLER output"
 
     rm -f "$TMP_INSTALLER"

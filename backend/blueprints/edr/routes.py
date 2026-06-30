@@ -1405,14 +1405,26 @@ def installer_yara_exe():
 
 @edr_bp.route("/installer/cysiem-script", methods=["GET"])
 def installer_cysiem_script():
-    """Serve CySIEM (Wazuh) shell installer for Linux/macOS."""
+    """Serve CySIEM (Wazuh) shell installer for Linux/macOS (dynamically generated)."""
     err = _require_deploy_token()
     if err:
         return err
-    fpath = os.path.join(_EDR_PKG_DIR, "cysiem-install.sh")
-    if not os.path.exists(fpath):
-        return jsonify({"error": "CySIEM installer script not staged"}), 404
-    return send_file(fpath, mimetype="text/x-shellscript")
+    from blueprints.system.routes import _INSTALLER_SH, _read_installed_version
+    base_domain    = os.environ.get("BASE_DOMAIN", "").strip()
+    server_url     = f"https://cy360.{base_domain}" if base_domain else request.host_url.rstrip("/")
+    cysiem_manager = (
+        os.environ.get("CY360_PUBLIC_IP") or
+        os.environ.get("WAZUH_MANAGER_IP") or
+        (f"cysiem.{base_domain}" if base_domain else request.host.split(":")[0])
+    )
+    content = _INSTALLER_SH.format(
+        server_url=server_url,
+        cysiem_manager=cysiem_manager,
+        version=_read_installed_version(),
+    )
+    resp = make_response(content)
+    resp.headers["Content-Type"] = "text/x-shellscript; charset=utf-8"
+    return add_cors_headers(resp)
 
 
 @edr_bp.route("/installer/cysiem-msi", methods=["GET"])
