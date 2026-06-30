@@ -464,6 +464,7 @@ enroll_agent() {
         -H "Authorization: Bearer $DEPLOY_TOKEN" \
         -H "Content-Type: application/json" \
         -d "{
+            \"deployment_token\": \"$DEPLOY_TOKEN\",
             \"hostname\":    \"$HOSTNAME\",
             \"os_type\":     \"$OS_KEY\",
             \"asset_type\":  \"$ASSET_TYPE\",
