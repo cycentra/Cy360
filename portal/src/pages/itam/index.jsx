@@ -2,8 +2,8 @@
  * pages/itam/index.jsx — ITAM Coverage Dashboard
  *
  * Unified view of all network assets, EDR/SIEM coverage gaps,
- * IoT device count, and Shadow AI open findings.
- * Tabs: All Assets | Uncovered | IoT Devices | Shadow AI
+ * IoT device count, Shadow AI open findings, and Network Zones.
+ * Tabs: All Assets | Uncovered | EDR Covered | Network Zones
  */
 import React, { useEffect, useState, useCallback } from "react";
 
@@ -148,6 +148,316 @@ function AssetTable({ assets, loading, onViewAsset }) {
   );
 }
 
+// ── Network Zones Tab ─────────────────────────────────────────────────────────
+
+function ZoneApproveModal({ suggestion, onClose, onApproved }) {
+  const [zoneName, setZoneName] = useState("");
+  const [notes,    setNotes]    = useState("");
+  const [saving,   setSaving]   = useState(false);
+  const [err,      setErr]      = useState("");
+
+  const submit = async () => {
+    if (!zoneName.trim()) { setErr("Zone name is required"); return; }
+    setSaving(true); setErr("");
+    try {
+      const r = await fetch(`/api/itam/network-zones/suggestions/${suggestion.id}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ zone_name: zoneName.trim(), notes }),
+      });
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error || "Failed"); setSaving(false); return; }
+      onApproved();
+    } catch { setErr("Network error"); setSaving(false); }
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999,
+    }}>
+      <div style={{
+        background: "#12182b", border: BORDER, borderRadius: 12,
+        padding: 28, maxWidth: 460, width: "90%",
+      }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: "#e8eaf0", marginBottom: 6 }}>
+          Approve Network Zone
+        </div>
+        <div style={{ fontSize: 11, color: "#555", marginBottom: 18 }}>
+          Subnet: <span style={{ color: ACCENT, fontFamily: "monospace" }}>{suggestion.subnet_prefix}</span>
+          &nbsp;·&nbsp;Gateway MAC: <span style={{ color: "#b06eff", fontFamily: "monospace" }}>{suggestion.gateway_mac}</span>
+          &nbsp;·&nbsp;{suggestion.agent_count} reporting agents
+        </div>
+        {suggestion.case_id && suggestion.case_id !== "pending" && (
+          <div style={{ fontSize: 11, color: "#f5c518", marginBottom: 14,
+            background: "#f5c51814", border: "1px solid #f5c51844",
+            borderRadius: 6, padding: "6px 10px" }}>
+            CyCase raised: <span style={{ fontFamily: "monospace" }}>{suggestion.case_id.slice(0, 8)}…</span>
+          </div>
+        )}
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: "#555", marginBottom: 4 }}>Zone Name *</div>
+          <input
+            value={zoneName} onChange={e => setZoneName(e.target.value)}
+            placeholder="e.g. London HQ, NYC Office, Corporate VPN"
+            style={{
+              width: "100%", background: CARD_BG, border: BORDER, borderRadius: 6,
+              padding: "7px 10px", fontSize: 12, color: "#c0c8d8", outline: "none",
+              boxSizing: "border-box",
+            }}
+          />
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 11, color: "#555", marginBottom: 4 }}>Notes (optional)</div>
+          <input
+            value={notes} onChange={e => setNotes(e.target.value)}
+            placeholder="Office location, network owner…"
+            style={{
+              width: "100%", background: CARD_BG, border: BORDER, borderRadius: 6,
+              padding: "7px 10px", fontSize: 12, color: "#c0c8d8", outline: "none",
+              boxSizing: "border-box",
+            }}
+          />
+        </div>
+        {err && <div style={{ fontSize: 11, color: "#ff3b3b", marginBottom: 10 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={{
+            border: BORDER, borderRadius: 6, padding: "6px 16px",
+            background: "transparent", color: "#9aa0b0", cursor: "pointer", fontSize: 12,
+          }}>Cancel</button>
+          <button onClick={submit} disabled={saving} style={{
+            border: "none", borderRadius: 6, padding: "6px 16px",
+            background: ACCENT, color: "#0a0e1a", fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", fontSize: 12,
+          }}>{saving ? "Approving…" : "Approve Zone"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NetworkZonesTab() {
+  const [zones,       setZones]       = useState([]);
+  const [suggestions, setSuggestions] = useState([]);
+  const [stats,       setStats]       = useState(null);
+  const [loading,     setLoading]     = useState(true);
+  const [approveModal,setApproveModal]= useState(null);
+  const [msg,         setMsg]         = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [zRes, sRes, stRes] = await Promise.all([
+        fetch("/api/itam/network-zones"),
+        fetch("/api/itam/network-zones/suggestions?status=pending"),
+        fetch("/api/itam/network-zones/stats"),
+      ]);
+      if (zRes.ok)  setZones((await zRes.json()).zones || []);
+      if (sRes.ok)  setSuggestions((await sRes.json()).suggestions || []);
+      if (stRes.ok) setStats(await stRes.json());
+    } catch {}
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const reject = async (sug) => {
+    const r = await fetch(`/api/itam/network-zones/suggestions/${sug.id}/reject`, { method: "POST" });
+    if (r.ok) { setMsg("Suggestion rejected"); load(); }
+  };
+
+  const deleteZone = async (zone) => {
+    if (!window.confirm(`Delete zone "${zone.zone_name}"? ARP discovery will revert to untrusted for this subnet.`)) return;
+    const r = await fetch(`/api/itam/network-zones/${zone.id}`, { method: "DELETE" });
+    if (r.ok) { setMsg(`Zone "${zone.zone_name}" deleted`); load(); }
+  };
+
+  if (loading) return <div style={{ color: "#555", padding: 40, textAlign: "center" }}>Loading…</div>;
+
+  return (
+    <div>
+      {/* Stats bar */}
+      {stats && (
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 24 }}>
+          {[
+            { label: "Approved Zones",    value: stats.approved_zones,    color: ACCENT },
+            { label: "Pending Approval",  value: stats.pending_approval,  color: "#f5c518" },
+            { label: "Agents ARP Active", value: stats.agents_arp_active, color: "#00e5a0" },
+            { label: "Agents ARP Blocked",value: stats.agents_arp_blocked,color: "#ff3b3b" },
+          ].map(({ label, value, color }) => (
+            <div key={label} style={{
+              background: CARD_BG, border: BORDER, borderRadius: 10,
+              padding: "12px 18px", flex: "1 1 120px",
+            }}>
+              <div style={{ fontSize: 24, fontWeight: 800, color }}>{value ?? 0}</div>
+              <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>{label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {msg && (
+        <div style={{ marginBottom: 14, padding: "8px 14px", borderRadius: 6, fontSize: 12,
+          background: "rgba(0,229,160,0.1)", border: `1px solid ${ACCENT}44`, color: ACCENT }}>
+          {msg}
+        </div>
+      )}
+
+      {/* Pending suggestions panel */}
+      {suggestions.length > 0 && (
+        <div style={{ background: "rgba(245,197,24,0.05)", border: "1px solid #f5c51844",
+          borderRadius: 12, padding: 20, marginBottom: 24 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+            <span style={{ fontSize: 14 }}>⏳</span>
+            <span style={{ fontWeight: 700, color: "#f5c518", fontSize: 13 }}>
+              Pending Admin Approval ({suggestions.length})
+            </span>
+            <span style={{ fontSize: 11, color: "#666" }}>— CyCase raised for each</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {suggestions.map(s => (
+              <div key={s.id} style={{
+                background: CARD_BG, border: BORDER, borderRadius: 8,
+                padding: "14px 16px", display: "flex", alignItems: "center",
+                gap: 16, flexWrap: "wrap",
+              }}>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ fontFamily: "monospace", fontSize: 13, color: ACCENT }}>{s.subnet_prefix}</div>
+                  <div style={{ fontSize: 11, color: "#9aa0b0", marginTop: 3 }}>
+                    GW MAC: <span style={{ fontFamily: "monospace", color: "#b06eff" }}>{s.gateway_mac}</span>
+                    {s.gateway_ip && <span style={{ color: "#555" }}> ({s.gateway_ip})</span>}
+                  </div>
+                </div>
+                <div style={{ minWidth: 80 }}>
+                  <div style={{ fontSize: 11, color: "#555" }}>Agents</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "#f5c518" }}>{s.agent_count}</div>
+                </div>
+                {s.case_id && s.case_id !== "pending" && (
+                  <div style={{ minWidth: 120 }}>
+                    <div style={{ fontSize: 10, color: "#555" }}>CyCase</div>
+                    <div style={{ fontSize: 11, fontFamily: "monospace", color: "#f5c518" }}>
+                      {s.case_id.slice(0, 8)}…
+                    </div>
+                  </div>
+                )}
+                <div style={{ fontSize: 11, color: "#555" }}>
+                  {new Date(s.created_at).toLocaleDateString()}
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => setApproveModal(s)} style={{
+                    border: `1px solid ${ACCENT}44`, borderRadius: 6, padding: "5px 12px",
+                    background: `${ACCENT}18`, color: ACCENT, fontSize: 11, fontWeight: 700, cursor: "pointer",
+                  }}>Approve</button>
+                  <button onClick={() => reject(s)} style={{
+                    border: "1px solid #ff3b3b44", borderRadius: 6, padding: "5px 12px",
+                    background: "rgba(255,59,59,0.08)", color: "#ff3b3b", fontSize: 11, fontWeight: 700, cursor: "pointer",
+                  }}>Reject</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {suggestions.length === 0 && (
+        <div style={{ background: "rgba(0,229,160,0.04)", border: `1px solid ${ACCENT}22`,
+          borderRadius: 8, padding: "12px 16px", marginBottom: 20, fontSize: 12, color: "#555" }}>
+          No pending zone suggestions — all discovered networks are either approved or rejected.
+        </div>
+      )}
+
+      {/* Approved zones table */}
+      <div style={{ background: CARD_BG, border: BORDER, borderRadius: 12, overflow: "hidden", marginBottom: 20 }}>
+        <div style={{ padding: "14px 18px", borderBottom: BORDER, fontSize: 12,
+          fontWeight: 700, color: "#555", letterSpacing: 0.5 }}>
+          APPROVED ZONES — ARP DISCOVERY ENABLED
+        </div>
+        {zones.filter(z => z.status === "approved").length === 0 ? (
+          <div style={{ padding: 32, textAlign: "center", color: "#444", fontSize: 12 }}>
+            No approved zones yet. Approve a pending suggestion above, or create one manually.
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: BORDER }}>
+                {["Zone Name", "Trusted CIDRs", "Gateway MACs", "Active Agents", "Source", "Approved By", "Actions"].map(h => (
+                  <th key={h} style={{ textAlign: "left", padding: "8px 14px",
+                    color: "#555", fontWeight: 600, fontSize: 10, letterSpacing: 0.5 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {zones.filter(z => z.status === "approved").map(z => {
+                const gws = Array.isArray(z.trusted_gateways)
+                  ? z.trusted_gateways
+                  : (typeof z.trusted_gateways === "string" ? JSON.parse(z.trusted_gateways || "[]") : []);
+                const allMacs = gws.flatMap(g => g.macs || []);
+                return (
+                  <tr key={z.id}
+                    style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
+                    onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.025)"}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                    <td style={{ padding: "10px 14px", fontWeight: 700, color: "#e8eaf0" }}>
+                      {z.zone_name}
+                    </td>
+                    <td style={{ padding: "10px 14px" }}>
+                      {(z.trusted_cidrs || []).map(c => (
+                        <div key={c} style={{ fontFamily: "monospace", color: ACCENT, fontSize: 11 }}>{c}</div>
+                      ))}
+                    </td>
+                    <td style={{ padding: "10px 14px" }}>
+                      {allMacs.length === 0
+                        ? <span style={{ color: "#444", fontSize: 11 }}>VPN / CIDR only</span>
+                        : allMacs.map(m => (
+                            <div key={m} style={{ fontFamily: "monospace", color: "#b06eff", fontSize: 11 }}>{m}</div>
+                          ))}
+                    </td>
+                    <td style={{ padding: "10px 14px", color: z.live_agent_count > 0 ? "#00e5a0" : "#555",
+                      fontWeight: 700, fontSize: 14 }}>
+                      {z.live_agent_count ?? 0}
+                    </td>
+                    <td style={{ padding: "10px 14px" }}>
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4,
+                        background: z.auto_discovered ? "rgba(176,110,255,0.15)" : "rgba(0,229,160,0.1)",
+                        color: z.auto_discovered ? "#b06eff" : ACCENT,
+                      }}>{z.auto_discovered ? "AUTO" : "MANUAL"}</span>
+                    </td>
+                    <td style={{ padding: "10px 14px", color: "#9aa0b0", fontSize: 11 }}>
+                      {z.approved_by || "—"}
+                    </td>
+                    <td style={{ padding: "10px 14px" }}>
+                      <button onClick={() => deleteZone(z)} style={{
+                        border: "1px solid #ff3b3b44", borderRadius: 5, padding: "3px 10px",
+                        background: "transparent", color: "#ff3b3b", fontSize: 11, cursor: "pointer",
+                      }}>Delete</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div style={{ fontSize: 11, color: "#444", lineHeight: 1.7 }}>
+        <strong style={{ color: "#666" }}>How it works:</strong>{" "}
+        CyEDR agents report their default gateway MAC on every heartbeat. When 3+ agents on the same
+        subnet share a gateway, a suggestion is auto-created and a CyCase is raised. Approving a
+        suggestion adds the subnet + gateway MAC to this list and enables ARP asset discovery for
+        those endpoints. Agents on untrusted networks (home/hotel/cafe) skip ARP collection automatically.
+      </div>
+
+      {approveModal && (
+        <ZoneApproveModal
+          suggestion={approveModal}
+          onClose={() => setApproveModal(null)}
+          onApproved={() => { setApproveModal(null); setMsg("Zone approved — ARP discovery enabled"); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
 export default function ItamCoveragePage({ onViewAsset }) {
   const [coverage,      setCoverage]      = useState(null);
   const [assets,        setAssets]        = useState([]);
@@ -276,6 +586,12 @@ export default function ItamCoveragePage({ onViewAsset }) {
         <KpiCard label="IoT Devices" value={cov?.iot_devices ?? 0} color="#f5c518"/>
         <KpiCard label="Shadow AI" value={cov?.shadow_ai_open ?? 0}
           sub="open findings" color={cov?.shadow_ai_open > 0 ? "#b06eff" : "#555"}/>
+        <div
+          onClick={() => setTab("zones")}
+          style={{ cursor: "pointer" }}>
+          <KpiCard label="Network Zones" value={cov?.pending_zones ?? "→"}
+            sub="click to manage" color="#b06eff"/>
+        </div>
       </div>
 
       {/* Coverage bar */}
@@ -326,48 +642,56 @@ export default function ItamCoveragePage({ onViewAsset }) {
             { id: "all",       label: "All Assets" },
             { id: "uncovered", label: `Uncovered (${cov?.uncovered ?? 0})` },
             { id: "edr",       label: `EDR Covered (${cov?.edr_covered ?? 0})` },
+            { id: "zones",     label: "🌐 Network Zones" },
           ].map(t => (
             <button key={t.id} onClick={() => setTab(t.id)} style={{
-              border: tab === t.id ? `1px solid ${ACCENT}` : BORDER,
+              border: tab === t.id ? `1px solid ${t.id === "zones" ? "#b06eff" : ACCENT}` : BORDER,
               borderRadius: 6, padding: "6px 14px", fontSize: 11, fontWeight: 600,
-              background: tab === t.id ? `${ACCENT}18` : "transparent",
-              color: tab === t.id ? ACCENT : "#666", cursor: "pointer",
+              background: tab === t.id ? (t.id === "zones" ? "#b06eff18" : `${ACCENT}18`) : "transparent",
+              color: tab === t.id ? (t.id === "zones" ? "#b06eff" : ACCENT) : "#666", cursor: "pointer",
             }}>{t.label}</button>
           ))}
         </div>
-        <input
-          value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="Search IP, hostname, vendor…"
-          style={{
-            background: CARD_BG, border: BORDER, borderRadius: 6,
-            padding: "6px 12px", fontSize: 12, color: "#c0c8d8",
-            outline: "none", width: 220,
-          }}
-        />
-      </div>
-
-      {/* Asset table */}
-      <div style={{ background: CARD_BG, border: BORDER, borderRadius: 12, overflow: "hidden" }}>
-        <AssetTable assets={assets} loading={loading} onViewAsset={onViewAsset}/>
-        {total > PER_PAGE && (
-          <div style={{ display: "flex", justifyContent: "center", gap: 8, padding: 16 }}>
-            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-              style={{ border: BORDER, borderRadius: 6, padding: "4px 12px", background: "transparent",
-                color: page === 1 ? "#333" : "#9aa0b0", cursor: page === 1 ? "not-allowed" : "pointer" }}>
-              ← Prev
-            </button>
-            <span style={{ color: "#555", fontSize: 11, alignSelf: "center" }}>
-              Page {page} of {Math.ceil(total / PER_PAGE)}
-            </span>
-            <button onClick={() => setPage(p => p + 1)} disabled={page >= Math.ceil(total / PER_PAGE)}
-              style={{ border: BORDER, borderRadius: 6, padding: "4px 12px", background: "transparent",
-                color: page >= Math.ceil(total / PER_PAGE) ? "#333" : "#9aa0b0",
-                cursor: page >= Math.ceil(total / PER_PAGE) ? "not-allowed" : "pointer" }}>
-              Next →
-            </button>
-          </div>
+        {tab !== "zones" && (
+          <input
+            value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="Search IP, hostname, vendor…"
+            style={{
+              background: CARD_BG, border: BORDER, borderRadius: 6,
+              padding: "6px 12px", fontSize: 12, color: "#c0c8d8",
+              outline: "none", width: 220,
+            }}
+          />
         )}
       </div>
+
+      {/* Network Zones tab */}
+      {tab === "zones" && <NetworkZonesTab />}
+
+      {/* Asset table (all non-zones tabs) */}
+      {tab !== "zones" && (
+        <div style={{ background: CARD_BG, border: BORDER, borderRadius: 12, overflow: "hidden" }}>
+          <AssetTable assets={assets} loading={loading} onViewAsset={onViewAsset}/>
+          {total > PER_PAGE && (
+            <div style={{ display: "flex", justifyContent: "center", gap: 8, padding: 16 }}>
+              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+                style={{ border: BORDER, borderRadius: 6, padding: "4px 12px", background: "transparent",
+                  color: page === 1 ? "#333" : "#9aa0b0", cursor: page === 1 ? "not-allowed" : "pointer" }}>
+                ← Prev
+              </button>
+              <span style={{ color: "#555", fontSize: 11, alignSelf: "center" }}>
+                Page {page} of {Math.ceil(total / PER_PAGE)}
+              </span>
+              <button onClick={() => setPage(p => p + 1)} disabled={page >= Math.ceil(total / PER_PAGE)}
+                style={{ border: BORDER, borderRadius: 6, padding: "4px 12px", background: "transparent",
+                  color: page >= Math.ceil(total / PER_PAGE) ? "#333" : "#9aa0b0",
+                  cursor: page >= Math.ceil(total / PER_PAGE) ? "not-allowed" : "pointer" }}>
+                Next →
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

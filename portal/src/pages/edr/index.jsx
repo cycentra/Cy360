@@ -71,6 +71,21 @@ function AgentCard({ agent, onAction }) {
           color={agent.pending_commands > 0 ? "#f5c518" : "#888"} />
         <StatItem label="Version"       value={agent.version || "—"} />
         <StatItem label="Last Seen"     value={agent.last_seen ? new Date(agent.last_seen).toLocaleString() : "Never"} />
+        <StatItem
+          label="Network Zone"
+          value={agent.current_network_zone || "Unknown / Roaming"}
+          color={agent.current_network_zone ? ACCENT : "#888"}
+        />
+        <div style={{ minWidth: 80 }}>
+          <div style={{ fontSize: 10, color: "#555", marginBottom: 2 }}>ARP Discovery</div>
+          <span style={{
+            fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4,
+            background: agent.arp_enabled ? "rgba(0,229,160,0.12)" : "rgba(255,59,59,0.12)",
+            color: agent.arp_enabled ? "#00e5a0" : "#ff3b3b",
+          }}>
+            {agent.arp_enabled ? "ACTIVE" : "BLOCKED"}
+          </span>
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4 }}>

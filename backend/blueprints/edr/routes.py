@@ -342,13 +342,43 @@ def _opt_heartbeat(agent_id):
 @require_agent_token
 def agent_heartbeat(agent_id):
     """
-    Agent-facing: update last_seen, version, and optionally ingest ARP neighbors.
-    Body: { version, agent_ip, arp_neighbors?: [{ip, mac}] }
+    Agent-facing: update last_seen, version, evaluate network zone trust,
+    and optionally ingest ARP neighbors.
+    Body: { version, agent_ip, gateway_macs?: [{ip, mac}], arp_neighbors?: [{ip, mac}] }
+    Response: { status, arp_enabled, arp_enabled_until, network_zone }
     """
-    body      = request.get_json(force=True, silent=True) or {}
-    version   = body.get("version", "")
-    ip        = body.get("agent_ip", "")
-    neighbors = body.get("arp_neighbors", [])
+    import threading
+    from datetime import datetime, timezone, timedelta
+
+    body          = request.get_json(force=True, silent=True) or {}
+    version       = body.get("version", "")
+    ip            = body.get("agent_ip", "")
+    gateway_macs  = body.get("gateway_macs", [])
+    neighbors     = body.get("arp_neighbors", [])
+
+    # ── Zone trust evaluation ─────────────────────────────────────────────────
+    arp_enabled   = True
+    network_zone  = None
+    zone_conf     = "unknown"
+    try:
+        from blueprints.itam.routes import evaluate_zone_trust, record_gateway_sighting
+        arp_enabled, network_zone, zone_conf = evaluate_zone_trust(ip, gateway_macs)
+        # Non-blocking: record gateway sighting for auto-learning
+        if gateway_macs:
+            threading.Thread(
+                target=record_gateway_sighting,
+                args=(agent_id, ip, gateway_macs),
+                daemon=True,
+            ).start()
+    except Exception as exc:
+        _log.debug("zone trust evaluation skipped: %s", exc)
+
+    # Grace period: trust lasts 2× heartbeat cycles after last confirmation
+    # so offline/travel doesn't immediately revoke trust if one heartbeat fails.
+    arp_enabled_until = (
+        datetime.now(timezone.utc) + timedelta(seconds=180)
+    ).isoformat() if arp_enabled else ""
+
     try:
         conn = _db()
         with conn.cursor() as cur:
@@ -356,21 +386,29 @@ def agent_heartbeat(agent_id):
                 """
                 UPDATE edr_agents
                 SET last_seen=NOW(), version=%s,
-                    agent_ip=COALESCE(NULLIF(%s,''), agent_ip)
+                    agent_ip=COALESCE(NULLIF(%s,''), agent_ip),
+                    arp_enabled=%s,
+                    current_network_zone=%s,
+                    last_gateway_mac=%s,
+                    arp_enabled_until=%s
                 WHERE agent_id=%s
                 """,
-                [version, ip, agent_id],
+                [
+                    version, ip, arp_enabled, network_zone,
+                    gateway_macs[0].get("mac") if gateway_macs else None,
+                    arp_enabled_until or None,
+                    agent_id,
+                ],
             )
         conn.commit()
         conn.close()
     except psycopg2.Error as exc:
         _log.error("heartbeat DB error: %s", exc)
 
-    # Feed ARP neighbors into ITAM network_assets (non-blocking, best-effort)
-    if neighbors:
+    # Feed ARP neighbors into ITAM network_assets only when zone is trusted
+    if neighbors and arp_enabled:
         try:
             from blueprints.itam.routes import ingest_arp_neighbors
-            import threading
             threading.Thread(
                 target=ingest_arp_neighbors,
                 args=(agent_id, neighbors),
@@ -379,7 +417,13 @@ def agent_heartbeat(agent_id):
         except Exception as exc:
             _log.debug("ITAM ARP ingest skipped: %s", exc)
 
-    return jsonify({"status": "ok"})
+    return jsonify({
+        "status":            "ok",
+        "arp_enabled":       arp_enabled,
+        "arp_enabled_until": arp_enabled_until,
+        "network_zone":      network_zone,
+        "zone_confidence":   zone_conf,
+    })
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1444,11 +1488,13 @@ def self_enroll_agent():
     if not dtoken or not validate_deployment_token(CYCENTRA_DB_URL, dtoken):
         return jsonify({"error": "Invalid or expired deployment token"}), 401
 
-    hostname   = (body.get("hostname") or "").strip()
-    os_type    = (body.get("os_type") or "UNKNOWN").upper()
-    agent_ip   = body.get("agent_ip", "")
-    version    = body.get("version", "")
-    asset_type = body.get("asset_type", "workstation")
+    hostname    = (body.get("hostname") or "").strip()
+    os_type     = (body.get("os_type") or "UNKNOWN").upper()
+    agent_ip    = body.get("agent_ip", "")
+    version     = body.get("version", "")
+    asset_type  = body.get("asset_type", "workstation")
+    gateway_ip  = body.get("gateway_ip", "")
+    gateway_mac = body.get("gateway_mac", "").upper().replace("-", ":")
     if not hostname:
         return jsonify({"error": "hostname required"}), 400
 
@@ -1462,16 +1508,31 @@ def self_enroll_agent():
                 """
                 INSERT INTO edr_agents
                   (agent_id, hostname, os_type, agent_ip, asset_type,
-                   enrollment_token, enrolled_by, version)
-                VALUES (%s,%s,%s,%s,%s,%s,'self-enrollment',%s)
+                   enrollment_token, enrolled_by, version,
+                   enrollment_gateway_mac, last_gateway_mac)
+                VALUES (%s,%s,%s,%s,%s,%s,'self-enrollment',%s,%s,%s)
                 """,
-                [agent_id, hostname, os_type, agent_ip, asset_type, token, version],
+                [agent_id, hostname, os_type, agent_ip, asset_type, token, version,
+                 gateway_mac or None, gateway_mac or None],
             )
         conn.commit()
         conn.close()
     except psycopg2.Error as exc:
         _log.error("self_enroll DB error: %s", exc)
         return jsonify({"error": "Database error"}), 500
+
+    # Seed gateway sighting for auto zone learning (non-blocking)
+    if gateway_mac:
+        try:
+            import threading
+            from blueprints.itam.routes import record_gateway_sighting
+            threading.Thread(
+                target=record_gateway_sighting,
+                args=(agent_id, agent_ip, [{"ip": gateway_ip, "mac": gateway_mac}]),
+                daemon=True,
+            ).start()
+        except Exception as exc:
+            _log.debug("enrollment gateway sighting skipped: %s", exc)
 
     return jsonify({
         "agent_id":         agent_id,

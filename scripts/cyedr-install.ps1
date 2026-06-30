@@ -272,12 +272,32 @@ function Invoke-Enrollment {
                  Where-Object { $_.InterfaceAlias -notmatch "Loopback" } |
                  Select-Object -First 1).IPAddress
 
+    # Detect default gateway MAC at install time (trusted corporate environment).
+    # Seeds network zone auto-learning so the server can auto-suggest approval.
+    $gwIp  = ""
+    $gwMac = ""
+    try {
+        $gwIp = (Get-NetRoute -DestinationPrefix "0.0.0.0/0" | Sort-Object RouteMetric |
+                 Select-Object -First 1).NextHop
+        if ($gwIp) {
+            $neighbor = Get-NetNeighbor -IPAddress $gwIp -ErrorAction SilentlyContinue |
+                        Select-Object -First 1
+            if ($neighbor) {
+                $gwMac = $neighbor.LinkLayerAddress.ToUpper().Replace("-", ":")
+            }
+        }
+    } catch {
+        Write-CyWarn "Could not detect gateway MAC — zone auto-learning will rely on heartbeat"
+    }
+
     $body = @{
-        hostname   = $hostname
-        os_type    = "WINDOWS"
-        asset_type = $AssetType
-        agent_ip   = "$agentIp"
-        version    = "1.0.0"
+        hostname    = $hostname
+        os_type     = "WINDOWS"
+        asset_type  = $AssetType
+        agent_ip    = "$agentIp"
+        version     = "1.0.0"
+        gateway_ip  = "$gwIp"
+        gateway_mac = "$gwMac"
     } | ConvertTo-Json
 
     try {

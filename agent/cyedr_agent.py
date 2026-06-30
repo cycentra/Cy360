@@ -73,12 +73,27 @@ class Config:
         self.log_file           = d.get("log_file", "/opt/cycentra/edr/logs/cyedr_agent.log")
         self.sysmon_channel     = d.get("sysmon_channel", "Microsoft-Windows-Sysmon/Operational")
         self._path              = path
+        # ARP network guard — persisted by heartbeat response
+        _arp = d.get("arp_discovery", {})
+        self.arp_enabled        = _arp.get("enabled", True)
+        self.arp_enabled_until  = _arp.get("arp_enabled_until", "")
 
     def save_agent_id(self, agent_id: str):
         self.agent_id = agent_id
         with open(self._path) as f:
             d = json.load(f)
         d["agent_id"] = agent_id
+        with open(self._path, "w") as f:
+            json.dump(d, f, indent=2)
+
+    def save_arp_state(self, enabled: bool, until_iso: str):
+        """Persist arp_enabled + arp_enabled_until from heartbeat response."""
+        self.arp_enabled       = enabled
+        self.arp_enabled_until = until_iso
+        with open(self._path) as f:
+            d = json.load(f)
+        d.setdefault("arp_discovery", {})["enabled"]           = enabled
+        d["arp_discovery"]["arp_enabled_until"]                = until_iso
         with open(self._path, "w") as f:
             json.dump(d, f, indent=2)
 
@@ -365,6 +380,86 @@ def _check_shadow_ai_dns(cfg: "Config", http: "requests.Session") -> None:
             logger.info("Shadow AI DNS detected: %s", domain)
         except Exception as e:
             logger.debug("shadow_ai_dns ingest error: %s", e)
+
+
+def _get_gateway_macs() -> list[dict]:
+    """
+    Return default gateway(s) as [{ip, mac}] for network-zone trust evaluation.
+
+    Strategy:
+      1. Detect all default-route gateway IPs from the routing table.
+      2. Look up each gateway IP in the ARP cache to get its MAC.
+
+    Cross-platform: Linux (ip route), macOS (netstat -rn), Windows (Get-NetRoute).
+    Returns an empty list on any failure — never raises.
+    """
+    import re as _re
+    gateways: list[dict] = []
+    gw_ips: list[str] = []
+
+    try:
+        if OS_TYPE == "LINUX":
+            r = subprocess.run(["ip", "route", "show", "default"],
+                               capture_output=True, text=True, timeout=8)
+            for line in r.stdout.splitlines():
+                m = _re.search(r"via\s+(\d{1,3}(?:\.\d{1,3}){3})", line)
+                if m:
+                    gw_ips.append(m.group(1))
+        elif OS_TYPE == "MACOS":
+            r = subprocess.run(["netstat", "-rn"],
+                               capture_output=True, text=True, timeout=8)
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                if parts and parts[0] in ("default", "0.0.0.0/0") and len(parts) >= 2:
+                    gw_ips.append(parts[1])
+        elif OS_TYPE == "WINDOWS":
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric)"
+                 " | Select-Object -ExpandProperty NextHop"],
+                capture_output=True, text=True, timeout=12
+            )
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if _re.match(r"\d{1,3}(\.\d{1,3}){3}", line):
+                    gw_ips.append(line)
+    except Exception as exc:
+        logger.debug("_get_gateway_macs route detection: %s", exc)
+
+    seen_ips: set[str] = set()
+    for gw_ip in gw_ips:
+        if gw_ip in seen_ips or gw_ip in ("0.0.0.0", ""):
+            continue
+        seen_ips.add(gw_ip)
+        try:
+            if OS_TYPE == "WINDOWS":
+                r = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command",
+                     f"(Get-NetNeighbor -IPAddress '{gw_ip}' -ErrorAction SilentlyContinue)"
+                     " | Select-Object -ExpandProperty LinkLayerAddress"],
+                    capture_output=True, text=True, timeout=8
+                )
+                mac_raw = r.stdout.strip().replace("-", ":").upper()
+            else:
+                r = subprocess.run(
+                    ["arp", "-n", gw_ip] if OS_TYPE == "LINUX" else ["arp", gw_ip],
+                    capture_output=True, text=True, timeout=8
+                )
+                mac_raw = ""
+                m = _re.search(
+                    r"([0-9a-fA-F]{2}[:\-][0-9a-fA-F]{2}[:\-][0-9a-fA-F]{2}"
+                    r"[:\-][0-9a-fA-F]{2}[:\-][0-9a-fA-F]{2}[:\-][0-9a-fA-F]{2})",
+                    r.stdout
+                )
+                if m:
+                    mac_raw = m.group(1).upper().replace("-", ":")
+
+            if mac_raw and mac_raw not in ("", "<incomplete>", "FF:FF:FF:FF:FF:FF"):
+                gateways.append({"ip": gw_ip, "mac": mac_raw})
+        except Exception as exc:
+            logger.debug("_get_gateway_macs arp lookup %s: %s", gw_ip, exc)
+
+    return gateways
 
 
 def _collect_arp_neighbors() -> list[dict]:
@@ -1059,16 +1154,49 @@ class Heartbeat(threading.Thread):
             payload["mem_percent"]  = psutil.virtual_memory().percent
             payload["disk_percent"] = psutil.disk_usage("/").percent
 
-        # ARP neighbor discovery — feeds ITAM network_assets table
-        neighbors = _collect_arp_neighbors()
-        if neighbors:
-            payload["arp_neighbors"] = neighbors
+        # Gateway MACs — always sent so server can update zone trust
+        gateways = _get_gateway_macs()
+        if gateways:
+            payload["gateway_macs"] = gateways
 
-        self._http.post(
-            f"{self._cfg.platform_url}/api/edr/agents/{self._cfg.agent_id}/heartbeat",
-            json=payload, timeout=10
-        )
-        logger.debug("Heartbeat sent (neighbors=%d)", len(neighbors))
+        # ARP network guard: check arp_enabled (with offline grace-period)
+        arp_ok = self._cfg.arp_enabled
+        if arp_ok and self._cfg.arp_enabled_until:
+            try:
+                from datetime import datetime, timezone
+                exp = datetime.fromisoformat(self._cfg.arp_enabled_until.replace("Z", "+00:00"))
+                if datetime.now(timezone.utc) > exp:
+                    arp_ok = False
+                    logger.info("ARP trust expired — roaming assumed; skipping neighbor collection")
+            except Exception:
+                pass
+
+        if arp_ok:
+            neighbors = _collect_arp_neighbors()
+            if neighbors:
+                payload["arp_neighbors"] = neighbors
+        else:
+            neighbors = []
+            logger.debug("ARP collection skipped (zone not trusted)")
+
+        try:
+            resp = self._http.post(
+                f"{self._cfg.platform_url}/api/edr/agents/{self._cfg.agent_id}/heartbeat",
+                json=payload, timeout=10
+            )
+            if resp.ok:
+                data = resp.json()
+                new_enabled = data.get("arp_enabled", True)
+                new_until   = data.get("arp_enabled_until", "")
+                if new_enabled != self._cfg.arp_enabled or new_until != self._cfg.arp_enabled_until:
+                    self._cfg.save_arp_state(new_enabled, new_until)
+                    logger.info("ARP state updated: enabled=%s zone=%s",
+                                new_enabled, data.get("network_zone", "unknown"))
+        except Exception as exc:
+            logger.debug("Heartbeat error: %s", exc)
+
+        logger.debug("Heartbeat sent (neighbors=%d gateways=%d arp_ok=%s)",
+                     len(neighbors), len(gateways), arp_ok)
 
         # Shadow AI process scan — sends telemetry for each detected AI tool
         _check_shadow_ai_processes(self._cfg, self._http)
@@ -1134,14 +1262,20 @@ def ensure_enrolled(cfg: Config, http: requests.Session):
                 if agent_ip:
                     break
 
+        # Capture default gateway at enrollment time (trusted corporate environment)
+        gateways = _get_gateway_macs()
+        enroll_gw = gateways[0] if gateways else {}
+
         resp = http.post(
             f"{cfg.platform_url}/api/edr/agents/self-enroll",
             json={
-                "hostname":   cfg.hostname,
-                "os_type":    cfg.os_type,
-                "asset_type": cfg.asset_type,
-                "agent_ip":   agent_ip,
-                "version":    VERSION,
+                "hostname":      cfg.hostname,
+                "os_type":       cfg.os_type,
+                "asset_type":    cfg.asset_type,
+                "agent_ip":      agent_ip,
+                "version":       VERSION,
+                "gateway_ip":    enroll_gw.get("ip", ""),
+                "gateway_mac":   enroll_gw.get("mac", ""),
             },
             timeout=30
         )

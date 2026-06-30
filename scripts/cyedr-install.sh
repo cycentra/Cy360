@@ -93,7 +93,9 @@ detect_platform() {
 
 # ── Root check ─────────────────────────────────────────────────────────────────
 check_root() {
-    [[ "$EUID" -ne 0 ]] && die "CyEDR installer must run as root (sudo bash $0 ...)"
+    if [[ "$EUID" -ne 0 ]]; then
+        die "CyEDR installer must run as root (sudo bash $0 ...)"
+    fi
 }
 
 # ── Architecture detection ─────────────────────────────────────────────────────
@@ -437,17 +439,37 @@ enroll_agent() {
     fi
     AGENT_IP="${AGENT_IP:-unknown}"
 
+    # Detect default gateway MAC at install time (trusted corporate environment)
+    # This seeds the network zone auto-learning so the server knows which gateway
+    # is the corporate one without admin needing to configure it manually.
+    GW_IP=""; GW_MAC=""
+    if [[ "$OS_KEY" == "LINUX" ]]; then
+        GW_IP="$(ip route show default 2>/dev/null | awk '/via/{print $3; exit}')"
+        if [[ -n "$GW_IP" ]]; then
+            GW_MAC="$(arp -n "$GW_IP" 2>/dev/null | awk 'NR==2{print $3}' | tr '[:lower:]' '[:upper:]')"
+        fi
+    else
+        # macOS: get default route then ARP lookup
+        GW_IP="$(netstat -rn 2>/dev/null | awk '/^default/{print $2; exit}')"
+        if [[ -n "$GW_IP" ]]; then
+            GW_MAC="$(arp "$GW_IP" 2>/dev/null | grep -oE '[0-9a-fA-F]{1,2}(:[0-9a-fA-F]{1,2}){5}' | head -1 | tr '[:lower:]' '[:upper:]')"
+        fi
+    fi
+    [[ -z "$GW_MAC" ]] && warn "Could not detect gateway MAC — zone auto-learning will rely on heartbeat"
+
     local ENROLL_RESPONSE
     ENROLL_RESPONSE=$(curl -fsSL --max-time 30 \
         -X POST "$PLATFORM_URL/api/edr/agents/self-enroll" \
         -H "Authorization: Bearer $DEPLOY_TOKEN" \
         -H "Content-Type: application/json" \
         -d "{
-            \"hostname\":   \"$HOSTNAME\",
-            \"os_type\":    \"$OS_KEY\",
-            \"asset_type\": \"$ASSET_TYPE\",
-            \"agent_ip\":   \"$AGENT_IP\",
-            \"version\":    \"1.0.0\"
+            \"hostname\":    \"$HOSTNAME\",
+            \"os_type\":     \"$OS_KEY\",
+            \"asset_type\":  \"$ASSET_TYPE\",
+            \"agent_ip\":    \"$AGENT_IP\",
+            \"version\":     \"1.0.0\",
+            \"gateway_ip\":  \"$GW_IP\",
+            \"gateway_mac\": \"$GW_MAC\"
         }") || die "Enrollment failed — check network connectivity to $PLATFORM_URL"
 
     # Extract agent_id from response

@@ -14,10 +14,12 @@ RBAC:
   DELETE / import / scan      → admin
 """
 from __future__ import annotations
+import ipaddress
 import json
 import logging
 import threading
 import uuid
+from datetime import datetime, timezone
 from functools import wraps
 
 import psycopg2
@@ -192,6 +194,39 @@ def init_itam_tables(db_url: str) -> None:
             )
         """)
 
+        # ── Network Zone tables (ARP guard feature) ───────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS network_zones (
+              id               SERIAL PRIMARY KEY,
+              zone_name        TEXT NOT NULL,
+              trusted_cidrs    TEXT[] NOT NULL DEFAULT '{}',
+              trusted_gateways JSONB  DEFAULT '[]',
+              status           TEXT   DEFAULT 'approved',
+              approved_by      TEXT,
+              approved_at      TIMESTAMPTZ,
+              auto_discovered  BOOLEAN DEFAULT FALSE,
+              notes            TEXT,
+              created_at       TIMESTAMPTZ DEFAULT NOW(),
+              updated_at       TIMESTAMPTZ DEFAULT NOW(),
+              UNIQUE(zone_name)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS network_zone_suggestions (
+              id               SERIAL PRIMARY KEY,
+              subnet_prefix    TEXT NOT NULL,
+              gateway_mac      TEXT NOT NULL,
+              gateway_ip       TEXT,
+              supporting_agents TEXT[] DEFAULT '{}',
+              agent_count      INTEGER DEFAULT 1,
+              status           TEXT DEFAULT 'pending',
+              approved_zone_id INTEGER REFERENCES network_zones(id) ON DELETE SET NULL,
+              case_id          TEXT,
+              created_at       TIMESTAMPTZ DEFAULT NOW(),
+              updated_at       TIMESTAMPTZ DEFAULT NOW(),
+              UNIQUE(subnet_prefix, gateway_mac)
+            )
+        """)
         # Indexes
         for stmt in [
             "CREATE INDEX IF NOT EXISTS idx_network_assets_ip ON network_assets(ip_address)",
@@ -201,6 +236,8 @@ def init_itam_tables(db_url: str) -> None:
             "CREATE INDEX IF NOT EXISTS idx_iot_devices_risk ON iot_devices(risk_score DESC)",
             "CREATE INDEX IF NOT EXISTS idx_shadow_ai_status ON shadow_ai_findings(status)",
             "CREATE INDEX IF NOT EXISTS idx_shadow_ai_tool ON shadow_ai_findings(ai_tool)",
+            "CREATE INDEX IF NOT EXISTS idx_nz_status ON network_zones(status)",
+            "CREATE INDEX IF NOT EXISTS idx_nzs_status ON network_zone_suggestions(status)",
         ]:
             cur.execute(stmt)
 
@@ -823,11 +860,229 @@ def ai_whitelist_delete(wl_id):
         return jsonify({"error": "Database error"}), 500
 
 
+# ── Network Zone Trust Engine ─────────────────────────────────────────────────
+
+def _corr_db_url() -> str:
+    """Resolve correlation DB URL (same pattern as cases blueprint)."""
+    import os as _os
+    url = _os.environ.get("CORRELATION_DB_URL", "").strip() or \
+          _os.environ.get("CYCENTRA_DB_URL", "").strip()
+    if url:
+        return url
+    try:
+        from pathlib import Path
+        for line in Path("/opt/cycentra/cysiemstack.env").read_text().splitlines():
+            if "DATABASE_URL" in line and "=" in line:
+                raw = line.partition("=")[2].strip().strip('"').strip("'")
+                return raw.replace("postgresql+asyncpg://", "postgresql://")
+    except Exception:
+        pass
+    return "postgresql://corruser:changeme@127.0.0.1:5433/correlation"
+
+
+def _raise_zone_approval_case(suggestion_id: int, subnet: str, gateway_mac: str,
+                               agent_count: int) -> str | None:
+    """
+    Create a CyCase (incident record) for a new network zone needing admin approval.
+    Returns the incident ID or None on failure.
+    """
+    incident_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    summary = (
+        f"A new network zone has been auto-discovered and requires admin approval.\n\n"
+        f"Subnet prefix: {subnet}\n"
+        f"Gateway MAC:   {gateway_mac}\n"
+        f"Reporting agents: {agent_count}\n"
+        f"Suggestion ID: #{suggestion_id}\n\n"
+        f"Action required: Navigate to ITAM > Network Zones to approve or reject this zone. "
+        f"Approving will enable ARP asset discovery for endpoints on this subnet. "
+        f"Rejecting will permanently silence ARP collection from this gateway."
+    )
+    try:
+        conn = psycopg2.connect(
+            _corr_db_url(),
+            cursor_factory=psycopg2.extras.RealDictCursor,
+        )
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO incidents
+                  (id, first_seen, last_seen, status, severity,
+                   categories, case_type, case_opened_at, llm_summary)
+                VALUES (%s,%s,%s,'open','medium',
+                        ARRAY['network_security'],'network_zone_approval',%s,%s)
+                ON CONFLICT (id) DO NOTHING
+            """, [incident_id, now, now, now, summary])
+        conn.commit()
+        conn.close()
+        _log.info("CyCase raised for zone suggestion #%d: %s", suggestion_id, incident_id)
+        return incident_id
+    except Exception as exc:
+        _log.warning("_raise_zone_approval_case failed: %s", exc)
+        return None
+
+
+def evaluate_zone_trust(agent_ip: str, gateway_macs: list[dict]) -> tuple[bool, str | None, str]:
+    """
+    Determine whether an agent is on a trusted corporate network.
+
+    Returns (arp_enabled, zone_name, confidence).
+    confidence: "high" | "medium" | "low" | "unknown"
+
+    Trust rules (layered signals):
+      1. Agent IP falls within a zone's trusted_cidrs  (CIDR match)
+      2. Any reported gateway MAC is in the zone's trusted_gateways list  (MAC match)
+      CIDR + MAC → "high"
+      CIDR only  → "medium" (VPN zones have no gateway MACs)
+      MAC only   → "medium"
+      Neither    → not trusted
+    """
+    if not agent_ip or agent_ip in ("unknown", ""):
+        return True, None, "unknown"
+
+    try:
+        agent_addr = ipaddress.ip_address(agent_ip)
+    except ValueError:
+        return True, None, "unknown"
+
+    reported_macs = {g.get("mac", "").upper().replace("-", ":") for g in gateway_macs if g.get("mac")}
+
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT zone_name, trusted_cidrs, trusted_gateways FROM network_zones WHERE status='approved'"
+            )
+            zones = cur.fetchall()
+        conn.close()
+    except Exception as exc:
+        _log.debug("evaluate_zone_trust DB error: %s", exc)
+        return True, None, "unknown"
+
+    for zone in zones:
+        cidr_match = False
+        mac_match  = False
+
+        for cidr_str in (zone["trusted_cidrs"] or []):
+            try:
+                if agent_addr in ipaddress.ip_network(cidr_str, strict=False):
+                    cidr_match = True
+                    break
+            except ValueError:
+                continue
+
+        gw_list = zone["trusted_gateways"] or []
+        if isinstance(gw_list, str):
+            gw_list = json.loads(gw_list)
+        trusted_macs: set[str] = set()
+        for gw in gw_list:
+            for m in gw.get("macs", []):
+                trusted_macs.add(m.upper().replace("-", ":"))
+
+        if trusted_macs and reported_macs & trusted_macs:
+            mac_match = True
+
+        if cidr_match and mac_match:
+            return True, zone["zone_name"], "high"
+        if cidr_match:
+            return True, zone["zone_name"], "medium"  # VPN zone or MAC not yet registered
+        if mac_match:
+            return True, zone["zone_name"], "medium"
+
+    return False, None, "low"
+
+
+def record_gateway_sighting(agent_id: str, agent_ip: str, gateway_macs: list[dict]) -> None:
+    """
+    Record an observed gateway MAC for auto-zone-learning.
+    If 3+ distinct agents have reported the same gateway MAC from the same /16 subnet,
+    a pending zone suggestion is created and a CyCase is raised for admin review.
+    Called non-blocking from heartbeat handler.
+    """
+    if not gateway_macs or not agent_ip:
+        return
+
+    try:
+        agent_addr = ipaddress.ip_address(agent_ip)
+        # Derive /16 subnet prefix as zone candidate key
+        parts = agent_ip.split(".")
+        if len(parts) != 4:
+            return
+        subnet_prefix = f"{parts[0]}.{parts[1]}.0.0/16"
+    except ValueError:
+        return
+
+    for gw in gateway_macs:
+        mac = (gw.get("mac") or "").upper().replace("-", ":")
+        gw_ip = gw.get("ip", "")
+        if not mac or mac in ("", "FF:FF:FF:FF:FF:FF", "<INCOMPLETE>"):
+            continue
+
+        try:
+            conn = _db()
+            with conn.cursor() as cur:
+                # Upsert suggestion — increment agent count when same mac+subnet is seen again
+                cur.execute("""
+                    INSERT INTO network_zone_suggestions
+                      (subnet_prefix, gateway_mac, gateway_ip, supporting_agents, agent_count)
+                    VALUES (%s,%s,%s,ARRAY[%s]::text[],1)
+                    ON CONFLICT (subnet_prefix, gateway_mac) DO UPDATE SET
+                      gateway_ip       = COALESCE(NULLIF(EXCLUDED.gateway_ip,''),
+                                                  network_zone_suggestions.gateway_ip),
+                      supporting_agents = (
+                          SELECT ARRAY(
+                              SELECT DISTINCT unnest(
+                                  network_zone_suggestions.supporting_agents || ARRAY[%s]::text[]
+                              ) LIMIT 20
+                          )
+                      ),
+                      agent_count      = array_length(
+                          (SELECT ARRAY(
+                              SELECT DISTINCT unnest(
+                                  network_zone_suggestions.supporting_agents || ARRAY[%s]::text[]
+                              )
+                          )), 1
+                      ),
+                      updated_at       = NOW()
+                    WHERE network_zone_suggestions.status = 'pending'
+                    RETURNING id, agent_count, status, case_id
+                """, [subnet_prefix, mac, gw_ip, agent_id, agent_id, agent_id])
+                row = cur.fetchone()
+
+                if row and row["agent_count"] >= 3 and not row["case_id"]:
+                    # Threshold reached — raise a CyCase for admin review (non-blocking later)
+                    suggestion_id = row["id"]
+                    agent_count   = row["agent_count"]
+                    # Mark in-flight to avoid double case creation
+                    cur.execute(
+                        "UPDATE network_zone_suggestions SET case_id='pending' WHERE id=%s",
+                        [suggestion_id]
+                    )
+                    conn.commit()
+                    conn.close()
+
+                    case_id = _raise_zone_approval_case(suggestion_id, subnet_prefix, mac, agent_count)
+                    if case_id:
+                        conn2 = _db()
+                        with conn2.cursor() as cur2:
+                            cur2.execute(
+                                "UPDATE network_zone_suggestions SET case_id=%s WHERE id=%s",
+                                [case_id, suggestion_id]
+                            )
+                        conn2.commit()
+                        conn2.close()
+                    return
+
+            conn.commit()
+            conn.close()
+        except Exception as exc:
+            _log.debug("record_gateway_sighting error: %s", exc)
+
+
 # ── Ingest: ARP neighbors from EDR heartbeat ─────────────────────────────────
 
 def ingest_arp_neighbors(agent_id: str, neighbors: list[dict]) -> int:
     """
-    Called by the EDR heartbeat handler when arp_neighbors is present.
+    Called by the EDR heartbeat handler when arp_neighbors is present and zone is trusted.
     Parses and upserts neighbors into network_assets, then cross-references.
     Returns count upserted.
     """
@@ -1667,3 +1922,320 @@ def asset_exploit_intel(asset_id):
         _log.warning("asset_exploit_intel error: %s", exc)
         return jsonify({"asset_id": asset_id, "kev_count": 0, "kev_packages": [],
                         "highest_epss": 0.0, "ransomware_risk": False})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NETWORK ZONES — ARP Guard: trusted corporate network definitions
+# ══════════════════════════════════════════════════════════════════════════════
+
+@itam_bp.route("/network-zones", methods=["GET", "POST", "OPTIONS"])
+def network_zones_list():
+    """
+    GET  /api/itam/network-zones  → list approved zones (viewer+)
+    POST /api/itam/network-zones  → create zone manually (admin)
+    """
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if request.method == "GET":
+        try:
+            conn = _db()
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT nz.*,
+                           (SELECT COUNT(*) FROM edr_agents ea
+                            WHERE ea.current_network_zone = nz.zone_name) AS live_agent_count
+                    FROM network_zones nz
+                    ORDER BY nz.status, nz.zone_name
+                """)
+                zones = [dict(r) for r in cur.fetchall()]
+            conn.close()
+            return jsonify({"zones": zones})
+        except psycopg2.Error as exc:
+            _log.error("network_zones GET error: %s", exc)
+            return jsonify({"error": "Database error"}), 500
+
+    # POST — admin creates a zone manually
+    if _role() != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+    body = request.get_json(silent=True) or {}
+    zone_name        = (body.get("zone_name") or "").strip()
+    trusted_cidrs    = body.get("trusted_cidrs", [])
+    trusted_gateways = body.get("trusted_gateways", [])
+    notes            = body.get("notes", "")
+    if not zone_name:
+        return jsonify({"error": "zone_name required"}), 400
+    if not trusted_cidrs:
+        return jsonify({"error": "At least one trusted_cidr required"}), 400
+
+    # Validate CIDRs
+    for cidr in trusted_cidrs:
+        try:
+            ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            return jsonify({"error": f"Invalid CIDR: {cidr}"}), 400
+
+    email = session.get("user_email")
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO network_zones
+                  (zone_name, trusted_cidrs, trusted_gateways, status,
+                   approved_by, approved_at, auto_discovered, notes)
+                VALUES (%s,%s,%s::jsonb,'approved',%s,NOW(),FALSE,%s)
+                RETURNING id
+            """, [zone_name, trusted_cidrs, json.dumps(trusted_gateways), email, notes])
+            row = cur.fetchone()
+        conn.commit(); conn.close()
+        auth_event(email, "network_zone_created", f"Zone '{zone_name}' created manually")
+        return jsonify({"id": row["id"], "zone_name": zone_name}), 201
+    except psycopg2.IntegrityError:
+        return jsonify({"error": f"Zone '{zone_name}' already exists"}), 409
+    except psycopg2.Error as exc:
+        _log.error("network_zones POST error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+
+
+@itam_bp.route("/network-zones/<int:zone_id>", methods=["GET", "PUT", "DELETE", "OPTIONS"])
+def network_zone_detail(zone_id):
+    """GET / PUT / DELETE a single network zone (admin for PUT/DELETE)."""
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if request.method == "GET":
+        try:
+            conn = _db()
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM network_zones WHERE id=%s", [zone_id])
+                row = cur.fetchone()
+            conn.close()
+            if not row:
+                return jsonify({"error": "Not found"}), 404
+            return jsonify(dict(row))
+        except psycopg2.Error:
+            return jsonify({"error": "Database error"}), 500
+
+    if _role() != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+
+    if request.method == "DELETE":
+        try:
+            conn = _db()
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM network_zones WHERE id=%s RETURNING zone_name", [zone_id])
+                row = cur.fetchone()
+            conn.commit(); conn.close()
+            if not row:
+                return jsonify({"error": "Not found"}), 404
+            auth_event(session.get("user_email"), "network_zone_deleted",
+                       f"Zone '{row['zone_name']}' deleted")
+            return jsonify({"ok": True})
+        except psycopg2.Error:
+            return jsonify({"error": "Database error"}), 500
+
+    # PUT
+    body = request.get_json(silent=True) or {}
+    allowed = {"zone_name", "trusted_cidrs", "trusted_gateways", "notes", "status"}
+    updates = {k: v for k, v in body.items() if k in allowed}
+    if "trusted_cidrs" in updates:
+        for cidr in updates["trusted_cidrs"]:
+            try:
+                ipaddress.ip_network(cidr, strict=False)
+            except ValueError:
+                return jsonify({"error": f"Invalid CIDR: {cidr}"}), 400
+    if not updates:
+        return jsonify({"error": "No valid fields"}), 400
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            set_parts, vals = [], []
+            for k, v in updates.items():
+                if k == "trusted_gateways":
+                    set_parts.append(f"{k}=%s::jsonb"); vals.append(json.dumps(v))
+                else:
+                    set_parts.append(f"{k}=%s"); vals.append(v)
+            set_parts.append("updated_at=NOW()")
+            vals.append(zone_id)
+            cur.execute(f"UPDATE network_zones SET {', '.join(set_parts)} WHERE id=%s RETURNING id",
+                        vals)
+            if not cur.fetchone():
+                conn.close(); return jsonify({"error": "Not found"}), 404
+        conn.commit(); conn.close()
+        auth_event(session.get("user_email"), "network_zone_updated", f"Zone #{zone_id} updated")
+        return jsonify({"ok": True})
+    except psycopg2.Error as exc:
+        _log.error("network_zone PUT error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+
+
+# ── Network Zone Suggestions (auto-discovered, pending admin approval) ────────
+
+@itam_bp.route("/network-zones/suggestions", methods=["GET", "OPTIONS"])
+def zone_suggestions_list():
+    """List all pending zone suggestions (viewer+). Shows CyCase link."""
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+    status_filter = request.args.get("status", "pending")
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT s.*, nz.zone_name AS approved_zone_name
+                FROM network_zone_suggestions s
+                LEFT JOIN network_zones nz ON nz.id = s.approved_zone_id
+                WHERE s.status = %s
+                ORDER BY s.agent_count DESC, s.created_at DESC
+            """, [status_filter])
+            rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return jsonify({"suggestions": rows, "total": len(rows)})
+    except psycopg2.Error as exc:
+        _log.error("zone_suggestions_list error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+
+
+@itam_bp.route("/network-zones/suggestions/<int:sug_id>/approve", methods=["POST", "OPTIONS"])
+def zone_suggestion_approve(sug_id):
+    """
+    Approve a zone suggestion. Creates a new network_zone or merges into existing.
+    Body: { zone_name, notes? }
+    Admin only.
+    """
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+    if _role() != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+
+    body      = request.get_json(silent=True) or {}
+    zone_name = (body.get("zone_name") or "").strip()
+    notes     = body.get("notes", "")
+    email     = session.get("user_email")
+    if not zone_name:
+        return jsonify({"error": "zone_name required"}), 400
+
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            # Fetch suggestion
+            cur.execute("SELECT * FROM network_zone_suggestions WHERE id=%s", [sug_id])
+            sug = cur.fetchone()
+            if not sug:
+                conn.close(); return jsonify({"error": "Suggestion not found"}), 404
+            if sug["status"] != "pending":
+                conn.close(); return jsonify({"error": f"Suggestion already {sug['status']}"}), 409
+
+            subnet   = sug["subnet_prefix"]
+            gw_mac   = sug["gateway_mac"]
+            gw_ip    = sug["gateway_ip"] or ""
+
+            # Build or merge gateway entry
+            gw_entry = {"ip": gw_ip, "macs": [gw_mac]}
+            cidr     = subnet  # e.g. "10.10.0.0/16"
+
+            # Create zone (or update if zone_name already exists)
+            cur.execute("""
+                INSERT INTO network_zones
+                  (zone_name, trusted_cidrs, trusted_gateways, status,
+                   approved_by, approved_at, auto_discovered, notes)
+                VALUES (%s,ARRAY[%s],%s::jsonb,'approved',%s,NOW(),TRUE,%s)
+                ON CONFLICT (zone_name) DO UPDATE SET
+                  trusted_cidrs    = ARRAY(
+                      SELECT DISTINCT unnest(network_zones.trusted_cidrs || ARRAY[%s])
+                  ),
+                  trusted_gateways = (
+                      CASE WHEN network_zones.trusted_gateways::text LIKE '%%' || %s || '%%'
+                           THEN network_zones.trusted_gateways
+                           ELSE (network_zones.trusted_gateways::jsonb || %s::jsonb)
+                      END
+                  ),
+                  updated_at       = NOW()
+                RETURNING id
+            """, [zone_name, cidr, json.dumps([gw_entry]), email, notes,
+                  cidr, gw_mac, json.dumps([gw_entry])])
+            zone_row = cur.fetchone()
+            zone_id  = zone_row["id"]
+
+            # Mark suggestion approved
+            cur.execute("""
+                UPDATE network_zone_suggestions
+                SET status='approved', approved_zone_id=%s, updated_at=NOW()
+                WHERE id=%s
+            """, [zone_id, sug_id])
+
+        conn.commit(); conn.close()
+        auth_event(email, "network_zone_approved",
+                   f"Suggestion #{sug_id} approved as zone '{zone_name}' (CIDR: {subnet})")
+        return jsonify({"ok": True, "zone_id": zone_id, "zone_name": zone_name})
+    except psycopg2.Error as exc:
+        _log.error("zone_suggestion_approve error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+
+
+@itam_bp.route("/network-zones/suggestions/<int:sug_id>/reject", methods=["POST", "OPTIONS"])
+def zone_suggestion_reject(sug_id):
+    """Reject a pending zone suggestion. Admin only."""
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+    if _role() != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+    email = session.get("user_email")
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE network_zone_suggestions
+                SET status='rejected', updated_at=NOW()
+                WHERE id=%s AND status='pending'
+                RETURNING id, subnet_prefix, gateway_mac
+            """, [sug_id])
+            row = cur.fetchone()
+        conn.commit(); conn.close()
+        if not row:
+            return jsonify({"error": "Suggestion not found or already actioned"}), 404
+        auth_event(email, "network_zone_rejected",
+                   f"Suggestion #{sug_id} rejected ({row['subnet_prefix']} / {row['gateway_mac']})")
+        return jsonify({"ok": True})
+    except psycopg2.Error as exc:
+        _log.error("zone_suggestion_reject error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+
+
+@itam_bp.route("/network-zones/stats", methods=["GET", "OPTIONS"])
+def zone_stats():
+    """Summary counts for Network Zones dashboard widget (viewer+)."""
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM network_zones WHERE status='approved'")
+            approved = cur.fetchone()["n"]
+            cur.execute("SELECT COUNT(*) AS n FROM network_zone_suggestions WHERE status='pending'")
+            pending = cur.fetchone()["n"]
+            cur.execute("SELECT COUNT(*) AS n FROM edr_agents WHERE arp_enabled=TRUE AND status='active'")
+            arp_active = cur.fetchone()["n"]
+            cur.execute("SELECT COUNT(*) AS n FROM edr_agents WHERE arp_enabled=FALSE AND status='active'")
+            arp_blocked = cur.fetchone()["n"]
+        conn.close()
+        return jsonify({
+            "approved_zones":  approved,
+            "pending_approval": pending,
+            "agents_arp_active": arp_active,
+            "agents_arp_blocked": arp_blocked,
+        })
+    except psycopg2.Error as exc:
+        _log.error("zone_stats error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
