@@ -191,8 +191,12 @@ deploy_agent() {
                     -o "$EDR_HOME/cyedr_agent.py" 2>/dev/null; then
                     chmod 640 "$EDR_HOME/cyedr_agent.py"
                     # Install pip dependencies for the agent
-                    "$PYTHON_BIN" -m pip install --quiet --break-system-packages psutil requests pyyaml 2>/dev/null \
-                        || "$PYTHON_BIN" -m pip install --quiet psutil requests pyyaml 2>/dev/null \
+                    if "$PYTHON_BIN" -m pip install --help 2>&1 | grep -q 'break-system-packages'; then
+                        "$PYTHON_BIN" -m pip install --quiet --break-system-packages psutil requests pyyaml 2>/dev/null || true
+                    else
+                        "$PYTHON_BIN" -m pip install --quiet psutil requests pyyaml 2>/dev/null || true
+                    fi
+                    "$PYTHON_BIN" -c "import requests" 2>/dev/null \
                         || warn "Python deps install failed — agent may not start; run: sudo $PYTHON_BIN -m pip install requests psutil pyyaml"
                     PYTHON_MODE=true
                     ok "Agent script installed (Python mode: $PYTHON_BIN)"
