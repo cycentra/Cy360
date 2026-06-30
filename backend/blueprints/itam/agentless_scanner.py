@@ -375,25 +375,37 @@ def winrm_deep_scan(
 # ── Auto-detect ────────────────────────────────────────────────────────────────
 
 def detect_and_scan(ip: str, credentials: dict, timeout: int = 15) -> dict:
-    ssh_kwargs: dict[str, Any] = {
-        "ip": ip,
-        "port": credentials.get("ssh_port", 22),
-        "username": credentials.get("username", ""),
-        "password": credentials.get("password", ""),
-        "key_path": credentials.get("key_path", ""),
-        "timeout": timeout,
-    }
-    result = ssh_deep_scan(**ssh_kwargs)
-    if result.get("status") == "ok":
-        return result
+    ssh_user = credentials.get("username") or credentials.get("ssh_username", "")
+    ssh_pass = credentials.get("password") or credentials.get("ssh_password", "")
+    ssh_key  = credentials.get("key_path") or credentials.get("ssh_key_path", "")
+    if not (ssh_user or ssh_key):
+        log.debug("No SSH credentials configured for %s — skipping SSH", ip)
+    else:
+        ssh_kwargs: dict[str, Any] = {
+            "ip":       ip,
+            "port":     credentials.get("ssh_port", 22),
+            "username": ssh_user,
+            "password": ssh_pass,
+            "key_path": ssh_key,
+            "timeout":  timeout,
+        }
+        result = ssh_deep_scan(**ssh_kwargs)
+        if result.get("status") == "ok":
+            return result
+        log.debug("SSH failed for %s (%s), trying WinRM", ip, result.get("error", ""))
 
-    log.debug("SSH failed for %s (%s), trying WinRM", ip, result.get("error", ""))
+    winrm_user = credentials.get("winrm_username") or ssh_user
+    winrm_pass = credentials.get("winrm_password") or ssh_pass
+    if not winrm_user:
+        return {"ip": ip, "method": "none", "status": "error",
+                "error": "No credentials configured — set ITAM_SSH_USERNAME/ITAM_SSH_PASSWORD or ITAM_WINRM_USERNAME/ITAM_WINRM_PASSWORD"}
+
     winrm_kwargs: dict[str, Any] = {
-        "ip": ip,
-        "port": credentials.get("winrm_port", 5985),
-        "username": credentials.get("username", ""),
-        "password": credentials.get("password", ""),
-        "use_ssl": credentials.get("use_ssl", False),
-        "timeout": timeout,
+        "ip":       ip,
+        "port":     credentials.get("winrm_port", 5985),
+        "username": winrm_user,
+        "password": winrm_pass,
+        "use_ssl":  credentials.get("use_ssl", False),
+        "timeout":  timeout,
     }
     return winrm_deep_scan(**winrm_kwargs)

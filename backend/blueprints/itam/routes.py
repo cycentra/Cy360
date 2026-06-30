@@ -169,6 +169,12 @@ def init_itam_tables(db_url: str) -> None:
             ("is_managed",       "BOOLEAN DEFAULT FALSE"),
             ("scan_status",      "VARCHAR(20) DEFAULT 'idle'"),
             ("scan_error",       "TEXT"),
+            # Phase 3 — deep scan results
+            ("hardware_info",    "JSONB DEFAULT '{}'::jsonb"),
+            ("services",         "JSONB DEFAULT '[]'::jsonb"),
+            ("local_users",      "JSONB DEFAULT '[]'::jsonb"),
+            ("listening_ports",  "JSONB DEFAULT '[]'::jsonb"),
+            ("last_deep_scan",   "TIMESTAMPTZ"),
         ]:
             cur.execute(
                 f"ALTER TABLE network_assets ADD COLUMN IF NOT EXISTS {col_name} {col_def};"
@@ -1505,16 +1511,23 @@ def agentless_deep_scan(asset_id):
         return jsonify({"error": "Forbidden"}), 403
 
     body = request.get_json(silent=True) or {}
+    # Keys must match what detect_and_scan() / ssh_deep_scan() / winrm_deep_scan() expect
     credentials = {
-        "ssh_username": body.get("ssh_username") or ITAM_SSH_USERNAME,
-        "ssh_password": body.get("ssh_password") or ITAM_SSH_PASSWORD,
-        "ssh_key_path": body.get("ssh_key_path") or ITAM_SSH_KEY_PATH,
-        "ssh_port":     body.get("ssh_port", ITAM_SSH_PORT),
+        "username":    body.get("ssh_username") or ITAM_SSH_USERNAME,
+        "password":    body.get("ssh_password") or ITAM_SSH_PASSWORD,
+        "key_path":    body.get("ssh_key_path") or ITAM_SSH_KEY_PATH,
+        "ssh_port":    body.get("ssh_port", ITAM_SSH_PORT),
+        "winrm_port":  body.get("winrm_port", ITAM_WINRM_PORT),
+        "use_ssl":     body.get("winrm_ssl", ITAM_WINRM_SSL),
+        # Also keep the original names so credential_profiles path works
         "winrm_username": body.get("winrm_username") or ITAM_WINRM_USERNAME,
         "winrm_password": body.get("winrm_password") or ITAM_WINRM_PASSWORD,
-        "winrm_port":     body.get("winrm_port", ITAM_WINRM_PORT),
-        "winrm_ssl":      body.get("winrm_ssl", ITAM_WINRM_SSL),
     }
+    # WinRM may use separate credentials; fall back to SSH creds if not set
+    if not credentials["winrm_username"]:
+        credentials["winrm_username"] = credentials["username"]
+    if not credentials["winrm_password"]:
+        credentials["winrm_password"] = credentials["password"]
 
     conn = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     try:
@@ -1541,12 +1554,15 @@ def agentless_deep_scan(asset_id):
                 with c.cursor() as cur:
                     cur.execute("""
                         UPDATE network_assets SET
-                            hostname       = COALESCE(NULLIF(%s,''), hostname),
-                            os_info        = %s,
-                            hardware_info  = %s::jsonb,
-                            services       = %s::jsonb,
-                            local_users    = %s::jsonb,
-                            last_deep_scan = NOW()
+                            hostname        = COALESCE(NULLIF(%s,''), hostname),
+                            os_info         = %s,
+                            hardware_info   = %s::jsonb,
+                            services        = %s::jsonb,
+                            local_users     = %s::jsonb,
+                            listening_ports = %s::jsonb,
+                            last_deep_scan  = NOW(),
+                            scan_status     = 'ok',
+                            scan_error      = NULL
                         WHERE id = %s
                     """, [
                         result.get("hostname", ""),
@@ -1554,6 +1570,7 @@ def agentless_deep_scan(asset_id):
                         json.dumps(hw),
                         json.dumps(result.get("services", [])),
                         json.dumps(result.get("local_users", [])),
+                        json.dumps(result.get("listening_ports", [])),
                         asset_id,
                     ])
                 c.commit()
@@ -1561,7 +1578,25 @@ def agentless_deep_scan(asset_id):
                 enrich_asset_cves(c, asset_id, NVD_API_KEY)
                 _log.info("[ITAM] deep-scan %s: %s packages upserted, method=%s", ip, count, result.get("method"))
             else:
-                _log.warning("[ITAM] deep-scan %s failed: %s", ip, result.get("error"))
+                err_msg = result.get("error", "unknown error")
+                _log.warning("[ITAM] deep-scan %s failed: %s", ip, err_msg)
+                with c.cursor() as cur:
+                    cur.execute(
+                        "UPDATE network_assets SET scan_status='error', scan_error=%s WHERE id=%s",
+                        [err_msg, asset_id],
+                    )
+                c.commit()
+        except Exception as exc:
+            _log.error("[ITAM] deep-scan thread error for %s: %s", ip, exc)
+            try:
+                with c.cursor() as cur:
+                    cur.execute(
+                        "UPDATE network_assets SET scan_status='error', scan_error=%s WHERE id=%s",
+                        [str(exc), asset_id],
+                    )
+                c.commit()
+            except Exception:
+                pass
         finally:
             c.close()
 

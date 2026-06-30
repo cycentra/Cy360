@@ -199,6 +199,14 @@ export default function AssetDetailPage({ assetId, onBack }) {
           fontSize: 12, color: ACCENT }}>{scanMsg}</div>
       )}
 
+      {scanStatus?.scan_status === "error" && scanStatus?.scan_error && (
+        <div style={{ marginBottom: 14, padding: "10px 16px", borderRadius: 8,
+          background: "rgba(255,59,59,0.08)", border: "1px solid #ff3b3b44",
+          fontSize: 12, color: "#ff3b3b" }}>
+          <strong>Last scan error:</strong> {scanStatus.scan_error}
+        </div>
+      )}
+
       {!detail?.last_deep_scan ? (
         <div style={{ background: CARD_BG, border: "1px solid #f5c51844", borderRadius: 12,
           padding: "24px 20px", textAlign: "center", marginBottom: 14 }}>
@@ -206,9 +214,15 @@ export default function AssetDetailPage({ assetId, onBack }) {
           <div style={{ fontSize: 13, color: "#9aa0b0", marginBottom: 4 }}>
             No deep inventory data yet.
           </div>
-          <div style={{ fontSize: 11, color: "#555" }}>
-            Configure SSH/WinRM credentials in <code style={{ color: "#f5c518" }}>/opt/cycentra/.env</code> then
-            click <strong>Deep Scan</strong> above. Or provide credentials per-scan via the API.
+          <div style={{ fontSize: 11, color: "#555", lineHeight: 1.6 }}>
+            Set credentials in your deployment environment, then click <strong>Deep Scan</strong> above.<br/>
+            <span style={{ fontFamily: "monospace", color: "#9aa0b0" }}>
+              ITAM_SSH_USERNAME / ITAM_SSH_PASSWORD / ITAM_SSH_KEY_PATH
+            </span><br/>
+            <span style={{ fontFamily: "monospace", color: "#9aa0b0" }}>
+              ITAM_WINRM_USERNAME / ITAM_WINRM_PASSWORD
+            </span><br/>
+            Or pass credentials directly in the POST body to <code style={{ color: "#f5c518" }}>/api/itam/assets/&#123;id&#125;/deep-scan</code>.
           </div>
         </div>
       ) : (
