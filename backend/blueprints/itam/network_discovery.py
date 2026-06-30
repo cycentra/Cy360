@@ -15,9 +15,11 @@ import csv
 import io
 import ipaddress
 import logging
+import socket
 import subprocess
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Generator
 
 _log = logging.getLogger(__name__)
@@ -174,15 +176,44 @@ def upsert_assets(conn, assets: list[dict], source: str = "manual") -> int:
 
 # ── ARP Neighbor Merge ────────────────────────────────────────────────────────
 
+def _rdns_batch(ips: list[str], timeout: float = 0.8) -> dict[str, str]:
+    """
+    Concurrent reverse-DNS lookup for a list of IPs.
+    Returns {ip: hostname}; missing = empty string.
+    Each lookup races against `timeout` seconds.
+    """
+    def _lookup(ip: str) -> tuple[str, str]:
+        try:
+            host, _, _ = socket.gethostbyaddr(ip)
+            return ip, host
+        except OSError:
+            return ip, ""
+
+    result: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=min(len(ips), 20)) as ex:
+        futures = {ex.submit(_lookup, ip): ip for ip in ips}
+        for fut in futures:
+            ip = futures[fut]
+            try:
+                _, host = fut.result(timeout=timeout)
+                result[ip] = host
+            except (FutureTimeoutError, Exception):
+                result[ip] = ""
+    return result
+
+
 def parse_arp_neighbors(raw: list[dict]) -> list[dict]:
     """
     Parse the arp_neighbors list from a CyEDR heartbeat payload.
     Each entry: {ip, mac, iface?}
     Filters out link-local, loopback, broadcast, multicast.
+    Enriches vendor + asset_type via OUI lookup and resolves hostnames via rDNS.
     """
+    from .iot_classifier import oui_lookup
+
     _SKIP = {"127.", "169.254.", "0.0.0.0", "255.", "224.", "ff02"}
 
-    result = []
+    entries = []
     for entry in raw:
         ip = str(entry.get("ip", "")).strip()
         if not ip or any(ip.startswith(s) for s in _SKIP):
@@ -192,10 +223,26 @@ def parse_arp_neighbors(raw: list[dict]) -> list[dict]:
         except ValueError:
             continue
         mac = str(entry.get("mac", "")).strip().upper()
+        entries.append({"ip": ip, "mac": mac})
+
+    if not entries:
+        return []
+
+    # Resolve hostnames concurrently
+    hostnames = _rdns_batch([e["ip"] for e in entries])
+
+    result = []
+    for e in entries:
+        ip, mac = e["ip"], e["mac"]
+        vendor_name, oui_cat = oui_lookup(mac) if mac else ("", "unknown")
+        vendor = vendor_name if vendor_name and vendor_name != "Unknown" else None
+        asset_type = oui_cat if oui_cat != "unknown" else "unknown"
         result.append({
             "ip_address":  ip,
-            "mac_address": mac,
-            "asset_type":  "unknown",
+            "mac_address": mac or None,
+            "hostname":    hostnames.get(ip) or None,
+            "vendor":      vendor,
+            "asset_type":  asset_type,
             "source":      "arp_report",
         })
     return result

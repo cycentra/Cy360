@@ -276,6 +276,9 @@ def init_itam_tables(db_url: str) -> None:
     conn.commit()
     conn.close()
     _log.info("ITAM tables initialised")
+    # Enrich existing ARP assets that are missing vendor or hostname (background)
+    import threading
+    threading.Thread(target=_backfill_arp_assets, daemon=True).start()
 
 
 # ── Settings helpers ──────────────────────────────────────────────────────────
@@ -1270,6 +1273,54 @@ def ingest_shadow_ai(agent_id: str, hostname: str, ai_tool: str,
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _backfill_arp_assets():
+    """
+    One-shot enrichment for ARP-discovered rows that predate OUI/rDNS enrichment.
+    Runs in a background thread at startup. Safe to run multiple times.
+    """
+    try:
+        from blueprints.itam.network_discovery import _rdns_batch
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, ip_address::text AS ip, mac_address
+                FROM network_assets
+                WHERE source = 'arp_report'
+                  AND (vendor IS NULL OR vendor = '' OR vendor = 'Unknown'
+                       OR hostname IS NULL OR hostname = '')
+            """)
+            rows = cur.fetchall()
+
+        if not rows:
+            conn.close()
+            return
+
+        ips = [r["ip"] for r in rows]
+        hostnames = _rdns_batch(ips, timeout=1.0)
+
+        with conn.cursor() as cur:
+            for r in rows:
+                vendor_name, oui_cat = oui_lookup(r["mac_address"] or "")
+                vendor    = vendor_name if vendor_name and vendor_name != "Unknown" else None
+                atype     = oui_cat    if oui_cat    != "unknown"                  else None
+                hostname  = hostnames.get(r["ip"]) or None
+                cur.execute("""
+                    UPDATE network_assets SET
+                      vendor     = CASE WHEN vendor IS NULL OR vendor IN ('','Unknown')
+                                        THEN COALESCE(%s, vendor) ELSE vendor END,
+                      asset_type = CASE WHEN asset_type IN ('unknown','')
+                                        THEN COALESCE(%s, asset_type) ELSE asset_type END,
+                      hostname   = CASE WHEN hostname IS NULL OR hostname = ''
+                                        THEN COALESCE(%s, hostname) ELSE hostname END
+                    WHERE id = %s
+                """, [vendor, atype, hostname, r["id"]])
+        conn.commit()
+        conn.close()
+        _log.info("ITAM: ARP backfill enriched %d assets", len(rows))
+    except Exception as exc:
+        _log.error("_backfill_arp_assets error: %s", exc)
+
 
 def _crossref_agents():
     """Cross-reference network_assets with edr_agents + host_posture_cache by IP."""
