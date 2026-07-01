@@ -1827,12 +1827,39 @@ def ingest_shadow_ai(agent_id: str, hostname: str, ai_tool: str,
                   (agent_id, hostname, ai_tool, detection_layer, detail, severity, status)
                 VALUES (%s,%s,%s,%s,%s::jsonb,%s,'open')
                 ON CONFLICT DO NOTHING
+                RETURNING id
             """, [agent_id, hostname, ai_tool, detection_method,
                   json.dumps({"process_name": process_name}),
                   severity])
+            new_row = cur.fetchone()
         conn.commit(); conn.close()
+
+        # Only push to SIEM on new detections (ON CONFLICT DO NOTHING returned a row)
+        if new_row:
+            _push_shadow_ai_to_siem(agent_id, hostname, ai_tool, severity)
     except Exception as exc:
         _log.error("ingest_shadow_ai error: %s", exc)
+
+
+def _push_shadow_ai_to_siem(agent_id: str, hostname: str, ai_tool: str, severity: str) -> None:
+    """Push a new shadow-AI finding to the SIEM pipeline. Non-fatal."""
+    try:
+        from cysiemstack.edr_bridge import push_itam_anomaly
+        push_itam_anomaly(
+            "shadow_ai",
+            {"id": 0, "ip_address": "", "hostname": hostname, "agent_name": hostname},
+            {
+                "description": (
+                    f"Unauthorised AI tool detected on {hostname}: {ai_tool} "
+                    f"(severity={severity})"
+                ),
+                "ai_tool":  ai_tool,
+                "agent_id": agent_id,
+                "severity": severity,
+            },
+        )
+    except Exception as exc:
+        _log.warning("[ITAM→SIEM] shadow-AI push failed (non-fatal): %s", exc)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -2172,10 +2199,40 @@ def _classify_iot_from_assets(conn, assets: list[dict]) -> None:
                   risk_score        = EXCLUDED.risk_score,
                   risk_factors      = EXCLUDED.risk_factors,
                   last_seen         = NOW()
+                RETURNING (xmax = 0) AS is_new_row
             """, [na_id, ip, mac or None, vendor_name, category,
                   json.dumps(open_ports), default_creds, risk,
                   json.dumps(factors)])
+            upsert_result = cur.fetchone()
+            # Push to SIEM on first discovery of a high-risk device (not on every rescan)
+            if risk >= 75 and upsert_result and upsert_result.get("is_new_row"):
+                _push_iot_risk_to_siem(ip, vendor_name, category, risk, factors, open_ports)
     conn.commit()
+
+
+def _push_iot_risk_to_siem(ip: str, vendor: str, category: str, risk: int,
+                            factors: list, open_ports: list) -> None:
+    """Push a newly-discovered high-risk IoT device (risk_score ≥ 75) to SIEM. Non-fatal."""
+    try:
+        from cysiemstack.edr_bridge import push_itam_anomaly
+        port_list = ",".join(str(p.get("port", "")) for p in (open_ports or [])[:10])
+        push_itam_anomaly(
+            "iot_high_risk",
+            {"id": 0, "ip_address": ip, "hostname": ip},
+            {
+                "description": (
+                    f"High-risk IoT device discovered: {vendor or 'unknown'} [{category}] "
+                    f"at {ip} — risk score {risk}/100, ports: {port_list}"
+                ),
+                "vendor":       vendor,
+                "device_category": category,
+                "risk_score":   risk,
+                "risk_factors": factors,
+                "open_ports":   port_list,
+            },
+        )
+    except Exception as exc:
+        _log.warning("[ITAM→SIEM] IoT risk push failed (non-fatal): %s", exc)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2541,6 +2598,8 @@ def _ingest_deep_scan_result(asset_id: int, ip: str, result: dict):
             count = upsert_software(c, asset_id, result.get("packages", []))
             enrich_asset_cves(c, asset_id, NVD_API_KEY)
             _log.info("[ITAM] deep-scan %s: %d packages, method=%s", ip, count, result.get("method"))
+            # Push high/critical CVEs found in this scan into Active Incidents pipeline
+            _push_deep_scan_cves_to_siem(c, asset_id, ip, result)
         else:
             err_msg = result.get("error", "unknown error")
             _log.warning("[ITAM] deep-scan %s failed: %s", ip, err_msg)
@@ -2563,6 +2622,60 @@ def _ingest_deep_scan_result(asset_id: int, ip: str, result: dict):
             pass
     finally:
         c.close()
+
+
+def _push_deep_scan_cves_to_siem(conn, asset_id: int, ip: str, scan_result: dict) -> None:
+    """
+    After a deep scan, query software_inventory for high/critical CVEs and push
+    each unique CVE into the SIEM correlation pipeline so Active Incidents
+    receives, enriches, and auto-cases them.  Non-fatal.
+    """
+    try:
+        from cysiemstack.edr_bridge import push_itam_anomaly
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT si.name, si.version, sv.cve_id, sv.cvss_score, sv.severity,
+                       sv.description, na.hostname, na.ip_address::text AS ip
+                FROM software_inventory si
+                JOIN software_cves sv ON sv.software_id = si.id
+                LEFT JOIN network_assets na ON na.id = si.asset_id
+                WHERE si.asset_id = %s
+                  AND sv.severity IN ('CRITICAL','HIGH')
+                ORDER BY sv.cvss_score DESC
+                LIMIT 20
+            """, [asset_id])
+            rows = cur.fetchall() or []
+
+        asset_info = {
+            "id":         asset_id,
+            "ip_address": ip,
+            "hostname":   scan_result.get("hostname", ip),
+        }
+
+        pushed_cves: set = set()
+        for row in rows:
+            cve_id = row.get("cve_id") or ""
+            if cve_id in pushed_cves:
+                continue
+            pushed_cves.add(cve_id)
+
+            sev_lower  = (row.get("severity") or "high").upper()
+            anom_type  = "cve_critical" if sev_lower == "CRITICAL" else "cve_high"
+            pkg        = row.get("name", "unknown")
+            ver        = row.get("version", "")
+            cvss       = row.get("cvss_score") or 0.0
+            push_itam_anomaly(anom_type, asset_info, {
+                "description": (
+                    f"{cve_id} ({sev_lower}, CVSS {cvss}) in {pkg} {ver} "
+                    f"on {asset_info.get('hostname', ip)}"
+                ),
+                "cve_id":    cve_id,
+                "cvss_score": float(cvss),
+                "package":   pkg,
+                "version":   ver,
+            })
+    except Exception as exc:
+        _log.warning("[ITAM→SIEM] CVE push failed (non-fatal): %s", exc)
 
 
 @itam_bp.route("/assets/<int:asset_id>/snmp-scan", methods=["POST", "OPTIONS"])

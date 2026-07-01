@@ -35,6 +35,16 @@ SCAN_RULE_IDS    = {40001, 40002, 40003}
 # Wazuh SCA (Security Configuration Assessment) rule IDs — policy scan results
 # 19001-19023: individual check pass/fail/notapplicable; 19100+ are summary rules
 SCA_RULE_IDS     = set(range(19001, 19024)) | set(range(19100, 19120))
+# ASM (Attack Surface Management) findings — pushed by edr_bridge.push_asm_finding()
+# 200100=critical, 200101=high, 200102=medium, 200103=escalated
+# Range 200100-200199 is unoccupied by Wazuh rules (cy_cust_rules.xml stops at 101042).
+# These IDs are never loaded into Wazuh — recognised only by this normaliser.
+ASM_RULE_IDS       = set(range(200100, 200110))
+# ITAM anomalies — pushed by edr_bridge.push_itam_anomaly()
+# 200200=cve_critical, 200201=cve_high, 200202=iot_high_risk, 200203=shadow_ai
+ITAM_VULN_RULE_IDS = {200200, 200201}
+ITAM_IOT_RULE_IDS  = {200202}
+ITAM_AI_RULE_IDS   = {200203}
 
 # Min rule level to ingest — drop noisy debug/info events below this
 MIN_RULE_LEVEL = 3
@@ -146,6 +156,15 @@ def _classify_category(rule_id: int, groups: list) -> str:
     # misclassified as generic 'system' events.
     if rule_id in SCA_RULE_IDS or 'sca' in groups:
         return 'sca'
+    # ASM / ITAM synthetic rule IDs — checked before generic cloud/auth labels
+    if rule_id in ASM_RULE_IDS or 'asm' in groups:
+        return 'asm'
+    if rule_id in ITAM_VULN_RULE_IDS or 'vulnerability' in groups:
+        return 'vulnerability'
+    if rule_id in ITAM_IOT_RULE_IDS:
+        return 'asm'
+    if rule_id in ITAM_AI_RULE_IDS:
+        return 'system'
     # Cloud integration sources — must be checked before generic 'authentication'
     # so that O365/Azure/AWS alert groups are not swallowed by the auth check.
     for grp in groups:

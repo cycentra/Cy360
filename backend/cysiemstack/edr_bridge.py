@@ -212,3 +212,214 @@ def bulk_forward(alerts: list[dict[str, Any]]) -> int:
             if forward_to_siem(alert):
                 success += 1
     return success
+
+
+# ── ASM / ITAM → SIEM bridge ──────────────────────────────────────────────────
+#
+# Rule ID allocation — synthetic IDs, never loaded into Wazuh.
+# Range 200100-200199 (ASM) and 200200-200299 (ITAM) are unoccupied:
+#   cy_cust_rules.xml uses 100100-101042 (Wazuh/kernel rules)
+#   EDR synthetic uses 100300-100399 (confidence_matrix.py)
+#   YARA synthetic uses 100210-100211 (routes.py _ingest_yara_scan_result)
+#
+# These IDs live ONLY in the cysiemstack alerts table (correlation DB).
+# They never pass through the Wazuh rule engine. No XML entry is needed.
+# They are NOT added by cycentra-setup.sh — recognised purely by normaliser.py
+# via the ASM_RULE_IDS / ITAM_*_RULE_IDS sets checked in _classify_category().
+#
+#   200100  ASM critical finding    (level 15 → severity=critical)
+#   200101  ASM high finding        (level 12 → severity=high)
+#   200102  ASM medium finding      (level  7 → severity=medium)
+#   200103  ASM finding escalated by analyst  (level 10 → severity=high)
+#   200200  ITAM critical CVE on asset        (level 15 → severity=critical)
+#   200201  ITAM high CVE on asset            (level 12 → severity=high)
+#   200202  ITAM high-risk IoT device         (level 10 → severity=high)
+#   200203  ITAM shadow-AI / rogue service    (level  9 → severity=high)
+
+_ASM_RULE_IDS: dict[str, int] = {
+    "critical":  200100,
+    "high":      200101,
+    "medium":    200102,
+    "escalated": 200103,
+}
+
+_ITAM_RULE_IDS: dict[str, int] = {
+    "cve_critical":  200200,
+    "cve_high":      200201,
+    "iot_high_risk": 200202,
+    "shadow_ai":     200203,
+}
+
+# Wazuh rule level → these are consumed by normaliser._level_to_score()
+# level 15 → 8.2 (critical), 12 → 7.6 (high), 10 → 7.1 (high), 9 → 7.0 (high), 7 → 6.2 (medium)
+_ASM_RULE_LEVELS: dict[str, int] = {
+    "critical":  15,
+    "high":      12,
+    "medium":     7,
+    "escalated": 10,
+}
+_ITAM_RULE_LEVELS: dict[str, int] = {
+    "cve_critical":  15,
+    "cve_high":      12,
+    "iot_high_risk": 10,
+    "shadow_ai":      9,
+}
+
+
+def _build_asm_alert(finding: dict, domain: str, override_severity: str | None = None) -> dict[str, Any]:
+    """
+    Convert an ASM finding dict into the internal alert format that
+    _wrap_as_wazuh() / forward_to_siem() expects.
+    """
+    raw_sev   = (override_severity or finding.get("severity", "medium") or "medium").lower()
+    severity  = raw_sev if raw_sev in _ASM_RULE_IDS else "medium"
+    rule_id   = _ASM_RULE_IDS[severity]
+    level     = _ASM_RULE_LEVELS[severity]
+    vuln      = str(finding.get("vulnerability") or finding.get("module") or "ASM Finding")[:200]
+    desc      = str(finding.get("description") or "")
+
+    return {
+        "wazuh_id":   finding.get("asm_id") or finding.get("id") or "",
+        "timestamp":  datetime.now(timezone.utc),
+        "agent_id":   f"asm-{domain[:30]}",
+        "agent_name": domain,
+        "agent_ip":   None,
+        "rule_id":    rule_id,
+        "rule_desc":  f"[ASM] {vuln}"[:200],
+        "rule_level": level,
+        "category":   "asm",
+        "mitre_id":   None,
+        "mitre_tactic": None,
+        "src_ip":     None,
+        "raw_log":    desc[:2000],
+        "full_alert": {
+            "asm":    True,
+            "domain": domain,
+            "groups": ["asm"],
+            **{k: v for k, v in finding.items()},
+        },
+    }
+
+
+def push_asm_finding(finding: dict, domain: str, override_severity: str | None = None) -> bool:
+    """
+    Push a single ASM finding into the SIEM correlation pipeline.
+
+    finding dict keys (all optional except vulnerability/module):
+        asm_id, vulnerability, severity, module, description, recommendation, risk_score
+
+    Returns True on success (Redis push). Non-fatal on failure.
+    Automatically opens a CyCase for critical findings after the ingestor
+    creates the incident row (same pattern as EDR high-confidence detections).
+    """
+    alert = _build_asm_alert(finding, domain, override_severity)
+    ok    = forward_to_siem(alert)
+
+    # Critical ASM findings → force-open a case (don't wait for alert_count ≥ 3)
+    sev = (override_severity or finding.get("severity", "")).lower()
+    if ok and sev == "critical":
+        _try_open_case({"wazuh_id": alert["wazuh_id"],
+                        "_edr_score": 100,
+                        "agent_id": alert["agent_id"]})
+    return ok
+
+
+def push_asm_scan_findings(findings: list[dict], domain: str, min_severity: str = "high") -> int:
+    """
+    Push all findings from a completed ASM scan that meet min_severity.
+    Called once per scan on first result read (guarded by a .siem_pushed marker).
+    Returns number of alerts successfully pushed.
+    """
+    _SEV_RANK = {"critical": 3, "high": 2, "medium": 1, "low": 0, "informational": -1}
+    threshold = _SEV_RANK.get(min_severity.lower(), 2)
+
+    r = _get_redis()
+    if r is None:
+        _log.warning("ASM bridge: Redis unavailable — scan findings not forwarded to SIEM")
+        return 0
+
+    pushed = 0
+    try:
+        pipe = r.pipeline()
+        for finding in findings:
+            sev = (finding.get("severity") or "low").lower()
+            if _SEV_RANK.get(sev, 0) < threshold:
+                continue
+            alert    = _build_asm_alert(finding, domain)
+            envelope = _wrap_as_wazuh(alert)
+            pipe.rpush(_REDIS_KEY, json.dumps(envelope))
+            pushed += 1
+        if pushed:
+            pipe.execute()
+            _log.info("ASM bridge: pushed %d finding(s) for domain=%s to SIEM", pushed, domain)
+    except Exception as exc:
+        _log.error("ASM bridge: bulk push failed: %s", exc)
+        # Fallback: push individually
+        pushed = 0
+        for finding in findings:
+            sev = (finding.get("severity") or "low").lower()
+            if _SEV_RANK.get(sev, 0) < threshold:
+                continue
+            if push_asm_finding(finding, domain):
+                pushed += 1
+
+    return pushed
+
+
+def push_itam_anomaly(anomaly_type: str, asset: dict, details: dict) -> bool:
+    """
+    Push an ITAM anomaly into the SIEM correlation pipeline.
+
+    anomaly_type: one of 'cve_critical', 'cve_high', 'iot_high_risk', 'shadow_ai'
+    asset:  dict with at least {id, ip_address/ip, hostname} (from network_assets row)
+    details: {description, cve_id, cvss_score, package, ai_tool, risk_score, ...}
+
+    Returns True on success.
+    """
+    rule_id = _ITAM_RULE_IDS.get(anomaly_type, 200203)
+    level   = _ITAM_RULE_LEVELS.get(anomaly_type, 9)
+
+    _CATEGORY_MAP = {
+        "cve_critical":  "vulnerability",
+        "cve_high":      "vulnerability",
+        "iot_high_risk": "asm",
+        "shadow_ai":     "system",
+    }
+    category = _CATEGORY_MAP.get(anomaly_type, "system")
+
+    ip       = str(asset.get("ip_address") or asset.get("ip") or "")
+    hostname = (asset.get("hostname") or asset.get("agent_name") or ip or "unknown")[:80]
+    desc     = str(details.get("description") or f"ITAM anomaly [{anomaly_type}] on {hostname}")
+
+    wazuh_id = f"itam-{anomaly_type}-{asset.get('id', '0')}"
+
+    alert: dict[str, Any] = {
+        "wazuh_id":   wazuh_id,
+        "timestamp":  datetime.now(timezone.utc),
+        "agent_id":   f"itam-{hostname[:30]}",
+        "agent_name": hostname,
+        "agent_ip":   ip or None,
+        "rule_id":    rule_id,
+        "rule_desc":  desc[:200],
+        "rule_level": level,
+        "category":   category,
+        "mitre_id":   None,
+        "mitre_tactic": None,
+        "src_ip":     None,
+        "raw_log":    desc[:2000],
+        "full_alert": {
+            "itam":         True,
+            "anomaly_type": anomaly_type,
+            "asset":        asset,
+            "groups":       [category, "itam"],
+            **details,
+        },
+    }
+
+    ok = forward_to_siem(alert)
+
+    # Critical CVEs → force-open case immediately
+    if ok and anomaly_type == "cve_critical":
+        _try_open_case({"wazuh_id": wazuh_id, "_edr_score": 100, "agent_id": alert["agent_id"]})
+
+    return ok

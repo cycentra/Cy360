@@ -7,11 +7,15 @@ EVIDENCE_ROOT = pathlib.Path("/opt/cycentra/evidence")
 
 def _infer_case_type(categories: list, tactics: list) -> str:
     combined = " ".join(categories + tactics).lower()
-    if "ransomware" in combined:   return "ransomware"
-    if "phishing"   in combined:   return "phishing"
-    if "brute"      in combined:   return "brute_force"
-    if "exfil"      in combined:   return "data_exfil"
-    if "lateral"    in combined:   return "lateral_movement"
+    if "ransomware"    in combined:   return "ransomware"
+    if "phishing"      in combined:   return "phishing"
+    if "brute"         in combined:   return "brute_force"
+    if "exfil"         in combined:   return "data_exfil"
+    if "lateral"       in combined:   return "lateral_movement"
+    if "vulnerability" in combined:   return "vulnerability"
+    if "asm"           in combined:   return "asm_finding"
+    if "shadow_ai"     in combined:   return "shadow_ai"
+    if "itam"          in combined:   return "itam_anomaly"
     return "generic"
 
 

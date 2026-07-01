@@ -35,12 +35,16 @@ const SvgEDR   = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" str
  * Called with live state so badges and OPERATIONS module links stay current.
  *
  * Navigation hierarchy:
- *   SECURITY POSTURE     — Posture Benchmark (primary entry)
- *   EXTERNAL EXPOSURE    — Attack Surface · Asset Inventory · Vulnerabilities · Scan Operations
- *   INTERNAL EXPOSURE    — Active Incidents · Entity Risk · Behavioral Analytics
- *   OPERATIONS           — Audit Trail · Active module launch links (CySIEM always, addons when enabled)
- *   MARKETPLACE          — Marketplace (integrations, playbooks, platform extensions)
- *   PLATFORM CONFIGURATION — Settings, Extensions, Audit Trail
+ *   SECURITY POSTURE       — Posture Benchmark (primary entry)
+ *   EXTERNAL EXPOSURE      — Attack Surface · Asset Inventory · Vulnerabilities · Scan Operations
+ *   INTERNAL EXPOSURE      — Active Incidents · Entity Risk · Behavioral Analytics · Threat Hunting
+ *   ENDPOINT DEFENSE       — EDR Fleet · Detections · Response · Policies · Custom Hunting · Installer
+ *   ASSET MANAGEMENT       — Asset Coverage · IoT Registry · Shadow AI Monitor
+ *   SECURITY COMPLIANCE    — GRC Posture · Assessments · Findings · Risk · Reports
+ *   MARKETPLACE            — Marketplace (integrations, playbooks, platform extensions)
+ *   OPERATIONS             — Active addon module launch links
+ *   CASE MANAGEMENT        — Case Management (standalone section at bottom)
+ *   PLATFORM CONFIGURATION — Settings, Extensions, Audit Trail, Integration Health
  *
  * @param {object} opts
  * @param {object} opts.installedModules - current installedModules state
@@ -74,7 +78,6 @@ export function buildNavSections({ installedModules = {}, data = null }) {
         { id: "siem-incidents",     label: "Active Incidents",        icon: <span style={{ fontSize: 13 }}>🔥</span>, accent: "#ff3b3b" },
         { id: "siem-ueba",          label: "Behavioral Analytics",    icon: <span style={{ fontSize: 13 }}>👤</span>, accent: "#b06eff" },
         { id: "threat-hunting",     label: "Threat Hunting",          icon: <span style={{ fontSize: 13 }}>🎯</span>, accent: "#ff8c00" },
-        { id: "cases",              label: "Case Management",         icon: <span style={{ fontSize: 13 }}>🗂️</span>, accent: "#b06eff" },
       ],
     },
     {
@@ -110,6 +113,12 @@ export function buildNavSections({ installedModules = {}, data = null }) {
       section: "MARKETPLACE",
       items: [
         { id: "marketplace", label: "Marketplace", icon: SvgMkt, accent: "#4d9eff" },
+      ],
+    },
+    {
+      section: "CASE MANAGEMENT",
+      items: [
+        { id: "cases", label: "Case Management", icon: <span style={{ fontSize: 13 }}>🗂️</span>, accent: "#b06eff" },
       ],
     },
     {

@@ -231,9 +231,54 @@ def get_latest_scan():
         latest = sorted(all_files, key=os.path.getmtime, reverse=True)[0]
         with open(latest) as f:
             import json
-            return jsonify(json.load(f))
+            data = json.load(f)
+
+        # Push high/critical findings to SIEM on first read (marker file guards replay)
+        _push_scan_to_siem_once(latest, data)
+
+        return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+def _push_scan_to_siem_once(scan_file: str, scan_data: dict) -> None:
+    """
+    Push high/critical ASM findings from a completed scan into the SIEM pipeline.
+    A companion .siem_pushed file ensures we push exactly once per scan file,
+    even if /api/scans/latest is polled many times.
+    Non-fatal: any failure is logged and swallowed.
+    """
+    marker = scan_file + ".siem_pushed"
+    if os.path.exists(marker):
+        return
+
+    try:
+        assets   = scan_data.get("assets", [])
+        domain   = scan_data.get("meta", {}).get("domain", "")
+        findings = []
+        for asset in assets:
+            for f in asset.get("vulnerabilities", []):
+                if isinstance(f, dict):
+                    findings.append(f)
+
+        if not findings or not domain:
+            # Nothing to push (e.g. guest scan or empty result)
+            Path(marker).touch()
+            return
+
+        from cysiemstack.edr_bridge import push_asm_scan_findings
+        pushed = push_asm_scan_findings(findings, domain, min_severity="high")
+
+        # Write marker regardless of push count so we never retry a completed scan
+        Path(marker).touch()
+        if pushed:
+            import logging as _log
+            _log.getLogger(__name__).info(
+                "[ASM→SIEM] %d finding(s) forwarded for domain=%s", pushed, domain
+            )
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).warning("[ASM→SIEM] push failed (non-fatal): %s", exc)
 
 
 # ── Scan history list ─────────────────────────────────────────────────────────
@@ -675,6 +720,10 @@ def asm_finding_transition(finding_id):
     data[finding_id] = entry
     _save_status_file(_ASM_STATUSES_FILE, data)
 
+    # Analyst escalation → push to SIEM so the correlation engine triages it
+    if to_status == "in_review":
+        _push_finding_escalation_to_siem(finding_id, comment)
+
     return jsonify({
         "finding_id":  finding_id,
         "status":      to_status,
@@ -683,6 +732,45 @@ def asm_finding_transition(finding_id):
         "actor":       session["user_email"],
         "created_at":  ts,
     })
+
+
+def _push_finding_escalation_to_siem(finding_id: str, comment: str) -> None:
+    """
+    Push an analyst-escalated ASM finding to SIEM so it enters the triage
+    and enrichment pipeline with severity=high (escalated by analyst).
+    """
+    try:
+        from cysiemstack.edr_bridge import push_asm_finding
+        finding = {
+            "asm_id":        finding_id,
+            "vulnerability": f"Analyst-escalated ASM finding {finding_id}",
+            "severity":      "high",
+            "description":   comment,
+            "module":        "analyst_escalation",
+        }
+        # Try to read finding details from the latest scan JSON for richer context
+        try:
+            import glob as _glob
+            import json as _json
+            all_files = _glob.glob(str(SCANS_DIR / "**" / "scan_*.json"), recursive=True)
+            if all_files:
+                latest = sorted(all_files, key=os.path.getmtime, reverse=True)[0]
+                with open(latest) as _f:
+                    scan_data = _json.load(_f)
+                domain = scan_data.get("meta", {}).get("domain", "")
+                for asset in scan_data.get("assets", []):
+                    for f in asset.get("vulnerabilities", []):
+                        if isinstance(f, dict) and f.get("asm_id") == finding_id:
+                            finding.update(f)
+                            finding["severity"] = "high"  # analyst escalation floor
+                            break
+        except Exception:
+            domain = ""
+
+        push_asm_finding(finding, domain or finding_id, override_severity="high")
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).warning("[ASM→SIEM] escalation push failed (non-fatal): %s", exc)
 
 
 # ── GET /api/asm/findings/<id>/audit ─────────────────────────────────────────
