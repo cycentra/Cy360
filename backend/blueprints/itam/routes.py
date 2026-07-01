@@ -1085,14 +1085,16 @@ def _get_active_probe_for_subnet(conn, subnet: str) -> "dict | None":
 
 
 def _enqueue_probe_job(conn, agent_id: str, scan_type: str,
-                       subnet: str = "", ports: str = "") -> str:
+                       subnet: str = "", ports: str = "",
+                       params: "dict | None" = None) -> str:
     """Insert a queued job; return the UUID job id."""
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO itam_scan_jobs (probe_agent_id, scan_type, subnet, ports, status)
-            VALUES (%s, %s, %s, %s, 'queued')
+            INSERT INTO itam_scan_jobs (probe_agent_id, scan_type, subnet, ports, params, status)
+            VALUES (%s, %s, %s, %s, %s, 'queued')
             RETURNING id
-        """, (agent_id, scan_type, subnet or None, ports or None))
+        """, (agent_id, scan_type, subnet or None, ports or None,
+              json.dumps(params) if params else None))
         job_id = str(cur.fetchone()["id"])
     conn.commit()
     return job_id
@@ -1228,6 +1230,15 @@ def probe_post_result(job_id):
                     args=(int(asset_id_from_job), ip_from_job, snmp_data),
                     daemon=True,
                 ).start()
+        elif scan_type == "deep_scan":
+            asset_id_from_job = result.get("asset_id")
+            ip_from_job       = result.get("ip", "")
+            if asset_id_from_job:
+                threading.Thread(
+                    target=_ingest_deep_scan_result,
+                    args=(int(asset_id_from_job), ip_from_job, result),
+                    daemon=True,
+                ).start()
 
     return jsonify({"ok": True})
 
@@ -1295,6 +1306,49 @@ def probe_status():
         _log.error("probe_status error: %s", exc)
         return jsonify({"error": "DB error"}), 500
     return jsonify({"probes": rows})
+
+
+@itam_bp.route("/probe/creds", methods=["GET", "OPTIONS"])
+def probe_get_creds():
+    """Probe agent fetches SSH/WinRM credentials for deep scan jobs.
+    Returns plaintext creds — secured by Bearer enrollment token + TLS."""
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    agent_id = _verify_probe_token(request)
+    if not agent_id:
+        return jsonify({"error": "Invalid or missing probe token"}), 401
+
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT key, value FROM itam_settings WHERE key IN "
+                "('ssh_username','ssh_password','ssh_key_path','ssh_port',"
+                "'winrm_username','winrm_password','winrm_port','winrm_ssl')"
+            )
+            stored = {r["key"]: r["value"] for r in cur.fetchall()}
+        conn.close()
+    except Exception:
+        stored = {}
+
+    def _v(db_key, env_val):
+        return stored.get(db_key) or env_val or ""
+
+    username = _v("ssh_username", ITAM_SSH_USERNAME)
+    password = _v("ssh_password", ITAM_SSH_PASSWORD)
+    winrm_u  = _v("winrm_username", ITAM_WINRM_USERNAME) or username
+    winrm_p  = _v("winrm_password", ITAM_WINRM_PASSWORD) or password
+
+    return jsonify({
+        "username":       username,
+        "password":       password,
+        "key_path":       _v("ssh_key_path", ITAM_SSH_KEY_PATH),
+        "ssh_port":       int(stored.get("ssh_port") or ITAM_SSH_PORT or 22),
+        "winrm_username": winrm_u,
+        "winrm_password": winrm_p,
+        "winrm_port":     int(stored.get("winrm_port") or ITAM_WINRM_PORT or 5985),
+        "winrm_ssl":      (stored.get("winrm_ssl") or str(ITAM_WINRM_SSL or "false")).lower() in ("true","1","yes"),
+    })
 
 
 # ── Shadow AI ─────────────────────────────────────────────────────────────────
@@ -2182,9 +2236,8 @@ def agentless_deep_scan(asset_id):
     finally:
         conn.close()
 
-    # If a probe covers this IP's subnet, deep scan via cloud will fail (RFC-1918 not routable).
-    # Deep scan via probe agent requires agent-side SSH/WinRM (paramiko) — planned for next release.
-    # Return a clear error now rather than silently timing out for 30s.
+    # If a probe covers this IP's subnet, dispatch SSH/WinRM to the probe agent
+    # (runs from inside the LAN) rather than timing out on a non-routable RFC-1918 address.
     try:
         import ipaddress as _ip
         target_addr = _ip.ip_address(ip)
@@ -2200,75 +2253,47 @@ def agentless_deep_scan(asset_id):
         except Exception:
             probe = None
         if probe:
+            # Dispatch deep scan to the probe agent; it will SSH/WinRM from inside the LAN.
+            try:
+                _pc2 = _db()
+                job_id = _enqueue_probe_job(
+                    _pc2, probe["agent_id"], "deep_scan",
+                    params={"asset_id": asset_id, "target_ip": ip},
+                )
+                _pc2.close()
+            except Exception as _e:
+                _log.warning("agentless_deep_scan probe enqueue failed: %s", _e)
+                return jsonify({"error": "Probe job enqueue failed", "detail": str(_e)}), 500
+            # Mark asset as scanning so UI shows progress
+            try:
+                _pc3 = _db()
+                with _pc3.cursor() as _cur3:
+                    _cur3.execute(
+                        "UPDATE network_assets SET scan_status='scanning' WHERE id=%s",
+                        [asset_id],
+                    )
+                _pc3.commit()
+                _pc3.close()
+            except Exception:
+                pass
             return jsonify({
-                "error": (
-                    f"{ip} is a private address behind NAT. "
-                    f"A Network Probe ({probe.get('hostname', probe['agent_id'])}) covers this subnet, "
-                    "but probe-based SSH/WinRM deep scan is not yet supported. "
-                    "Install a CyEDR agent directly on this host for deep inventory."
+                "status": "scanning",
+                "mode": "probe",
+                "asset_id": asset_id,
+                "ip": ip,
+                "job_id": job_id,
+                "probe_agent": probe.get("hostname", probe["agent_id"]),
+                "message": (
+                    f"Deep scan dispatched to Network Probe "
+                    f"({probe.get('hostname', probe['agent_id'])}). "
+                    "Results appear in 30–90 seconds."
                 ),
-                "hint": "network_probe_deep_scan_unsupported",
-            }), 422
+            })
 
     def _do_scan():
         from blueprints.itam.agentless_scanner import detect_and_scan
-        from blueprints.itam.software_inventory import (
-            ensure_software_tables, upsert_software, enrich_asset_cves, get_asset_software_summary
-        )
-        c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
-        try:
-            ensure_software_tables(c)
-            result = detect_and_scan(ip, credentials)
-            if result.get("status") == "ok":
-                hw = result.get("hardware", {})
-                with c.cursor() as cur:
-                    cur.execute("""
-                        UPDATE network_assets SET
-                            hostname        = COALESCE(NULLIF(%s,''), hostname),
-                            os_info         = %s,
-                            hardware_info   = %s::jsonb,
-                            services        = %s::jsonb,
-                            local_users     = %s::jsonb,
-                            listening_ports = %s::jsonb,
-                            last_deep_scan  = NOW(),
-                            scan_status     = 'ok',
-                            scan_error      = NULL
-                        WHERE id = %s
-                    """, [
-                        result.get("hostname", ""),
-                        json.dumps(result.get("os_info", {})),
-                        json.dumps(hw),
-                        json.dumps(result.get("services", [])),
-                        json.dumps(result.get("local_users", [])),
-                        json.dumps(result.get("listening_ports", [])),
-                        asset_id,
-                    ])
-                c.commit()
-                count = upsert_software(c, asset_id, result.get("packages", []))
-                enrich_asset_cves(c, asset_id, NVD_API_KEY)
-                _log.info("[ITAM] deep-scan %s: %s packages upserted, method=%s", ip, count, result.get("method"))
-            else:
-                err_msg = result.get("error", "unknown error")
-                _log.warning("[ITAM] deep-scan %s failed: %s", ip, err_msg)
-                with c.cursor() as cur:
-                    cur.execute(
-                        "UPDATE network_assets SET scan_status='error', scan_error=%s WHERE id=%s",
-                        [err_msg, asset_id],
-                    )
-                c.commit()
-        except Exception as exc:
-            _log.error("[ITAM] deep-scan thread error for %s: %s", ip, exc)
-            try:
-                with c.cursor() as cur:
-                    cur.execute(
-                        "UPDATE network_assets SET scan_status='error', scan_error=%s WHERE id=%s",
-                        [str(exc), asset_id],
-                    )
-                c.commit()
-            except Exception:
-                pass
-        finally:
-            c.close()
+        result = detect_and_scan(ip, credentials)
+        _ingest_deep_scan_result(asset_id, ip, result)
 
     t = threading.Thread(target=_do_scan, daemon=True)
     t.start()
@@ -2472,6 +2497,67 @@ def _ingest_snmp_result(asset_id: int, ip: str, result: dict):
                 cur.execute(
                     "UPDATE network_assets SET scan_status='error', scan_error=%s WHERE id=%s",
                     [str(exc), asset_id])
+            c.commit()
+        except Exception:
+            pass
+    finally:
+        c.close()
+
+
+def _ingest_deep_scan_result(asset_id: int, ip: str, result: dict):
+    """Write SSH/WinRM deep scan result into network_assets + software_inventory.
+    Called from probe_post_result (deep_scan job) or the local _do_scan() thread."""
+    from blueprints.itam.software_inventory import (
+        ensure_software_tables, upsert_software, enrich_asset_cves,
+    )
+    c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        ensure_software_tables(c)
+        if result.get("status") == "ok":
+            hw = result.get("hardware", {})
+            with c.cursor() as cur:
+                cur.execute("""
+                    UPDATE network_assets SET
+                        hostname        = COALESCE(NULLIF(%s,''), hostname),
+                        os_info         = %s,
+                        hardware_info   = %s::jsonb,
+                        services        = %s::jsonb,
+                        local_users     = %s::jsonb,
+                        listening_ports = %s::jsonb,
+                        last_deep_scan  = NOW(),
+                        scan_status     = 'ok',
+                        scan_error      = NULL
+                    WHERE id = %s
+                """, [
+                    result.get("hostname", ""),
+                    json.dumps(result.get("os_info", {})),
+                    json.dumps(hw),
+                    json.dumps(result.get("services", [])),
+                    json.dumps(result.get("local_users", [])),
+                    json.dumps(result.get("listening_ports", [])),
+                    asset_id,
+                ])
+            c.commit()
+            count = upsert_software(c, asset_id, result.get("packages", []))
+            enrich_asset_cves(c, asset_id, NVD_API_KEY)
+            _log.info("[ITAM] deep-scan %s: %d packages, method=%s", ip, count, result.get("method"))
+        else:
+            err_msg = result.get("error", "unknown error")
+            _log.warning("[ITAM] deep-scan %s failed: %s", ip, err_msg)
+            with c.cursor() as cur:
+                cur.execute(
+                    "UPDATE network_assets SET scan_status='error', scan_error=%s WHERE id=%s",
+                    [err_msg, asset_id],
+                )
+            c.commit()
+    except Exception as exc:
+        _log.error("[ITAM] deep-scan ingest error for %s: %s", ip, exc)
+        try:
+            with c.cursor() as cur:
+                cur.execute(
+                    "UPDATE network_assets SET scan_status='error', scan_error=%s WHERE id=%s",
+                    [str(exc), asset_id],
+                )
             c.commit()
         except Exception:
             pass

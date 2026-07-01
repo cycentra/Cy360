@@ -2275,14 +2275,25 @@ class NetworkProbePoller(threading.Thread):
             return
 
         for job in jobs:
-            job_id    = job.get("id")
-            scan_type = job.get("scan_type", "subnet")
-            try:
-                result = self._execute_job(job)
-                self._post_result(job_id, result, error=None)
-            except Exception as exc:
-                logger.warning("Probe job %s failed: %s", job_id, exc)
-                self._post_result(job_id, {}, error=str(exc))
+            # Run each job in its own daemon thread — SSH/WinRM can take 30-90s
+            # without blocking the poll loop or the auto-scan timer.
+            job_id = job.get("id")
+            t = threading.Thread(
+                target=self._run_job_thread,
+                args=(job,),
+                daemon=True,
+                name=f"ProbeJob-{job_id}",
+            )
+            t.start()
+
+    def _run_job_thread(self, job: dict):
+        job_id = job.get("id")
+        try:
+            result = self._execute_job(job)
+            self._post_result(job_id, result, error=None)
+        except Exception as exc:
+            logger.warning("Probe job %s failed: %s", job_id, exc)
+            self._post_result(job_id, {}, error=str(exc))
 
     def _execute_job(self, job: dict) -> dict:
         scan_type = job.get("scan_type", "subnet")
@@ -2304,6 +2315,17 @@ class NetworkProbePoller(threading.Thread):
             port      = int(params.get("port") or self._policy.get("snmp_port", 161))
             asset_id  = params.get("asset_id")
             return self._run_snmp(target_ip, community, port, asset_id)
+        if scan_type == "deep_scan":
+            params = job.get("params") or {}
+            if isinstance(params, str):
+                try:
+                    import json as _json
+                    params = _json.loads(params)
+                except Exception:
+                    params = {}
+            target_ip = params.get("target_ip", job.get("target_ip", ""))
+            asset_id  = params.get("asset_id")
+            return self._run_deep_scan(target_ip, asset_id)
         raise ValueError(f"Unsupported scan_type: {scan_type}")
 
     def _post_result(self, job_id: str, result: dict, error: "str | None"):
@@ -2437,6 +2459,275 @@ class NetworkProbePoller(threading.Thread):
             "interfaces":     [],  # interface walk omitted for brevity
         }
         logger.info("Probe SNMP: %s → hostname=%s", ip, hostname or "(none)")
+        return result
+
+    # ── SSH/WinRM deep scan ───────────────────────────────────────────────────
+
+    def _run_deep_scan(self, target_ip: str, asset_id) -> dict:
+        """Fetch credentials from server, then try SSH (paramiko) then WinRM."""
+        base = {"scan_type": "deep_scan", "asset_id": asset_id, "ip": target_ip}
+        if not target_ip:
+            base.update({"status": "error", "error": "No target IP in job"})
+            return base
+        try:
+            cred_resp = self._http.get(
+                f"{self._cfg.platform_url}/api/itam/probe/creds",
+                timeout=10,
+            )
+            if not cred_resp.ok:
+                base.update({"status": "error", "error": "Failed to fetch scan credentials"})
+                return base
+            creds = cred_resp.json()
+        except Exception as exc:
+            base.update({"status": "error", "error": f"Credential fetch failed: {exc}"})
+            return base
+
+        result = self._ssh_deep_scan(
+            ip=target_ip,
+            port=int(creds.get("ssh_port", 22)),
+            username=creds.get("username", ""),
+            password=creds.get("password", ""),
+            key_path=creds.get("key_path", ""),
+        )
+        if result.get("status") != "ok":
+            # SSH failed — try WinRM
+            winrm_result = self._winrm_deep_scan(
+                ip=target_ip,
+                port=int(creds.get("winrm_port", 5985)),
+                username=creds.get("winrm_username", ""),
+                password=creds.get("winrm_password", ""),
+                use_ssl=bool(creds.get("winrm_ssl", False)),
+            )
+            if winrm_result.get("status") == "ok":
+                result = winrm_result
+        result.update({"scan_type": "deep_scan", "asset_id": asset_id, "ip": target_ip})
+        logger.info("Probe deep-scan %s: status=%s method=%s", target_ip,
+                    result.get("status"), result.get("method"))
+        return result
+
+    def _ssh_deep_scan(self, ip: str, port: int, username: str,
+                       password: str, key_path: str) -> dict:
+        """SSH deep inventory via paramiko (lazy import — zero overhead unless used)."""
+        result = {"status": "error", "method": "ssh", "ip": ip, "error": ""}
+        try:
+            import paramiko  # noqa: PLC0415 — lazy import keeps cold-start fast
+        except ImportError:
+            result["error"] = "paramiko not available in this agent build"
+            return result
+        if not username:
+            result["error"] = "No SSH username configured in ITAM settings"
+            return result
+        if not password and not (key_path and os.path.isfile(key_path)):
+            result["error"] = "No SSH password or key_path configured in ITAM settings"
+            return result
+        try:
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            kwargs: dict = {"hostname": ip, "port": port, "username": username, "timeout": 12}
+            if key_path and os.path.isfile(key_path):
+                kwargs["key_filename"] = key_path
+            else:
+                kwargs["password"] = password
+            ssh.connect(**kwargs)
+
+            def _run(cmd: str) -> str:
+                try:
+                    _, out, _ = ssh.exec_command(cmd, timeout=20)
+                    return out.read().decode(errors="replace").strip()
+                except Exception:
+                    return ""
+
+            hostname  = _run("hostname")
+            os_raw    = _run("cat /etc/os-release 2>/dev/null || uname -a")
+            cpu_info  = _run("lscpu 2>/dev/null | head -20 || sysctl -n machdep.cpu.brand_string 2>/dev/null")
+            mem_raw   = _run("free -b 2>/dev/null || vm_stat 2>/dev/null")
+            disk_raw  = _run("df -h / 2>/dev/null")
+            pkgs_raw  = _run(
+                "dpkg -l 2>/dev/null | tail -n +6 || "
+                "rpm -qa --queryformat '%{NAME}|%{VERSION}|%{ARCH}|%{SUMMARY}\\n' 2>/dev/null || "
+                "brew list --versions 2>/dev/null"
+            )
+            svcs_raw  = _run(
+                "systemctl list-units --type=service --state=running --no-pager --no-legend 2>/dev/null | head -60 || "
+                "launchctl list 2>/dev/null | head -40"
+            )
+            ports_raw = _run("ss -tlnup 2>/dev/null || netstat -tlnup 2>/dev/null | head -40")
+            users_raw = _run(
+                "getent passwd 2>/dev/null | awk -F: '$3>=1000{print $1\"|\"$6\"|\"$7}' || "
+                "dscl . list /Users 2>/dev/null | grep -v '^_'"
+            )
+            ssh.close()
+
+            # Parse packages
+            packages = []
+            for line in pkgs_raw.splitlines():
+                if "|" in line:
+                    p = line.split("|")
+                    packages.append({"name": p[0], "version": p[1] if len(p) > 1 else "",
+                                     "arch": p[2] if len(p) > 2 else "",
+                                     "description": p[3] if len(p) > 3 else ""})
+                elif line[:3] in ("ii ", "hi ", "rc "):
+                    p = line.split()
+                    if len(p) >= 3:
+                        packages.append({"name": p[1], "version": p[2],
+                                         "arch": p[3] if len(p) > 3 else "",
+                                         "description": " ".join(p[4:])})
+                elif " " in line and not line.startswith(" "):
+                    p = line.split(None, 1)
+                    packages.append({"name": p[0], "version": p[1] if len(p) > 1 else ""})
+
+            # Parse services
+            services = []
+            for line in svcs_raw.splitlines()[:60]:
+                p = line.split()
+                if not p:
+                    continue
+                name  = p[0].replace(".service", "")
+                state = "running" if len(p) > 2 and p[2] == "running" else "unknown"
+                services.append({"name": name, "state": state})
+
+            # Parse listening ports
+            listening_ports = []
+            for line in ports_raw.splitlines():
+                p = line.split()
+                if len(p) < 4:
+                    continue
+                addr = p[3]
+                if ":" in addr:
+                    port_part = addr.rsplit(":", 1)[-1]
+                    try:
+                        listening_ports.append({
+                            "port": int(port_part),
+                            "proto": p[0].lower(),
+                            "address": addr,
+                        })
+                    except ValueError:
+                        pass
+
+            # Parse local users
+            local_users = []
+            for line in users_raw.splitlines():
+                if "|" in line:
+                    p = line.split("|")
+                    local_users.append({"username": p[0],
+                                        "home": p[1] if len(p) > 1 else "",
+                                        "shell": p[2] if len(p) > 2 else ""})
+                elif line.strip():
+                    local_users.append({"username": line.strip()})
+
+            result.update({
+                "status":         "ok",
+                "hostname":       hostname,
+                "os_info":        {"raw": os_raw},
+                "hardware":       {"cpu_info": cpu_info, "memory_raw": mem_raw, "disk": disk_raw},
+                "packages":       packages[:500],
+                "services":       services,
+                "listening_ports": listening_ports,
+                "local_users":    local_users,
+            })
+        except Exception as exc:
+            result["error"] = str(exc)
+        return result
+
+    def _winrm_deep_scan(self, ip: str, port: int, username: str,
+                         password: str, use_ssl: bool = False) -> dict:
+        """WinRM deep inventory via pywinrm (lazy import)."""
+        result = {"status": "error", "method": "winrm", "ip": ip, "error": ""}
+        try:
+            import winrm  # noqa: PLC0415
+        except ImportError:
+            result["error"] = "pywinrm not available in this agent build"
+            return result
+        if not username or not password:
+            result["error"] = "No WinRM credentials configured in ITAM settings"
+            return result
+        try:
+            import json as _json
+            protocol = "https" if use_ssl else "http"
+            s = winrm.Session(
+                f"{protocol}://{ip}:{port}/wsman",
+                auth=(username, password),
+                transport="basic",
+                server_cert_validation="ignore",
+            )
+
+            def _ps(script: str) -> str:
+                try:
+                    r = s.run_ps(script)
+                    return r.std_out.decode(errors="replace").strip() if r.std_out else ""
+                except Exception:
+                    return ""
+
+            def _parse(raw: str):
+                try:
+                    return _json.loads(raw) if raw else None
+                except Exception:
+                    return None
+
+            def _listify(v):
+                if v is None:
+                    return []
+                return v if isinstance(v, list) else [v]
+
+            hostname  = _ps("hostname")
+            os_data   = _parse(_ps(
+                "Get-WmiObject Win32_OperatingSystem | "
+                "Select-Object Caption,Version,OSArchitecture | ConvertTo-Json"
+            )) or {}
+            cpu_data  = _parse(_ps(
+                "Get-WmiObject Win32_Processor | "
+                "Select-Object Name,NumberOfCores | ConvertTo-Json"
+            )) or {}
+            svcs_raw  = _listify(_parse(_ps(
+                "Get-Service | Where-Object {$_.Status -eq 'Running'} | "
+                "Select-Object Name,DisplayName | ConvertTo-Json"
+            )))
+            ports_raw = _listify(_parse(_ps(
+                "Get-NetTCPConnection -State Listen | "
+                "Select-Object LocalPort,LocalAddress | ConvertTo-Json"
+            )))
+            users_raw = _listify(_parse(_ps(
+                "Get-LocalUser | Select-Object Name,Enabled | ConvertTo-Json"
+            )))
+            pkgs_raw  = _listify(_parse(_ps(
+                "Get-Package | Select-Object Name,Version | ConvertTo-Json"
+            )))
+
+            if isinstance(os_data, list) and os_data:
+                os_data = os_data[0]
+            if isinstance(cpu_data, list) and cpu_data:
+                cpu_data = cpu_data[0]
+
+            result.update({
+                "status":   "ok",
+                "hostname": hostname,
+                "os_info":  {
+                    "name":    os_data.get("Caption", "Windows") if isinstance(os_data, dict) else "Windows",
+                    "version": os_data.get("Version", "") if isinstance(os_data, dict) else "",
+                    "arch":    os_data.get("OSArchitecture", "") if isinstance(os_data, dict) else "",
+                },
+                "hardware": {"cpu_info": str(cpu_data)},
+                "services": [
+                    {"name": s.get("Name", ""), "state": "running",
+                     "display_name": s.get("DisplayName", "")}
+                    for s in svcs_raw if isinstance(s, dict)
+                ],
+                "listening_ports": [
+                    {"port": p.get("LocalPort", 0), "proto": "tcp",
+                     "address": p.get("LocalAddress", "")}
+                    for p in ports_raw if isinstance(p, dict)
+                ],
+                "local_users": [
+                    {"username": u.get("Name", ""), "enabled": u.get("Enabled", True)}
+                    for u in users_raw if isinstance(u, dict)
+                ],
+                "packages": [
+                    {"name": pk.get("Name", ""), "version": pk.get("Version", "")}
+                    for pk in pkgs_raw if isinstance(pk, dict)
+                ][:500],
+            })
+        except Exception as exc:
+            result["error"] = str(exc)
         return result
 
     # ── Subnet resolution ─────────────────────────────────────────────────────

@@ -44,6 +44,11 @@ cat > "$BUILD_DIR/requirements.txt" << 'EOF'
 pyinstaller>=6.0
 requests>=2.31
 psutil>=5.9
+paramiko>=3.0
+cryptography>=41.0
+bcrypt>=4.0
+pywinrm>=0.4.3
+xmltodict>=0.13
 EOF
 
 # ── PyInstaller spec (single-file, no console) ────────────────────────────────
@@ -54,7 +59,17 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=['psutil', 'requests', 'urllib3', 'certifi', 'charset_normalizer'],
+    hiddenimports=[
+        'psutil', 'requests', 'urllib3', 'certifi', 'charset_normalizer',
+        'paramiko', 'paramiko.transport', 'paramiko.auth_handler',
+        'paramiko.channel', 'paramiko.client', 'paramiko.hostkeys',
+        'cryptography', 'cryptography.hazmat.primitives.ciphers',
+        'cryptography.hazmat.primitives.asymmetric',
+        'cryptography.hazmat.backends.openssl',
+        'bcrypt',
+        'winrm', 'winrm.protocol', 'winrm.exceptions',
+        'xmltodict',
+    ],
     hookspath=[],
     runtime_hooks=[],
     excludes=['tkinter', 'matplotlib', 'numpy', 'scipy', 'PIL', 'test'],

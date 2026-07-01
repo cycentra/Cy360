@@ -117,15 +117,15 @@ install_packages_linux() {
     if command -v apt-get &>/dev/null; then
         apt-get update -qq
         apt-get install -y -qq auditd audispd-plugins yara curl python3 \
-            iptables iproute2 2>/dev/null || true
+            iptables iproute2 nmap snmp 2>/dev/null || true
     elif command -v yum &>/dev/null; then
         yum install -y -q audit audit-libs yara curl python3 \
-            iptables iproute 2>/dev/null || true
+            iptables iproute nmap net-snmp-utils 2>/dev/null || true
     elif command -v dnf &>/dev/null; then
         dnf install -y -q audit yara curl python3 \
-            iptables iproute 2>/dev/null || true
+            iptables iproute nmap net-snmp-utils 2>/dev/null || true
     else
-        warn "Unknown package manager — skipping auto-install; ensure auditd and yara are present"
+        warn "Unknown package manager — skipping auto-install; ensure auditd, yara, nmap, and snmpwalk are present"
     fi
     ok "System packages installed"
 }
@@ -146,15 +146,20 @@ install_packages_macos() {
         # Homebrew refuses to run as root. When invoked via `sudo bash`, delegate
         # the install back to the original user via SUDO_USER.
         local _BREW_USER="${SUDO_USER:-}"
+        local _brew_install
         if [[ -n "$_BREW_USER" && "$_BREW_USER" != "root" ]]; then
-            HOMEBREW_NO_AUTO_UPDATE=1 sudo -u "$_BREW_USER" "$BREW_BIN" install yara 2>/dev/null \
-                || warn "Homebrew yara install failed — YARA scanning may be unavailable"
+            _brew_install="HOMEBREW_NO_AUTO_UPDATE=1 sudo -u $_BREW_USER $BREW_BIN install"
         else
-            HOMEBREW_NO_AUTO_UPDATE=1 "$BREW_BIN" install yara 2>/dev/null \
-                || warn "Homebrew yara install failed — YARA scanning may be unavailable"
+            _brew_install="HOMEBREW_NO_AUTO_UPDATE=1 $BREW_BIN install"
         fi
+        eval "$_brew_install yara" 2>/dev/null \
+            || warn "Homebrew yara install failed — YARA scanning may be unavailable"
+        eval "$_brew_install nmap" 2>/dev/null \
+            || warn "Homebrew nmap install failed — Network Probe subnet scan may be unavailable"
+        eval "$_brew_install net-snmp" 2>/dev/null \
+            || warn "Homebrew net-snmp install failed — SNMP probe scan may be unavailable"
     else
-        warn "Homebrew not found — YARA scanning may be unavailable. Install: https://brew.sh"
+        warn "Homebrew not found — YARA, nmap, and snmpwalk may be unavailable. Install: https://brew.sh"
     fi
     # Python3 is expected via Xcode CLT or Homebrew
     ok "System packages installed"

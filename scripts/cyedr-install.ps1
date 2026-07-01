@@ -223,6 +223,37 @@ function Install-Yara {
     }
 }
 
+# ── Optional nmap for Network Probe agents ────────────────────────────────────
+function Install-Nmap {
+    # nmap is only needed when this agent is designated as a Network Probe.
+    # Install silently via winget or chocolatey if available; skip otherwise.
+    $nmapExe = "C:\Program Files (x86)\Nmap\nmap.exe"
+    if (Test-Path $nmapExe) {
+        Write-CyOk "nmap already installed — Network Probe subnet scan ready"
+        return
+    }
+    Write-CyInfo "Installing nmap (required for Network Probe subnet scan)..."
+    $installed = $false
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        try {
+            winget install --id Insecure.Nmap --silent --accept-package-agreements `
+                --accept-source-agreements 2>&1 | Out-Null
+            $installed = $true
+            Write-CyOk "nmap installed via winget"
+        } catch { }
+    }
+    if (-not $installed -and (Get-Command choco -ErrorAction SilentlyContinue)) {
+        try {
+            choco install nmap -y --no-progress 2>&1 | Out-Null
+            $installed = $true
+            Write-CyOk "nmap installed via chocolatey"
+        } catch { }
+    }
+    if (-not $installed) {
+        Write-CyWarn "nmap not installed — Network Probe subnet scan unavailable. Install manually: https://nmap.org/download.html"
+    }
+}
+
 # ── PowerShell Script Block Logging ───────────────────────────────────────────
 function Enable-PSLogging {
     Write-CyInfo "Enabling PowerShell Script Block Logging..."
@@ -466,6 +497,7 @@ Initialize-Directories
 Install-EdrBinary -Arch $EdrArch
 Install-Sysmon
 Install-Yara
+Install-Nmap
 Enable-PSLogging
 Deploy-Agent
 Set-AntiTamper

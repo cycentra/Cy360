@@ -101,11 +101,12 @@ export default function AssetDetailPage({ assetId, onBack }) {
       const r = await fetch(`/api/itam/assets/${assetId}/deep-scan`, { method: "POST",
         headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
       const d = await r.json();
-      if (r.ok) {
+      if (r.ok && d.mode === "probe") {
+        setScanMsg(`Deep scan dispatched to Network Probe (${d.probe_agent}) — results appear in ~60s`);
+        setTimeout(() => { loadDetail(); loadSoftware(); }, 70000);
+      } else if (r.ok) {
         setScanMsg("Deep scan started — results appear in ~60s");
         setTimeout(() => { loadDetail(); loadSoftware(); }, 65000);
-      } else if (r.status === 422 && d.hint === "network_probe_deep_scan_unsupported") {
-        setScanMsg("Private IP behind NAT — deep scan via cloud not supported. Install a CyEDR agent directly on this host, or use SNMP Scan for basic inventory.");
       } else {
         setScanMsg(d.error || "Scan failed");
       }
