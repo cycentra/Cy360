@@ -157,6 +157,42 @@ def ensure_tables(db_url: str) -> None:
             cur.execute(ddl)
             for stmt in _arp_guard_alters:
                 cur.execute(stmt)
+            # Merge duplicate agents that share the same hardware_uuid.
+            # Keeps the most-recently-seen row; re-parents detections + commands to it,
+            # then deletes the stale rows.  Safe to run repeatedly (idempotent).
+            cur.execute("""
+                WITH dupes AS (
+                    SELECT hardware_uuid,
+                           MAX(last_seen) AS latest_seen
+                      FROM edr_agents
+                     WHERE hardware_uuid IS NOT NULL
+                     GROUP BY hardware_uuid
+                    HAVING COUNT(*) > 1
+                ),
+                keep AS (
+                    SELECT DISTINCT ON (a.hardware_uuid)
+                           a.agent_id AS keep_id,
+                           a.hardware_uuid
+                      FROM edr_agents a
+                      JOIN dupes d ON d.hardware_uuid = a.hardware_uuid
+                     ORDER BY a.hardware_uuid, a.last_seen DESC NULLS LAST
+                ),
+                stale AS (
+                    SELECT a.agent_id AS stale_id, k.keep_id
+                      FROM edr_agents a
+                      JOIN keep k ON k.hardware_uuid = a.hardware_uuid
+                     WHERE a.agent_id <> k.keep_id
+                )
+                SELECT stale_id, keep_id FROM stale
+            """)
+            rows = cur.fetchall()
+            for row in rows:
+                stale_id = row["stale_id"] if hasattr(row, "__getitem__") else row[0]
+                keep_id  = row["keep_id"]  if hasattr(row, "__getitem__") else row[1]
+                cur.execute("UPDATE edr_detections       SET agent_id=%s WHERE agent_id=%s", [keep_id, stale_id])
+                cur.execute("UPDATE edr_response_commands SET agent_id=%s WHERE agent_id=%s", [keep_id, stale_id])
+                cur.execute("DELETE FROM edr_agents WHERE agent_id=%s", [stale_id])
+                _log.info("EDR dedup: merged stale agent %s → %s", stale_id, keep_id)
         conn.commit()
         conn.close()
     except Exception as exc:
