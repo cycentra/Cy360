@@ -355,6 +355,8 @@ def agent_heartbeat(agent_id):
     ip            = body.get("agent_ip", "")
     gateway_macs  = body.get("gateway_macs", [])
     neighbors     = body.get("arp_neighbors", [])
+    probe_active  = bool(body.get("probe_active", False))
+    probe_subnet  = body.get("probe_subnet", "") or None
 
     # ── Zone trust evaluation ─────────────────────────────────────────────────
     arp_enabled   = True
@@ -390,13 +392,17 @@ def agent_heartbeat(agent_id):
                     arp_enabled=%s,
                     current_network_zone=%s,
                     last_gateway_mac=%s,
-                    arp_enabled_until=%s
+                    arp_enabled_until=%s,
+                    probe_policy_active=%s,
+                    probe_subnet=COALESCE(%s, probe_subnet)
                 WHERE agent_id=%s
                 """,
                 [
                     version, ip, arp_enabled, network_zone,
                     gateway_macs[0].get("mac") if gateway_macs else None,
                     arp_enabled_until or None,
+                    probe_active,
+                    probe_subnet,
                     agent_id,
                 ],
             )

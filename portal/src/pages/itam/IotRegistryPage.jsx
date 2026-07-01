@@ -65,9 +65,11 @@ export default function IotRegistryPage() {
   const [riskMin,          setRiskMin]          = useState(0);
   const [scanning,         setScanning]         = useState(false);
   const [scanMsg,          setScanMsg]          = useState("");
+  const [scanMode,         setScanMode]         = useState("");  // "probe" | "local" | ""
   const [loading,          setLoading]          = useState(true);
   const [selected,         setSelected]         = useState(null);
   const [configuredSubnet, setConfiguredSubnet] = useState("");
+  const [probes,           setProbes]           = useState([]);  // active probe agents
 
   const PER_PAGE = 50;
 
@@ -96,18 +98,34 @@ export default function IotRegistryPage() {
     } catch {}
   };
 
-  useEffect(() => { loadSummary(); loadSettings(); }, []);
+  const loadProbes = async () => {
+    try {
+      const r = await fetch("/api/itam/probe/status");
+      if (r.ok) { const d = await r.json(); setProbes(d.probes || []); }
+    } catch {}
+  };
+
+  useEffect(() => { loadSummary(); loadSettings(); loadProbes(); }, []);
   useEffect(() => { loadDevices(); }, [loadDevices]);
 
   const handleScan = async () => {
-    setScanning(true); setScanMsg("");
+    setScanning(true); setScanMsg(""); setScanMode("");
     try {
       const body = configuredSubnet ? { subnet: configuredSubnet } : {};
       const r = await fetch("/api/itam/iot/scan", { method: "POST",
         headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const d = await r.json();
-      setScanMsg(r.ok ? `IoT scan started for ${d.subnet}` : (d.error || "Scan failed"));
-      if (r.ok) setTimeout(() => { loadSummary(); loadDevices(); }, 10000);
+      if (r.ok) {
+        setScanMode(d.mode || "local");
+        if (d.mode === "probe") {
+          setScanMsg(`Scan dispatched to probe agent "${d.probe_agent}" for ${d.subnet}`);
+        } else {
+          setScanMsg(`IoT scan started for ${d.subnet}${d.warning ? " — ⚠ " + d.warning : ""}`);
+        }
+        setTimeout(() => { loadSummary(); loadDevices(); }, 12000);
+      } else {
+        setScanMsg(d.error || "Scan failed");
+      }
     } catch { setScanMsg("Network error"); }
     setScanning(false);
   };
@@ -136,6 +154,34 @@ export default function IotRegistryPage() {
         </button>
       </div>
 
+      {/* Network Probe status banner */}
+      {probes.length > 0 ? (
+        <div style={{ marginBottom: 12, padding: "8px 14px", borderRadius: 6,
+          background: "rgba(0,212,255,0.06)", border: "1px solid rgba(0,212,255,0.25)",
+          fontSize: 12, color: "#00d4ff", display: "flex", alignItems: "center", gap: 8 }}>
+          <span>📡</span>
+          <span>
+            <strong>Network Probe active</strong> — IoT scan runs from{" "}
+            <strong>{probes.map(p => p.hostname || p.agent_id).join(", ")}</strong>{" "}
+            inside your LAN. NAT/firewall is transparent.
+          </span>
+          {probes[0]?.probe_last_scan && (
+            <span style={{ color: "#555", marginLeft: "auto", whiteSpace: "nowrap" }}>
+              Last scan: {new Date(probes[0].probe_last_scan).toLocaleString()}
+            </span>
+          )}
+        </div>
+      ) : (
+        <div style={{ marginBottom: 12, padding: "8px 14px", borderRadius: 6,
+          background: "rgba(245,197,24,0.06)", border: "1px solid rgba(245,197,24,0.25)",
+          fontSize: 12, color: "#f5c518" }}>
+          <strong>No Network Probe configured.</strong>{" "}
+          Scans run from the cloud server and will fail for private subnets behind NAT/firewall.
+          Go to <strong>Endpoint Defence &gt; Policies</strong> and create a{" "}
+          <strong>Network Probe</strong> policy, then assign it to one agent on this network.
+        </div>
+      )}
+
       {!configuredSubnet && (
         <div style={{ marginBottom: 14, padding: "8px 14px", borderRadius: 6,
           background: "rgba(255,140,0,0.08)", border: "1px solid #ff8c0044",
@@ -151,14 +197,18 @@ export default function IotRegistryPage() {
           <span style={{ color: "#555", fontSize: 10 }}>— edit in Asset Coverage &gt; Scan Settings</span>
         </div>
       )}
-      {scanMsg && (
-        <div style={{ marginBottom: 16, marginTop: configuredSubnet ? 8 : 0, padding: "8px 14px", borderRadius: 6,
-          background: scanMsg.includes("failed") || scanMsg.includes("error") ? "rgba(255,59,59,0.1)" : "rgba(245,197,24,0.1)",
-          border: `1px solid ${scanMsg.includes("failed") || scanMsg.includes("error") ? "#ff3b3b" : "#f5c518"}44`,
-          fontSize: 12, color: scanMsg.includes("failed") || scanMsg.includes("error") ? "#ff3b3b" : "#f5c518" }}>
-          {scanMsg}
-        </div>
-      )}
+      {scanMsg && (() => {
+        const isErr  = scanMsg.includes("failed") || scanMsg.includes("error");
+        const isProbe = scanMode === "probe";
+        const bg     = isErr ? "rgba(255,59,59,0.1)" : isProbe ? "rgba(0,212,255,0.08)" : "rgba(245,197,24,0.1)";
+        const clr    = isErr ? "#ff3b3b" : isProbe ? "#00d4ff" : "#f5c518";
+        return (
+          <div style={{ marginBottom: 16, marginTop: configuredSubnet ? 8 : 0, padding: "8px 14px",
+            borderRadius: 6, background: bg, border: `1px solid ${clr}44`, fontSize: 12, color: clr }}>
+            {scanMsg}
+          </div>
+        );
+      })()}
 
       {/* KPI row */}
       {summary && (

@@ -39,6 +39,7 @@ POLICY_TYPES = {
     "exclusions",
     "update_policy",
     "isolation_exceptions",
+    "network_probe",
 }
 
 # ── Default policy templates ──────────────────────────────────────────────────
@@ -129,6 +130,16 @@ POLICY_DEFAULTS: dict[str, dict] = {
         "allow_dns":      True,
         "allow_dhcp":     True,
         "notes":          "",
+    },
+    "network_probe": {
+        "enabled":                 False,
+        "subnet":                  "",   # CIDR to scan; empty = auto-detect from agent IP
+        "scan_interval_minutes":   60,   # 0 = on-demand only
+        "scan_types":              ["subnet"],  # "subnet" | "snmp" (future)
+        "ports":                   "22,23,80,443,554,631,8080,8883,9100,161,502,47808",
+        "snmp_community":          "public",
+        "snmp_port":               161,
+        "dns_monitor":             False,
     },
 }
 

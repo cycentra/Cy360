@@ -259,6 +259,34 @@ def init_itam_tables(db_url: str) -> None:
             )
         """)
 
+        # ── Network Probe job queue ────────────────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS itam_scan_jobs (
+              id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+              probe_agent_id  TEXT NOT NULL,
+              scan_type       TEXT NOT NULL DEFAULT 'subnet',
+              subnet          TEXT,
+              target_ip       TEXT,
+              ports           TEXT,
+              params          JSONB DEFAULT '{}'::jsonb,
+              status          TEXT DEFAULT 'queued',
+              result_json     JSONB,
+              error_msg       TEXT,
+              created_at      TIMESTAMPTZ DEFAULT NOW(),
+              started_at      TIMESTAMPTZ,
+              completed_at    TIMESTAMPTZ
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_scan_jobs_probe ON itam_scan_jobs(probe_agent_id, status)")
+
+        # Probe status columns on edr_agents (added when probe policy is first applied)
+        for col, defn in [
+            ("probe_policy_active", "BOOLEAN DEFAULT FALSE"),
+            ("probe_subnet",        "TEXT"),
+            ("probe_last_scan",     "TIMESTAMPTZ"),
+        ]:
+            cur.execute(f"ALTER TABLE edr_agents ADD COLUMN IF NOT EXISTS {col} {defn}")
+
         # Bootstrap NVD + KEV tables so routes work even before first sync
         try:
             from blueprints.itam.nvd_mirror import ensure_nvd_tables
@@ -799,13 +827,39 @@ def assets_scan():
     if not subnet:
         return jsonify({"error": "No subnet configured. Set it in Asset Coverage > Scan Settings."}), 400
 
+    iot_ports = _resolve_iot_ports()
+    auth_event(session.get("user_email"), "itam_subnet_scan", f"Subnet scan triggered: {subnet}")
+
+    # Prefer probe agent deployed inside the customer's LAN
+    try:
+        conn  = _db()
+        probe = _get_active_probe_for_subnet(conn, subnet)
+        conn.close()
+    except Exception:
+        probe = None
+
+    if probe:
+        try:
+            conn   = _db()
+            job_id = _enqueue_probe_job(conn, probe["agent_id"], "subnet",
+                                        subnet=subnet, ports=iot_ports)
+            conn.close()
+        except Exception as exc:
+            _log.error("assets_scan: failed to enqueue probe job: %s", exc)
+            return jsonify({"error": "Failed to enqueue probe job"}), 500
+        return jsonify({
+            "ok": True, "mode": "probe",
+            "probe_agent": probe.get("hostname", probe["agent_id"]),
+            "subnet": subnet, "job_id": job_id,
+            "message": f"Scan dispatched to probe agent '{probe.get('hostname', probe['agent_id'])}'",
+        })
+
     def _run():
-        assets = run_nmap_discovery(subnet, _resolve_iot_ports())
+        assets = run_nmap_discovery(subnet, iot_ports)
         if assets:
             try:
                 conn = _db()
                 upsert_assets(conn, assets, source="nmap")
-                # Classify IoT candidates from scan results
                 _classify_iot_from_assets(conn, assets)
                 _crossref_agents_conn(conn)
                 conn.close()
@@ -813,8 +867,14 @@ def assets_scan():
                 _log.error("scan background error: %s", exc)
 
     threading.Thread(target=_run, daemon=True).start()
-    auth_event(session.get("user_email"), "itam_subnet_scan", f"Subnet scan triggered: {subnet}")
-    return jsonify({"ok": True, "subnet": subnet, "message": "Scan started in background"})
+    return jsonify({
+        "ok": True, "mode": "local", "subnet": subnet,
+        "message": "Scan started in background",
+        "warning": (
+            "No network probe configured for this subnet. "
+            "Running from cloud server — will fail if subnet is behind NAT."
+        ),
+    })
 
 
 # ── IoT Registry ──────────────────────────────────────────────────────────────
@@ -941,12 +1001,37 @@ def iot_scan():
     if _role() not in ("admin", "analyst"):
         return jsonify({"error": "Analyst or admin role required"}), 403
 
-    body   = request.get_json(silent=True) or {}
-    subnet = body.get("subnet") or _resolve_subnet()
+    body      = request.get_json(silent=True) or {}
+    subnet    = body.get("subnet") or _resolve_subnet()
     if not subnet:
         return jsonify({"error": "No subnet configured. Set it in Asset Coverage > Scan Settings."}), 400
 
     iot_ports = _resolve_iot_ports()
+
+    # Prefer a probe agent deployed inside the customer's LAN for this subnet.
+    # If none is configured, fall back to running nmap from the cloud server
+    # (works only when Cy360 is co-located with the target network).
+    try:
+        conn  = _db()
+        probe = _get_active_probe_for_subnet(conn, subnet)
+        conn.close()
+    except Exception:
+        probe = None
+
+    if probe:
+        try:
+            conn = _db()
+            job_id = _enqueue_probe_job(conn, probe["agent_id"], "subnet",
+                                        subnet=subnet, ports=iot_ports)
+            conn.close()
+        except Exception as exc:
+            _log.error("iot_scan: failed to enqueue probe job: %s", exc)
+            return jsonify({"error": "Failed to enqueue probe job"}), 500
+        return jsonify({
+            "ok": True, "mode": "probe",
+            "probe_agent": probe.get("hostname", probe["agent_id"]),
+            "subnet": subnet, "job_id": job_id,
+        })
 
     def _run():
         assets = run_nmap_discovery(subnet, iot_ports)
@@ -960,7 +1045,256 @@ def iot_scan():
                 _log.error("iot_scan background error: %s", exc)
 
     threading.Thread(target=_run, daemon=True).start()
-    return jsonify({"ok": True, "subnet": subnet})
+    return jsonify({
+        "ok": True, "mode": "local", "subnet": subnet,
+        "warning": (
+            "No network probe configured for this subnet. "
+            "Running from cloud server — will fail if subnet is behind NAT. "
+            "Deploy a CyEDR Network Probe policy to an endpoint on this network."
+        ),
+    })
+
+
+# ── Network Probe infrastructure ──────────────────────────────────────────────
+
+def _get_active_probe_for_subnet(conn, subnet: str) -> "dict | None":
+    """Return the first active probe agent whose probe_subnet matches or overlaps subnet."""
+    import ipaddress as _ip
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT agent_id, hostname, probe_subnet
+            FROM edr_agents
+            WHERE probe_policy_active = TRUE
+              AND probe_subnet IS NOT NULL
+        """)
+        rows = cur.fetchall()
+    if not rows:
+        return None
+    try:
+        target = _ip.ip_network(subnet, strict=False)
+    except ValueError:
+        return None
+    for row in rows:
+        try:
+            probe_net = _ip.ip_network(row["probe_subnet"], strict=False)
+            if target.overlaps(probe_net) or probe_net.overlaps(target):
+                return dict(row)
+        except ValueError:
+            continue
+    return None
+
+
+def _enqueue_probe_job(conn, agent_id: str, scan_type: str,
+                       subnet: str = "", ports: str = "") -> str:
+    """Insert a queued job; return the UUID job id."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO itam_scan_jobs (probe_agent_id, scan_type, subnet, ports, status)
+            VALUES (%s, %s, %s, %s, 'queued')
+            RETURNING id
+        """, (agent_id, scan_type, subnet or None, ports or None))
+        job_id = str(cur.fetchone()["id"])
+    conn.commit()
+    return job_id
+
+
+def _ingest_probe_nmap_xml(xml_text: str, subnet: str):
+    """Parse nmap XML returned by a probe agent and upsert into ITAM tables."""
+    from .network_discovery import _parse_nmap_xml
+    assets = _parse_nmap_xml(xml_text)
+    if assets:
+        conn = _db()
+        upsert_assets(conn, assets, source="nmap")
+        _classify_iot_from_assets(conn, assets)
+        conn.close()
+        _log.info("Probe nmap ingested %d asset(s) for %s", len(assets), subnet)
+
+
+# ── Probe API routes ──────────────────────────────────────────────────────────
+
+def _verify_probe_token(req) -> "str | None":
+    """Return agent_id if the Bearer enrollment token is valid, else None."""
+    auth = req.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    token = auth[7:].strip()
+    if not token:
+        return None
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT agent_id FROM edr_agents WHERE enrollment_token=%s LIMIT 1",
+                (token,)
+            )
+            row = cur.fetchone()
+        conn.close()
+        return row["agent_id"] if row else None
+    except Exception:
+        return None
+
+
+@itam_bp.route("/probe/jobs", methods=["GET", "OPTIONS"])
+def probe_poll_jobs():
+    """Agent polls this to claim pending scan jobs for itself."""
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    agent_id = _verify_probe_token(request)
+    if not agent_id:
+        return jsonify({"error": "Invalid or missing probe token"}), 401
+
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE itam_scan_jobs
+                SET status='running', started_at=NOW()
+                WHERE id IN (
+                    SELECT id FROM itam_scan_jobs
+                    WHERE probe_agent_id=%s AND status='queued'
+                    ORDER BY created_at
+                    LIMIT 5
+                )
+                RETURNING id, scan_type, subnet, ports, params
+            """, (agent_id,))
+            jobs = [dict(r) for r in cur.fetchall()]
+            # Stringify UUID for JSON
+            for j in jobs:
+                j["id"] = str(j["id"])
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        _log.error("probe_poll_jobs error: %s", exc)
+        return jsonify({"error": "DB error"}), 500
+
+    return jsonify({"jobs": jobs})
+
+
+@itam_bp.route("/probe/jobs/<job_id>/result", methods=["POST", "OPTIONS"])
+def probe_post_result(job_id):
+    """Agent posts completed scan results."""
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    agent_id = _verify_probe_token(request)
+    if not agent_id:
+        return jsonify({"error": "Invalid or missing probe token"}), 401
+
+    body      = request.get_json(silent=True) or {}
+    result    = body.get("result", {})
+    error_msg = body.get("error")
+
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE itam_scan_jobs
+                SET status=%s, result_json=%s, error_msg=%s, completed_at=NOW()
+                WHERE id=%s::uuid AND probe_agent_id=%s
+            """, (
+                "error" if error_msg else "done",
+                json.dumps(result),
+                error_msg,
+                job_id, agent_id,
+            ))
+            cur.execute("""
+                UPDATE edr_agents SET probe_last_scan=NOW()
+                WHERE agent_id=%s
+            """, (agent_id,))
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        _log.error("probe_post_result error: %s", exc)
+        return jsonify({"error": "DB error"}), 500
+
+    # Ingest results in background based on scan_type
+    if not error_msg:
+        scan_type = result.get("scan_type", "subnet")
+        if scan_type == "subnet":
+            xml    = result.get("raw_nmap_xml", "")
+            subnet = result.get("subnet", "")
+            if xml:
+                threading.Thread(
+                    target=_ingest_probe_nmap_xml,
+                    args=(xml, subnet),
+                    daemon=True,
+                ).start()
+        elif scan_type == "snmp":
+            asset_id_from_job = result.get("asset_id")
+            ip_from_job       = result.get("ip", "")
+            snmp_data         = result.get("snmp_data", {})
+            if asset_id_from_job and snmp_data:
+                threading.Thread(
+                    target=_ingest_snmp_result,
+                    args=(int(asset_id_from_job), ip_from_job, snmp_data),
+                    daemon=True,
+                ).start()
+
+    return jsonify({"ok": True})
+
+
+@itam_bp.route("/probe/auto-result", methods=["POST", "OPTIONS"])
+def probe_auto_result():
+    """Agent POSTs results from its scheduled auto-scan (no job_id)."""
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    agent_id = _verify_probe_token(request)
+    if not agent_id:
+        return jsonify({"error": "Invalid or missing probe token"}), 401
+
+    body   = request.get_json(silent=True) or {}
+    result = body.get("result", {})
+    subnet = body.get("subnet", result.get("subnet", ""))
+    xml    = result.get("raw_nmap_xml", "")
+
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE edr_agents SET probe_last_scan=NOW() WHERE agent_id=%s",
+                (agent_id,)
+            )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        _log.error("probe_auto_result db error: %s", exc)
+
+    if xml:
+        threading.Thread(
+            target=_ingest_probe_nmap_xml,
+            args=(xml, subnet),
+            daemon=True,
+        ).start()
+
+    return jsonify({"ok": True})
+
+
+@itam_bp.route("/probe/status", methods=["GET", "OPTIONS"])
+@require_viewer
+def probe_status():
+    """Returns all agents with active network probe policies."""
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT agent_id, hostname, probe_subnet, probe_last_scan,
+                       probe_policy_active, last_seen
+                FROM edr_agents
+                WHERE probe_policy_active = TRUE
+                ORDER BY hostname
+            """)
+            rows = [dict(r) for r in cur.fetchall()]
+            for r in rows:
+                if r.get("probe_last_scan"):
+                    r["probe_last_scan"] = r["probe_last_scan"].isoformat()
+                if r.get("last_seen"):
+                    r["last_seen"] = r["last_seen"].isoformat()
+        conn.close()
+    except Exception as exc:
+        _log.error("probe_status error: %s", exc)
+        return jsonify({"error": "DB error"}), 500
+    return jsonify({"probes": rows})
 
 
 # ── Shadow AI ─────────────────────────────────────────────────────────────────
@@ -1848,6 +2182,34 @@ def agentless_deep_scan(asset_id):
     finally:
         conn.close()
 
+    # If a probe covers this IP's subnet, deep scan via cloud will fail (RFC-1918 not routable).
+    # Deep scan via probe agent requires agent-side SSH/WinRM (paramiko) — planned for next release.
+    # Return a clear error now rather than silently timing out for 30s.
+    try:
+        import ipaddress as _ip
+        target_addr = _ip.ip_address(ip)
+        is_private  = target_addr.is_private
+    except ValueError:
+        is_private = False
+
+    if is_private:
+        try:
+            _pc = _db()
+            probe = _get_active_probe_for_subnet(_pc, ip + "/32")
+            _pc.close()
+        except Exception:
+            probe = None
+        if probe:
+            return jsonify({
+                "error": (
+                    f"{ip} is a private address behind NAT. "
+                    f"A Network Probe ({probe.get('hostname', probe['agent_id'])}) covers this subnet, "
+                    "but probe-based SSH/WinRM deep scan is not yet supported. "
+                    "Install a CyEDR agent directly on this host for deep inventory."
+                ),
+                "hint": "network_probe_deep_scan_unsupported",
+            }), 422
+
     def _do_scan():
         from blueprints.itam.agentless_scanner import detect_and_scan
         from blueprints.itam.software_inventory import (
@@ -2068,6 +2430,55 @@ def _start_dns_monitor_if_enabled():
 
 # ── SNMP scan ─────────────────────────────────────────────────────────────────
 
+def _ingest_snmp_result(asset_id: int, ip: str, result: dict):
+    """Write SNMP scan result into network_assets. Called locally or from probe result ingest."""
+    from blueprints.itam.snmp_scanner import infer_device_type
+    c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        if result.get("error"):
+            with c.cursor() as cur:
+                cur.execute(
+                    "UPDATE network_assets SET scan_status='error', scan_error=%s WHERE id=%s",
+                    [result["error"], asset_id])
+            c.commit()
+            return
+        device_type = infer_device_type(result.get("description", ""), result.get("object_id", ""))
+        with c.cursor() as cur:
+            cur.execute("""
+                UPDATE network_assets SET
+                    hostname    = COALESCE(NULLIF(%s,''), hostname),
+                    notes       = COALESCE(NULLIF(%s,''), notes),
+                    os_info     = COALESCE(NULLIF(%s,'{}'), os_info),
+                    scan_status = 'ok',
+                    scan_error  = NULL,
+                    last_seen   = NOW()
+                WHERE id=%s
+            """, [
+                result.get("hostname", ""),
+                result.get("description", "")[:500] if result.get("description") else "",
+                json.dumps({"sys_description": result.get("description", ""),
+                            "device_type": device_type,
+                            "sys_location": result.get("location", ""),
+                            "uptime_seconds": result.get("uptime_seconds", 0)}),
+                asset_id,
+            ])
+        c.commit()
+        _log.info("[ITAM-SNMP] %s: %d interfaces, type=%s", ip,
+                  len(result.get("interfaces", [])), device_type)
+    except Exception as exc:
+        _log.warning("[ITAM-SNMP] ingest error for %s: %s", ip, exc)
+        try:
+            with c.cursor() as cur:
+                cur.execute(
+                    "UPDATE network_assets SET scan_status='error', scan_error=%s WHERE id=%s",
+                    [str(exc), asset_id])
+            c.commit()
+        except Exception:
+            pass
+    finally:
+        c.close()
+
+
 @itam_bp.route("/assets/<int:asset_id>/snmp-scan", methods=["POST", "OPTIONS"])
 def snmp_scan_asset(asset_id):
     if request.method == "OPTIONS":
@@ -2079,10 +2490,10 @@ def snmp_scan_asset(asset_id):
         return jsonify({"error": "Forbidden"}), 403
 
     body      = request.get_json(silent=True) or {}
-    community = body.get("community", ITAM_SNMP_COMMUNITY)
-    port      = int(body.get("port", ITAM_SNMP_PORT))
+    community = body.get("community") or ITAM_SNMP_COMMUNITY or "public"
+    port      = int(body.get("port") or ITAM_SNMP_PORT or 161)
 
-    conn = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    conn = _db()
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT id, ip_address FROM network_assets WHERE id=%s", [asset_id])
@@ -2094,61 +2505,54 @@ def snmp_scan_asset(asset_id):
         return jsonify({"error": "Asset not found"}), 404
     ip = str(asset["ip_address"])
 
+    # Prefer probe agent for private/RFC-1918 targets
+    try:
+        conn  = _db()
+        probe = _get_active_probe_for_subnet(conn, ip + "/32")
+        conn.close()
+    except Exception:
+        probe = None
+
+    if probe:
+        try:
+            conn   = _db()
+            # Mark asset scanning so UI shows spinner
+            with conn.cursor() as cur:
+                cur.execute("UPDATE network_assets SET scan_status='scanning' WHERE id=%s", [asset_id])
+            conn.commit()
+            job_id = _enqueue_probe_job(conn, probe["agent_id"], "snmp",
+                                        target_ip=ip,
+                                        params=json.dumps({
+                                            "asset_id": asset_id,
+                                            "community": community,
+                                            "port": port,
+                                        }))
+            conn.close()
+        except Exception as exc:
+            _log.error("snmp_scan_asset: probe job enqueue failed: %s", exc)
+            return jsonify({"error": "Failed to enqueue probe SNMP job"}), 500
+        return jsonify({
+            "status": "scanning", "mode": "probe",
+            "probe_agent": probe.get("hostname", probe["agent_id"]),
+            "asset_id": asset_id, "ip": ip, "job_id": job_id,
+        })
+
+    # Fallback: run SNMP from the cloud server (works only if target is reachable)
     def _do_snmp():
         from blueprints.itam.snmp_scanner import snmp_scan
-        c = psycopg2.connect(CYCENTRA_DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        c = _db()
         try:
             with c.cursor() as cur:
                 cur.execute("UPDATE network_assets SET scan_status='scanning' WHERE id=%s", [asset_id])
             c.commit()
-            result = snmp_scan(ip, community=community, port=port)
-            if result.get("error"):
-                with c.cursor() as cur:
-                    cur.execute(
-                        "UPDATE network_assets SET scan_status='error', scan_error=%s WHERE id=%s",
-                        [result["error"], asset_id])
-                c.commit()
-                return
-            # Write discovered info back to network_assets
-            with c.cursor() as cur:
-                cur.execute("""
-                    UPDATE network_assets SET
-                        hostname    = COALESCE(NULLIF(%s,''), hostname),
-                        vendor      = COALESCE(NULLIF(%s,''), vendor),
-                        notes       = COALESCE(NULLIF(%s,''), notes),
-                        os_info     = COALESCE(NULLIF(%s,'{}'), os_info),
-                        scan_status = 'ok',
-                        scan_error  = NULL,
-                        last_seen   = NOW()
-                    WHERE id=%s
-                """, [
-                    result.get("sys_name", ""),
-                    result.get("vendor", ""),
-                    result.get("sys_description", "")[:500] if result.get("sys_description") else "",
-                    json.dumps({"sys_description": result.get("sys_description", ""),
-                                "device_type": result.get("device_type", ""),
-                                "sys_location": result.get("sys_location", ""),
-                                "uptime_seconds": result.get("uptime_seconds", 0)}),
-                    asset_id,
-                ])
-            c.commit()
-            _log.info("[ITAM-SNMP] %s: %s interfaces discovered, type=%s",
-                      ip, len(result.get("interfaces", [])), result.get("device_type"))
-        except Exception as exc:
-            _log.warning("[ITAM-SNMP] scan error for %s: %s", ip, exc)
-            try:
-                with c.cursor() as cur:
-                    cur.execute(
-                        "UPDATE network_assets SET scan_status='error', scan_error=%s WHERE id=%s",
-                        [str(exc), asset_id])
-                c.commit()
-            except Exception:
-                pass
-        finally:
             c.close()
+        except Exception:
+            pass
+        result = snmp_scan(ip, community=community, port=port)
+        _ingest_snmp_result(asset_id, ip, result)
 
     threading.Thread(target=_do_snmp, daemon=True).start()
-    return jsonify({"status": "scanning", "asset_id": asset_id, "ip": ip})
+    return jsonify({"status": "scanning", "mode": "local", "asset_id": asset_id, "ip": ip})
 
 
 @itam_bp.route("/assets/<int:asset_id>/scan-status", methods=["GET", "OPTIONS"])

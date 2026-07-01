@@ -893,11 +893,17 @@ class TelemetrySender(threading.Thread):
 class ResponseExecutor:
     """Executes commands issued by the platform (ISOLATE, KILL_PROCESS, QUARANTINE_FILE, etc.)."""
 
-    def __init__(self, cfg: Config):
-        self._cfg = cfg
+    def __init__(self, cfg: Config, http: "requests.Session | None" = None):
+        self._cfg  = cfg
+        self._http = http
         self._policy_state_path = os.path.join(cfg.edr_home, "policy_state.json")
         os.makedirs(cfg.quarantine_dir, exist_ok=True)
+        self._probe_poller: "NetworkProbePoller | None" = None
         self._load_policy_state()
+        # Re-activate probe poller if policy was active before this restart
+        probe_cfg = self._cfg.policy_state.get("network_probe", {})
+        if probe_cfg.get("enabled") and self._http:
+            self._start_probe_poller(probe_cfg)
 
     def execute(self, cmd: dict) -> dict:
         # DB/API returns field "action"; "command_type" was a legacy alias that no longer exists
@@ -1272,6 +1278,7 @@ class ResponseExecutor:
             "exclusions":           self._apply_exclusions,
             "update_policy":        self._apply_update_policy,
             "isolation_exceptions": self._apply_isolation_exceptions,
+            "network_probe":        self._apply_network_probe_policy,
         }
 
         fn = _dispatch.get(policy_type)
@@ -2011,6 +2018,34 @@ class ResponseExecutor:
         return (f"isolation_exceptions stored: {len(allowed_ips)} IP(s), "
                 f"ports={allowed_ports}, dns={allow_dns}, dhcp={allow_dhcp}")
 
+    # ── network_probe ─────────────────────────────────────────────────────────
+
+    def _apply_network_probe_policy(self, cfg: dict) -> str:
+        enabled = cfg.get("enabled", False)
+        if enabled:
+            if not self._http:
+                return "network_probe: cannot start — HTTP session not available (upgrade agent)"
+            self._start_probe_poller(cfg)
+            subnet = cfg.get("subnet", "auto")
+            interval = cfg.get("scan_interval_minutes", 60)
+            return f"network_probe: started (subnet={subnet}, interval={interval}min)"
+        else:
+            self._stop_probe_poller()
+            return "network_probe: stopped"
+
+    def _start_probe_poller(self, cfg: dict):
+        self._stop_probe_poller()
+        self._probe_poller = NetworkProbePoller(self._http, self._cfg, cfg)
+        self._probe_poller.start()
+        logger.info("NetworkProbePoller started for subnet=%s", cfg.get("subnet", "auto"))
+
+    def _stop_probe_poller(self):
+        if self._probe_poller and self._probe_poller.is_alive():
+            self._probe_poller.stop()
+            self._probe_poller.join(timeout=5)
+            logger.info("NetworkProbePoller stopped")
+        self._probe_poller = None
+
 
 # ── Command poller ─────────────────────────────────────────────────────────────
 class CommandPoller(threading.Thread):
@@ -2086,7 +2121,13 @@ class Heartbeat(threading.Thread):
     def _beat(self):
         if not self._cfg.agent_id:
             return
-        payload = {"version": VERSION, "os_type": self._cfg.os_type}
+        probe_cfg = self._cfg.policy_state.get("network_probe", {})
+        payload = {
+            "version":      VERSION,
+            "os_type":      self._cfg.os_type,
+            "probe_active": bool(probe_cfg.get("enabled")),
+            "probe_subnet": probe_cfg.get("subnet", "") if probe_cfg.get("enabled") else "",
+        }
         if psutil:
             payload["cpu_percent"]  = psutil.cpu_percent(interval=1)
             payload["mem_percent"]  = psutil.virtual_memory().percent
@@ -2180,6 +2221,246 @@ class IOCRefresher(threading.Thread):
             _STOP_EVENT.wait(self.INTERVAL)
 
 
+# ── Network Probe Poller ───────────────────────────────────────────────────────
+class NetworkProbePoller(threading.Thread):
+    """
+    Activated only when the 'network_probe' policy is deployed to this agent.
+    Polls /api/itam/probe/jobs for on-demand scan requests and executes them
+    locally using nmap, then POSTs raw XML results back to the server.
+    Also fires scheduled auto-scans at the configured interval.
+
+    All scan traffic originates from inside the customer LAN — the cloud
+    Cy360 server never needs a route to private subnets.
+    """
+
+    POLL_INTERVAL = 30   # seconds between job queue polls
+
+    def __init__(self, http: "requests.Session", cfg: Config, policy: dict):
+        super().__init__(daemon=True, name="NetworkProbePoller")
+        self._http   = http
+        self._cfg    = cfg
+        self._policy = policy
+        self._stop   = threading.Event()
+        self._last_auto_scan: float = 0.0
+
+    def stop(self):
+        self._stop.set()
+
+    def run(self):
+        logger.info("NetworkProbePoller running — polling every %ds", self.POLL_INTERVAL)
+        while not self._stop.is_set():
+            try:
+                self._poll_jobs()
+                self._maybe_auto_scan()
+            except Exception as exc:
+                logger.warning("NetworkProbePoller error: %s", exc)
+            self._stop.wait(self.POLL_INTERVAL)
+
+    # ── Job queue poll ────────────────────────────────────────────────────────
+
+    def _poll_jobs(self):
+        if not self._cfg.agent_id:
+            return
+        try:
+            resp = self._http.get(
+                f"{self._cfg.platform_url}/api/itam/probe/jobs",
+                params={"agent_id": self._cfg.agent_id},
+                timeout=15,
+            )
+            if not resp.ok:
+                return
+            jobs = resp.json().get("jobs", [])
+        except Exception as exc:
+            logger.debug("Probe job poll failed: %s", exc)
+            return
+
+        for job in jobs:
+            job_id    = job.get("id")
+            scan_type = job.get("scan_type", "subnet")
+            try:
+                result = self._execute_job(job)
+                self._post_result(job_id, result, error=None)
+            except Exception as exc:
+                logger.warning("Probe job %s failed: %s", job_id, exc)
+                self._post_result(job_id, {}, error=str(exc))
+
+    def _execute_job(self, job: dict) -> dict:
+        scan_type = job.get("scan_type", "subnet")
+        if scan_type == "subnet":
+            subnet = job.get("subnet") or self._resolve_subnet()
+            ports  = job.get("ports") or self._policy.get("ports",
+                "22,23,80,443,554,631,8080,8883,9100,161,502,47808")
+            return self._run_nmap(subnet, ports)
+        if scan_type == "snmp":
+            params    = job.get("params") or {}
+            if isinstance(params, str):
+                try:
+                    import json as _json
+                    params = _json.loads(params)
+                except Exception:
+                    params = {}
+            target_ip = job.get("target_ip") or params.get("target_ip", "")
+            community = params.get("community", self._policy.get("snmp_community", "public"))
+            port      = int(params.get("port") or self._policy.get("snmp_port", 161))
+            asset_id  = params.get("asset_id")
+            return self._run_snmp(target_ip, community, port, asset_id)
+        raise ValueError(f"Unsupported scan_type: {scan_type}")
+
+    def _post_result(self, job_id: str, result: dict, error: "str | None"):
+        try:
+            self._http.post(
+                f"{self._cfg.platform_url}/api/itam/probe/jobs/{job_id}/result",
+                json={"result": result, "error": error},
+                timeout=30,
+            )
+        except Exception as exc:
+            logger.warning("Probe result post failed for job %s: %s", job_id, exc)
+
+    # ── Auto-scan on interval ─────────────────────────────────────────────────
+
+    def _maybe_auto_scan(self):
+        interval_min = int(self._policy.get("scan_interval_minutes", 60))
+        if interval_min <= 0:
+            return
+        elapsed_min = (time.time() - self._last_auto_scan) / 60
+        if elapsed_min < interval_min:
+            return
+        subnet = self._resolve_subnet()
+        if not subnet:
+            logger.warning("NetworkProbePoller: no subnet configured for auto-scan")
+            return
+        ports = self._policy.get("ports", "22,23,80,443,554,631,8080,8883,9100,161,502,47808")
+        logger.info("NetworkProbePoller: starting auto-scan of %s", subnet)
+        try:
+            result = self._run_nmap(subnet, ports)
+            self._http.post(
+                f"{self._cfg.platform_url}/api/itam/probe/auto-result",
+                json={"agent_id": self._cfg.agent_id, "subnet": subnet, "result": result},
+                timeout=30,
+            )
+            self._last_auto_scan = time.time()
+            logger.info("NetworkProbePoller: auto-scan complete for %s", subnet)
+        except Exception as exc:
+            logger.warning("NetworkProbePoller: auto-scan failed: %s", exc)
+
+    # ── nmap execution ────────────────────────────────────────────────────────
+
+    def _run_nmap(self, subnet: str, ports: str) -> dict:
+        nmap_bin = shutil.which("nmap")
+        if not nmap_bin:
+            for candidate in ("/usr/bin/nmap", "/usr/local/bin/nmap", "/opt/homebrew/bin/nmap"):
+                if os.path.isfile(candidate):
+                    nmap_bin = candidate
+                    break
+        if not nmap_bin:
+            raise RuntimeError("nmap not found — install nmap on this host to use Network Probe")
+
+        cmd = [
+            nmap_bin, "-sn", "-PS22,80,443", "--open",
+            "-p", ports, "-oX", "-",
+            "--host-timeout", "5s",
+            subnet,
+        ]
+        logger.debug("Probe nmap: %s", " ".join(cmd))
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            return {"scan_type": "subnet", "subnet": subnet, "raw_nmap_xml": proc.stdout}
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"nmap timed out scanning {subnet}")
+
+    # ── SNMP execution ────────────────────────────────────────────────────────
+
+    def _run_snmp(self, ip: str, community: str, port: int, asset_id) -> dict:
+        """
+        Poll one device via SNMP v2c using snmpget/snmpwalk CLI tools.
+        Returns a dict that the server's _ingest_snmp_result() understands.
+        Requires net-snmp tools (snmpget + snmpwalk) on the probe agent host.
+        """
+        snmpget  = shutil.which("snmpget")
+        snmpwalk = shutil.which("snmpwalk")
+
+        result = {
+            "scan_type": "snmp",
+            "ip": ip,
+            "asset_id": asset_id,
+            "snmp_data": {},
+        }
+
+        if not snmpget or not snmpwalk:
+            result["error"] = (
+                "snmpget/snmpwalk not found on probe agent — "
+                "install net-snmp: apt install snmp / yum install net-snmp-utils"
+            )
+            return result
+
+        _OID_DESCR    = "1.3.6.1.2.1.1.1.0"
+        _OID_NAME     = "1.3.6.1.2.1.1.5.0"
+        _OID_LOCATION = "1.3.6.1.2.1.1.6.0"
+        _OID_OBJ_ID   = "1.3.6.1.2.1.1.2.0"
+        _OID_UPTIME   = "1.3.6.1.2.1.1.3.0"
+
+        def _get(oid: str) -> str:
+            try:
+                out = subprocess.check_output(
+                    [snmpget, "-v2c", f"-c{community}", f"-t3", "-r1", "-Oqn",
+                     f"{ip}:{port}", oid],
+                    stderr=subprocess.DEVNULL, timeout=8,
+                )
+                val = out.decode(errors="replace").strip()
+                for prefix in ("STRING:", "INTEGER:", "OID:", "Timeticks:", "Gauge32:",
+                               "Counter32:", "IpAddress:", "Hex-STRING:"):
+                    if val.startswith(prefix):
+                        val = val[len(prefix):].strip()
+                return val.strip('"')
+            except Exception:
+                return ""
+
+        description = _get(_OID_DESCR)
+        hostname    = _get(_OID_NAME)
+        location    = _get(_OID_LOCATION)
+        object_id   = _get(_OID_OBJ_ID)
+        uptime_raw  = _get(_OID_UPTIME)
+
+        try:
+            centiseconds = int("".join(filter(str.isdigit, uptime_raw.split(" ")[0])) or "0")
+            uptime_sec = centiseconds // 100
+        except Exception:
+            uptime_sec = 0
+
+        result["snmp_data"] = {
+            "status":         "ok",
+            "description":    description,
+            "hostname":       hostname,
+            "location":       location,
+            "object_id":      object_id,
+            "uptime_seconds": uptime_sec,
+            "interfaces":     [],  # interface walk omitted for brevity
+        }
+        logger.info("Probe SNMP: %s → hostname=%s", ip, hostname or "(none)")
+        return result
+
+    # ── Subnet resolution ─────────────────────────────────────────────────────
+
+    def _resolve_subnet(self) -> str:
+        configured = self._policy.get("subnet", "").strip()
+        if configured:
+            return configured
+        # Auto-detect from the agent's own IP — derive /24 CIDR
+        try:
+            if psutil:
+                for iface, addrs in psutil.net_if_addrs().items():
+                    if "lo" in iface.lower():
+                        continue
+                    for addr in addrs:
+                        if addr.family == socket.AF_INET:
+                            parts = addr.address.split(".")
+                            if len(parts) == 4 and parts[0] not in ("127", "169"):
+                                return f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
+        except Exception:
+            pass
+        return ""
+
+
 # ── Self-enrollment (if no agent_id yet) ──────────────────────────────────────
 def ensure_enrolled(cfg: Config, http: requests.Session):
     if cfg.agent_id:
@@ -2261,7 +2542,7 @@ def main():
 
     ioc      = IOCCache(cfg.ioc_cache)
     ev_queue = queue.Queue(maxsize=5000)
-    executor = ResponseExecutor(cfg)
+    executor = ResponseExecutor(cfg, http)
 
     # Build reader for this platform
     if OS_TYPE == "LINUX":

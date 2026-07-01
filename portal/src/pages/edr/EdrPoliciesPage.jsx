@@ -27,6 +27,7 @@ const POLICY_TYPE_CFG = {
   exclusions:          { label:"Exclusions",           color:"#f5c518", icon:"🔕",  desc:"Scan exclusions by path, process, file extension, hash" },
   update_policy:       { label:"Update Policy",        color:"#00e5a0", icon:"🔄",  desc:"Auto-update, channel (stable/beta/LTS), maintenance windows" },
   isolation_exceptions:{ label:"Isolation Exceptions", color:"#888",    icon:"🔓",  desc:"IPs and ports reachable when an endpoint is isolated" },
+  network_probe:       { label:"Network Probe",        color:"#00d4ff", icon:"📡",  desc:"Designate this agent as a local network scanner — enables IoT, SNMP, and deep scan behind NAT/firewall" },
 };
 
 const AI_SENSITIVITY_LABELS = {
@@ -327,6 +328,110 @@ function IsolationExceptionsEditor({ config, onChange }) {
   );
 }
 
+function NetworkProbeEditor({ config, onChange }) {
+  const s = (k, v) => onChange({ ...config, [k]: v });
+  const scanTypes = config.scan_types || ["subnet"];
+  const toggleScanType = (t) => {
+    const next = scanTypes.includes(t) ? scanTypes.filter(x => x !== t) : [...scanTypes, t];
+    s("scan_types", next.length ? next : ["subnet"]);
+  };
+
+  return (
+    <div>
+      <div style={{ background:"rgba(0,212,255,0.06)", border:"1px solid rgba(0,212,255,0.2)", borderRadius:8, padding:"10px 14px", marginBottom:16, fontSize:12, color:"#00d4ff" }}>
+        Deploy this policy to <strong>one agent per network segment</strong> that sits inside the customer's LAN.
+        That agent runs nmap/SNMP locally and reports results to Cy360 — no inbound firewall rules needed.
+        <br/>All other agents are unaffected; zero extra load on them.
+      </div>
+
+      <div style={{ fontSize:12, color:"#555", marginBottom:14, fontWeight:600, letterSpacing:1 }}>PROBE SETTINGS</div>
+      <Toggle
+        value={config.enabled}
+        onChange={v => s("enabled", v)}
+        label="Enable Network Probe"
+        sublabel="Start local nmap/SNMP scanning on this agent"
+      />
+      <div style={{ marginBottom:14 }}>
+        <div style={{ fontSize:11, color:"#555", marginBottom:5 }}>Subnet to Scan (CIDR)</div>
+        <input
+          value={config.subnet || ""}
+          onChange={e => s("subnet", e.target.value)}
+          placeholder="192.168.1.0/24 — leave blank to auto-detect from agent IP"
+          style={{
+            width:"100%", background:"rgba(255,255,255,0.05)", border:BORDER, borderRadius:6,
+            color:"#e8eaf0", padding:"7px 12px", fontSize:12, boxSizing:"border-box",
+          }}
+        />
+      </div>
+      <div style={{ marginBottom:14 }}>
+        <div style={{ fontSize:11, color:"#555", marginBottom:5 }}>Auto-Scan Interval (minutes) — 0 = on-demand only</div>
+        <input
+          type="number" min="0" max="10080"
+          value={config.scan_interval_minutes ?? 60}
+          onChange={e => s("scan_interval_minutes", parseInt(e.target.value) || 0)}
+          style={{
+            width:120, background:"rgba(255,255,255,0.05)", border:BORDER, borderRadius:6,
+            color:"#e8eaf0", padding:"7px 12px", fontSize:12,
+          }}
+        />
+      </div>
+
+      <div style={{ fontSize:12, color:"#555", marginTop:20, marginBottom:14, fontWeight:600, letterSpacing:1 }}>SCAN TYPES</div>
+      {[
+        { key:"subnet", label:"Subnet Discovery (nmap)", note:"Ping sweep + port scan to discover all active hosts" },
+        { key:"snmp",   label:"SNMP Polling", note:"Read sysDescr, interfaces, uptime from network devices (future)" },
+      ].map(({ key, label, note }) => (
+        <div key={key} onClick={() => key !== "snmp" && toggleScanType(key)} style={{
+          display:"flex", alignItems:"center", gap:12, padding:"10px 0",
+          borderBottom:BORDER, cursor: key === "snmp" ? "default" : "pointer",
+          opacity: key === "snmp" ? 0.4 : 1,
+        }}>
+          <div style={{
+            width:18, height:18, borderRadius:4, flexShrink:0,
+            background: scanTypes.includes(key) ? "#00d4ff" : "transparent",
+            border:`1.5px solid ${scanTypes.includes(key) ? "#00d4ff" : "#444"}`,
+            display:"flex", alignItems:"center", justifyContent:"center",
+          }}>
+            {scanTypes.includes(key) && <span style={{ color:"#000", fontSize:11, fontWeight:700 }}>✓</span>}
+          </div>
+          <div>
+            <div style={{ fontSize:13, color:"#e8eaf0" }}>{label}</div>
+            <div style={{ fontSize:11, color:"#555", marginTop:2 }}>{note}</div>
+          </div>
+        </div>
+      ))}
+
+      <div style={{ fontSize:12, color:"#555", marginTop:20, marginBottom:14, fontWeight:600, letterSpacing:1 }}>PORT CONFIGURATION</div>
+      <div style={{ marginBottom:14 }}>
+        <div style={{ fontSize:11, color:"#555", marginBottom:5 }}>IoT / Service Ports (comma-separated)</div>
+        <input
+          value={config.ports || ""}
+          onChange={e => s("ports", e.target.value)}
+          placeholder="22,23,80,443,554,631,8080,8883,9100,161,502,47808"
+          style={{
+            width:"100%", background:"rgba(255,255,255,0.05)", border:BORDER, borderRadius:6,
+            color:"#e8eaf0", padding:"7px 12px", fontSize:12, boxSizing:"border-box",
+          }}
+        />
+      </div>
+
+      <div style={{ fontSize:12, color:"#555", marginTop:20, marginBottom:14, fontWeight:600, letterSpacing:1 }}>SHADOW AI DNS MONITOR</div>
+      <Toggle
+        value={config.dns_monitor}
+        onChange={v => s("dns_monitor", v)}
+        label="Local DNS Monitor"
+        sublabel="Run a local DNS forwarder to catch AI SaaS queries from IoT and unmanaged devices"
+      />
+
+      <div style={{ marginTop:20, padding:"10px 14px", background:"rgba(255,255,255,0.03)", borderRadius:8, fontSize:11, color:"#555", lineHeight:1.6 }}>
+        <strong style={{ color:"#888" }}>Deployment note:</strong> Deploy this policy to exactly one agent per network zone.
+        Assigning to multiple agents in the same /24 causes duplicate scan results.
+        The agent needs <code style={{ color:"#00d4ff" }}>nmap</code> installed — included in the CyEDR install script for Linux/macOS.
+      </div>
+    </div>
+  );
+}
+
 const EDITORS = {
   threat_prevention:    ThreatPreventionEditor,
   device_control:       DeviceControlEditor,
@@ -335,6 +440,7 @@ const EDITORS = {
   exclusions:           ExclusionsEditor,
   update_policy:        UpdatePolicyEditor,
   isolation_exceptions: IsolationExceptionsEditor,
+  network_probe:        NetworkProbeEditor,
 };
 
 // ── Assign modal ──────────────────────────────────────────────────────────────
