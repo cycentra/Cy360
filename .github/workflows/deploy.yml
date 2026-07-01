@@ -211,24 +211,3 @@ jobs:
             dist/*.whl
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # ── Auto-deploy to Cy360 production server ─────────────────────────
-      # Triggers the server's own --update path so the new release bundle
-      # (including cyedr_agent.py + installer scripts) is staged immediately.
-      # Requires SERVER_SSH_KEY secret containing the root private key.
-      - name: Deploy to Cy360 server
-        if: steps.version.outputs.is_release == 'true' && env.SERVER_SSH_KEY != ''
-        env:
-          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
-          GH_TOKEN: ${{ secrets.GH_DEPLOY_TOKEN }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          echo "$SERVER_SSH_KEY" > /tmp/deploy_key
-          chmod 600 /tmp/deploy_key
-          ssh -o StrictHostKeyChecking=no \
-              -o ConnectTimeout=15 \
-              -i /tmp/deploy_key \
-              -p 2026 root@77.42.75.20 \
-              "GH_TOKEN=${GH_TOKEN} bash /opt/cycentra/cycentra-setup.sh --update && \
-               echo 'Server updated to ${TAG}'"
-          rm -f /tmp/deploy_key
