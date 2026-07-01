@@ -1,3 +1,11 @@
+## v1.0.139 -- 2026-07-01
+
+### Bug Fixes
+
+  - cyedr): run brew as SUDO_USER — Homebrew refuses to run as root
+
+---
+
 ## v1.0.138 -- 2026-07-01
 
 ### Improvements
