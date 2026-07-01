@@ -132,8 +132,19 @@ install_packages_linux() {
 
 install_packages_macos() {
     info "Installing system dependencies (macOS)..."
-    if command -v brew &>/dev/null; then
-        brew install yara 2>/dev/null || warn "Homebrew yara install failed — YARA scanning may be unavailable"
+    # When run as `sudo bash`, root's PATH excludes Homebrew directories.
+    # Probe known Homebrew prefix locations explicitly before falling back to PATH.
+    local BREW_BIN=""
+    for _try in \
+        /opt/homebrew/bin/brew \
+        /usr/local/bin/brew \
+        "$(command -v brew 2>/dev/null)"; do
+        [[ -x "$_try" ]] && { BREW_BIN="$_try"; break; }
+    done
+
+    if [[ -n "$BREW_BIN" ]]; then
+        "$BREW_BIN" install yara 2>/dev/null \
+            || warn "Homebrew yara install failed — YARA scanning may be unavailable"
     else
         warn "Homebrew not found — YARA scanning may be unavailable. Install: https://brew.sh"
     fi

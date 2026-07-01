@@ -1567,27 +1567,28 @@ def self_enroll_agent():
     try:
         conn = _db()
         with conn.cursor() as cur:
-            # UPSERT on hostname: update the existing row when the same endpoint
-            # re-enrolls (reinstall / repeated install). Keeps agent_id stable so
-            # FK-referenced tables (edr_detections, edr_response_commands) are
-            # never orphaned. A DELETE+INSERT would violate those FK constraints.
-            cur.execute("SELECT agent_id FROM edr_agents WHERE hostname=%s", [hostname])
+            # Try UPDATE first (re-enrollment of same hostname keeps agent_id stable
+            # so FK-referenced tables like edr_detections are never orphaned).
+            cur.execute(
+                """
+                UPDATE edr_agents
+                   SET enrollment_token=%s, os_type=%s, agent_ip=%s,
+                       asset_type=%s, version=%s, enrolled_by='self-enrollment',
+                       enrollment_gateway_mac=%s, last_gateway_mac=%s,
+                       last_seen=NOW()
+                 WHERE hostname=%s
+                RETURNING agent_id
+                """,
+                [token, os_type, agent_ip, asset_type, version,
+                 gateway_mac or None, gateway_mac or None, hostname],
+            )
             row = cur.fetchone()
             if row:
-                agent_id = row[0]
-                cur.execute(
-                    """
-                    UPDATE edr_agents
-                       SET enrollment_token=%s, os_type=%s, agent_ip=%s,
-                           asset_type=%s, version=%s, enrolled_by='self-enrollment',
-                           enrollment_gateway_mac=%s, last_gateway_mac=%s,
-                           last_seen=NOW()
-                     WHERE agent_id=%s
-                    """,
-                    [token, os_type, agent_ip, asset_type, version,
-                     gateway_mac or None, gateway_mac or None, agent_id],
-                )
+                # Existing enrollment — read agent_id from RETURNING clause.
+                # Use values() to avoid RealDictRow integer-index ambiguity.
+                agent_id = next(iter(row.values())) if hasattr(row, "values") else row[0]
             else:
+                # New hostname — INSERT fresh enrollment.
                 agent_id = str(uuid.uuid4())
                 cur.execute(
                     """
