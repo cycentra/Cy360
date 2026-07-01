@@ -12,6 +12,7 @@ Phase 2: Native eBPF (Linux) / ESF (macOS) / ETW (Windows) agent replaces this.
 """
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import logging
@@ -24,6 +25,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -50,6 +52,14 @@ OS_TYPE       = platform.system().upper()   # LINUX, DARWIN, WINDOWS
 _RUNNING      = True
 _STOP_EVENT   = threading.Event()
 logger        = logging.getLogger("cyedr")
+
+# ── Policy enforcement constants ───────────────────────────────────────────────
+_SINKHOLE_BEGIN  = "# BEGIN CyEDR-SINKHOLE"
+_SINKHOLE_END    = "# END CyEDR-SINKHOLE"
+_UDEV_USB_RULES  = "/etc/udev/rules.d/99-cyedr-usb.rules"
+_CRON_DEEPSCAN   = "/etc/cron.d/cyedr-deepscan"
+_CRON_UPDATE     = "/etc/cron.d/cyedr-update"
+_PF_ANCHOR       = "/etc/pf.anchors/cyedr_policy"
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 class Config:
@@ -78,6 +88,8 @@ class Config:
         _arp = d.get("arp_discovery", {})
         self.arp_enabled        = _arp.get("enabled", True)
         self.arp_enabled_until  = _arp.get("arp_enabled_until", "")
+        # Active policy state — populated by ResponseExecutor on startup and after each APPLY_POLICY
+        self.policy_state: dict = {}
 
     def save_agent_id(self, agent_id: str):
         self.agent_id = agent_id
@@ -837,7 +849,9 @@ class ResponseExecutor:
 
     def __init__(self, cfg: Config):
         self._cfg = cfg
+        self._policy_state_path = os.path.join(cfg.edr_home, "policy_state.json")
         os.makedirs(cfg.quarantine_dir, exist_ok=True)
+        self._load_policy_state()
 
     def execute(self, cmd: dict) -> dict:
         # DB/API returns field "action"; "command_type" was a legacy alias that no longer exists
@@ -846,13 +860,14 @@ class ResponseExecutor:
         result = {"status": "failed", "output": ""}
 
         handlers = {
-            "ISOLATE":        self._isolate,
-            "UNISOLATE":      self._unisolate,
-            "KILL_PROCESS":   self._kill_process,
-            "QUARANTINE_FILE": self._quarantine_file,
-            "ROLLBACK":       self._rollback,
-            "RUN_SCAN":       self._run_scan,
+            "ISOLATE":           self._isolate,
+            "UNISOLATE":         self._unisolate,
+            "KILL_PROCESS":      self._kill_process,
+            "QUARANTINE_FILE":   self._quarantine_file,
+            "ROLLBACK":          self._rollback,
+            "RUN_SCAN":          self._run_scan,
             "COLLECT_FORENSICS": self._collect_forensics,
+            "APPLY_POLICY":      self._apply_policy,
         }
         handler = handlers.get(name)
         if handler:
@@ -894,6 +909,20 @@ class ResponseExecutor:
             cmds.append(["iptables", "-A", "INPUT",  "-s", mgmt_ip, "-j", "ACCEPT"])
         # Allow established connections to management (so agent can send telemetry)
         cmds.append(["iptables", "-A", "OUTPUT", "-m", "state", "--state", "ESTABLISHED", "-j", "ACCEPT"])
+        # Apply isolation_exceptions policy (allowed IPs, ports, DNS, DHCP)
+        iex = self._cfg.policy_state.get("isolation_exceptions", {})
+        for ip in iex.get("allowed_ips", []):
+            cmds.append(["iptables", "-A", "OUTPUT", "-d", ip, "-j", "ACCEPT"])
+            cmds.append(["iptables", "-A", "INPUT",  "-s", ip, "-j", "ACCEPT"])
+        for port in iex.get("allowed_ports", []):
+            cmds.append(["iptables", "-A", "OUTPUT", "-p", "tcp", "--dport", str(port), "-j", "ACCEPT"])
+            cmds.append(["iptables", "-A", "INPUT",  "-p", "tcp", "--sport", str(port), "-j", "ACCEPT"])
+        if iex.get("allow_dns", True):
+            cmds.append(["iptables", "-A", "OUTPUT", "-p", "udp", "--dport", "53", "-j", "ACCEPT"])
+            cmds.append(["iptables", "-A", "INPUT",  "-p", "udp", "--sport", "53", "-j", "ACCEPT"])
+        if iex.get("allow_dhcp", True):
+            cmds.append(["iptables", "-A", "OUTPUT", "-p", "udp", "--dport", "67:68", "-j", "ACCEPT"])
+            cmds.append(["iptables", "-A", "INPUT",  "-p", "udp", "--sport", "67:68", "-j", "ACCEPT"])
 
         for c in cmds:
             subprocess.run(c, check=True, capture_output=True)
@@ -906,6 +935,17 @@ class ResponseExecutor:
         if mgmt_ip:
             pf_rules += f"pass out quick to {mgmt_ip} keep state\n"
             pf_rules += f"pass in quick from {mgmt_ip} keep state\n"
+        # Apply isolation_exceptions policy
+        iex = self._cfg.policy_state.get("isolation_exceptions", {})
+        for ip in iex.get("allowed_ips", []):
+            pf_rules += f"pass out quick to {ip} keep state\n"
+            pf_rules += f"pass in quick from {ip} keep state\n"
+        for port in iex.get("allowed_ports", []):
+            pf_rules += f"pass out quick proto tcp to any port {port} keep state\n"
+        if iex.get("allow_dns", True):
+            pf_rules += "pass out quick proto udp to any port 53\n"
+        if iex.get("allow_dhcp", True):
+            pf_rules += "pass out quick proto udp to any port 67\n"
 
         pf_conf = "/tmp/cyedr_isolation.pf"
         with open(pf_conf, "w") as f:
@@ -928,6 +968,25 @@ class ResponseExecutor:
             cmds.append(["netsh", "advfirewall", "firewall", "add", "rule",
                          "name=CyEDR-Management-In", "dir=in", f"remoteip={mgmt_ip}",
                          "action=allow"])
+        # Apply isolation_exceptions policy
+        iex = self._cfg.policy_state.get("isolation_exceptions", {})
+        for ip in iex.get("allowed_ips", []):
+            cmds.append(["netsh", "advfirewall", "firewall", "add", "rule",
+                         "name=CyEDR-IsoEx-IP-Out", "dir=out", f"remoteip={ip}", "action=allow"])
+            cmds.append(["netsh", "advfirewall", "firewall", "add", "rule",
+                         "name=CyEDR-IsoEx-IP-In",  "dir=in",  f"remoteip={ip}", "action=allow"])
+        for port in iex.get("allowed_ports", []):
+            cmds.append(["netsh", "advfirewall", "firewall", "add", "rule",
+                         f"name=CyEDR-IsoEx-Port-{port}", "dir=out", "protocol=tcp",
+                         f"remoteport={port}", "action=allow"])
+        if iex.get("allow_dns", True):
+            cmds.append(["netsh", "advfirewall", "firewall", "add", "rule",
+                         "name=CyEDR-IsoEx-DNS", "dir=out", "protocol=udp",
+                         "remoteport=53", "action=allow"])
+        if iex.get("allow_dhcp", True):
+            cmds.append(["netsh", "advfirewall", "firewall", "add", "rule",
+                         "name=CyEDR-IsoEx-DHCP", "dir=out", "protocol=udp",
+                         "remoteport=67", "action=allow"])
         for c in cmds:
             subprocess.run(c, capture_output=True)
         logger.info("ISOLATE applied (Windows Firewall). Reason: %s", reason)
@@ -1064,6 +1123,25 @@ class ResponseExecutor:
             except Exception as exc:
                 logger.warning("YARA scan error (%s): %s", source, exc)
 
+        # Filter matches against exclusions policy (paths and extensions)
+        excl = self._cfg.policy_state.get("exclusions", {})
+        excl_paths = excl.get("paths", [])
+        excl_exts  = excl.get("extensions", [])
+        excl_hashes_set = {h.lower() for h in excl.get("hashes", [])}
+        if excl_paths or excl_exts or excl_hashes_set:
+            filtered = []
+            for m in all_matches:
+                match_path = m.get("path", "")
+                if excl_paths and any(match_path.startswith(ep) for ep in excl_paths):
+                    continue
+                if excl_exts and any(match_path.endswith(ext) for ext in excl_exts):
+                    continue
+                filtered.append(m)
+            excluded_count = len(all_matches) - len(filtered)
+            all_matches    = filtered
+            if excluded_count:
+                logger.debug("YARA: %d match(es) suppressed by exclusions policy", excluded_count)
+
         summary = f"CyScan complete. {len(all_matches)} match(es) in {path}."
         return {"output": summary, "matches": all_matches, "source": source_tag}
 
@@ -1101,6 +1179,791 @@ class ResponseExecutor:
             json.dump(artifacts, f, indent=2, default=str)
 
         return f"Forensics collected: {out_file} ({len(artifacts.get('processes', []))} processes)"
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # POLICY ENFORCEMENT
+    # Each policy_type delivered via APPLY_POLICY is enforced here and persisted
+    # in policy_state.json so that settings survive agent restarts.
+    # All threads hold a reference to cfg, so cfg.policy_state updates are
+    # immediately visible to heuristic readers and the telemetry sender.
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # ── Policy state I/O ──────────────────────────────────────────────────────
+
+    def _load_policy_state(self):
+        if os.path.exists(self._policy_state_path):
+            try:
+                with open(self._policy_state_path) as f:
+                    self._cfg.policy_state = json.load(f)
+                logger.info("Policy state loaded: %d policy type(s) active",
+                            len(self._cfg.policy_state))
+            except Exception as e:
+                logger.warning("Policy state load failed: %s", e)
+                self._cfg.policy_state = {}
+        else:
+            self._cfg.policy_state = {}
+
+    def _save_policy_state(self):
+        try:
+            os.makedirs(os.path.dirname(self._policy_state_path), exist_ok=True)
+            with open(self._policy_state_path, "w") as f:
+                json.dump(self._cfg.policy_state, f, indent=2)
+        except Exception as e:
+            logger.warning("Policy state save failed: %s", e)
+
+    # ── APPLY_POLICY dispatcher ───────────────────────────────────────────────
+
+    def _apply_policy(self, params: dict) -> str:
+        policy_type = params.get("policy_type", "")
+        config      = params.get("config", {})
+        policy_id   = params.get("policy_id", "?")
+
+        _dispatch = {
+            "threat_prevention":    self._apply_threat_prevention,
+            "device_control":       self._apply_device_control,
+            "app_control":          self._apply_app_control,
+            "network_control":      self._apply_network_control,
+            "exclusions":           self._apply_exclusions,
+            "update_policy":        self._apply_update_policy,
+            "isolation_exceptions": self._apply_isolation_exceptions,
+        }
+
+        fn = _dispatch.get(policy_type)
+        if not fn:
+            raise ValueError(f"Unknown policy_type: {policy_type}")
+
+        result = fn(config)
+        self._cfg.policy_state[policy_type] = config
+        self._save_policy_state()
+        logger.info("Policy applied: type=%s id=%s", policy_type, policy_id)
+        return result
+
+    # ── threat_prevention ─────────────────────────────────────────────────────
+
+    def _apply_threat_prevention(self, cfg: dict) -> str:
+        parts = []
+
+        yara_enabled = cfg.get("yara_enabled", True)
+        parts.append(f"yara={'enabled' if yara_enabled else 'disabled'}")
+
+        auto_q = cfg.get("auto_quarantine", True)
+        parts.append(f"auto_quarantine={'on' if auto_q else 'off'}")
+
+        sched = cfg.get("deep_scan_schedule", "off")
+        parts.append(self._schedule_deep_scan(sched))
+
+        script_ctrl = cfg.get("script_control", "audit")
+        if script_ctrl == "block":
+            parts.append("script_engines: " + self._block_script_engines())
+        else:
+            parts.append(f"script_control={script_ctrl}")
+
+        ai_sens = cfg.get("ai_sensitivity", "medium")
+        parts.append(f"ai_sensitivity={ai_sens} (stored)")
+
+        return "threat_prevention: " + "; ".join(parts)
+
+    def _schedule_deep_scan(self, schedule: str) -> str:
+        agent_bin    = sys.executable
+        agent_script = os.path.abspath(sys.argv[0])
+        cfg_path     = self._cfg._path
+
+        cron_map = {"daily": "0 2 * * *", "weekly": "0 2 * * 0", "monthly": "0 2 1 * *"}
+
+        if OS_TYPE == "LINUX":
+            if schedule == "off":
+                if os.path.exists(_CRON_DEEPSCAN):
+                    os.remove(_CRON_DEEPSCAN)
+                return "deep_scan=off (cron removed)"
+            interval = cron_map.get(schedule, "0 2 * * 0")
+            try:
+                with open(_CRON_DEEPSCAN, "w") as f:
+                    f.write(f"# CyEDR deep scan — auto-generated\n"
+                            f"{interval} root {agent_bin} {agent_script} "
+                            f"--config {cfg_path} --run-scan /\n")
+                return f"deep_scan={schedule} ({interval} cron)"
+            except Exception as e:
+                return f"deep_scan={schedule} (cron error: {e})"
+
+        elif OS_TYPE == "DARWIN":
+            plist_path = "/Library/LaunchDaemons/com.cycentra.edr.deepscan.plist"
+            if schedule == "off":
+                if os.path.exists(plist_path):
+                    subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
+                    try:
+                        os.remove(plist_path)
+                    except Exception:
+                        pass
+                return "deep_scan=off (LaunchDaemon removed)"
+            hour = 2
+            try:
+                plist = (
+                    '<?xml version="1.0" encoding="UTF-8"?>\n'
+                    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                    '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+                    "<plist version=\"1.0\"><dict>\n"
+                    "  <key>Label</key><string>com.cycentra.edr.deepscan</string>\n"
+                    "  <key>ProgramArguments</key><array>\n"
+                    f"    <string>{agent_bin}</string><string>{agent_script}</string>\n"
+                    f"    <string>--config</string><string>{cfg_path}</string>\n"
+                    "    <string>--run-scan</string><string>/</string>\n"
+                    "  </array>\n"
+                    "  <key>StartCalendarInterval</key><dict>\n"
+                    f"    <key>Hour</key><integer>{hour}</integer>\n"
+                    "    <key>Minute</key><integer>0</integer>\n"
+                    "  </dict>\n"
+                    "  <key>RunAtLoad</key><false/>\n"
+                    "</dict></plist>\n"
+                )
+                with open(plist_path, "w") as f:
+                    f.write(plist)
+                subprocess.run(["launchctl", "load", plist_path], capture_output=True)
+                return f"deep_scan={schedule} (LaunchDaemon)"
+            except Exception as e:
+                return f"deep_scan={schedule} (plist error: {e})"
+
+        elif OS_TYPE == "WINDOWS":
+            task_name = "CyEDR-DeepScan"
+            if schedule == "off":
+                subprocess.run(["schtasks", "/Delete", "/TN", task_name, "/F"],
+                               capture_output=True)
+                return "deep_scan=off (scheduled task removed)"
+            sc_type = {"daily": "DAILY", "weekly": "WEEKLY", "monthly": "MONTHLY"}.get(
+                schedule, "WEEKLY")
+            try:
+                subprocess.run([
+                    "schtasks", "/Create", "/F",
+                    "/TN", task_name, "/SC", sc_type, "/ST", "02:00",
+                    "/TR", f'"{agent_bin}" "{agent_script}" --config "{cfg_path}" --run-scan C:\\',
+                    "/RU", "SYSTEM",
+                ], capture_output=True, check=True)
+                return f"deep_scan={schedule} (Windows scheduled task)"
+            except Exception as e:
+                return f"deep_scan={schedule} (schtasks error: {e})"
+
+        return f"deep_scan={schedule} (stored)"
+
+    def _block_script_engines(self) -> str:
+        if not psutil:
+            return "psutil unavailable"
+        if OS_TYPE != "WINDOWS":
+            return "block mode stored (Linux/macOS: requires kernel driver)"
+        targets = {"powershell.exe", "wscript.exe", "cscript.exe", "mshta.exe"}
+        killed  = []
+        for proc in psutil.process_iter(["pid", "name"]):
+            try:
+                if (proc.info.get("name") or "").lower() in targets:
+                    proc.kill()
+                    killed.append(proc.info["name"])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        return f"terminated: {killed or 'none'}"
+
+    # ── device_control ────────────────────────────────────────────────────────
+
+    def _apply_device_control(self, cfg: dict) -> str:
+        parts = []
+
+        usb_policy   = cfg.get("usb_policy", "allow")
+        approved_ids = cfg.get("usb_approved_ids", []) if cfg.get("usb_corporate_only") else []
+        parts.append(self._enforce_usb_policy(usb_policy, approved_ids))
+
+        parts.append(self._enforce_bluetooth(cfg.get("bluetooth_policy", "allow")))
+        parts.append(self._enforce_wifi(cfg.get("wifi_policy", "allow"),
+                                         cfg.get("wifi_approved_ssids", [])))
+
+        for key in ("camera_policy", "microphone_policy", "clipboard_policy", "screenshot_policy"):
+            val = cfg.get(key, "allow")
+            if val != "allow":
+                parts.append(f"{key}={val} (stored; MDM/kernel driver required)")
+
+        return "device_control: " + "; ".join(parts)
+
+    def _enforce_usb_policy(self, policy: str, approved_ids: list) -> str:
+        if OS_TYPE == "LINUX":
+            if policy == "allow":
+                if os.path.exists(_UDEV_USB_RULES):
+                    os.remove(_UDEV_USB_RULES)
+                    subprocess.run(["udevadm", "control", "--reload-rules"], capture_output=True)
+                return "usb=allow"
+            lines = ["# CyEDR USB Policy — auto-generated, do not edit"]
+            for dev_id in approved_ids:
+                if ":" in dev_id:
+                    vendor, product = dev_id.split(":", 1)
+                    lines.append(
+                        f'ACTION=="add", SUBSYSTEM=="usb", '
+                        f'ATTR{{idVendor}}=="{vendor}", ATTR{{idProduct}}=="{product}", '
+                        f'GOTO="cyedr_usb_end"'
+                    )
+            if policy == "block":
+                lines.append('ACTION=="add", SUBSYSTEM=="usb", ATTR{authorized}="0"')
+            elif policy == "read_only":
+                lines.append(
+                    'ACTION=="add", SUBSYSTEM=="block", ATTRS{removable}=="1", '
+                    'RUN+="/sbin/blockdev --setro /dev/%k"'
+                )
+            lines.append('LABEL="cyedr_usb_end"')
+            try:
+                with open(_UDEV_USB_RULES, "w") as f:
+                    f.write("\n".join(lines) + "\n")
+                subprocess.run(["udevadm", "control", "--reload-rules"], capture_output=True)
+                subprocess.run(["udevadm", "trigger"], capture_output=True)
+                return f"usb={policy} (udev)"
+            except Exception as e:
+                return f"usb={policy} (udev error: {e})"
+
+        elif OS_TYPE == "WINDOWS":
+            try:
+                import winreg
+                usb_key = r"SYSTEM\CurrentControlSet\Services\USBSTOR"
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, usb_key,
+                                    0, winreg.KEY_SET_VALUE) as k:
+                    winreg.SetValueEx(k, "Start", 0, winreg.REG_DWORD,
+                                      4 if policy == "block" else 3)
+                if policy == "read_only":
+                    stor_key = r"SYSTEM\CurrentControlSet\Control\StorageDevicePolicies"
+                    with winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, stor_key) as k:
+                        winreg.SetValueEx(k, "WriteProtect", 0, winreg.REG_DWORD, 1)
+                elif policy == "allow":
+                    stor_key = r"SYSTEM\CurrentControlSet\Control\StorageDevicePolicies"
+                    try:
+                        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, stor_key,
+                                            0, winreg.KEY_SET_VALUE) as k:
+                            winreg.SetValueEx(k, "WriteProtect", 0, winreg.REG_DWORD, 0)
+                    except FileNotFoundError:
+                        pass
+                return f"usb={policy} (registry)"
+            except Exception as e:
+                return f"usb={policy} (registry error: {e})"
+
+        return f"usb={policy} (stored; macOS USB blocking requires MDM)"
+
+    def _enforce_bluetooth(self, policy: str) -> str:
+        if OS_TYPE == "LINUX":
+            cmd = ["rfkill", "block" if policy == "block" else "unblock", "bluetooth"]
+            subprocess.run(cmd, capture_output=True)
+            return f"bluetooth={'blocked' if policy == 'block' else 'allow'} (rfkill)"
+
+        elif OS_TYPE == "DARWIN":
+            val = "0" if policy == "block" else "1"
+            try:
+                subprocess.run(
+                    ["defaults", "write", "/Library/Preferences/com.apple.Bluetooth",
+                     "ControllerPowerState", val], capture_output=True)
+                subprocess.run(["killall", "-HUP", "bluetoothd"], capture_output=True)
+                return f"bluetooth={'blocked' if policy == 'block' else 'allow'} (macOS defaults)"
+            except Exception as e:
+                return f"bluetooth={policy} (error: {e})"
+
+        elif OS_TYPE == "WINDOWS":
+            try:
+                if policy == "block":
+                    subprocess.run(["sc", "stop",   "bthserv"], capture_output=True)
+                    subprocess.run(["sc", "config",  "bthserv", "start=disabled"],
+                                   capture_output=True)
+                    return "bluetooth=blocked (bthserv disabled)"
+                else:
+                    subprocess.run(["sc", "config",  "bthserv", "start=auto"],
+                                   capture_output=True)
+                    subprocess.run(["sc", "start",   "bthserv"], capture_output=True)
+                    return "bluetooth=allow (bthserv)"
+            except Exception as e:
+                return f"bluetooth={policy} (error: {e})"
+
+        return f"bluetooth={policy} (stored)"
+
+    def _enforce_wifi(self, policy: str, approved_ssids: list) -> str:
+        if OS_TYPE == "LINUX":
+            try:
+                if policy == "block":
+                    subprocess.run(["nmcli", "radio", "wifi", "off"], capture_output=True)
+                    return "wifi=blocked (nmcli)"
+                elif policy == "allow":
+                    subprocess.run(["nmcli", "radio", "wifi", "on"], capture_output=True)
+                    return "wifi=allow (nmcli)"
+                elif policy == "managed" and approved_ssids:
+                    cur = subprocess.run(
+                        ["nmcli", "-t", "-f", "NAME,TYPE,STATE", "connection", "show", "--active"],
+                        capture_output=True, text=True)
+                    for line in cur.stdout.splitlines():
+                        parts = line.split(":")
+                        if len(parts) >= 3 and "wifi" in parts[1] and parts[0] not in approved_ssids:
+                            subprocess.run(["nmcli", "connection", "down", parts[0]],
+                                           capture_output=True)
+                    return f"wifi=managed (approved: {approved_ssids})"
+            except Exception as e:
+                return f"wifi={policy} (nmcli error: {e})"
+
+        elif OS_TYPE == "DARWIN":
+            try:
+                state = "off" if policy == "block" else "on"
+                subprocess.run(
+                    ["networksetup", "-setnetworkserviceenabled", "Wi-Fi", state],
+                    capture_output=True)
+                return f"wifi={'blocked' if policy == 'block' else 'allow'} (networksetup)"
+            except Exception as e:
+                return f"wifi={policy} (error: {e})"
+
+        elif OS_TYPE == "WINDOWS":
+            try:
+                state = "disabled" if policy == "block" else "enabled"
+                subprocess.run(
+                    ["netsh", "interface", "set", "interface", "Wi-Fi", state],
+                    capture_output=True)
+                return f"wifi={'blocked' if policy == 'block' else 'allow'} (netsh)"
+            except Exception as e:
+                return f"wifi={policy} (error: {e})"
+
+        return f"wifi={policy} (stored)"
+
+    # ── app_control ───────────────────────────────────────────────────────────
+
+    def _apply_app_control(self, cfg: dict) -> str:
+        mode         = cfg.get("mode", "audit")
+        blocked_apps = cfg.get("blocked_apps", [])
+        allowed_apps = cfg.get("allowed_apps", [])
+        hash_rules   = cfg.get("hash_rules", [])
+        path_rules   = cfg.get("path_rules", [])
+
+        parts = [f"mode={mode}"]
+        if mode in ("blacklist", "whitelist") or blocked_apps or hash_rules or path_rules:
+            parts.append(self._app_control_sweep(
+                mode, blocked_apps, allowed_apps, hash_rules, path_rules))
+        else:
+            parts.append("monitoring (audit mode — telemetry only)")
+
+        return "app_control: " + "; ".join(parts)
+
+    def _app_control_sweep(self, mode: str, blocked_apps: list, allowed_apps: list,
+                            hash_rules: list, path_rules: list) -> str:
+        if not psutil:
+            return "sweep skipped (psutil unavailable)"
+
+        blocked_names = {b.lower() for b in blocked_apps}
+        allowed_names = {a.lower() for a in allowed_apps}
+        block_hashes  = {r["hash"].lower() for r in hash_rules if r.get("action") == "block"}
+        block_paths   = [(r["path_pattern"], ) for r in path_rules if r.get("action") == "block"]
+
+        killed = []
+        for proc in psutil.process_iter(["pid", "name", "exe"]):
+            try:
+                pid  = proc.info.get("pid", 0)
+                name = (proc.info.get("name") or "").lower()
+                exe  = proc.info.get("exe") or ""
+                if pid <= 10:
+                    continue
+                kill_it = False
+                if mode == "blacklist" and name in blocked_names:
+                    kill_it = True
+                elif mode == "whitelist" and allowed_names and name not in allowed_names:
+                    kill_it = True
+                if not kill_it and exe and block_hashes:
+                    try:
+                        digest = hashlib.sha256(
+                            open(exe, "rb").read(4 * 1024 * 1024)).hexdigest()
+                        if digest in block_hashes:
+                            kill_it = True
+                    except Exception:
+                        pass
+                if not kill_it and exe and block_paths:
+                    for (pattern,) in block_paths:
+                        if fnmatch.fnmatch(exe, pattern):
+                            kill_it = True
+                            break
+                if kill_it:
+                    proc.kill()
+                    killed.append(f"{name}({pid})")
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+        return f"sweep: {len(killed)} terminated ({', '.join(killed[:5]) or 'none'})"
+
+    # ── network_control ───────────────────────────────────────────────────────
+
+    def _apply_network_control(self, cfg: dict) -> str:
+        parts = []
+
+        parts.append(self._set_host_firewall(cfg.get("host_firewall_enabled", True)))
+
+        fw_rules = cfg.get("firewall_rules", [])
+        if fw_rules:
+            parts.append(self._apply_firewall_rules(
+                fw_rules,
+                cfg.get("default_inbound", "allow"),
+                cfg.get("default_outbound", "allow"),
+            ))
+        else:
+            parts.append(
+                f"inbound={cfg.get('default_inbound', 'allow')} "
+                f"outbound={cfg.get('default_outbound', 'allow')} (stored)"
+            )
+
+        # Build sinkhole domain list
+        sinkhole_domains: list = []
+        if cfg.get("dns_sinkhole", False):
+            sinkhole_domains = list(cfg.get("dns_sinkhole_domains", []))
+        if cfg.get("block_malicious_dns", True):
+            ioc_domains = self._get_ioc_domains()
+            # Merge without duplicates, preserving order
+            existing = set(sinkhole_domains)
+            sinkhole_domains += [d for d in ioc_domains if d not in existing]
+        parts.append(self._update_hosts_sinkhole(sinkhole_domains))
+
+        if cfg.get("proxy_enforcement", False) and cfg.get("proxy_host", ""):
+            parts.append(self._set_system_proxy(cfg["proxy_host"]))
+        else:
+            parts.append(self._clear_system_proxy())
+
+        conn_log = cfg.get("connection_logging", "anomalies")
+        if conn_log == "all":
+            logger.setLevel(logging.DEBUG)
+        else:
+            logger.setLevel(logging.INFO)
+        parts.append(f"connection_logging={conn_log}")
+
+        return "network_control: " + "; ".join(parts)
+
+    def _set_host_firewall(self, enabled: bool) -> str:
+        if OS_TYPE == "LINUX":
+            try:
+                if not enabled:
+                    for rule in ["-F", "-P INPUT ACCEPT", "-P OUTPUT ACCEPT",
+                                 "-P FORWARD ACCEPT"]:
+                        subprocess.run(["iptables"] + rule.split(), capture_output=True)
+                    return "host_firewall=disabled (iptables flushed)"
+                return "host_firewall=enabled"
+            except Exception as e:
+                return f"host_firewall={enabled} (iptables error: {e})"
+
+        elif OS_TYPE == "DARWIN":
+            subprocess.run(["pfctl", "-e" if enabled else "-d"], capture_output=True)
+            return f"host_firewall={'enabled' if enabled else 'disabled'} (pf)"
+
+        elif OS_TYPE == "WINDOWS":
+            state = "on" if enabled else "off"
+            subprocess.run(
+                ["netsh", "advfirewall", "set", "allprofiles", "state", state],
+                capture_output=True)
+            return f"host_firewall={'enabled' if enabled else 'disabled'} (Windows Firewall)"
+
+        return f"host_firewall={enabled} (stored)"
+
+    def _apply_firewall_rules(self, rules: list, default_inbound: str,
+                               default_outbound: str) -> str:
+        applied, errors = 0, []
+
+        if OS_TYPE == "LINUX":
+            # Remove previous CyEDR-Policy iptables rules
+            subprocess.run(
+                "iptables-save 2>/dev/null | grep -v 'CyEDR-Policy' | iptables-restore",
+                shell=True, capture_output=True)
+            for rule in rules:
+                name      = rule.get("name", "unnamed")
+                direction = rule.get("direction", "out").upper()
+                protocol  = rule.get("protocol", "tcp").lower()
+                port_rng  = str(rule.get("port_range", ""))
+                action    = "ACCEPT" if rule.get("action", "allow") == "allow" else "DROP"
+                src_ip    = rule.get("src_ip", "")
+                chain     = "INPUT" if direction == "IN" else "OUTPUT"
+                cmd       = ["iptables", "-A", chain, "-p", protocol]
+                if src_ip:
+                    cmd += ["-s" if direction == "IN" else "-d", src_ip]
+                if port_rng:
+                    cmd += ["--dport", port_rng]
+                cmd += ["-m", "comment", "--comment", f"CyEDR-Policy-{name}", "-j", action]
+                try:
+                    subprocess.run(cmd, check=True, capture_output=True)
+                    applied += 1
+                except Exception:
+                    errors.append(name)
+            if default_inbound == "block":
+                subprocess.run(
+                    ["iptables", "-A", "INPUT", "-m", "comment",
+                     "--comment", "CyEDR-Policy-default-in", "-j", "DROP"],
+                    capture_output=True)
+            if default_outbound == "block":
+                subprocess.run(
+                    ["iptables", "-A", "OUTPUT", "-m", "comment",
+                     "--comment", "CyEDR-Policy-default-out", "-j", "DROP"],
+                    capture_output=True)
+
+        elif OS_TYPE == "WINDOWS":
+            subprocess.run(
+                'netsh advfirewall firewall delete rule name="CyEDR-Policy"',
+                shell=True, capture_output=True)
+            for rule in rules:
+                name     = rule.get("name", "unnamed")
+                dirn     = "in" if rule.get("direction", "out").upper() == "IN" else "out"
+                protocol = rule.get("protocol", "tcp").lower()
+                port_rng = str(rule.get("port_range", "")) or "any"
+                action   = "allow" if rule.get("action", "allow") == "allow" else "block"
+                cmd = [
+                    "netsh", "advfirewall", "firewall", "add", "rule",
+                    f"name=CyEDR-Policy-{name}",
+                    f"dir={dirn}", f"protocol={protocol}",
+                    f"localport={port_rng}", f"action={action}",
+                ]
+                if rule.get("src_ip"):
+                    cmd.append(f"remoteip={rule['src_ip']}")
+                try:
+                    subprocess.run(cmd, capture_output=True, check=True)
+                    applied += 1
+                except Exception:
+                    errors.append(name)
+
+        elif OS_TYPE == "DARWIN":
+            pf_lines = []
+            for rule in rules:
+                dirn     = "in" if rule.get("direction", "out").upper() == "IN" else "out"
+                protocol = rule.get("protocol", "tcp").lower()
+                port_rng = rule.get("port_range", "")
+                action   = "pass" if rule.get("action", "allow") == "allow" else "block"
+                line     = f"{action} {dirn} proto {protocol}"
+                if port_rng:
+                    line += f" to any port {port_rng}"
+                pf_lines.append(line)
+            if default_inbound == "block":
+                pf_lines.append("block in all")
+            if default_outbound == "block":
+                pf_lines.append("block out all")
+            try:
+                os.makedirs(os.path.dirname(_PF_ANCHOR), exist_ok=True)
+                with open(_PF_ANCHOR, "w") as f:
+                    f.write("\n".join(pf_lines) + "\n")
+                subprocess.run(
+                    ["pfctl", "-a", "cyedr_policy", "-f", _PF_ANCHOR],
+                    capture_output=True)
+                applied = len(pf_lines)
+            except Exception as e:
+                errors.append(str(e))
+
+        err_str = f" (errors: {errors})" if errors else ""
+        return f"{applied} firewall rule(s) applied{err_str}"
+
+    def _get_ioc_domains(self) -> list:
+        try:
+            if os.path.exists(self._cfg.ioc_cache):
+                with open(self._cfg.ioc_cache) as f:
+                    return list(json.load(f).get("domains", []))
+        except Exception:
+            pass
+        return []
+
+    def _hosts_file_path(self) -> str:
+        if OS_TYPE == "WINDOWS":
+            return r"C:\Windows\System32\drivers\etc\hosts"
+        return "/etc/hosts"
+
+    def _update_hosts_sinkhole(self, domains: list) -> str:
+        hosts_path = self._hosts_file_path()
+        try:
+            with open(hosts_path, "r") as f:
+                content = f.read()
+        except Exception as e:
+            return f"sinkhole error (read: {e})"
+
+        # Remove any existing CyEDR block (clean slate before re-applying)
+        content = re.sub(
+            rf"{re.escape(_SINKHOLE_BEGIN)}.*?{re.escape(_SINKHOLE_END)}\n?",
+            "",
+            content,
+            flags=re.DOTALL,
+        )
+
+        if domains:
+            block = f"\n{_SINKHOLE_BEGIN}\n"
+            for domain in sorted(set(d.strip().lower() for d in domains if d.strip())):
+                block += f"0.0.0.0 {domain}\n"
+                if not domain.startswith("www."):
+                    block += f"0.0.0.0 www.{domain}\n"
+            block += f"{_SINKHOLE_END}\n"
+            content = content.rstrip("\n") + "\n" + block
+
+        try:
+            with open(hosts_path, "w") as f:
+                f.write(content)
+        except PermissionError:
+            if OS_TYPE in ("LINUX", "DARWIN"):
+                try:
+                    with tempfile.NamedTemporaryFile(
+                            mode="w", suffix=".hosts", delete=False) as tf:
+                        tf.write(content)
+                        tf_path = tf.name
+                    subprocess.run(
+                        ["sudo", "cp", tf_path, hosts_path],
+                        check=True, capture_output=True)
+                    os.unlink(tf_path)
+                except Exception as e:
+                    return f"sinkhole error (sudo cp failed: {e})"
+            else:
+                return f"sinkhole error (permission denied — run agent as Administrator)"
+        except Exception as e:
+            return f"sinkhole error (write: {e})"
+
+        self._flush_dns_cache()
+        count = len(domains)
+        return (f"sinkhole=applied ({count} domain(s) → 0.0.0.0)"
+                if count else "sinkhole=cleared")
+
+    def _flush_dns_cache(self):
+        try:
+            if OS_TYPE == "LINUX":
+                for svc in ("systemd-resolved", "nscd", "dnsmasq"):
+                    r = subprocess.run(
+                        ["systemctl", "is-active", "--quiet", svc], capture_output=True)
+                    if r.returncode == 0:
+                        if svc == "systemd-resolved":
+                            subprocess.run(["resolvectl", "flush-caches"], capture_output=True)
+                        else:
+                            subprocess.run(["systemctl", "restart", svc], capture_output=True)
+                        break
+            elif OS_TYPE == "DARWIN":
+                subprocess.run(["dscacheutil", "-flushcache"], capture_output=True)
+                subprocess.run(["killall", "-HUP", "mDNSResponder"], capture_output=True)
+            elif OS_TYPE == "WINDOWS":
+                subprocess.run(["ipconfig", "/flushdns"], capture_output=True)
+        except Exception as e:
+            logger.debug("DNS cache flush: %s", e)
+
+    def _set_system_proxy(self, proxy_host: str) -> str:
+        try:
+            if OS_TYPE == "LINUX":
+                with open("/etc/profile.d/cyedr_proxy.sh", "w") as f:
+                    f.write(f'export http_proxy="{proxy_host}"\n'
+                            f'export https_proxy="{proxy_host}"\n')
+                os.environ.update({"http_proxy": proxy_host, "https_proxy": proxy_host})
+                return f"proxy={proxy_host} (/etc/profile.d)"
+            elif OS_TYPE == "DARWIN":
+                iface = "Wi-Fi"
+                host_port = proxy_host.replace("http://", "").replace("https://", "").split(":")
+                subprocess.run(
+                    ["networksetup", "-setwebproxy", iface] + host_port,
+                    capture_output=True)
+                subprocess.run(
+                    ["networksetup", "-setwebproxystate", iface, "on"], capture_output=True)
+                return f"proxy={proxy_host} (macOS networksetup)"
+            elif OS_TYPE == "WINDOWS":
+                reg_path = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+                subprocess.run(
+                    ["reg", "add", reg_path, "/v", "ProxyServer", "/t", "REG_SZ",
+                     "/d", proxy_host, "/f"], capture_output=True)
+                subprocess.run(
+                    ["reg", "add", reg_path, "/v", "ProxyEnable", "/t", "REG_DWORD",
+                     "/d", "1", "/f"], capture_output=True)
+                return f"proxy={proxy_host} (Windows registry)"
+        except Exception as e:
+            return f"proxy={proxy_host} (error: {e})"
+        return f"proxy={proxy_host} (stored)"
+
+    def _clear_system_proxy(self) -> str:
+        try:
+            if OS_TYPE == "LINUX":
+                proxy_file = "/etc/profile.d/cyedr_proxy.sh"
+                if os.path.exists(proxy_file):
+                    os.remove(proxy_file)
+                for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+                    os.environ.pop(k, None)
+            elif OS_TYPE == "DARWIN":
+                subprocess.run(
+                    ["networksetup", "-setwebproxystate", "Wi-Fi", "off"],
+                    capture_output=True)
+            elif OS_TYPE == "WINDOWS":
+                reg_path = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+                subprocess.run(
+                    ["reg", "add", reg_path, "/v", "ProxyEnable", "/t", "REG_DWORD",
+                     "/d", "0", "/f"], capture_output=True)
+        except Exception as e:
+            return f"proxy clear error: {e}"
+        return "proxy=cleared"
+
+    # ── exclusions ────────────────────────────────────────────────────────────
+
+    def _apply_exclusions(self, cfg: dict) -> str:
+        # Persisted in cfg.policy_state["exclusions"].
+        # _run_scan reads paths/extensions/hashes to filter YARA matches.
+        # Heuristic readers read processes/network_ips to skip telemetry.
+        paths  = len(cfg.get("paths", []))
+        procs  = len(cfg.get("processes", []))
+        exts   = len(cfg.get("extensions", []))
+        hashes = len(cfg.get("hashes", []))
+        ips    = len(cfg.get("network_ips", []))
+        return (f"exclusions stored: {paths} path(s), {procs} process(es), "
+                f"{exts} extension(s), {hashes} hash(es), {ips} network IP(s)")
+
+    # ── update_policy ─────────────────────────────────────────────────────────
+
+    def _apply_update_policy(self, cfg: dict) -> str:
+        auto_update  = cfg.get("auto_update", True)
+        channel      = cfg.get("channel", "stable")
+        maint_start  = cfg.get("maintenance_window_start", "02:00")
+        maint_days   = cfg.get("maintenance_days", ["saturday", "sunday"])
+        parts        = [f"channel={channel}",
+                        f"window={maint_start} ({','.join(maint_days)})"]
+
+        if not auto_update:
+            # Remove any existing schedules
+            if OS_TYPE == "LINUX" and os.path.exists(_CRON_UPDATE):
+                os.remove(_CRON_UPDATE)
+            elif OS_TYPE == "WINDOWS":
+                subprocess.run(
+                    ["schtasks", "/Delete", "/TN", "CyEDR-AutoUpdate", "/F"],
+                    capture_output=True)
+            parts.append("auto_update=off")
+            return "update_policy: " + "; ".join(parts)
+
+        if OS_TYPE == "LINUX":
+            try:
+                h, m = maint_start.split(":")
+                day_nums = {
+                    "monday": 1, "tuesday": 2, "wednesday": 3,
+                    "thursday": 4, "friday": 5, "saturday": 6, "sunday": 0,
+                }
+                days_str = ",".join(
+                    str(day_nums[d]) for d in maint_days if d in day_nums) or "6,0"
+                with open(_CRON_UPDATE, "w") as f:
+                    f.write(f"# CyEDR auto-update — auto-generated\n"
+                            f"{m} {h} * * {days_str} root "
+                            f"systemctl restart cyedr-agent 2>/dev/null || true\n")
+                parts.append(f"cron written ({m} {h} * * {days_str})")
+            except Exception as e:
+                parts.append(f"cron error: {e}")
+
+        elif OS_TYPE == "WINDOWS":
+            try:
+                day_abbr = {
+                    "monday": "MON", "tuesday": "TUE", "wednesday": "WED",
+                    "thursday": "THU", "friday": "FRI",
+                    "saturday": "SAT", "sunday": "SUN",
+                }
+                day_str = ",".join(
+                    day_abbr[d] for d in maint_days if d in day_abbr) or "SAT,SUN"
+                subprocess.run([
+                    "schtasks", "/Create", "/F",
+                    "/TN", "CyEDR-AutoUpdate",
+                    "/SC", "WEEKLY", "/D", day_str, "/ST", maint_start,
+                    "/TR", "sc stop CyEDR-Agent && sc start CyEDR-Agent",
+                    "/RU", "SYSTEM",
+                ], capture_output=True)
+                parts.append(f"scheduled ({day_str} {maint_start})")
+            except Exception as e:
+                parts.append(f"schtasks error: {e}")
+
+        else:
+            parts.append("update_policy stored (macOS: use MDM or launchd for restarts)")
+
+        return "update_policy: " + "; ".join(parts)
+
+    # ── isolation_exceptions ──────────────────────────────────────────────────
+
+    def _apply_isolation_exceptions(self, cfg: dict) -> str:
+        # Persisted in cfg.policy_state["isolation_exceptions"].
+        # _isolate_linux/darwin/windows read this on every ISOLATE command.
+        allowed_ips   = cfg.get("allowed_ips", [])
+        allowed_ports = cfg.get("allowed_ports", [443, 8443])
+        allow_dns     = cfg.get("allow_dns", True)
+        allow_dhcp    = cfg.get("allow_dhcp", True)
+        return (f"isolation_exceptions stored: {len(allowed_ips)} IP(s), "
+                f"ports={allowed_ports}, dns={allow_dns}, dhcp={allow_dhcp}")
 
 
 # ── Command poller ─────────────────────────────────────────────────────────────
