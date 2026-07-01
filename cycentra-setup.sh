@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.135 -- 2026-07-01 13:05 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.136 -- 2026-07-01 13:14 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -1203,6 +1203,30 @@ if [[ -d "$_early_bundle_pkgs" ]]; then
         fi
     done
 fi
+
+# ── Stage CyEDR installer + agent files (mirrors Wazuh package seeding above) ─
+# Source files live in the repo; this block copies them to the NGINX-served dir
+# automatically on every install/update run — no manual download-packages step needed.
+_EDR_PKG_DEST="${_EARLY_PKG_DIR}/edr"
+mkdir -p "$_EDR_PKG_DEST"
+chmod 755 "$_EDR_PKG_DEST"; chown www-data:www-data "$_EDR_PKG_DEST" 2>/dev/null || true
+
+for _edr_src_dest in \
+    "${BUNDLE_DIR}/scripts/cyedr-install.sh:cyedr-install.sh" \
+    "${BUNDLE_DIR}/scripts/cyedr-install.ps1:cyedr-install.ps1" \
+    "${BUNDLE_DIR}/agent/cyedr_agent.py:cyedr_agent.py" \
+    "${BUNDLE_DIR}/CYSIEM-Config/yara/cycentra.yar:cycentra.yar"; do
+    _src="${_edr_src_dest%%:*}"
+    _dst_name="${_edr_src_dest##*:}"
+    if [[ -f "$_src" ]]; then
+        cp -f "$_src" "${_EDR_PKG_DEST}/${_dst_name}"
+        chmod 644 "${_EDR_PKG_DEST}/${_dst_name}"
+        chown www-data:www-data "${_EDR_PKG_DEST}/${_dst_name}" 2>/dev/null || true
+        success "CyEDR asset staged: ${_dst_name}"
+    else
+        warn "CyEDR asset not found in bundle: ${_src##*/}"
+    fi
+done
 
 # Write RELEASE_NOTES.md for System Settings page — shipped inside the release bundle
 _RN_DEST="/opt/cycentra/RELEASE_NOTES.md"
@@ -3669,14 +3693,15 @@ MISPCRON
         success "cycentra_sysmon_config.xml staged to $_SYSMON_PKG (served via /api/edr/installer/sysmon-config)"
     fi
 
-    # Stage CyEDR installer scripts and agent to the package directory
-    # served by Flask at /api/edr/installer/{unix,win,agent-py}
+    # Stage CyEDR installer scripts, agent, and YARA rules to the package directory
+    # served by Flask at /api/edr/installer/{unix,win,agent-py,yara-rules}
     _EDR_PKG="/var/lib/cycentra-agent-packages/edr"
     mkdir -p "$_EDR_PKG"
     for _src in \
         "$_SCRIPT_DIR/scripts/cyedr-install.sh" \
         "$_SCRIPT_DIR/scripts/cyedr-install.ps1" \
-        "$_SCRIPT_DIR/agent/cyedr_agent.py"; do
+        "$_SCRIPT_DIR/agent/cyedr_agent.py" \
+        "$_SCRIPT_DIR/CYSIEM-Config/yara/cycentra.yar"; do
         if [[ -f "$_src" ]]; then
             cp "$_src" "$_EDR_PKG/"
             success "Staged $(basename "$_src") → $_EDR_PKG/"
