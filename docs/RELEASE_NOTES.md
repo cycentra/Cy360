@@ -1,3 +1,13 @@
+## v1.0.142 -- 2026-07-01
+
+### Bug Fixes
+
+  - fix(cyedr): APPLY_POLICY command now fully implemented — all 7 policy types enforced on-agent (threat_prevention, device_control, app_control, network_control, exclusions, update_policy, isolation_exceptions)
+  - fix(cyedr): DNS sinkhole domains written to /etc/hosts with BEGIN/END fences; DNS cache flushed cross-platform
+  - fix(deploy): CyEDR agent source and installer scripts now included in release bundle so setup.sh --update stages them correctly
+
+---
+
 ## v1.0.141 -- 2026-07-01
 
 ### Improvements
