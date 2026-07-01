@@ -1513,6 +1513,27 @@ def _crossref_agents():
 def _crossref_agents_conn(conn) -> None:
     """Run cross-reference within an existing connection."""
     with conn.cursor() as cur:
+        # Clear edr_agent_id references that point to agents no longer in edr_agents
+        # (e.g. after an agent merge/delete).  Clearing first lets MAC-based dedup
+        # and the IP re-link below reclaim these rows cleanly.
+        cur.execute("""
+            UPDATE network_assets na
+               SET edr_agent_id = NULL
+             WHERE edr_agent_id IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM edr_agents WHERE agent_id = na.edr_agent_id
+               )
+        """)
+        # Similarly clear stale siem_agent_id references
+        cur.execute("""
+            UPDATE network_assets na
+               SET siem_agent_id = NULL
+             WHERE siem_agent_id IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM host_posture_cache WHERE agent_id = na.siem_agent_id
+               )
+        """)
+
         # Link EDR agents by IP
         cur.execute("""
             UPDATE network_assets na
