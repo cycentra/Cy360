@@ -840,7 +840,8 @@ class ResponseExecutor:
         os.makedirs(cfg.quarantine_dir, exist_ok=True)
 
     def execute(self, cmd: dict) -> dict:
-        name   = cmd.get("command_type", "")
+        # DB/API returns field "action"; "command_type" was a legacy alias that no longer exists
+        name   = cmd.get("action", cmd.get("command_type", ""))
         params = cmd.get("parameters", {})
         result = {"status": "failed", "output": ""}
 
@@ -1115,19 +1116,29 @@ class CommandPoller(threading.Thread):
             return
         logger.info("CommandPoller: %d pending command(s)", len(commands))
         for cmd in commands:
-            cmd_id = cmd.get("id")
-            result = self._executor.execute(cmd)
-            self._ack(cmd_id, result)
+            cmd_id     = cmd.get("id")
+            cmd_action = cmd.get("action", "")
+            result     = self._executor.execute(cmd)
+            self._complete(cmd_id, cmd_action, result)
 
-    def _ack(self, cmd_id: Any, result: dict):
+    def _complete(self, cmd_id: Any, cmd_action: str, result: dict):
+        """Report command execution result to the platform via the correct completion endpoint."""
+        success = result.get("status") == "completed"
+        payload = {
+            "success": success,
+            "result":  result.get("output", {}),
+            "action":  cmd_action,
+        }
         try:
-            self._http.post(
-                f"{self._cfg.platform_url}/api/edr/response/{self._cfg.agent_id}/ack",
-                json={"command_id": cmd_id, **result},
-                timeout=15
+            resp = self._http.post(
+                f"{self._cfg.platform_url}/api/edr/response/{self._cfg.agent_id}/commands/{cmd_id}/complete",
+                json=payload,
+                timeout=15,
             )
+            if not resp.ok:
+                logger.warning("Command complete returned %s for cmd %s", resp.status_code, cmd_id)
         except Exception as e:
-            logger.warning("Command ACK failed: %s", e)
+            logger.warning("Command complete failed for cmd %s: %s", cmd_id, e)
 
 
 # ── Heartbeat ──────────────────────────────────────────────────────────────────
