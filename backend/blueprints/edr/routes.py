@@ -877,15 +877,18 @@ def _ingest_yara_scan_result(agent_id: str, cmd_id: str, result: dict | str) -> 
     raw_output = result if isinstance(result, str) else (
         result.get("output") or result.get("matches_text") or json.dumps(result)
     )
-    # Structured matches take priority
+    # Structured matches take priority.
+    # Use `is None` not `not structured` — an explicit [] means the agent ran
+    # successfully and found zero matches; we must not fall through to text parsing.
     structured = result.get("matches") if isinstance(result, dict) else None
 
-    if not structured:
-        # Parse text format: "RULENAME /path/to/file"
+    if structured is None:
+        # Legacy text format: "RULENAME /path/to/file" (one hit per line).
+        # Skip summary/header lines that start with known prefixes.
         structured = []
         for line in raw_output.splitlines():
             line = line.strip()
-            if not line or line.startswith("YARA scan"):
+            if not line or line.startswith(("YARA scan", "CyScan")):
                 continue
             parts = line.split(None, 1)
             if len(parts) == 2:
@@ -894,7 +897,7 @@ def _ingest_yara_scan_result(agent_id: str, cmd_id: str, result: dict | str) -> 
                 structured.append({"rule": parts[0], "path": "unknown"})
 
     if not structured:
-        return  # no matches — nothing to ingest
+        return  # zero matches — nothing to ingest
 
     # Determine if this is a custom rule hit (rule name contains 'custom_yara' prefix
     # OR came from the custom.yar file — agent tags these in the result)
