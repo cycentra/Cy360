@@ -913,7 +913,7 @@ def _ingest_yara_scan_result(agent_id: str, cmd_id: str, result: dict | str) -> 
             agent_ip = ag.get("agent_ip", "")
 
         now = datetime.now(timezone.utc)
-        rule_desc_prefix = "custom_yara" if is_custom else "yara"
+        rule_desc_prefix = "custom_cyscan" if is_custom else "cyscan"
 
         for match in structured:
             rule_name = match.get("rule", "UNKNOWN_RULE")
@@ -933,7 +933,7 @@ def _ingest_yara_scan_result(agent_id: str, cmd_id: str, result: dict | str) -> 
                     """,
                     [
                         det_id, agent_id, event_uuid,
-                        f"{rule_desc_prefix} match: {rule_name}",
+                        f"CyScan match: {rule_name}",
                         file_path,
                         json.dumps({"cmd_id": cmd_id, "match": match, "source": "RUN_SCAN"}),
                     ],
@@ -955,12 +955,12 @@ def _ingest_yara_scan_result(agent_id: str, cmd_id: str, result: dict | str) -> 
                     [
                         event_uuid, now, agent_id, hostname, agent_ip,
                         alert_rule_id,
-                        f"{rule_desc_prefix} match: {rule_name} in {file_path}",
+                        f"CyScan match: {rule_name} in {file_path}",
                         file_path,
                         json.dumps({
                             "rule": {"id": str(alert_rule_id), "level": 12,
-                                     "description": f"YARA match: {rule_name}",
-                                     "groups": ["malware", "yara"]},
+                                     "description": f"CyScan match: {rule_name}",
+                                     "groups": ["malware", "cyscan"]},
                             "agent": {"id": agent_id, "name": hostname},
                             "data": {"yara_rule": rule_name, "file_path": file_path,
                                      "source": "CyEDR_RUN_SCAN", "is_custom": is_custom},
@@ -1683,7 +1683,7 @@ def create_custom_yara_rule():
     except ImportError:
         pass  # yara-python not installed on platform host — skip validation
     except Exception as exc:
-        return jsonify({"error": f"Invalid YARA syntax: {exc}"}), 400
+        return jsonify({"error": f"Invalid CyScan rule syntax: {exc}"}), 400
 
     rule_id = str(uuid.uuid4())
     try:
@@ -1745,7 +1745,7 @@ def update_custom_yara_rule(rule_id):
                 except ImportError:
                     pass
                 except Exception as exc:
-                    return jsonify({"error": f"Invalid YARA syntax: {exc}"}), 400
+                    return jsonify({"error": f"Invalid CyScan rule syntax: {exc}"}), 400
             fields.append(f"{col} = %s")
             vals.append(body[col])
     if not fields:

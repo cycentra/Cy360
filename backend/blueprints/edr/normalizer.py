@@ -30,7 +30,7 @@ _CATEGORY_MITRE: dict[str, tuple[str, str]] = {
     "MEMORY":    ("T1055",  "Defense Evasion"),
     "DNS":       ("T1071.004", "Command and Control"),
     "AUTH":      ("T1078",  "Initial Access"),
-    "YARA":      ("T1204",  "Execution"),
+    "CyScan":    ("T1204",  "Execution"),
 }
 
 # Minimum confidence score to emit an alert into the SIEM pipeline

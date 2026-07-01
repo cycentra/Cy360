@@ -4,7 +4,7 @@
  * Full policy management: create, edit, and assign endpoint policies across
  * all 7 policy types mirroring enterprise EDR vendors:
  *
- *   threat_prevention   — real-time AI, quarantine, YARA, ransomware rollback
+ *   threat_prevention   — real-time AI, quarantine, CyScan, ransomware rollback
  *   device_control      — USB, WiFi, Bluetooth, camera, microphone, clipboard
  *   app_control         — whitelist/blacklist/audit, hash/publisher/path rules
  *   network_control     — host firewall, DNS sinkhole, connection logging
@@ -20,7 +20,7 @@ const BORDER  = "1px solid rgba(255,255,255,0.07)";
 const ACCENT  = "#00e5a0";
 
 const POLICY_TYPE_CFG = {
-  threat_prevention:   { label:"Threat Prevention",    color:"#ff3b3b", icon:"🛡️",  desc:"Real-time protection, behavioral AI, YARA, ransomware rollback" },
+  threat_prevention:   { label:"Threat Prevention",    color:"#ff3b3b", icon:"🛡️",  desc:"Real-time protection, behavioral AI, CyScan, ransomware rollback" },
   device_control:      { label:"Device Control",       color:"#ff8c00", icon:"🔌",  desc:"USB, WiFi, Bluetooth, camera, microphone, removable media" },
   app_control:         { label:"App Control",          color:"#b06eff", icon:"📦",  desc:"Application whitelist/blacklist, publisher and hash rules" },
   network_control:     { label:"Network Control",      color:"#4d9eff", icon:"🌐",  desc:"Host firewall, inbound/outbound defaults, DNS sinkhole" },
@@ -143,7 +143,7 @@ function ThreatPreventionEditor({ config, onChange }) {
       <Toggle value={config.scan_on_write} onChange={v=>s("scan_on_write",v)} label="Scan on File Write"/>
       <Toggle value={config.scan_on_execute} onChange={v=>s("scan_on_execute",v)} label="Scan on Execute"/>
       <Toggle value={config.pua_detection} onChange={v=>s("pua_detection",v)} label="Detect Potentially Unwanted Applications (PUA)"/>
-      <Toggle value={config.yara_enabled} onChange={v=>s("yara_enabled",v)} label="YARA Rule Scanning" sublabel="Custom YARA rules applied on file events"/>
+      <Toggle value={config.yara_enabled} onChange={v=>s("yara_enabled",v)} label="CyScan Rule Scanning" sublabel="Custom CyScan rules applied on file events"/>
 
       <div style={{ fontSize:12, color:"#555", marginTop:20, marginBottom:14, fontWeight:600, letterSpacing:1 }}>RESPONSE</div>
       <Toggle value={config.auto_quarantine} onChange={v=>s("auto_quarantine",v)} label="Auto-Quarantine" sublabel="Automatically quarantine detected malicious files"/>

@@ -27,7 +27,7 @@ import EdrResponsePage                  from '../pages/edr/EdrResponsePage.jsx';
 import EdrPoliciesPage                  from '../pages/edr/EdrPoliciesPage.jsx';
 import EdrAgentInstallerPage            from '../pages/edr/EdrAgentInstallerPage.jsx';
 import EdrEndpointDetailPage            from '../pages/edr/EdrEndpointDetailPage.jsx';
-import EdrYaraRulesPage                 from '../pages/edr/EdrYaraRulesPage.jsx';
+import EdrCyScanRulesPage               from '../pages/edr/EdrCyScanRulesPage.jsx';
 import ItamCoveragePage                 from '../pages/itam/index.jsx';
 import IotRegistryPage                  from '../pages/itam/IotRegistryPage.jsx';
 import ShadowAiPage                     from '../pages/itam/ShadowAiPage.jsx';
@@ -78,7 +78,7 @@ export function AppRouter({ activeTab, user, assets, data, stats, installedModul
       {activeTab==="edr-response"   && <EdrResponsePage/>}
       {activeTab==="edr-policies"   && <EdrPoliciesPage/>}
       {activeTab==="edr-installer"  && <EdrAgentInstallerPage/>}
-      {activeTab==="edr-yara-rules" && <EdrYaraRulesPage/>}
+      {activeTab==="edr-cyscan-rules" && <EdrCyScanRulesPage/>}
       {activeTab==="edr-endpoint-detail" && <EdrEndpointDetailPage agentId={selectedEdrAgent}/>}
       {activeTab==="itam-coverage"  && <ItamCoveragePage user={user} onViewAsset={id => { setSelectedItamAsset(id); setActiveTab("itam-asset-detail"); }}/>}
       {activeTab==="itam-iot"       && <IotRegistryPage/>}

@@ -336,7 +336,7 @@ function AgentDetailModal({ agent, onClose, onAction }) {
         `✓ ${friendly} — Command ID: ${data.command_id}. ` +
         `The agent will execute on its next poll cycle (~60s). ` +
         `Switch to the Command History tab to track progress; ` +
-        (action === "scan" ? "YARA matches will appear in EDR Detections." : "results appear in Command History.")
+        (action === "scan" ? "CyScan matches will appear in EDR Detections." : "results appear in Command History.")
       );
       setTab("history");
     } catch (e) {
@@ -476,7 +476,7 @@ function AgentDetailModal({ agent, onClose, onAction }) {
                     : <ActionModalBtn label="Unisolate"         color="#00e5a0" disabled={busy} onClick={() => handleAction("unisolate")} />
                   }
                   <ActionModalBtn label="Collect Forensics" color="#b06eff" disabled={busy} onClick={() => handleAction("forensics")} />
-                  <ActionModalBtn label="Run YARA Scan"     color="#f5c518" disabled={busy} onClick={() => handleAction("scan")} />
+                  <ActionModalBtn label="Run CyScan"        color="#f5c518" disabled={busy} onClick={() => handleAction("scan")} />
                   <ActionModalBtn label="View Full Detail"  color={ACCENT}   disabled={false} onClick={() => onAction("detail", agent)} />
                 </div>
                 {!online && (
@@ -780,7 +780,7 @@ export default function EdrFleetPage({ onViewDetail }) {
                                   Unisolate
                                 </IconBtn>
                             }
-                            <IconBtn title="Queue YARA scan" color="#f5c518" onClick={() => { setSelected(agent); }}>
+                            <IconBtn title="Queue CyScan" color="#f5c518" onClick={() => { setSelected(agent); }}>
                               Scan
                             </IconBtn>
                             <IconBtn title="Collect forensics" color="#b06eff" onClick={() => { setSelected(agent); }}>

@@ -1009,7 +1009,7 @@ class ResponseExecutor:
         yara_rules = self._cfg.yara_rules
 
         if not shutil.which(yara_bin) and not os.path.exists(yara_bin):
-            return {"output": "YARA binary not found — scan skipped", "matches": [], "source": "bundled"}
+            return {"output": "CyScan engine not found — scan skipped", "matches": [], "source": "bundled"}
 
         # Collect rule files: bundled cycentra.yar + custom.yar (if present)
         rule_files = []
@@ -1020,7 +1020,7 @@ class ResponseExecutor:
             rule_files.append(("custom_yara", custom_yar))
 
         if not rule_files:
-            return {"output": "No YARA rules available — scan skipped", "matches": [], "source": "none"}
+            return {"output": "No CyScan rules available — scan skipped", "matches": [], "source": "none"}
 
         all_matches = []
         source_tag  = "bundled"
@@ -1047,7 +1047,7 @@ class ResponseExecutor:
             except Exception as exc:
                 logger.warning("YARA scan error (%s): %s", source, exc)
 
-        summary = f"YARA scan complete. {len(all_matches)} match(es) in {path}."
+        summary = f"CyScan complete. {len(all_matches)} match(es) in {path}."
         return {"output": summary, "matches": all_matches, "source": source_tag}
 
     # ── COLLECT_FORENSICS ──
