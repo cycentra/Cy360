@@ -1555,13 +1555,14 @@ def self_enroll_agent():
     if not dtoken or not validate_deployment_token(CYCENTRA_DB_URL, dtoken):
         return jsonify({"error": "Invalid or expired deployment token"}), 401
 
-    hostname    = (body.get("hostname") or "").strip()
-    os_type     = (body.get("os_type") or "UNKNOWN").upper()
-    agent_ip    = body.get("agent_ip", "")
-    version     = body.get("version", "")
-    asset_type  = body.get("asset_type", "workstation")
-    gateway_ip  = body.get("gateway_ip", "")
-    gateway_mac = body.get("gateway_mac", "").upper().replace("-", ":")
+    hostname      = (body.get("hostname") or "").strip()
+    os_type       = (body.get("os_type") or "UNKNOWN").upper()
+    agent_ip      = body.get("agent_ip", "")
+    version       = body.get("version", "")
+    asset_type    = body.get("asset_type", "workstation")
+    gateway_ip    = body.get("gateway_ip", "")
+    gateway_mac   = body.get("gateway_mac", "").upper().replace("-", ":")
+    hardware_uuid = (body.get("hardware_uuid") or "").strip().upper() or None
     if not hostname:
         return jsonify({"error": "hostname required"}), 400
 
@@ -1570,39 +1571,59 @@ def self_enroll_agent():
     try:
         conn = _db()
         with conn.cursor() as cur:
-            # Try UPDATE first (re-enrollment of same hostname keeps agent_id stable
-            # so FK-referenced tables like edr_detections are never orphaned).
-            cur.execute(
-                """
-                UPDATE edr_agents
-                   SET enrollment_token=%s, os_type=%s, agent_ip=%s,
-                       asset_type=%s, version=%s, enrolled_by='self-enrollment',
-                       enrollment_gateway_mac=%s, last_gateway_mac=%s,
-                       last_seen=NOW()
-                 WHERE hostname=%s
-                RETURNING agent_id
-                """,
-                [token, os_type, agent_ip, asset_type, version,
-                 gateway_mac or None, gateway_mac or None, hostname],
-            )
-            row = cur.fetchone()
+            row = None
+
+            # Pass 1: match by hardware_uuid — survives hostname changes and reinstalls.
+            if hardware_uuid:
+                cur.execute(
+                    """
+                    UPDATE edr_agents
+                       SET enrollment_token=%s, os_type=%s, agent_ip=%s,
+                           asset_type=%s, version=%s, enrolled_by='self-enrollment',
+                           hostname=%s,
+                           enrollment_gateway_mac=%s, last_gateway_mac=%s,
+                           last_seen=NOW()
+                     WHERE hardware_uuid=%s
+                    RETURNING agent_id
+                    """,
+                    [token, os_type, agent_ip, asset_type, version, hostname,
+                     gateway_mac or None, gateway_mac or None, hardware_uuid],
+                )
+                row = cur.fetchone()
+
+            # Pass 2: match by hostname (backwards compat — agents without hardware_uuid).
+            if not row:
+                cur.execute(
+                    """
+                    UPDATE edr_agents
+                       SET enrollment_token=%s, os_type=%s, agent_ip=%s,
+                           asset_type=%s, version=%s, enrolled_by='self-enrollment',
+                           hardware_uuid=COALESCE(hardware_uuid, %s),
+                           enrollment_gateway_mac=%s, last_gateway_mac=%s,
+                           last_seen=NOW()
+                     WHERE hostname=%s
+                    RETURNING agent_id
+                    """,
+                    [token, os_type, agent_ip, asset_type, version, hardware_uuid,
+                     gateway_mac or None, gateway_mac or None, hostname],
+                )
+                row = cur.fetchone()
+
             if row:
-                # Existing enrollment — read agent_id from RETURNING clause.
-                # Use values() to avoid RealDictRow integer-index ambiguity.
                 agent_id = next(iter(row.values())) if hasattr(row, "values") else row[0]
             else:
-                # New hostname — INSERT fresh enrollment.
+                # Genuinely new machine — INSERT.
                 agent_id = str(uuid.uuid4())
                 cur.execute(
                     """
                     INSERT INTO edr_agents
                       (agent_id, hostname, os_type, agent_ip, asset_type,
                        enrollment_token, enrolled_by, version,
-                       enrollment_gateway_mac, last_gateway_mac)
-                    VALUES (%s,%s,%s,%s,%s,%s,'self-enrollment',%s,%s,%s)
+                       hardware_uuid, enrollment_gateway_mac, last_gateway_mac)
+                    VALUES (%s,%s,%s,%s,%s,%s,'self-enrollment',%s,%s,%s,%s)
                     """,
                     [agent_id, hostname, os_type, agent_ip, asset_type, token, version,
-                     gateway_mac or None, gateway_mac or None],
+                     hardware_uuid, gateway_mac or None, gateway_mac or None],
                 )
         conn.commit()
         conn.close()

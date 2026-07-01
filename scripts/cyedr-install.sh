@@ -266,6 +266,15 @@ deploy_agent() {
         -o "$EDR_HOME/yara_rules/cycentra.yar" 2>/dev/null \
         || warn "YARA rules download failed — local scanning will use built-in signatures only"
 
+    # Preserve existing enrollment credentials + hardware UUID before overwriting config.
+    # Without this, every reinstall creates a duplicate agent in the fleet.
+    _PREV_AGENT_ID=""; _PREV_TOKEN=""; _PREV_HW_UUID=""
+    if [[ -f "$EDR_HOME/config.json" ]]; then
+        _PREV_AGENT_ID=$(python3 -c "import json; d=json.load(open('$EDR_HOME/config.json')); print(d.get('agent_id',''))" 2>/dev/null || true)
+        _PREV_TOKEN=$(python3 -c "import json; d=json.load(open('$EDR_HOME/config.json')); print(d.get('enrollment_token',''))" 2>/dev/null || true)
+        _PREV_HW_UUID=$(python3 -c "import json; d=json.load(open('$EDR_HOME/config.json')); print(d.get('hardware_uuid',''))" 2>/dev/null || true)
+    fi
+
     # Write agent config
     HOSTNAME="$(hostname -f 2>/dev/null || hostname)"
     YARA_BIN="$(resolve_yara_binary)"
@@ -287,6 +296,23 @@ deploy_agent() {
   "log_file":        "$EDR_HOME/logs/cyedr_agent.log"
 }
 CONF
+
+    # Re-inject enrollment credentials so the agent skips re-enrollment on restart.
+    if [[ -n "$_PREV_AGENT_ID" && -n "$_PREV_TOKEN" ]]; then
+        python3 - << PYINLINE
+import json
+with open("$EDR_HOME/config.json") as f:
+    cfg = json.load(f)
+cfg["agent_id"]         = "$_PREV_AGENT_ID"
+cfg["enrollment_token"] = "$_PREV_TOKEN"
+if "$_PREV_HW_UUID":
+    cfg["hardware_uuid"] = "$_PREV_HW_UUID"
+with open("$EDR_HOME/config.json", "w") as f:
+    json.dump(cfg, f, indent=2)
+PYINLINE
+        ok "Preserved existing enrollment (Agent ID: $_PREV_AGENT_ID)"
+    fi
+
     chmod 600 "$EDR_HOME/config.json"
     ok "CyEDR agent deployed to $EDR_HOME"
 }
@@ -506,6 +532,16 @@ enroll_agent() {
     info "Enrolling with CyCentra 360 platform..."
     HOSTNAME="$(hostname -f 2>/dev/null || hostname)"
 
+    # Collect stable hardware UUID for deduplication across reinstalls
+    HW_UUID=""
+    if [[ "$OS_KEY" == "MACOS" ]]; then
+        HW_UUID="$(ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | grep -o '"IOPlatformUUID" = "[^"]*"' | grep -oE '[0-9A-F-]{36}' | head -1)"
+    elif [[ "$OS_KEY" == "LINUX" ]]; then
+        HW_UUID="$(cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null || cat /sys/class/dmi/id/product_uuid 2>/dev/null | head -1)"
+        HW_UUID="${HW_UUID^^}"  # uppercase
+    fi
+    [[ -z "$HW_UUID" ]] && warn "Could not detect hardware UUID — hostname will be used for deduplication"
+
     # Collect agent IP
     if [[ "$OS_KEY" == "LINUX" ]]; then
         AGENT_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)"
@@ -539,13 +575,14 @@ enroll_agent() {
         -H "Content-Type: application/json" \
         -d "{
             \"deployment_token\": \"$DEPLOY_TOKEN\",
-            \"hostname\":    \"$HOSTNAME\",
-            \"os_type\":     \"$OS_KEY\",
-            \"asset_type\":  \"$ASSET_TYPE\",
-            \"agent_ip\":    \"$AGENT_IP\",
-            \"version\":     \"1.0.0\",
-            \"gateway_ip\":  \"$GW_IP\",
-            \"gateway_mac\": \"$GW_MAC\"
+            \"hostname\":      \"$HOSTNAME\",
+            \"os_type\":       \"$OS_KEY\",
+            \"asset_type\":    \"$ASSET_TYPE\",
+            \"agent_ip\":      \"$AGENT_IP\",
+            \"version\":       \"1.0.0\",
+            \"hardware_uuid\": \"$HW_UUID\",
+            \"gateway_ip\":    \"$GW_IP\",
+            \"gateway_mac\":   \"$GW_MAC\"
         }") || die "Enrollment failed — check network connectivity to $PLATFORM_URL"
 
     # Extract agent_id and enrollment_token from response
@@ -554,14 +591,16 @@ enroll_agent() {
     [[ -z "$AGENT_ID" ]] && die "Enrollment response did not include agent_id: $ENROLL_RESPONSE"
     [[ -z "$ENROLLMENT_TOKEN" ]] && die "Enrollment response did not include enrollment_token: $ENROLL_RESPONSE"
 
-    # Persist agent_id and enrollment_token into config
+    # Persist agent_id, enrollment_token, and hardware_uuid into config
     python3 - << PYINLINE
 import json
 cfg_path = "$EDR_HOME/config.json"
 with open(cfg_path) as f:
     cfg = json.load(f)
-cfg["agent_id"] = "$AGENT_ID"
+cfg["agent_id"]         = "$AGENT_ID"
 cfg["enrollment_token"] = "$ENROLLMENT_TOKEN"
+if "$HW_UUID":
+    cfg["hardware_uuid"] = "$HW_UUID"
 with open(cfg_path, "w") as f:
     json.dump(cfg, f, indent=2)
 PYINLINE

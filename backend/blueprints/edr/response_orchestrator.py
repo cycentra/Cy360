@@ -140,13 +140,16 @@ def ensure_tables(db_url: str) -> None:
     );
     CREATE INDEX IF NOT EXISTS idx_edr_yara_active ON edr_custom_yara_rules(active, created_at DESC);
     """
-    # New columns for ARP network-guard (added after initial table creation)
+    # New columns added after initial table creation
     _arp_guard_alters = [
         "ALTER TABLE edr_agents ADD COLUMN IF NOT EXISTS current_network_zone TEXT",
         "ALTER TABLE edr_agents ADD COLUMN IF NOT EXISTS arp_enabled BOOLEAN DEFAULT TRUE",
         "ALTER TABLE edr_agents ADD COLUMN IF NOT EXISTS last_gateway_mac TEXT",
         "ALTER TABLE edr_agents ADD COLUMN IF NOT EXISTS arp_enabled_until TIMESTAMPTZ",
         "ALTER TABLE edr_agents ADD COLUMN IF NOT EXISTS enrollment_gateway_mac TEXT",
+        # Stable hardware UUID — deduplicates agents across reinstalls / hostname changes
+        "ALTER TABLE edr_agents ADD COLUMN IF NOT EXISTS hardware_uuid TEXT",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_edr_agents_hw_uuid ON edr_agents(hardware_uuid) WHERE hardware_uuid IS NOT NULL",
     ]
     try:
         conn = _get_db(db_url)

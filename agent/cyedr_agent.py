@@ -53,6 +53,47 @@ _RUNNING      = True
 _STOP_EVENT   = threading.Event()
 logger        = logging.getLogger("cyedr")
 
+# ── Stable hardware UUID — survives reinstalls and hostname changes ────────────
+def _get_hardware_uuid() -> str:
+    """Return a hardware-stable identifier for this machine."""
+    try:
+        if platform.system() == "Darwin":
+            out = subprocess.check_output(
+                ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                stderr=subprocess.DEVNULL,
+            ).decode(errors="replace")
+            m = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', out)
+            if m:
+                return m.group(1).upper()
+        elif platform.system() == "Linux":
+            for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+                if os.path.exists(path):
+                    uid = open(path).read().strip()
+                    if uid:
+                        return uid.upper()
+            try:
+                uid = open("/sys/class/dmi/id/product_uuid").read().strip()
+                if uid:
+                    return uid.upper()
+            except Exception:
+                pass
+        elif platform.system() == "Windows":
+            out = subprocess.check_output(
+                ["wmic", "csproduct", "get", "UUID"],
+                stderr=subprocess.DEVNULL,
+            ).decode(errors="replace")
+            for line in out.splitlines():
+                line = line.strip()
+                if line and line.upper() != "UUID":
+                    return line.upper()
+    except Exception:
+        pass
+    # Fallback: stable hash of primary MAC + initial hostname (written once to config)
+    return hashlib.sha256(
+        f"{uuid.getnode()}:{socket.gethostname()}".encode()
+    ).hexdigest()[:32].upper()
+
+
 # ── Policy enforcement constants ───────────────────────────────────────────────
 _SINKHOLE_BEGIN  = "# BEGIN CyEDR-SINKHOLE"
 _SINKHOLE_END    = "# END CyEDR-SINKHOLE"
@@ -70,6 +111,7 @@ class Config:
         self.deploy_token       = d["deploy_token"]
         self.enrollment_token   = d.get("enrollment_token", d["deploy_token"])
         self.agent_id           = d.get("agent_id", "")
+        self.hardware_uuid      = d.get("hardware_uuid", "")
         self.asset_type         = d.get("asset_type", "workstation")
         self.hostname           = d.get("hostname", socket.gethostname())
         self.os_type            = d.get("os_type", OS_TYPE)
@@ -91,11 +133,15 @@ class Config:
         # Active policy state — populated by ResponseExecutor on startup and after each APPLY_POLICY
         self.policy_state: dict = {}
 
-    def save_agent_id(self, agent_id: str):
+    def save_agent_id(self, agent_id: str, hardware_uuid: str = ""):
         self.agent_id = agent_id
+        if hardware_uuid:
+            self.hardware_uuid = hardware_uuid
         with open(self._path) as f:
             d = json.load(f)
         d["agent_id"] = agent_id
+        if hardware_uuid:
+            d["hardware_uuid"] = hardware_uuid
         with open(self._path, "w") as f:
             json.dump(d, f, indent=2)
 
@@ -2142,6 +2188,9 @@ def ensure_enrolled(cfg: Config, http: requests.Session):
 
     logger.info("Enrolling with platform...")
     try:
+        # Collect hardware UUID once — persisted so future starts skip re-enroll
+        hardware_uuid = cfg.hardware_uuid or _get_hardware_uuid()
+
         agent_ip = ""
         if psutil:
             for iface, addrs in psutil.net_if_addrs().items():
@@ -2161,13 +2210,14 @@ def ensure_enrolled(cfg: Config, http: requests.Session):
         resp = http.post(
             f"{cfg.platform_url}/api/edr/agents/self-enroll",
             json={
-                "hostname":      cfg.hostname,
-                "os_type":       cfg.os_type,
-                "asset_type":    cfg.asset_type,
-                "agent_ip":      agent_ip,
-                "version":       VERSION,
-                "gateway_ip":    enroll_gw.get("ip", ""),
-                "gateway_mac":   enroll_gw.get("mac", ""),
+                "hostname":       cfg.hostname,
+                "os_type":        cfg.os_type,
+                "asset_type":     cfg.asset_type,
+                "agent_ip":       agent_ip,
+                "version":        VERSION,
+                "hardware_uuid":  hardware_uuid,
+                "gateway_ip":     enroll_gw.get("ip", ""),
+                "gateway_mac":    enroll_gw.get("mac", ""),
             },
             timeout=30
         )
@@ -2175,7 +2225,7 @@ def ensure_enrolled(cfg: Config, http: requests.Session):
             data = resp.json()
             agent_id = data.get("agent_id")
             if agent_id:
-                cfg.save_agent_id(agent_id)
+                cfg.save_agent_id(agent_id, hardware_uuid=hardware_uuid)
                 logger.info("Enrolled — Agent ID: %s", agent_id)
             else:
                 logger.error("Enrollment response missing agent_id: %s", resp.text)
