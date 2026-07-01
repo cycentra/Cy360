@@ -1,3 +1,11 @@
+## v1.0.146 -- 2026-07-01
+
+### Bug Fixes
+
+  - itam): clear stale edr_agent_id/siem_agent_id refs before crossref
+
+---
+
 ## v1.0.145 -- 2026-07-01
 
 ### Bug Fixes
