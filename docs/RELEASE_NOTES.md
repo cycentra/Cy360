@@ -1,3 +1,11 @@
+## v1.0.144 -- 2026-07-01
+
+### Bug Fixes
+
+  - fix(cyedr): startup dedup — agents sharing same hardware_uuid are auto-merged at backend startup
+
+---
+
 ## v1.0.143 -- 2026-07-01
 
 ### Bug Fixes
