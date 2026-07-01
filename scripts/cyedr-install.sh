@@ -143,8 +143,16 @@ install_packages_macos() {
     done
 
     if [[ -n "$BREW_BIN" ]]; then
-        "$BREW_BIN" install yara 2>/dev/null \
-            || warn "Homebrew yara install failed — YARA scanning may be unavailable"
+        # Homebrew refuses to run as root. When invoked via `sudo bash`, delegate
+        # the install back to the original user via SUDO_USER.
+        local _BREW_USER="${SUDO_USER:-}"
+        if [[ -n "$_BREW_USER" && "$_BREW_USER" != "root" ]]; then
+            HOMEBREW_NO_AUTO_UPDATE=1 sudo -u "$_BREW_USER" "$BREW_BIN" install yara 2>/dev/null \
+                || warn "Homebrew yara install failed — YARA scanning may be unavailable"
+        else
+            HOMEBREW_NO_AUTO_UPDATE=1 "$BREW_BIN" install yara 2>/dev/null \
+                || warn "Homebrew yara install failed — YARA scanning may be unavailable"
+        fi
     else
         warn "Homebrew not found — YARA scanning may be unavailable. Install: https://brew.sh"
     fi
