@@ -163,6 +163,8 @@ def init_itam_tables(db_url: str) -> None:
               UNIQUE(tool_name, department)
             )
         """)
+        # ai_tool_whitelist: add vendor column if missing (added v1.0.165+)
+        cur.execute("ALTER TABLE ai_tool_whitelist ADD COLUMN IF NOT EXISTS vendor TEXT;")
         # Columns added by Phase 2 (agentless scan + cloud discovery)
         for col_name, col_def in [
             ("os_info",          "TEXT"),
@@ -559,7 +561,8 @@ def assets_list():
                        ea.hostname AS edr_hostname, ea.status AS edr_status,
                        hpc.agent_name AS siem_hostname,
                        COALESCE(sv.vuln_count, 0) AS vuln_count,
-                       sv.highest_severity AS highest_cve_severity
+                       sv.highest_severity AS highest_cve_severity,
+                       zone_match.zone_name
                 FROM network_assets na
                 LEFT JOIN edr_agents ea ON ea.agent_id = na.edr_agent_id
                 LEFT JOIN host_posture_cache hpc ON hpc.agent_id = na.siem_agent_id
@@ -581,6 +584,16 @@ def assets_list():
                     WHERE cve_count > 0
                     GROUP BY asset_id
                 ) sv ON sv.asset_id = na.id
+                LEFT JOIN LATERAL (
+                    SELECT nz.zone_name FROM network_zones nz
+                    WHERE nz.status = 'approved'
+                      AND EXISTS (
+                          SELECT 1 FROM unnest(nz.trusted_cidrs) cidr_str
+                          WHERE na.ip_address <<= cidr_str::inet
+                      )
+                    ORDER BY cardinality(nz.trusted_cidrs) DESC
+                    LIMIT 1
+                ) zone_match ON TRUE
                 {where}
                 ORDER BY na.last_seen DESC
                 LIMIT %s OFFSET %s
@@ -671,6 +684,67 @@ def asset_delete(asset_id):
         return jsonify({"ok": True})
     except psycopg2.Error as exc:
         _log.error("asset_delete error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+
+
+# ── Asset Merge ───────────────────────────────────────────────────────────────
+
+@itam_bp.route("/assets/merge", methods=["POST", "OPTIONS"])
+def assets_merge():
+    """Merge two duplicate network_asset rows into one. Admin only.
+    Body: {primary_id, secondary_id}
+    The primary row is kept; the secondary row is deleted. Best-available
+    fields from secondary are absorbed into primary where primary has gaps.
+    """
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    if _role() != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+
+    body         = request.get_json(silent=True) or {}
+    primary_id   = body.get("primary_id")
+    secondary_id = body.get("secondary_id")
+    if not primary_id or not secondary_id:
+        return jsonify({"error": "primary_id and secondary_id required"}), 400
+    if primary_id == secondary_id:
+        return jsonify({"error": "primary and secondary must differ"}), 400
+
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM network_assets WHERE id=ANY(%s)", [[primary_id, secondary_id]])
+            rows = {r["id"]: r for r in cur.fetchall()}
+            if primary_id not in rows or secondary_id not in rows:
+                conn.close(); return jsonify({"error": "One or both assets not found"}), 404
+
+            sec = rows[secondary_id]
+            # Absorb best fields from secondary into primary (fill gaps only)
+            cur.execute("""
+                UPDATE network_assets SET
+                  hostname     = COALESCE(NULLIF(hostname,''),     %s),
+                  mac_address  = COALESCE(NULLIF(mac_address,''),  %s),
+                  vendor       = COALESCE(NULLIF(vendor,''),       %s),
+                  asset_type   = CASE WHEN asset_type IN ('unknown','') THEN COALESCE(%s, asset_type) ELSE asset_type END,
+                  edr_agent_id = COALESCE(edr_agent_id,           %s),
+                  siem_agent_id= COALESCE(siem_agent_id,          %s),
+                  os_fingerprint=COALESCE(NULLIF(os_fingerprint,''),%s),
+                  last_seen    = GREATEST(last_seen,               %s),
+                  first_seen   = LEAST(first_seen,                 %s)
+                WHERE id = %s
+            """, [sec["hostname"], sec["mac_address"], sec["vendor"],
+                  sec["asset_type"], sec["edr_agent_id"], sec["siem_agent_id"],
+                  sec["os_fingerprint"], sec["last_seen"], sec["first_seen"],
+                  primary_id])
+            # Delete the secondary (iot_devices CASCADE will follow)
+            cur.execute("DELETE FROM network_assets WHERE id=%s", [secondary_id])
+        conn.commit(); conn.close()
+        auth_event(session.get("user_email"), "itam_asset_merge",
+                   f"Merged asset #{secondary_id} into #{primary_id}")
+        return jsonify({"ok": True, "kept_id": primary_id})
+    except psycopg2.Error as exc:
+        _log.error("assets_merge error: %s", exc)
         return jsonify({"error": "Database error"}), 500
 
 
@@ -924,7 +998,13 @@ def shadow_ai_list():
             cur.execute(f"SELECT COUNT(*) AS n FROM shadow_ai_findings {where}", params)
             total = cur.fetchone()["n"]
             cur.execute(f"""
-                SELECT * FROM shadow_ai_findings {where}
+                SELECT id, agent_id, hostname, ai_tool,
+                       detection_layer AS detection_method,
+                       detail->>'process_name' AS process_name,
+                       severity, status,
+                       detected_at AS first_seen,
+                       resolved_at, notes
+                FROM shadow_ai_findings {where}
                 ORDER BY detected_at DESC
                 LIMIT %s OFFSET %s
             """, params + [per_page, offset])
@@ -947,11 +1027,12 @@ def shadow_ai_summary():
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT
-                  COUNT(*) FILTER (WHERE status='open') AS open_total,
-                  COUNT(*) FILTER (WHERE status='approved') AS approved,
+                  COUNT(*) FILTER (WHERE status='open')       AS open,
+                  COUNT(*) FILTER (WHERE status='escalated')  AS escalated,
+                  COUNT(*) FILTER (WHERE status='approved')   AS approved,
                   COUNT(*) FILTER (WHERE status='suppressed') AS suppressed,
                   COUNT(*) FILTER (WHERE severity='high' AND status='open') AS high_open,
-                  COUNT(*) FILTER (WHERE detected_at > NOW()-INTERVAL '7 days') AS last_7d,
+                  COUNT(*) FILTER (WHERE detected_at > NOW()-INTERVAL '7 days')  AS total_7d,
                   COUNT(*) FILTER (WHERE detected_at > NOW()-INTERVAL '30 days') AS last_30d,
                   COUNT(DISTINCT hostname) FILTER (WHERE status='open') AS affected_hosts,
                   COUNT(DISTINCT ai_tool) AS unique_tools
@@ -959,11 +1040,11 @@ def shadow_ai_summary():
             """)
             summary = dict(cur.fetchone())
             cur.execute("""
-                SELECT ai_tool, detection_layer, COUNT(*) AS n
+                SELECT ai_tool, COUNT(*) AS n
                 FROM shadow_ai_findings WHERE status='open'
-                GROUP BY ai_tool, detection_layer ORDER BY n DESC LIMIT 20
+                GROUP BY ai_tool ORDER BY n DESC LIMIT 20
             """)
-            summary["by_tool"] = [dict(r) for r in cur.fetchall()]
+            summary["by_tool"] = {r["ai_tool"]: r["n"] for r in cur.fetchall()}
         conn.close()
         return jsonify(summary)
     except psycopg2.Error as exc:
@@ -1019,38 +1100,50 @@ def ai_whitelist():
         try:
             conn = _db()
             with conn.cursor() as cur:
-                cur.execute("SELECT * FROM ai_tool_whitelist ORDER BY approved_at DESC")
+                cur.execute("""
+                    SELECT id,
+                           tool_name  AS ai_tool,
+                           vendor,
+                           tool_type,
+                           department,
+                           approved_by,
+                           approved_at AS created_at,
+                           notes      AS rationale
+                    FROM ai_tool_whitelist ORDER BY approved_at DESC
+                """)
                 rows = [dict(r) for r in cur.fetchall()]
             conn.close()
-            return jsonify({"whitelist": rows})
+            return jsonify({"tools": rows})
         except psycopg2.Error as exc:
             return jsonify({"error": "Database error"}), 500
 
-    # POST
+    # POST — accept both "ai_tool" (UI field) and legacy "tool_name"
     if _role() != "admin":
         return jsonify({"error": "Admin role required"}), 403
     body = request.get_json(silent=True) or {}
-    tool_name = (body.get("tool_name") or "").strip()
+    tool_name = (body.get("ai_tool") or body.get("tool_name") or "").strip()
     if not tool_name:
-        return jsonify({"error": "tool_name required"}), 400
+        return jsonify({"error": "ai_tool required"}), 400
 
     try:
         conn = _db()
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO ai_tool_whitelist (tool_name, tool_type, department, approved_by, notes)
-                VALUES (%s,%s,%s,%s,%s)
+                INSERT INTO ai_tool_whitelist (tool_name, vendor, tool_type, department, approved_by, notes)
+                VALUES (%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (tool_name, department) DO UPDATE SET
+                  vendor      = EXCLUDED.vendor,
                   tool_type   = EXCLUDED.tool_type,
                   approved_by = EXCLUDED.approved_by,
                   approved_at = NOW(),
                   notes       = EXCLUDED.notes
                 RETURNING id
             """, [tool_name,
+                  body.get("vendor", ""),
                   body.get("tool_type", "saas"),
                   body.get("department", "ALL"),
                   session.get("user_email"),
-                  body.get("notes", "")])
+                  body.get("rationale") or body.get("notes", "")])
             row = cur.fetchone()
         conn.commit(); conn.close()
         auth_event(session.get("user_email"), "ai_whitelist_add", f"Whitelisted: {tool_name}")
@@ -2696,6 +2789,37 @@ def zone_suggestion_reject(sug_id):
         return jsonify({"ok": True})
     except psycopg2.Error as exc:
         _log.error("zone_suggestion_reject error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+
+
+@itam_bp.route("/network-zones/suggestions/<int:sug_id>/reopen", methods=["POST", "OPTIONS"])
+def zone_suggestion_reopen(sug_id):
+    """Re-open a previously rejected suggestion, setting it back to pending. Admin only."""
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+    if _role() != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+    email = session.get("user_email")
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE network_zone_suggestions
+                SET status='pending', case_id=NULL, updated_at=NOW()
+                WHERE id=%s AND status='rejected'
+                RETURNING id, subnet_prefix, gateway_mac
+            """, [sug_id])
+            row = cur.fetchone()
+        conn.commit(); conn.close()
+        if not row:
+            return jsonify({"error": "Suggestion not found or not in rejected state"}), 404
+        auth_event(email, "network_zone_reopened",
+                   f"Suggestion #{sug_id} re-opened ({row['subnet_prefix']} / {row['gateway_mac']})")
+        return jsonify({"ok": True})
+    except psycopg2.Error as exc:
+        _log.error("zone_suggestion_reopen error: %s", exc)
         return jsonify({"error": "Database error"}), 500
 
 

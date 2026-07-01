@@ -98,69 +98,117 @@ function Badge({ label, color }) {
 // ── Scan Settings Panel ───────────────────────────────────────────────────────
 
 
-function AssetTable({ assets, loading, onViewAsset }) {
+function AssetTable({ assets, loading, onViewAsset, onMergeRequest }) {
+  const [selected, setSelected] = React.useState(null);
+
   if (loading) return <div style={{ color: "#555", padding: 32, textAlign: "center" }}>Loading…</div>;
   if (!assets.length) return <div style={{ color: "#555", padding: 32, textAlign: "center" }}>No assets found.</div>;
   return (
-    <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-        <thead>
-          <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
-            {["IP Address", "Hostname", "Vendor", "Type", "EDR", "SIEM", "Source", "Vulns", "Last Seen"].map(h => (
-              <th key={h} style={{ textAlign: "left", padding: "8px 12px", color: "#555", fontWeight: 600, fontSize: 10, letterSpacing: 0.5 }}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {assets.map((a, i) => (
-            <tr key={a.id || i}
-              onClick={() => a.id && onViewAsset && onViewAsset(a.id)}
-              style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", cursor: a.id ? "pointer" : "default" }}
-              onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.025)"}
-              onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-              <td style={{ padding: "9px 12px", fontFamily: "monospace", color: ACCENT }}>{a.ip_address}</td>
-              <td style={{ padding: "9px 12px", color: "#c0c8d8" }}>{a.hostname || "—"}</td>
-              <td style={{ padding: "9px 12px", color: "#9aa0b0" }}>{a.vendor || "—"}</td>
-              <td style={{ padding: "9px 12px" }}>
-                <Badge label={(a.asset_type || "unknown").replace(/_/g, " ")}
-                       color={ASSET_TYPE_COLORS[a.asset_type] || "#555"} />
-              </td>
-              <td style={{ padding: "9px 12px" }}>
-                {a.edr_agent_id
-                  ? <Badge label="EDR" color={ACCENT}/>
-                  : <span style={{ color: "#333", fontSize: 10 }}>—</span>}
-              </td>
-              <td style={{ padding: "9px 12px" }}>
-                {a.siem_agent_id
-                  ? <Badge label="SIEM" color="#4d9eff"/>
-                  : <span style={{ color: "#333", fontSize: 10 }}>—</span>}
-              </td>
-              <td style={{ padding: "9px 12px" }}>
-                {(() => {
-                  const src = a.source && a.source !== "manual"
-                    ? a.source
-                    : (a.discovery_source || a.source || "manual");
-                  return (
-                    <Badge label={SOURCE_LABEL[src] || src}
-                           color={SOURCE_COLOR[src] || "#555"}/>
-                  );
-                })()}
-              </td>
-              <td style={{ padding: "9px 12px" }}>
-                {a.vuln_count > 0
-                  ? <span style={{ fontWeight: 700, color: a.highest_cve_severity === "critical" ? "#ff3b3b" : a.highest_cve_severity === "high" ? "#ff8c00" : "#f5c518" }}>
-                      {a.vuln_count} {a.highest_cve_severity}
-                    </span>
-                  : <span style={{ color: "#333", fontSize: 10 }}>—</span>}
-              </td>
-              <td style={{ padding: "9px 12px", color: "#555", fontSize: 11 }}>
-                {a.last_seen ? new Date(a.last_seen).toLocaleString() : "—"}
-              </td>
+    <>
+      {selected && (
+        <div style={{ marginBottom: 12, padding: "8px 14px", borderRadius: 6,
+          background: "rgba(176,110,255,0.08)", border: "1px solid rgba(176,110,255,0.3)",
+          display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>
+          <span style={{ color: "#b06eff" }}>Selected: <strong>{selected.hostname || selected.ip_address}</strong></span>
+          <span style={{ color: "#555" }}>Click another asset row to merge it into this one</span>
+          <button onClick={() => setSelected(null)} style={{
+            marginLeft: "auto", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4,
+            padding: "2px 10px", fontSize: 11, color: "#666", background: "transparent", cursor: "pointer",
+          }}>Cancel</button>
+        </div>
+      )}
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+              {["IP Address", "Hostname", "Vendor", "Type", "Zone", "EDR", "SIEM", "Source", "Vulns", "Last Seen", ""].map(h => (
+                <th key={h} style={{ textAlign: "left", padding: "8px 12px", color: "#555", fontWeight: 600, fontSize: 10, letterSpacing: 0.5 }}>{h}</th>
+              ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {assets.map((a, i) => {
+              const isMergeTarget = !!selected && selected.id !== a.id;
+              return (
+                <tr key={a.id || i}
+                  onClick={() => {
+                    if (selected && selected.id !== a.id) {
+                      onMergeRequest && onMergeRequest(selected, a);
+                      setSelected(null);
+                    } else if (!selected) {
+                      a.id && onViewAsset && onViewAsset(a.id);
+                    }
+                  }}
+                  style={{
+                    borderBottom: "1px solid rgba(255,255,255,0.04)",
+                    cursor: a.id ? "pointer" : "default",
+                    background: isMergeTarget ? "rgba(176,110,255,0.06)" : "transparent",
+                    outline: isMergeTarget ? "1px solid rgba(176,110,255,0.3)" : "none",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = isMergeTarget ? "rgba(176,110,255,0.12)" : "rgba(255,255,255,0.025)"}
+                  onMouseLeave={e => e.currentTarget.style.background = isMergeTarget ? "rgba(176,110,255,0.06)" : "transparent"}>
+                  <td style={{ padding: "9px 12px", fontFamily: "monospace", color: ACCENT }}>{a.ip_address}</td>
+                  <td style={{ padding: "9px 12px", color: "#c0c8d8" }}>{a.hostname || "—"}</td>
+                  <td style={{ padding: "9px 12px", color: "#9aa0b0" }}>{a.vendor || "—"}</td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <Badge label={(a.asset_type || "unknown").replace(/_/g, " ")}
+                           color={ASSET_TYPE_COLORS[a.asset_type] || "#555"} />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    {a.zone_name
+                      ? <Badge label={a.zone_name} color="#b06eff"/>
+                      : <span style={{ color: "#333", fontSize: 10 }}>—</span>}
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    {a.edr_agent_id
+                      ? <Badge label="EDR" color={ACCENT}/>
+                      : <span style={{ color: "#333", fontSize: 10 }}>—</span>}
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    {a.siem_agent_id
+                      ? <Badge label="SIEM" color="#4d9eff"/>
+                      : <span style={{ color: "#333", fontSize: 10 }}>—</span>}
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    {(() => {
+                      const src = a.source && a.source !== "manual"
+                        ? a.source
+                        : (a.discovery_source || a.source || "manual");
+                      return (
+                        <Badge label={SOURCE_LABEL[src] || src}
+                               color={SOURCE_COLOR[src] || "#555"}/>
+                      );
+                    })()}
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    {a.vuln_count > 0
+                      ? <span style={{ fontWeight: 700, color: a.highest_cve_severity === "critical" ? "#ff3b3b" : a.highest_cve_severity === "high" ? "#ff8c00" : "#f5c518" }}>
+                          {a.vuln_count} {a.highest_cve_severity}
+                        </span>
+                      : <span style={{ color: "#333", fontSize: 10 }}>—</span>}
+                  </td>
+                  <td style={{ padding: "9px 12px", color: "#555", fontSize: 11 }}>
+                    {a.last_seen ? new Date(a.last_seen).toLocaleString() : "—"}
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    {a.id && !selected && (
+                      <button
+                        onClick={e => { e.stopPropagation(); setSelected(a); }}
+                        title="Mark as duplicate — click another asset to merge into this one"
+                        style={{ border: "1px solid rgba(176,110,255,0.3)", borderRadius: 4,
+                          padding: "2px 8px", fontSize: 9, fontWeight: 700, color: "#b06eff",
+                          background: "transparent", cursor: "pointer" }}>
+                        Merge
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
@@ -252,23 +300,27 @@ function ZoneApproveModal({ suggestion, onClose, onApproved }) {
 }
 
 function NetworkZonesTab() {
-  const [zones,       setZones]       = useState([]);
-  const [suggestions, setSuggestions] = useState([]);
-  const [stats,       setStats]       = useState(null);
-  const [loading,     setLoading]     = useState(true);
-  const [approveModal,setApproveModal]= useState(null);
-  const [msg,         setMsg]         = useState("");
+  const [zones,        setZones]        = useState([]);
+  const [suggestions,  setSuggestions]  = useState([]);
+  const [rejected,     setRejected]     = useState([]);
+  const [showRejected, setShowRejected] = useState(false);
+  const [stats,        setStats]        = useState(null);
+  const [loading,      setLoading]      = useState(true);
+  const [approveModal, setApproveModal] = useState(null);
+  const [msg,          setMsg]          = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [zRes, sRes, stRes] = await Promise.all([
+      const [zRes, sRes, rRes, stRes] = await Promise.all([
         fetch("/api/itam/network-zones"),
         fetch("/api/itam/network-zones/suggestions?status=pending"),
+        fetch("/api/itam/network-zones/suggestions?status=rejected"),
         fetch("/api/itam/network-zones/stats"),
       ]);
       if (zRes.ok)  setZones((await zRes.json()).zones || []);
       if (sRes.ok)  setSuggestions((await sRes.json()).suggestions || []);
+      if (rRes.ok)  setRejected((await rRes.json()).suggestions || []);
       if (stRes.ok) setStats(await stRes.json());
     } catch {}
     setLoading(false);
@@ -278,7 +330,14 @@ function NetworkZonesTab() {
 
   const reject = async (sug) => {
     const r = await fetch(`/api/itam/network-zones/suggestions/${sug.id}/reject`, { method: "POST" });
-    if (r.ok) { setMsg("Suggestion rejected"); load(); }
+    if (r.ok) { setMsg("Gateway rejected — ARP discovery from this network will remain disabled. You can re-open it from the Rejected section below."); load(); }
+  };
+
+  const reopen = async (sug) => {
+    try {
+      const r = await fetch(`/api/itam/network-zones/suggestions/${sug.id}/reopen`, { method: "POST" });
+      if (r.ok) { setMsg("Suggestion re-opened — it will appear in the pending list."); load(); }
+    } catch {}
   };
 
   const deleteZone = async (zone) => {
@@ -377,7 +436,55 @@ function NetworkZonesTab() {
       {suggestions.length === 0 && (
         <div style={{ background: "rgba(0,229,160,0.04)", border: `1px solid ${ACCENT}22`,
           borderRadius: 8, padding: "12px 16px", marginBottom: 20, fontSize: 12, color: "#555" }}>
-          No pending zone suggestions — all discovered networks are either approved or rejected.
+          No pending zone suggestions — all discovered networks are approved or rejected.
+          {rejected.length > 0 && <span> ({rejected.length} rejected — see below)</span>}
+        </div>
+      )}
+
+      {/* Rejected suggestions panel */}
+      {rejected.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <button onClick={() => setShowRejected(v => !v)} style={{
+            background: "transparent", border: "1px solid rgba(255,255,255,0.1)",
+            borderRadius: 6, padding: "5px 12px", fontSize: 11, color: "#555",
+            cursor: "pointer", marginBottom: showRejected ? 10 : 0,
+          }}>
+            {showRejected ? "▾" : "▸"} {rejected.length} Rejected Gateway{rejected.length !== 1 ? "s" : ""} — ARP collection permanently silenced
+          </button>
+          {showRejected && (
+            <div style={{ background: "rgba(255,255,255,0.02)", border: BORDER,
+              borderRadius: 10, padding: 16 }}>
+              <div style={{ fontSize: 11, color: "#555", marginBottom: 12, lineHeight: 1.6 }}>
+                <strong style={{ color: "#666" }}>What rejection means:</strong> Agents on these
+                networks will never send ARP neighbor tables to CyCentra. This prevents asset
+                discovery on home, hotel, and public Wi-Fi networks. Rejecting is permanent until
+                manually re-opened here. The associated CyCase is closed.
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {rejected.map(s => (
+                  <div key={s.id} style={{
+                    background: "rgba(255,255,255,0.02)", border: BORDER, borderRadius: 8,
+                    padding: "12px 14px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
+                  }}>
+                    <div style={{ flex: 1, minWidth: 180 }}>
+                      <div style={{ fontFamily: "monospace", fontSize: 12, color: "#9aa0b0" }}>{s.subnet_prefix}</div>
+                      <div style={{ fontSize: 10, color: "#555", marginTop: 2 }}>
+                        GW MAC: <span style={{ fontFamily: "monospace", color: "#666" }}>{s.gateway_mac}</span>
+                        {s.gateway_ip && <span> ({s.gateway_ip})</span>}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 10, color: "#555" }}>
+                      {new Date(s.updated_at || s.created_at).toLocaleDateString()}
+                    </div>
+                    <button onClick={() => reopen(s)} style={{
+                      border: "1px solid rgba(245,197,24,0.4)", borderRadius: 5, padding: "4px 10px",
+                      fontSize: 10, fontWeight: 700, color: "#f5c518", background: "transparent", cursor: "pointer",
+                    }}>Re-open</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -455,12 +562,15 @@ function NetworkZonesTab() {
         )}
       </div>
 
-      <div style={{ fontSize: 11, color: "#444", lineHeight: 1.7 }}>
+      <div style={{ fontSize: 11, color: "#444", lineHeight: 1.8 }}>
         <strong style={{ color: "#666" }}>How it works:</strong>{" "}
         CyEDR agents report their default gateway MAC on every heartbeat. When 3+ agents on the same
-        subnet share a gateway, a suggestion is auto-created and a CyCase is raised. Approving a
-        suggestion adds the subnet + gateway MAC to this list and enables ARP asset discovery for
-        those endpoints. Agents on untrusted networks (home/hotel/cafe) skip ARP collection automatically.
+        subnet share a gateway, a suggestion is auto-created and a CyCase is raised for admin review.
+        {" "}<strong style={{ color: "#555" }}>Approve</strong> → adds the subnet + gateway MAC here and enables ARP asset discovery
+        for all endpoints on that network (good for corporate/office networks).{" "}
+        <strong style={{ color: "#555" }}>Reject</strong> → permanently silences ARP collection from that gateway —
+        agents on that network (home, hotel, cafe) will continue to check in but won't send neighbor tables.
+        No new CyCase will be raised for that gateway unless you re-open the rejection.
       </div>
 
       {approveModal && (
@@ -487,6 +597,7 @@ export default function ItamCoveragePage({ onViewAsset, user }) {
   const [importResult,     setImportResult]     = useState(null);
   const [scanMsg,          setScanMsg]          = useState("");
   const [configuredSubnet, setConfiguredSubnet] = useState("");
+  const [mergeMsg,         setMergeMsg]         = useState("");
   // Load configured subnet silently so scan button can use it
   useEffect(() => {
     fetch("/api/itam/settings").then(r => r.ok ? r.json() : null).then(d => {
@@ -549,6 +660,29 @@ export default function ItamCoveragePage({ onViewAsset, user }) {
     setScanning(false);
   };
 
+  const handleMergeRequest = async (primary, secondary) => {
+    if (!window.confirm(
+      `Merge "${secondary.hostname || secondary.ip_address}" into "${primary.hostname || primary.ip_address}"?\n\n` +
+      `The primary asset (${primary.ip_address}) is kept. The secondary (${secondary.ip_address}) is deleted. ` +
+      `Missing fields from the secondary are copied into the primary.`
+    )) return;
+    try {
+      const r = await fetch("/api/itam/assets/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ primary_id: primary.id, secondary_id: secondary.id }),
+      });
+      const d = await r.json();
+      if (r.ok) {
+        setMergeMsg(`Merged: ${secondary.hostname || secondary.ip_address} → ${primary.hostname || primary.ip_address}`);
+        loadCoverage(); loadAssets();
+      } else {
+        setMergeMsg(`Merge failed: ${d.error}`);
+      }
+    } catch { setMergeMsg("Network error during merge"); }
+    setTimeout(() => setMergeMsg(""), 6000);
+  };
+
   const cov = coverage;
 
   return (
@@ -585,6 +719,15 @@ export default function ItamCoveragePage({ onViewAsset, user }) {
         </div>
       </div>
 
+      {/* Merge result banner */}
+      {mergeMsg && (
+        <div style={{ marginBottom: 12, padding: "8px 14px", borderRadius: 6,
+          background: mergeMsg.includes("failed") || mergeMsg.includes("error") ? "rgba(255,59,59,0.1)" : "rgba(176,110,255,0.1)",
+          border: `1px solid ${mergeMsg.includes("failed") || mergeMsg.includes("error") ? "#ff3b3b" : "#b06eff"}44`,
+          fontSize: 12, color: mergeMsg.includes("failed") || mergeMsg.includes("error") ? "#ff3b3b" : "#b06eff" }}>
+          {mergeMsg}
+        </div>
+      )}
       {/* Status messages */}
       {importResult && (
         <div style={{ marginBottom: 16, padding: "8px 14px", borderRadius: 6,
@@ -698,7 +841,7 @@ export default function ItamCoveragePage({ onViewAsset, user }) {
       {/* Asset table (all non-zones tabs) */}
       {tab !== "zones" && (
         <div style={{ background: CARD_BG, border: BORDER, borderRadius: 12, overflow: "hidden" }}>
-          <AssetTable assets={assets} loading={loading} onViewAsset={onViewAsset}/>
+          <AssetTable assets={assets} loading={loading} onViewAsset={onViewAsset} onMergeRequest={handleMergeRequest}/>
           {total > PER_PAGE && (
             <div style={{ display: "flex", justifyContent: "center", gap: 8, padding: 16 }}>
               <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}

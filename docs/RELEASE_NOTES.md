@@ -1,3 +1,11 @@
+## v1.0.148 -- 2026-07-01
+
+### Improvements
+
+  - revert(deploy): remove hardcoded server auto-deploy step
+
+---
+
 ## v1.0.147 -- 2026-07-01
 
 ### Improvements
