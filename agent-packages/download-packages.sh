@@ -171,6 +171,25 @@ if [[ -f "${REPO_ROOT}/scripts/agent-installer.sh" ]]; then
     ok "Staged: cysiem-install.sh"
 fi
 
+# Stage CyEDR installer script (served by GET /api/edr/installer/unix|win)
+if [[ -f "${REPO_ROOT}/scripts/cyedr-install.sh" ]]; then
+    cp -f "${REPO_ROOT}/scripts/cyedr-install.sh" "${EDR_DEST_DIR}/cyedr-install.sh"
+    chmod 644 "${EDR_DEST_DIR}/cyedr-install.sh"
+    ok "Staged: cyedr-install.sh"
+fi
+if [[ -f "${REPO_ROOT}/scripts/cyedr-install.ps1" ]]; then
+    cp -f "${REPO_ROOT}/scripts/cyedr-install.ps1" "${EDR_DEST_DIR}/cyedr-install.ps1"
+    chmod 644 "${EDR_DEST_DIR}/cyedr-install.ps1"
+    ok "Staged: cyedr-install.ps1"
+fi
+
+# Stage CyEDR Python agent (served by GET /api/edr/installer/agent-py for Python-mode fallback)
+if [[ -f "${REPO_ROOT}/agent/cyedr_agent.py" ]]; then
+    cp -f "${REPO_ROOT}/agent/cyedr_agent.py" "${EDR_DEST_DIR}/cyedr_agent.py"
+    chmod 644 "${EDR_DEST_DIR}/cyedr_agent.py"
+    ok "Staged: cyedr_agent.py (v${CV})"
+fi
+
 chmod -R 644 "${EDR_DEST_DIR}"/* 2>/dev/null || true
 chmod 755 "${EDR_DEST_DIR}"
 chown -R www-data:www-data "${EDR_DEST_DIR}" 2>/dev/null || true

@@ -1008,7 +1008,24 @@ class ResponseExecutor:
         yara_bin   = self._cfg.yara_binary
         yara_rules = self._cfg.yara_rules
 
-        if not shutil.which(yara_bin) and not os.path.exists(yara_bin):
+        # Resolve yara binary: config value → PATH lookup → common absolute fallbacks.
+        # LaunchDaemons and systemd services run with a stripped PATH that excludes
+        # Homebrew (/opt/homebrew/bin) and some distro paths (/usr/local/bin), so we
+        # must probe absolute locations when shutil.which() returns nothing.
+        _YARA_FALLBACKS = [
+            "/opt/homebrew/bin/yara",   # macOS Apple Silicon (Homebrew)
+            "/usr/local/bin/yara",       # macOS Intel (Homebrew) / Linux manual install
+            "/usr/bin/yara",             # Linux package manager (apt/yum/dnf)
+            "/bin/yara",                 # some minimal Linux distros
+        ]
+        resolved_bin = shutil.which(yara_bin) or (yara_bin if os.path.isfile(yara_bin) else None)
+        if not resolved_bin:
+            for fb in _YARA_FALLBACKS:
+                if os.path.isfile(fb):
+                    resolved_bin = fb
+                    logger.info("yara binary resolved via fallback: %s", fb)
+                    break
+        if not resolved_bin:
             return {"output": "CyScan engine not found — scan skipped", "matches": [], "source": "bundled"}
 
         # Collect rule files: bundled cycentra.yar + custom.yar (if present)
@@ -1027,7 +1044,7 @@ class ResponseExecutor:
         for source, rules_path in rule_files:
             try:
                 result = subprocess.run(
-                    [yara_bin, "-r", rules_path, path],
+                    [resolved_bin, "-r", rules_path, path],
                     capture_output=True, text=True, timeout=300,
                 )
                 for line in result.stdout.splitlines():

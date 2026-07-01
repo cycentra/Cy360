@@ -141,6 +141,22 @@ install_packages_macos() {
     ok "System packages installed"
 }
 
+# Resolve the absolute path to the yara binary after package install.
+# LaunchDaemons/systemd services run with a stripped PATH that excludes
+# Homebrew and /usr/local/bin, so we must embed the absolute path in config.json.
+resolve_yara_binary() {
+    local bin
+    for bin in \
+        "$(command -v yara 2>/dev/null)" \
+        /opt/homebrew/bin/yara \
+        /usr/local/bin/yara \
+        /usr/bin/yara \
+        /bin/yara; do
+        [[ -x "$bin" ]] && { echo "$bin"; return 0; }
+    done
+    echo "yara"   # fallback: keep as name, agent will try absolute paths at runtime
+}
+
 # ── Deploy CyEDR agent ─────────────────────────────────────────────────────────
 PYTHON_MODE=false   # set to true when falling back to python3 launcher
 
@@ -233,6 +249,7 @@ deploy_agent() {
 
     # Write agent config
     HOSTNAME="$(hostname -f 2>/dev/null || hostname)"
+    YARA_BIN="$(resolve_yara_binary)"
     cat > "$EDR_HOME/config.json" << CONF
 {
   "platform_url":    "$PLATFORM_URL",
@@ -244,6 +261,7 @@ deploy_agent() {
   "poll_interval":   60,
   "heartbeat_interval": 60,
   "telemetry_batch": 20,
+  "yara_binary":     "$YARA_BIN",
   "yara_rules":      "$EDR_HOME/yara_rules/cycentra.yar",
   "quarantine_dir":  "$EDR_HOME/quarantine",
   "ioc_cache":       "$EDR_HOME/ioc_cache/ioc.json",
