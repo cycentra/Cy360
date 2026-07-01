@@ -1428,7 +1428,7 @@ def _crossref_agents_conn(conn) -> None:
             UPDATE network_assets na
             SET siem_agent_id = hpc.agent_id
             FROM host_posture_cache hpc
-            WHERE hpc.ip::inet = na.ip_address
+            WHERE hpc.agent_ip::inet = na.ip_address
               AND na.siem_agent_id IS DISTINCT FROM hpc.agent_id
         """)
         # Auto-populate new edr_agents into network_assets if not already there
@@ -1479,7 +1479,7 @@ def _crossref_agents_conn(conn) -> None:
               (ip_address, hostname, siem_agent_id, source, discovery_source,
                asset_type, vendor, os_fingerprint)
             SELECT
-              hpc.ip::inet,
+              hpc.agent_ip::inet,
               hpc.agent_name,
               hpc.agent_id,
               'siem_agent',
@@ -1498,7 +1498,7 @@ def _crossref_agents_conn(conn) -> None:
               END,
               hpc.os_platform
             FROM host_posture_cache hpc
-            WHERE hpc.ip IS NOT NULL AND hpc.ip NOT IN ('any', '127.0.0.1', '0.0.0.0')
+            WHERE hpc.agent_ip IS NOT NULL AND hpc.agent_ip NOT IN ('any', '127.0.0.1', '0.0.0.0')
             ON CONFLICT (ip_address) DO UPDATE SET
               siem_agent_id    = EXCLUDED.siem_agent_id,
               hostname         = COALESCE(network_assets.hostname, EXCLUDED.hostname),

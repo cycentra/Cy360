@@ -1563,28 +1563,43 @@ def self_enroll_agent():
         return jsonify({"error": "hostname required"}), 400
 
     import secrets as _s
-    agent_id = str(uuid.uuid4())
-    token    = _s.token_urlsafe(48)
+    token = _s.token_urlsafe(48)
     try:
         conn = _db()
         with conn.cursor() as cur:
-            # Retire any previous enrollments for the same hostname so Fleet
-            # never shows duplicate cards for the same physical endpoint.
-            cur.execute(
-                "DELETE FROM edr_agents WHERE hostname=%s AND agent_id!=%s",
-                [hostname, agent_id],
-            )
-            cur.execute(
-                """
-                INSERT INTO edr_agents
-                  (agent_id, hostname, os_type, agent_ip, asset_type,
-                   enrollment_token, enrolled_by, version,
-                   enrollment_gateway_mac, last_gateway_mac)
-                VALUES (%s,%s,%s,%s,%s,%s,'self-enrollment',%s,%s,%s)
-                """,
-                [agent_id, hostname, os_type, agent_ip, asset_type, token, version,
-                 gateway_mac or None, gateway_mac or None],
-            )
+            # UPSERT on hostname: update the existing row when the same endpoint
+            # re-enrolls (reinstall / repeated install). Keeps agent_id stable so
+            # FK-referenced tables (edr_detections, edr_response_commands) are
+            # never orphaned. A DELETE+INSERT would violate those FK constraints.
+            cur.execute("SELECT agent_id FROM edr_agents WHERE hostname=%s", [hostname])
+            row = cur.fetchone()
+            if row:
+                agent_id = row[0]
+                cur.execute(
+                    """
+                    UPDATE edr_agents
+                       SET enrollment_token=%s, os_type=%s, agent_ip=%s,
+                           asset_type=%s, version=%s, enrolled_by='self-enrollment',
+                           enrollment_gateway_mac=%s, last_gateway_mac=%s,
+                           last_seen=NOW()
+                     WHERE agent_id=%s
+                    """,
+                    [token, os_type, agent_ip, asset_type, version,
+                     gateway_mac or None, gateway_mac or None, agent_id],
+                )
+            else:
+                agent_id = str(uuid.uuid4())
+                cur.execute(
+                    """
+                    INSERT INTO edr_agents
+                      (agent_id, hostname, os_type, agent_ip, asset_type,
+                       enrollment_token, enrolled_by, version,
+                       enrollment_gateway_mac, last_gateway_mac)
+                    VALUES (%s,%s,%s,%s,%s,%s,'self-enrollment',%s,%s,%s)
+                    """,
+                    [agent_id, hostname, os_type, agent_ip, asset_type, token, version,
+                     gateway_mac or None, gateway_mac or None],
+                )
         conn.commit()
         conn.close()
     except psycopg2.Error as exc:
