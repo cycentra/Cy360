@@ -141,7 +141,48 @@ def upsert_assets(conn, assets: list[dict], source: str = "manual") -> int:
                     tags,
                 ))
             else:
-                # Non-manual: only fill fields that are currently empty
+                # Non-manual: only fill fields that are currently empty.
+                # When a MAC is present, try to update the existing row for that
+                # MAC first (handles devices that changed IP due to roaming/DHCP).
+                # Only move the IP if the new IP is not already claimed by a
+                # different device — otherwise fall through to the IP-based upsert.
+                mac = a.get("mac_address") or None
+                if mac:
+                    cur.execute("""
+                        UPDATE network_assets SET
+                          ip_address       = %s::inet,
+                          hostname         = COALESCE(hostname, NULLIF(%s, '')),
+                          vendor           = COALESCE(vendor,   NULLIF(%s, '')),
+                          asset_type       = CASE WHEN asset_type IN ('unknown','')
+                                                  THEN %s ELSE asset_type END,
+                          source           = CASE WHEN source = 'manual' THEN 'manual'
+                                                  ELSE %s END,
+                          discovery_source = CASE WHEN discovery_source IN ('manual','')
+                                                  THEN %s ELSE discovery_source END,
+                          last_seen        = NOW()
+                        WHERE mac_address = %s
+                          AND ip_address IS DISTINCT FROM %s::inet
+                          AND NOT EXISTS (
+                            SELECT 1 FROM network_assets
+                            WHERE ip_address = %s::inet
+                              AND mac_address IS DISTINCT FROM %s
+                          )
+                        RETURNING id
+                    """, (
+                        a["ip_address"],
+                        a.get("hostname") or None,
+                        a.get("vendor") or None,
+                        a.get("asset_type", "unknown"),
+                        source, source,
+                        mac,
+                        a["ip_address"],
+                        a["ip_address"],
+                        mac,
+                    ))
+                    if cur.fetchone():
+                        count += 1
+                        continue
+
                 cur.execute("""
                     INSERT INTO network_assets
                       (ip_address, mac_address, hostname, vendor, asset_type,
@@ -162,7 +203,7 @@ def upsert_assets(conn, assets: list[dict], source: str = "manual") -> int:
                       last_seen        = NOW()
                 """, (
                     a["ip_address"],
-                    a.get("mac_address") or None,
+                    mac,
                     a.get("hostname") or None,
                     a.get("vendor") or None,
                     a.get("asset_type", "unknown"),

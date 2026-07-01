@@ -283,9 +283,11 @@ def init_itam_tables(db_url: str) -> None:
     conn.commit()
     conn.close()
     _log.info("ITAM tables initialised")
-    # Enrich existing ARP assets that are missing vendor or hostname (background)
     import threading
+    # Enrich existing ARP assets that are missing vendor or hostname (background)
     threading.Thread(target=_backfill_arp_assets, daemon=True).start()
+    # Clean up duplicate asset rows from roaming devices (runs once at startup)
+    threading.Thread(target=_startup_dedup, daemon=True).start()
 
 
 # ── Settings helpers ──────────────────────────────────────────────────────────
@@ -1402,6 +1404,102 @@ def _backfill_arp_assets():
         _log.error("_backfill_arp_assets error: %s", exc)
 
 
+def _startup_dedup():
+    """Background thread: dedup existing duplicate asset rows on service start."""
+    try:
+        conn = _db()
+        n = _dedup_by_agent_id(conn)
+        conn.close()
+        if n:
+            _log.info("ITAM startup dedup: removed %d stale duplicate row(s)", n)
+    except Exception as exc:
+        _log.error("ITAM startup dedup error: %s", exc)
+
+
+def _dedup_by_agent_id(conn) -> int:
+    """
+    Merge duplicate network_asset rows that represent the same physical device.
+
+    Dedup order:
+      1. Same edr_agent_id  — one CyEDR agent = one physical device
+      2. Same siem_agent_id — one Wazuh agent  = one physical device
+      3. Same mac_address   — for ARP/nmap rows with no agent link
+
+    Keeps the most-recently-seen row (highest last_seen), absorbs best-available
+    fields from the dupes, then deletes the dupes.  Called after every
+    _crossref_agents_conn() run so roaming devices never accumulate rows.
+
+    Returns the number of duplicate rows deleted.
+    """
+    deleted = 0
+    with conn.cursor() as cur:
+        for field in ("edr_agent_id", "siem_agent_id"):
+            other = "siem_agent_id" if field == "edr_agent_id" else "edr_agent_id"
+            cur.execute(f"""
+                SELECT {field},
+                       array_agg(id ORDER BY last_seen DESC NULLS LAST) AS ids
+                FROM network_assets
+                WHERE {field} IS NOT NULL
+                GROUP BY {field}
+                HAVING COUNT(*) > 1
+            """)
+            for row in cur.fetchall():
+                ids, keeper_id, dupe_ids = row["ids"], row["ids"][0], row["ids"][1:]
+
+                # Collect best fields from dupes before deleting them
+                cur.execute(f"""
+                    SELECT MAX(last_seen) AS last_seen,
+                           (array_agg({other} ORDER BY last_seen DESC NULLS LAST)
+                            FILTER (WHERE {other} IS NOT NULL))[1]          AS other_agent_id,
+                           (array_agg(hostname ORDER BY last_seen DESC NULLS LAST)
+                            FILTER (WHERE hostname IS NOT NULL AND hostname <> ''))[1] AS hostname,
+                           (array_agg(mac_address ORDER BY last_seen DESC NULLS LAST)
+                            FILTER (WHERE mac_address IS NOT NULL AND mac_address <> ''))[1] AS mac,
+                           (array_agg(vendor ORDER BY last_seen DESC NULLS LAST)
+                            FILTER (WHERE vendor IS NOT NULL AND vendor <> ''))[1]     AS vendor
+                    FROM network_assets WHERE id = ANY(%s)
+                """, [dupe_ids])
+                merge = cur.fetchone()
+
+                cur.execute("DELETE FROM network_assets WHERE id = ANY(%s)", [dupe_ids])
+                deleted += len(dupe_ids)
+
+                if merge:
+                    cur.execute(f"""
+                        UPDATE network_assets SET
+                          {other}      = COALESCE({other}, %s),
+                          hostname     = COALESCE(NULLIF(hostname, ''), %s),
+                          mac_address  = COALESCE(NULLIF(mac_address, ''), %s),
+                          vendor       = COALESCE(NULLIF(vendor, ''), %s),
+                          last_seen    = GREATEST(last_seen, %s)
+                        WHERE id = %s
+                    """, [
+                        merge["other_agent_id"], merge["hostname"],
+                        merge["mac"], merge["vendor"],
+                        merge["last_seen"], keeper_id,
+                    ])
+
+        # MAC-based dedup for pure ARP/nmap rows (no agent IDs)
+        cur.execute("""
+            SELECT mac_address,
+                   array_agg(id ORDER BY last_seen DESC NULLS LAST) AS ids
+            FROM network_assets
+            WHERE mac_address IS NOT NULL AND mac_address <> ''
+              AND edr_agent_id IS NULL AND siem_agent_id IS NULL
+            GROUP BY mac_address
+            HAVING COUNT(*) > 1
+        """)
+        for row in cur.fetchall():
+            dupe_ids = row["ids"][1:]
+            cur.execute("DELETE FROM network_assets WHERE id = ANY(%s)", [dupe_ids])
+            deleted += len(dupe_ids)
+
+    conn.commit()
+    if deleted:
+        _log.info("ITAM: dedup merged %d duplicate asset row(s)", deleted)
+    return deleted
+
+
 def _crossref_agents():
     """Cross-reference network_assets with edr_agents + host_posture_cache by IP."""
     try:
@@ -1516,6 +1614,7 @@ def _crossref_agents_conn(conn) -> None:
               last_seen        = NOW()
         """)
     conn.commit()
+    _dedup_by_agent_id(conn)
 
 
 def _classify_iot_from_assets(conn, assets: list[dict]) -> None:

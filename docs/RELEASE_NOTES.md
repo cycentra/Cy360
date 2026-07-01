@@ -1,3 +1,11 @@
+## v1.0.140 -- 2026-07-01
+
+### Bug Fixes
+
+  - cyscan): spurious critical detection when YARA finds 0 matches
+
+---
+
 ## v1.0.139 -- 2026-07-01
 
 ### Bug Fixes

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════════
-# CyCentra 360 -- Setup & Update Wizard v1.0.139 -- 2026-07-01 15:09 UTC
+# CyCentra 360 -- Setup & Update Wizard v1.0.140 -- 2026-07-01 17:43 UTC
 #
 # FRESH INSTALL (runs everything — infra + app):
 #   sudo bash cycentra-setup.sh
@@ -528,6 +528,7 @@ apt-get install -y -qq \
     curl wget gnupg lsb-release ca-certificates jq \
     python3 python3-pip \
     nmap whois rsync git openssl \
+    snmp \
     nginx certbot python3-certbot-nginx \
     2>/dev/null
 success "System packages installed"
