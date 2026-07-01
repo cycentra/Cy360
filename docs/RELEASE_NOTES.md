@@ -1,3 +1,13 @@
+## v1.0.143 -- 2026-07-01
+
+### Bug Fixes
+
+  - fix(cyedr): stable hardware UUID (IOPlatformUUID/machine-id/WMIC) prevents duplicate agent registration on reinstall
+  - fix(cyedr): installer now preserves agent_id + enrollment_token across reinstalls
+  - fix(cyedr): server deduplicates by hardware_uuid first, hostname second
+
+---
+
 ## v1.0.142 -- 2026-07-01
 
 ### Bug Fixes
