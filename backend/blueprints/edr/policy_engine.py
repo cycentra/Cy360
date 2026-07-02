@@ -536,3 +536,16 @@ def add_agents_to_group(db_url: str, group_id: str, agent_ids: list[str]) -> int
     finally:
         conn.close()
     return count
+
+
+def delete_group(db_url: str, group_id: str) -> bool:
+    conn = _db(db_url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM edr_group_members WHERE group_id=%s", [group_id])
+            cur.execute("DELETE FROM edr_agent_groups WHERE id=%s", [group_id])
+            deleted = cur.rowcount > 0
+        conn.commit()
+    finally:
+        conn.close()
+    return deleted

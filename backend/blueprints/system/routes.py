@@ -998,7 +998,7 @@ def _get_host_count() -> int:
         import psycopg2
         with psycopg2.connect(_CORR_DB_URL) as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM host_posture_cache")
+                cur.execute("SELECT COUNT(*) FROM edr_agents WHERE status='active'")
                 return cur.fetchone()[0]
     except Exception:
         return -1  # unknown — don't enforce limit if DB unreachable

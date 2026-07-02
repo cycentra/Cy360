@@ -367,7 +367,7 @@ function RuleDetailModal({ rule, onClose, onDelete, onToggle }) {
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
-export default function EdrCyScanRulesPage() {
+export function CyScanRulesContent() {
   const [rules,         setRules]         = useState([]);
   const [loading,       setLoading]       = useState(true);
   const [showUpload,    setShowUpload]    = useState(false);
@@ -421,7 +421,7 @@ export default function EdrCyScanRulesPage() {
   const totalMatches  = rules.reduce((s, r) => s + (r.match_count || 0), 0);
 
   return (
-    <div style={{ padding: "24px 28px", background: T.bg, minHeight: "100vh", color: T.text }}>
+    <div style={{ color: T.text }}>
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
         <div>
@@ -591,6 +591,14 @@ export default function EdrCyScanRulesPage() {
       )}
 
       <Toast msg={toast.msg} ok={toast.ok} />
+    </div>
+  );
+}
+
+export default function EdrCyScanRulesPage() {
+  return (
+    <div style={{ padding: "24px 28px", background: T.bg, minHeight: "100vh" }}>
+      <CyScanRulesContent />
     </div>
   );
 }

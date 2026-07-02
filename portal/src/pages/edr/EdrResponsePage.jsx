@@ -221,7 +221,13 @@ function IssueActionPanel({ agents, onIssued }) {
   );
 }
 
+const RESPONSE_TABS = [
+  { id: "console", label: "Response Console", icon: "⚡" },
+  { id: "history", label: "Command History",  icon: "📋" },
+];
+
 export default function EdrResponsePage() {
+  const [activeTab,    setActiveTab]    = useState("console");
   const [commands, setCommands] = useState([]);
   const [agents,   setAgents]   = useState([]);
   const [loading,  setLoading]  = useState(true);
@@ -267,59 +273,50 @@ export default function EdrResponsePage() {
 
   return (
     <div style={{ padding: "28px 32px", minHeight: "100vh", background: "#0a0e1a" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#e8eaf0" }}>
-            Response Console
-          </h1>
-          <div style={{ fontSize: 12, color: "#555", marginTop: 4 }}>
-            Issue containment actions and track command execution across the fleet
-          </div>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#e8eaf0" }}>Response Console</h1>
+          <div style={{ fontSize: 12, color: "#555", marginTop: 4 }}>Issue containment actions and track command execution across the fleet</div>
         </div>
-        <button onClick={load} style={{
-          border: `1px solid ${ACCENT}44`, borderRadius: 6, background: "transparent",
-          color: ACCENT, padding: "6px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12,
-        }}>Refresh</button>
+        <button onClick={load} style={{ border: `1px solid ${ACCENT}44`, borderRadius: 6, background: "transparent", color: ACCENT, padding: "6px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12 }}>Refresh</button>
       </div>
 
-      <IssueActionPanel agents={agents} onIssued={load} />
-
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#e8eaf0" }}>
-          Command History
-        </div>
-        <select
-          value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
-          style={{
-            background: CARD_BG, border: CARD_BORDER, borderRadius: 6, color: "#e8eaf0",
-            padding: "4px 10px", fontSize: 11, cursor: "pointer",
-          }}
-        >
-          <option value="">All Statuses</option>
-          <option value="pending">Pending</option>
-          <option value="acknowledged">Acknowledged</option>
-          <option value="completed">Completed</option>
-          <option value="failed">Failed</option>
-        </select>
+      <div style={{ display: "flex", gap: 0, marginBottom: 28, borderBottom: "1px solid rgba(255,255,255,0.07)" }}>
+        {RESPONSE_TABS.map(tab => (
+          <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
+            border: "none", borderBottom: activeTab === tab.id ? `2px solid ${ACCENT}` : "2px solid transparent",
+            background: "transparent", color: activeTab === tab.id ? ACCENT : "#666",
+            padding: "10px 20px", fontSize: 13, fontWeight: activeTab === tab.id ? 700 : 400,
+            cursor: "pointer", marginBottom: -1, transition: "color 0.15s",
+          }}>{tab.icon} {tab.label}</button>
+        ))}
       </div>
 
-      {error && (
-        <div style={{
-          background: "#ff3b3b22", border: "1px solid #ff3b3b44", borderRadius: 8,
-          padding: "12px 16px", color: "#ff7070", fontSize: 13, marginBottom: 16,
-        }}>{error}</div>
+      {activeTab === "console" && (
+        <IssueActionPanel agents={agents} onIssued={() => { load(); setActiveTab("history"); }} />
       )}
 
-      {loading ? (
-        <div style={{ textAlign: "center", color: "#555", padding: 40, fontSize: 13 }}>
-          Loading commands…
-        </div>
-      ) : filtered.length === 0 ? (
-        <div style={{ textAlign: "center", color: "#555", padding: 60, fontSize: 13 }}>
-          No response commands yet. Issue an action above.
-        </div>
-      ) : (
-        filtered.map(cmd => <CommandRow key={cmd.id} cmd={cmd} />)
+      {activeTab === "history" && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+            <div style={{ fontSize: 13, color: "#9aa0b0" }}>{commands.length} command{commands.length !== 1 ? "s" : ""} across the fleet</div>
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ background: CARD_BG, border: CARD_BORDER, borderRadius: 6, color: "#e8eaf0", padding: "4px 10px", fontSize: 11, cursor: "pointer" }}>
+              <option value="">All Statuses</option>
+              <option value="pending">Pending</option>
+              <option value="acknowledged">Acknowledged</option>
+              <option value="completed">Completed</option>
+              <option value="failed">Failed</option>
+            </select>
+          </div>
+          {error && <div style={{ background: "#ff3b3b22", border: "1px solid #ff3b3b44", borderRadius: 8, padding: "12px 16px", color: "#ff7070", fontSize: 13, marginBottom: 16 }}>{error}</div>}
+          {loading ? (
+            <div style={{ textAlign: "center", color: "#555", padding: 40, fontSize: 13 }}>Loading commands…</div>
+          ) : filtered.length === 0 ? (
+            <div style={{ textAlign: "center", color: "#555", padding: 60, fontSize: 13 }}>No response commands yet. Issue an action from the Response Console tab.</div>
+          ) : (
+            filtered.map(cmd => <CommandRow key={cmd.id} cmd={cmd} />)
+          )}
+        </>
       )}
     </div>
   );

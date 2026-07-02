@@ -1044,7 +1044,7 @@ from .policy_engine import (
     create_policy, list_policies, get_policy, update_policy, delete_policy,
     assign_policy, get_agent_effective_policies,
     create_deployment_token, list_deployment_tokens, revoke_deployment_token,
-    create_group, list_groups, add_agents_to_group,
+    create_group, list_groups, add_agents_to_group, delete_group,
     POLICY_TYPES, POLICY_DEFAULTS,
     ensure_policy_tables,
 )
@@ -1066,7 +1066,7 @@ def init_edr(app):
 
 # ── Policy OPTIONS ────────────────────────────────────────────────────────────
 for _pp in ("/policies", "/policies/<pol_id>", "/policies/<pol_id>/assign",
-            "/agents/<agent_id>/policies", "/groups", "/groups/<grp_id>/members"):
+            "/agents/<agent_id>/policies", "/groups", "/groups/<grp_id>", "/groups/<grp_id>/members"):
     edr_bp.add_url_rule(
         _pp,
         endpoint=f"opts_pol_{_pp.replace('/', '_').replace('<', '').replace('>', '')}",
@@ -1195,6 +1195,15 @@ def add_group_members(grp_id):
         return jsonify({"error": "agent_ids required"}), 400
     count = add_agents_to_group(CYCENTRA_DB_URL, grp_id, agent_ids)
     return jsonify({"added": count})
+
+
+@edr_bp.route("/groups/<grp_id>", methods=["DELETE"])
+@require_analyst
+def delete_group_route(grp_id):
+    ok = delete_group(CYCENTRA_DB_URL, grp_id)
+    if not ok:
+        return jsonify({"error": "Group not found"}), 404
+    return jsonify({"deleted": True})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

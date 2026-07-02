@@ -13,6 +13,7 @@
  *   isolation_exceptions — IPs/ports reachable during network isolation
  */
 import React, { useEffect, useState, useCallback, useRef } from "react";
+import { CyScanRulesContent } from "./EdrCyScanRulesPage";
 
 const BG      = "#0a0e1a";
 const CARD_BG = "rgba(255,255,255,0.03)";
@@ -518,6 +519,120 @@ function AssignModal({ policy, agents, groups, onClose, onAssigned }) {
   );
 }
 
+// ── Groups Tab ────────────────────────────────────────────────────────────────
+function GroupsTab({ agents }) {
+  const [groups,     setGroups]     = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [newName,    setNewName]    = useState("");
+  const [creating,   setCreating]   = useState(false);
+  const [addingTo,   setAddingTo]   = useState(null);
+  const [selected,   setSelected]   = useState([]);
+  const [err,        setErr]        = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const r = await fetch("/api/edr/groups").catch(() => null);
+    if (r?.ok) setGroups((await r.json()).groups || []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const createGroup = async () => {
+    if (!newName.trim()) return;
+    setErr("");
+    const r = await fetch("/api/edr/groups", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ name:newName }) });
+    if (r.ok) { setNewName(""); setCreating(false); load(); }
+    else setErr("Failed to create group");
+  };
+
+  const deleteGrp = async (id, name) => {
+    if (!confirm(`Delete group "${name}"?`)) return;
+    await fetch(`/api/edr/groups/${id}`, { method:"DELETE" });
+    load();
+  };
+
+  const addMembers = async () => {
+    if (!selected.length) return;
+    await fetch(`/api/edr/groups/${addingTo}/members`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ agent_ids:selected }) });
+    setAddingTo(null); setSelected([]); load();
+  };
+
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
+        <div style={{ fontSize:12, color:"#9aa0b0" }}>{groups.length} group{groups.length!==1?"s":""}</div>
+        <button onClick={()=>setCreating(c=>!c)} style={{ border:"none", borderRadius:7, background:ACCENT, color:"#0a0e1a", fontWeight:700, padding:"9px 20px", cursor:"pointer", fontSize:13 }}>+ New Group</button>
+      </div>
+
+      {creating && (
+        <div style={{ background:CARD_BG, border:BORDER, borderRadius:10, padding:"16px 20px", marginBottom:20 }}>
+          <div style={{ fontSize:12, color:"#555", marginBottom:8 }}>Group name</div>
+          <div style={{ display:"flex", gap:10 }}>
+            <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="e.g. Linux Servers" autoFocus
+              style={{ flex:1, background:"rgba(255,255,255,0.05)", border:BORDER, borderRadius:6, color:"#e8eaf0", padding:"7px 12px", fontSize:12, outline:"none" }}/>
+            <button onClick={createGroup} style={{ border:"none", borderRadius:6, background:ACCENT, color:"#0a0e1a", fontWeight:700, padding:"7px 18px", cursor:"pointer" }}>Create</button>
+            <button onClick={()=>setCreating(false)} style={{ border:BORDER, borderRadius:6, background:"transparent", color:"#888", padding:"7px 14px", cursor:"pointer" }}>Cancel</button>
+          </div>
+          {err && <div style={{ color:"#ff7070", fontSize:11, marginTop:8 }}>{err}</div>}
+        </div>
+      )}
+
+      {/* Add-members modal */}
+      {addingTo && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center" }}>
+          <div style={{ background:"#111827", border:BORDER, borderRadius:12, padding:"24px 28px", width:480, maxHeight:"70vh", display:"flex", flexDirection:"column" }}>
+            <div style={{ fontSize:14, fontWeight:700, color:"#e8eaf0", marginBottom:16 }}>Add Agents to Group</div>
+            <div style={{ flex:1, overflowY:"auto", marginBottom:16 }}>
+              {agents.map(a => (
+                <div key={a.agent_id} onClick={()=>setSelected(s=>s.includes(a.agent_id)?s.filter(x=>x!==a.agent_id):[...s,a.agent_id])}
+                  style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderRadius:6, cursor:"pointer", background:selected.includes(a.agent_id)?"rgba(0,229,160,0.08)":"transparent" }}>
+                  <input type="checkbox" readOnly checked={selected.includes(a.agent_id)} style={{ accentColor:ACCENT }}/>
+                  <div>
+                    <div style={{ fontSize:12, color:"#e8eaf0" }}>{a.hostname}</div>
+                    <div style={{ fontSize:10, color:"#555" }}>{a.os_type} · {a.ip_address}</div>
+                  </div>
+                </div>
+              ))}
+              {agents.length===0 && <div style={{ color:"#555", fontSize:12, padding:12 }}>No active agents.</div>}
+            </div>
+            <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+              <button onClick={()=>{setAddingTo(null);setSelected([]);}} style={{ border:BORDER, borderRadius:6, background:"transparent", color:"#888", padding:"6px 16px", cursor:"pointer" }}>Cancel</button>
+              <button onClick={addMembers} style={{ border:"none", borderRadius:6, background:ACCENT, color:"#0a0e1a", fontWeight:700, padding:"6px 18px", cursor:"pointer" }}>Add {selected.length||""} Agent{selected.length!==1?"s":""}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ textAlign:"center", color:"#555", padding:40 }}>Loading groups…</div>
+      ) : groups.length===0 ? (
+        <div style={{ textAlign:"center", color:"#555", padding:60, fontSize:13 }}>No groups yet. Create one to batch-assign policies.</div>
+      ) : (
+        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          {groups.map(g => (
+            <div key={g.id} style={{ background:CARD_BG, border:BORDER, borderRadius:10, padding:"14px 20px", display:"flex", alignItems:"center", gap:12 }}>
+              <span style={{ fontSize:18 }}>👥</span>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:14, fontWeight:700, color:"#e8eaf0" }}>{g.name}</div>
+                <div style={{ fontSize:11, color:"#555", marginTop:2 }}>{g.member_count||0} agents</div>
+              </div>
+              <button onClick={()=>{setAddingTo(g.id);setSelected([]);}} style={{ border:`1px solid ${ACCENT}44`, borderRadius:5, background:"transparent", color:ACCENT, padding:"4px 12px", fontSize:11, cursor:"pointer" }}>+ Add Agents</button>
+              <button onClick={()=>deleteGrp(g.id,g.name)} style={{ border:"1px solid #ff3b3b44", borderRadius:5, background:"transparent", color:"#ff3b3b", padding:"4px 12px", fontSize:11, cursor:"pointer" }}>Delete</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const PAGE_TABS = [
+  { id:"policies", label:"Policies",     icon:"📋" },
+  { id:"cyscan",   label:"CyScan Rules", icon:"🧬" },
+  { id:"groups",   label:"Groups",       icon:"👥" },
+];
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function EdrPoliciesPage() {
   const [policies,   setPolicies]  = useState([]);
@@ -535,6 +650,7 @@ export default function EdrPoliciesPage() {
   const [filterType, setFilterType] = useState("");
   const [saving,     setSaving]    = useState(false);
   const [error,      setError]     = useState("");
+  const [activeTab,  setActiveTab] = useState("policies");
 
   const load = useCallback(async () => {
     setLoading(true); setError("");
@@ -612,10 +728,30 @@ export default function EdrPoliciesPage() {
           onClose={()=>setAssigning(null)} onAssigned={load} />
       )}
 
+      <div style={{ marginBottom:20 }}>
+        <h1 style={{ margin:0, fontSize:22, fontWeight:800, color:"#e8eaf0" }}>Endpoint Defence</h1>
+        <div style={{ fontSize:12, color:"#555", marginTop:4 }}>Manage endpoint policies, threat hunting rules, and agent groups</div>
+      </div>
+
+      {/* Tab bar */}
+      <div style={{ display:"flex", gap:0, marginBottom:28, borderBottom:"1px solid rgba(255,255,255,0.07)" }}>
+        {PAGE_TABS.map(tab => (
+          <button key={tab.id} onClick={()=>setActiveTab(tab.id)} style={{
+            border:"none", borderBottom:activeTab===tab.id?`2px solid ${ACCENT}`:"2px solid transparent",
+            background:"transparent", color:activeTab===tab.id?ACCENT:"#666",
+            padding:"10px 20px", fontSize:13, fontWeight:activeTab===tab.id?700:400,
+            cursor:"pointer", marginBottom:-1, transition:"color 0.15s",
+          }}>{tab.icon} {tab.label}</button>
+        ))}
+      </div>
+
+      {activeTab==="cyscan" && <CyScanRulesContent />}
+      {activeTab==="groups" && <GroupsTab agents={agents} />}
+      {activeTab==="policies" && (<>
+
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:24 }}>
         <div>
-          <h1 style={{ margin:0, fontSize:22, fontWeight:800, color:"#e8eaf0" }}>Endpoint Policies</h1>
-          <div style={{ fontSize:12, color:"#555", marginTop:4 }}>
+          <div style={{ fontSize:12, color:"#9aa0b0" }}>
             {policies.length} policies across {Object.keys(POLICY_TYPE_CFG).length} categories
           </div>
         </div>
@@ -731,6 +867,7 @@ export default function EdrPoliciesPage() {
           })}
         </div>
       )}
+      </>)}
     </div>
   );
 }
