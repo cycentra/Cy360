@@ -1,3 +1,11 @@
+## v1.0.157 -- 2026-07-02
+
+### New Features
+
+  - policies 3-tab shell, response console tabs, EDR groups UI, EDR license count
+
+---
+
 ## v1.0.156 -- 2026-07-02
 
 ### Improvements
