@@ -1,3 +1,11 @@
+## v1.0.159 -- 2026-07-02
+
+### New Features
+
+  - remove CyScan Rules from sidebar nav (now a tab inside Policies
+
+---
+
 ## v1.0.158 -- 2026-07-02
 
 ### New Features
