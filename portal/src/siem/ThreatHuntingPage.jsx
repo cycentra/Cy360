@@ -476,8 +476,18 @@ export function ThreatHuntingPage({ setActiveTab }) {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 6, flexWrap: "wrap" }}>
           <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 13, margin: 0 }}>
-            Proactive hunt engine · 12 YAML rules · runs every 6 hours · on-demand via CyMind AI
+            Proactive hunt engine · 14 correlation rules · runs every 6 hours · on-demand via CyMind AI
           </p>
+          <div style={{
+            marginTop: 10, padding: "8px 14px",
+            background: "rgba(255,140,0,0.05)", border: "1px solid rgba(255,140,0,0.15)",
+            borderRadius: 4, fontSize: 11, color: "rgba(255,255,255,0.5)", lineHeight: 1.6,
+          }}>
+            <strong style={{ color: "#ff8c00" }}>This is the findings dashboard.</strong>{" "}
+            It shows incidents raised by the hunt engine against SIEM data — you cannot author rules here.
+            To create custom endpoint detection rules for a specific zero-day, go to{" "}
+            <strong style={{ color: "rgba(255,255,255,0.75)" }}>Endpoint Defence → CyScan Rules</strong>.
+          </div>
           {lastRefresh && (
             <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>
               Updated {lastRefresh.toLocaleTimeString()}

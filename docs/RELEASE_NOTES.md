@@ -1,3 +1,28 @@
+## v1.0.152 -- 2026-07-02
+
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.152 -- 2026-07-02
+
+### New Features
+
+  - feat(siem): ASM scan findings and analyst escalations now flow into Active Incidents pipeline — high/critical findings pushed to Redis on scan completion (`.siem_pushed` guard prevents replay); escalation hook fires on `in_review` status transition
+  - feat(siem): ITAM anomalies now flow into Active Incidents — deep scan CVEs (top-20 per asset), high-risk IoT devices (risk ≥ 75, new-discovery only), and Shadow AI detections (new findings only) all push to SIEM correlation engine
+  - feat(siem): New synthetic rule ID namespace 200100–200299 for ASM and ITAM alerts; no Wazuh XML or cycentra-setup.sh changes needed; normaliser categorises by range
+  - feat(siem): Auto-case opening extended — critical ASM findings and critical ITAM CVEs force-open a CyCase immediately, bypassing the alert_count ≥ 3 threshold
+  - feat(siem): `_infer_case_type()` updated in both `cases/service.py` and `correlation_engine/ingestor.py` — new case types: `asm_finding`, `vulnerability`, `shadow_ai`, `itam_anomaly`
+  - feat(nav): Case Management moved from INTERNAL EXPOSURE section to standalone CASE MANAGEMENT nav section at the bottom of the sidebar
+
+### Bug Fixes
+
+  - fix(siem): Rule ID collision — initial allocation used 100400–100503 which overlap with existing Wazuh lateral movement and persistence rules in cy_cust_rules.xml; renumbered to 200100+ (unoccupied range)
+
+---
+
 ## v1.0.151 -- 2026-07-01
 
 ### Improvements
