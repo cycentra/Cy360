@@ -38,7 +38,7 @@ const SvgEDR   = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" str
  *   SECURITY POSTURE       — Posture Benchmark (primary entry)
  *   EXTERNAL EXPOSURE      — Attack Surface · Asset Inventory · Vulnerabilities · Scan Operations
  *   INTERNAL EXPOSURE      — Active Incidents · Entity Risk · Behavioral Analytics · Threat Hunting
- *   ENDPOINT DEFENSE       — EDR Fleet · Detections · Response · Policies · Custom Hunting · Installer
+ *   ENDPOINT DEFENSE       — EDR Fleet · Detections · Response · Policies · CyScan Rules · Installer
  *   ASSET MANAGEMENT       — Asset Coverage · IoT Registry · Shadow AI Monitor
  *   SECURITY COMPLIANCE    — GRC Posture · Assessments · Findings · Risk · Reports
  *   MARKETPLACE            — Marketplace (integrations, playbooks, platform extensions)
@@ -87,7 +87,7 @@ export function buildNavSections({ installedModules = {}, data = null }) {
         { id: "edr-detections", label: "EDR Detections",      icon: <span style={{ fontSize: 13 }}>🛡️</span>,         accent: "#ff3b3b" },
         { id: "edr-response",   label: "Response Console",    icon: <span style={{ fontSize: 13 }}>⚡</span>,          accent: "#ff8c00" },
         { id: "edr-policies",   label: "Policies",            icon: <span style={{ fontSize: 13 }}>📋</span>,          accent: "#b06eff" },
-        { id: "edr-cyscan-rules", label: "Custom Threat Hunting", icon: <span style={{ fontSize: 13 }}>🎯</span>,       accent: "#00e5a0" },
+        { id: "edr-cyscan-rules", label: "CyScan Rules",           icon: <span style={{ fontSize: 13 }}>🧬</span>,       accent: "#00e5a0" },
         { id: "edr-installer",  label: "Agent Installer",     icon: <span style={{ fontSize: 13 }}>📥</span>,          accent: "#4d9eff" },
       ],
     },
