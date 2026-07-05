@@ -1,3 +1,15 @@
+## v1.0.163 -- 2026-07-05
+
+### New Features
+
+  - ASM scan now routes all TI enrichment through CyTIM (profile=asm: Shodan, VT, GreyNoise, MISP, AlienVault)
+  - Dark web scan (Ahmia + HIBP) now runs inside CyTIM — toggle-controlled from CyTIM Sources tab
+  - passive_osint.py routes domain TI through CyTIM; falls back to MISP when CyTIM not configured
+  - `is_cytim_enabled()`, `cytim_bulk_enrich()`, `cytim_darkweb_enrich()`, `is_darkweb_enabled()` centralized gateway helpers added to core/helpers.py
+  - `CYTIM_ENABLED` master switch added to core/config.py
+
+---
+
 ## v1.0.162 -- 2026-07-05
 
 ### Improvements
