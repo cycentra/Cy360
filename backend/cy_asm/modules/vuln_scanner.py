@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import aiohttp
 
 from config import (
-    HTTP_TIMEOUT, NVD_API_KEY, EPSS_API_URL,
+    HTTP_TIMEOUT,
     CVSS_CRITICAL, CVSS_HIGH, CVSS_MEDIUM,
     GVM_USER, GVM_PASSWORD,
 )
@@ -51,7 +51,6 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-_NVD_BASE = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 _GVM_SOCKET = "/run/gvmd/gvmd.sock"   # default path; override via env if needed
 
 _SEVERITY_FROM_CVSS = {
@@ -122,90 +121,35 @@ def _compliance_tags(vuln_id: str, source: str = "") -> Dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# NVD CVE lookup
+# CVE + EPSS via CyTIM
 # ---------------------------------------------------------------------------
-async def _fetch_nvd_cves(
-    keyword: str,
-    session: aiohttp.ClientSession,
-    max_results: int = 5,
-) -> List[Dict[str, Any]]:
-    """Query NVD by keyword (banner, product name, CPE string). Returns list of CVE dicts."""
-    params: Dict[str, Any] = {
-        "keywordSearch": keyword[:120],
-        "resultsPerPage": max_results,
-    }
-    headers = {}
-    if NVD_API_KEY:
-        headers["apiKey"] = NVD_API_KEY
 
+def _cytim_cve_by_keyword(domain: str, keyword: str) -> List[Dict[str, Any]]:
+    """Query CyTIM /api/cytim/recon cve module by banner keyword. Returns CVE findings list."""
     try:
-        async with session.get(
-            _NVD_BASE,
-            params=params,
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=15),
-        ) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                results = []
-                for item in data.get("vulnerabilities", [])[:max_results]:
-                    cve  = item.get("cve", {})
-                    cve_id = cve.get("id", "")
-                    desc_list = cve.get("descriptions", [])
-                    desc = next(
-                        (d["value"] for d in desc_list if d.get("lang") == "en"), ""
-                    )
-                    # Extract CVSSv3 base score
-                    metrics = cve.get("metrics", {})
-                    cvss3 = 0.0
-                    for key in ("cvssMetricV31", "cvssMetricV30"):
-                        if key in metrics and metrics[key]:
-                            cvss3 = metrics[key][0].get("cvssData", {}).get("baseScore", 0.0)
-                            break
-                    if not cvss3:
-                        v2 = metrics.get("cvssMetricV2", [])
-                        if v2:
-                            cvss3 = v2[0].get("cvssData", {}).get("baseScore", 0.0)
-
-                    results.append({
-                        "cve_id":    cve_id,
-                        "cvss":      cvss3,
-                        "severity":  _severity_label(cvss3),
-                        "description": desc[:300],
-                    })
-                return results
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), '..', '..'))
+        from core.helpers import cytim_recon
+        results = cytim_recon(domain, ["cve"], cve_keywords=[keyword[:120]])
+        return (results.get("cve") or {}).get("findings", [])
     except Exception as e:
-        logger.debug(f"[VulnScanner] NVD lookup failed for '{keyword}': {e}")
-    return []
+        logger.debug(f"[VulnScanner] CyTIM CVE keyword recon failed for '{keyword}': {e}")
+        return []
 
 
-# ---------------------------------------------------------------------------
-# EPSS enrichment
-# ---------------------------------------------------------------------------
-async def _fetch_epss(
-    cve_ids: List[str],
-    session: aiohttp.ClientSession,
-) -> Dict[str, float]:
-    """Fetch EPSS probability for a batch of CVE IDs. Returns {cve_id: epss_score}."""
+def _cytim_epss_batch(domain: str, cve_ids: List[str]) -> Dict[str, float]:
+    """Query CyTIM /api/cytim/recon cve module for EPSS scores. Returns {cve_id: float}."""
     if not cve_ids:
         return {}
-    # EPSS API accepts comma-separated CVE IDs
-    cve_param = ",".join(cve_ids[:30])
     try:
-        async with session.get(
-            EPSS_API_URL,
-            params={"cve": cve_param},
-            timeout=aiohttp.ClientTimeout(total=10),
-        ) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                return {
-                    row["cve"]: float(row.get("epss", 0.0))
-                    for row in data.get("data", [])
-                }
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), '..', '..'))
+        from core.helpers import cytim_recon
+        results = cytim_recon(domain, ["cve"], cve_ids=cve_ids[:30])
+        return (results.get("cve") or {}).get("epss", {})
     except Exception as e:
-        logger.debug(f"[VulnScanner] EPSS lookup failed: {e}")
-    return {}
+        logger.debug(f"[VulnScanner] CyTIM EPSS recon failed: {e}")
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -219,17 +163,15 @@ async def enrich_port_findings(
     """
     Takes the fingerprints dict from web_analysis.py (port → {banner, vulns})
     and enriches each open port with:
-      - Full CVSSv3 score from NVD (not just CVE ID)
-      - EPSS exploitation probability
+      - Full CVSSv3 score from NVD via CyTIM (not just CVE ID)
+      - EPSS exploitation probability via CyTIM
       - Combined risk score (1-10)
       - Remediation recommendation
-
-    This replaces the stub in web_analysis.fingerprint_services() which only
-    returned bare CVE IDs without scoring.
     """
     findings: List[Dict[str, Any]] = []
+    loop = asyncio.get_running_loop()
 
-    # Collect all CVE IDs first so we can batch EPSS
+    # Per-port CVE lookup via CyTIM (NVD keyword search)
     all_cve_ids: List[str] = []
     port_cves: Dict[int, List[Dict[str, Any]]] = {}
 
@@ -238,12 +180,13 @@ async def enrich_port_findings(
         if not banner or banner in ("Error", "Unknown"):
             continue
 
-        cves = await _fetch_nvd_cves(banner, session)
+        cves = await loop.run_in_executor(None, _cytim_cve_by_keyword, domain, banner)
         if cves:
             port_cves[port] = cves
             all_cve_ids.extend(c["cve_id"] for c in cves)
 
-    epss_map = await _fetch_epss(all_cve_ids, session)
+    # Single batch EPSS call via CyTIM for all collected CVE IDs
+    epss_map = await loop.run_in_executor(None, _cytim_epss_batch, domain, all_cve_ids)
 
     for port, cves in port_cves.items():
         banner = fingerprints[port].get("banner", "")

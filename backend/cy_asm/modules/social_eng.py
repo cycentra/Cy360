@@ -4,7 +4,7 @@ CyCentra ASM — Social Engineering Vectors Module
 
 Enumerates exposed employee contact information that could be used
 for phishing, spear-phishing, or BEC attacks. Data sources:
-  1. Hunter.io domain search (requires HUNTER_API_KEY env var)
+  1. Hunter.io domain search (via CyTIM /api/cytim/recon emails module)
   2. Email pattern inference from any discovered names
   3. LinkedIn public profile enumeration via Google dork
   4. Common corporate email format guessing
@@ -23,7 +23,7 @@ from urllib.parse import quote_plus
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config import HUNTER_API_KEY, HTTP_TIMEOUT
+from config import HTTP_TIMEOUT
 from utils import setup_logging, create_async_session
 
 logger = setup_logging()
@@ -32,57 +32,23 @@ logger = setup_logging()
 # Hunter.io domain search
 # ---------------------------------------------------------------------------
 
-async def find_emails_hunter(
-    domain: str,
-    session: aiohttp.ClientSession,
-) -> List[Dict[str, Any]]:
+def find_emails_cytim(domain: str) -> List[Dict[str, Any]]:
     """
-    Query Hunter.io for known email addresses at *domain*.
-    Returns list of {email, first_name, last_name, position, confidence}.
-    Skipped gracefully if HUNTER_API_KEY is not set.
+    Query CyTIM /api/cytim/recon (emails module) for known email addresses at *domain*.
+    Returns list of {email, first_name, last_name, position, confidence, source}.
+    Falls back to [] if CyTIM is unavailable or unconfigured.
     """
-    if not HUNTER_API_KEY:
-        logger.info("[SocialEng] Hunter.io API key not set — skipping Hunter lookup.")
-        return []
-
-    url = f"https://api.hunter.io/v2/domain-search"
-    params = {
-        "domain":  domain,
-        "api_key": HUNTER_API_KEY,
-        "limit":   20,
-    }
     try:
-        async with session.get(
-            url,
-            params=params,
-            timeout=aiohttp.ClientTimeout(total=HTTP_TIMEOUT),
-        ) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                emails_raw = data.get("data", {}).get("emails", [])
-                results = []
-                for e in emails_raw:
-                    results.append({
-                        "email":      e.get("value", ""),
-                        "first_name": e.get("first_name", ""),
-                        "last_name":  e.get("last_name", ""),
-                        "position":   e.get("position", ""),
-                        "confidence": e.get("confidence", 0),
-                        "source":     "hunter.io",
-                    })
-                logger.info(f"[SocialEng] Hunter.io found {len(results)} email(s) for {domain}.")
-                return results
-            elif resp.status == 401:
-                logger.warning("[SocialEng] Hunter.io API key invalid or expired.")
-            elif resp.status == 429:
-                logger.warning("[SocialEng] Hunter.io rate limit hit.")
-            else:
-                logger.warning(f"[SocialEng] Hunter.io returned HTTP {resp.status}.")
-    except asyncio.TimeoutError:
-        logger.warning("[SocialEng] Hunter.io request timed out.")
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), '..', '..'))
+        from core.helpers import cytim_recon
+        results = cytim_recon(domain, ["emails"])
+        emails = results.get("emails") or []
+        logger.info(f"[SocialEng] CyTIM emails recon returned {len(emails)} email(s) for {domain}.")
+        return emails
     except Exception as e:
-        logger.error(f"[SocialEng] Hunter.io lookup failed: {type(e).__name__}: {e}")
-    return []
+        logger.warning(f"[SocialEng] CyTIM email recon failed: {e}")
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -224,14 +190,15 @@ async def gather_social_eng(domain: str) -> Dict[str, Any]:
     logger.info(f"[SocialEng] Starting social engineering intel for {domain}...")
 
     async with await create_async_session() as session:
-        # Run Hunter.io and LinkedIn dork concurrently
-        hunter_results, li_profiles = await asyncio.gather(
-            find_emails_hunter(domain, session),
+        # CyTIM email recon (Hunter.io via CyTIM) + LinkedIn dork concurrently
+        loop = asyncio.get_running_loop()
+        cytim_results, li_profiles = await asyncio.gather(
+            loop.run_in_executor(None, find_emails_cytim, domain),
             find_linkedin_profiles(domain, session),
             return_exceptions=True,
         )
 
-    emails   = hunter_results if isinstance(hunter_results, list) else []
+    emails   = cytim_results if isinstance(cytim_results, list) else []
     profiles = li_profiles   if isinstance(li_profiles, list)   else []
 
     # Generate additional email pattern variants for discovered names

@@ -178,20 +178,49 @@ def get_threat_intel_client() -> Optional[CyTIMClient]:
 
 # ── Centralized CyTIM gateway helpers (used by all ASM + SIEM modules) ────────
 
+def _get_cytim_settings() -> tuple[str, str]:
+    """Return (cytim_url, api_key) from ai_settings.json, falling back to env vars.
+
+    ai_settings.json is the source of truth — CYTIM_URL / CYTIM_API_KEY in os.environ
+    are only populated if the admin explicitly added them to /opt/cycentra/.env.
+    Reading from the settings file at call-time means the values are always current
+    without requiring a Flask restart after the user saves CyTIM config in the UI.
+    """
+    import json as _json
+    from core.config import AI_SETTINGS_FILE
+    try:
+        if AI_SETTINGS_FILE.exists():
+            data = _json.loads(AI_SETTINGS_FILE.read_text())
+            cytim = data.get("cytim", {})
+            url     = (cytim.get("url") or "").strip().rstrip("/")
+            api_key = (cytim.get("apiKey") or "").strip()
+            if url and api_key:
+                return url, api_key
+    except Exception:
+        pass
+    # Fallback: honour explicit env-var override
+    from core.config import CYTIM_URL, CYTIM_API_KEY
+    return CYTIM_URL, CYTIM_API_KEY
+
+
 def is_cytim_enabled() -> bool:
-    from core.config import CYTIM_URL, CYTIM_API_KEY, CYTIM_ENABLED
-    return bool(CYTIM_ENABLED and CYTIM_URL and CYTIM_API_KEY)
+    from core.config import CYTIM_ENABLED
+    url, api_key = _get_cytim_settings()
+    return bool(CYTIM_ENABLED and url and api_key)
 
 
 def cytim_bulk_enrich(iocs: list, profile: str = "default") -> dict:
     """POST /api/cytim/bulk-enrich. Returns {ioc_value_lower: result_dict}. Never raises."""
     import requests as _req
-    from core.config import CYTIM_URL, CYTIM_API_KEY, CYTIM_TIMEOUT
+    from core.config import CYTIM_TIMEOUT
+    url, api_key = _get_cytim_settings()
+    if not url or not api_key:
+        return {}
     try:
         resp = _req.post(
-            f"{CYTIM_URL}/api/cytim/bulk-enrich",
+            f"{url}/api/cytim/bulk-enrich",
             json={"iocs": iocs, "profile": profile},
-            headers={"X-CyTIM-Key": CYTIM_API_KEY},
+            headers={"X-CyTIM-Key": api_key},
             timeout=CYTIM_TIMEOUT,
         )
         resp.raise_for_status()
@@ -205,12 +234,15 @@ def cytim_bulk_enrich(iocs: list, profile: str = "default") -> dict:
 def cytim_darkweb_enrich(iocs: list) -> dict:
     """POST /api/cytim/darkweb-enrich. Returns raw response dict. Never raises."""
     import requests as _req
-    from core.config import CYTIM_URL, CYTIM_API_KEY, CYTIM_TIMEOUT
+    from core.config import CYTIM_TIMEOUT
+    url, api_key = _get_cytim_settings()
+    if not url or not api_key:
+        return {"enabled": False, "results": []}
     try:
         resp = _req.post(
-            f"{CYTIM_URL}/api/cytim/darkweb-enrich",
+            f"{url}/api/cytim/darkweb-enrich",
             json={"iocs": iocs},
-            headers={"X-CyTIM-Key": CYTIM_API_KEY},
+            headers={"X-CyTIM-Key": api_key},
             timeout=CYTIM_TIMEOUT,
         )
         resp.raise_for_status()
@@ -226,11 +258,35 @@ def is_darkweb_enabled() -> bool:
     if not is_cytim_enabled():
         return False
     import requests as _req
-    from core.config import CYTIM_URL
+    url, _ = _get_cytim_settings()
     try:
-        resp = _req.get(f"{CYTIM_URL}/api/cytim/darkweb-status", timeout=5)
+        resp = _req.get(f"{url}/api/cytim/darkweb-status", timeout=5)
         return resp.json().get("enabled", False)
     except Exception:
         return False
+
+
+def cytim_recon(domain: str, modules: list, **kwargs) -> dict:
+    """POST /api/cytim/recon. Returns results dict keyed by module. Never raises."""
+    import requests as _req
+    from core.config import CYTIM_TIMEOUT
+    url, api_key = _get_cytim_settings()
+    if not url or not api_key:
+        return {}
+    try:
+        payload = {"domain": domain, "modules": modules}
+        payload.update(kwargs)
+        resp = _req.post(
+            f"{url}/api/cytim/recon",
+            json=payload,
+            headers={"X-CyTIM-Key": api_key},
+            timeout=CYTIM_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", {})
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("[CyTIM] recon failed: %s", e)
+        return {}
 
 

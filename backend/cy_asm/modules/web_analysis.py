@@ -20,7 +20,7 @@ from config import (
     HTTP_TIMEOUT, EXPOSED_PATHS, QUICK_SCAN_PORTS,
     EXTENDED_PORT_RANGE, INFRA_EXPOSURE_PORTS,
     ENABLE_EXTENDED_PORT_SCAN, ENABLE_UDP_SCAN,
-    NVD_API_KEY, PROTO_PROBE_TIMEOUT,
+    PROTO_PROBE_TIMEOUT,
 )
 from utils import setup_logging, create_async_session
 
@@ -532,19 +532,17 @@ async def fingerprint_services(host: str, ports: List[int]) -> Dict[int, Dict[st
 
         vulns: List[str] = []
         banner = fp.get("banner", "")
-        if NVD_API_KEY and banner and len(banner) > 4:
+        if banner and len(banner) > 4:
             try:
-                import aiohttp as _aio
-                async with _aio.ClientSession() as sess:
-                    async with sess.get(
-                        "https://services.nvd.nist.gov/rest/json/cves/2.0",
-                        params={"keywordSearch": banner[:100], "resultsPerPage": 10},
-                        headers={"apiKey": NVD_API_KEY},
-                        timeout=_aio.ClientTimeout(total=10),
-                    ) as r:
-                        if r.status == 200:
-                            data = await r.json()
-                            vulns = [v["cve"]["id"] for v in data.get("vulnerabilities", [])[:5]]
+                import sys as _sys, os as _os
+                _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), '..', '..'))
+                from core.helpers import cytim_recon
+                _host = host if isinstance(host, str) else str(host)
+                _r = await loop.run_in_executor(
+                    None,
+                    lambda: cytim_recon(_host, ["cve"], cve_keywords=[banner[:100]])
+                )
+                vulns = [f["cve_id"] for f in (_r.get("cve") or {}).get("findings", [])[:5]]
             except Exception:
                 pass
 

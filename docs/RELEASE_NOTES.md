@@ -1,3 +1,83 @@
+## v1.0.168 -- 2026-07-05
+
+### Architecture — CyTIM Recon Consolidation (Full External API Migration)
+
+All ASM external API calls are now routed through CyTIM as the single intelligence
+gateway. ASM no longer manages keys or HTTP sessions for any discovery API — it sends
+requests to CyTIM and CyTIM fans out to the underlying sources with caching, rate
+limiting, and key management handled centrally.
+
+#### New — `cytim_recon()` helper (`core/helpers.py`)
+Added `cytim_recon(domain, modules, **kwargs)` — mirrors `cytim_bulk_enrich` pattern.
+POSTs to `POST /api/cytim/recon`, returns results dict keyed by module, never raises.
+Used by all five ASM modules below.
+
+#### `backend/cy_asm/modules/subdomain_enum.py`
+- Removed `get_subdomains_virustotal()`, `get_subdomains_alienvault()`, `get_subdomains_securitytrails()` — all three called external APIs directly.
+- Added `get_subdomains_cytim_recon(domain)` — single CyTIM `subdomains` module call (VT + OTX + SecurityTrails concurrent inside CyTIM).
+- `gather_subdomains()` default sources changed from `securitytrails/virustotal/alienvault` to `cytim`. crt.sh, MISP, brute-force, crawl remain direct.
+- Removed `SECURITYTRAILS_API_KEY`, `VIRUSTOTAL_API_KEY` from config import.
+
+#### `backend/cy_asm/modules/social_eng.py`
+- Removed `find_emails_hunter()` — called Hunter.io directly.
+- Added `find_emails_cytim(domain)` — routes Hunter.io through CyTIM `emails` module.
+- `gather_social_eng()` runs CyTIM emails via executor; LinkedIn dork stays direct.
+- Removed `HUNTER_API_KEY` from config import.
+
+#### `backend/cy_asm/modules/dns_recon.py`
+- Removed per-IP IPInfo loop — called `ipinfo.io` once per IP.
+- Added `_cytim_geoip(domain, ips)` — single batch call to CyTIM `geoip` module.
+- `get_ip_addresses()` now collects all IPs first, then enriches all at once via one executor call.
+- Removed `IPINFO_API_KEY` from config import.
+
+#### `backend/cy_asm/modules/vuln_scanner.py`
+- Removed `_fetch_nvd_cves()` and `_fetch_epss()` — called NVD and EPSS directly.
+- Added `_cytim_cve_by_keyword(domain, keyword)` — NVD search via CyTIM `cve` module.
+- Added `_cytim_epss_batch(domain, cve_ids)` — EPSS lookup via CyTIM `cve` module.
+- `enrich_port_findings()` still does per-port CVE lookups (preserving port context) via executor; single batch EPSS call at end.
+- Removed `NVD_API_KEY`, `EPSS_API_URL`, `_NVD_BASE` constant.
+
+#### `backend/cy_asm/modules/whois_history.py`
+- Removed direct ViewDNS HTML scrape in `get_domain_history()`.
+- Added `_cytim_whois_history(domain)` — routes ViewDNS through CyTIM `whois_history` module.
+- Local `python-whois` data (registrar, expiry) remains direct and unchanged.
+
+#### `backend/cy_asm/modules/web_analysis.py`
+- Removed direct NVD call during port fingerprinting (per-port CVE ID lookup).
+- Replaced with `cytim_recon(host, ["cve"], cve_keywords=[banner])` via executor.
+- Removed `NVD_API_KEY` from config import (would have caused ImportError after config cleanup).
+
+#### `backend/cy_asm/config.py` — cleanup
+- Removed 6 keys that are now managed by CyTIM: `IPINFO_API_KEY`, `SECURITYTRAILS_API_KEY`, `VIRUSTOTAL_API_KEY`, `NVD_API_KEY`, `HUNTER_API_KEY`, `HIBP_API_KEY`.
+- Removed unused `EPSS_API_URL` constant.
+- Kept: `SHODAN_API_KEY` (fallback in passive_osint), `GOOGLE_GEMINI_KEY` (AI enrichment), `GVM_PASSWORD`, `GVM_USER`.
+
+#### `backend/core/kv_secrets.py` — cleanup
+- `ASM_KV_MAP` trimmed from 12 → 4 entries. Removed: `IPINFO_API_KEY`, `SECURITYTRAILS_API_KEY`, `VIRUSTOTAL_API_KEY`, `NVD_API_KEY`, `HUNTER_API_KEY`, `HIBP_API_KEY`, `ABUSEIPDB_API_KEY`, `GREYNOISE_API_KEY`.
+- Kept: `SHODAN_API_KEY`, `GOOGLE_GEMINI_KEY`, `GVM_PASSWORD`, `GVM_USER`.
+
+#### Fix — CyTIM Test Connection now validates API key properly (`blueprints/system/routes.py`)
+- Changed from hitting `/health` (unauthenticated) to `/api/cytim/sources` (authenticated).
+- Returns specific error messages for 401 (invalid key), 403 (key disabled), and other failures.
+- Removed fallback path that tested without a key.
+
+#### What stays direct (per architecture doc)
+| API | File | Reason |
+|-----|------|--------|
+| crt.sh | `subdomain_enum.py` | Free, keyless, 6h on-disk cache — no key benefit from CyTIM |
+| Shodan | `passive_osint.py` | CyTIM fallback only — fires if CyTIM unreachable |
+| Google Gemini | `cycentra_scan.py` | AI text generation for deep scan enrichment |
+| GVM/OpenVAS | `vuln_scanner.py` | Local Unix socket — not an external API |
+
+#### Ops — keys to migrate to CyTIM `cytim.env`
+The following keys were in Cy360's `.env` / Azure Key Vault and should now live in CyTIM only:
+```
+SECURITYTRAILS_API_KEY, HUNTER_API_KEY, IPINFO_API_KEY, NVD_API_KEY
+```
+VT and OTX keys are already in CyTIM. HIBP was already migrated in v1.0.154.
+
+---
+
 ## v1.0.167 -- 2026-07-05
 
 ### Improvements

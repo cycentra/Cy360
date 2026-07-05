@@ -190,20 +190,13 @@ ENGINE_KV_MAP: dict[str, str] = {
     "CYMIND_API_KEY": "CYMIND-API-KEY",
 }
 
-# CyASM scanning modules
+# CyASM scanning modules — only keys that ASM uses directly.
+# IPINFO, SECURITYTRAILS, VIRUSTOTAL, NVD, HUNTER, HIBP now managed by CyTIM.
 ASM_KV_MAP: dict[str, str] = {
-    "IPINFO_API_KEY":         "IPINFO-API-KEY",
-    "SECURITYTRAILS_API_KEY": "SECURITYTRAILS-API-KEY",
-    "VIRUSTOTAL_API_KEY":     "VIRUSTOTAL-API-KEY",
-    "NVD_API_KEY":            "NVD-API-KEY",
-    "SHODAN_API_KEY":         "SHODAN-API-KEY",
-    "GOOGLE_GEMINI_KEY":      "GOOGLE-GEMINI-KEY",
-    "HUNTER_API_KEY":         "HUNTER-API-KEY",
-    "HIBP_API_KEY":           "HIBP-API-KEY",
-    "GVM_PASSWORD":           "GVM-PASSWORD",
-    "GVM_USER":               "GVM-USER",
-    "ABUSEIPDB_API_KEY":      "ABUSEIPDB-API-KEY",
-    "GREYNOISE_API_KEY":      "GREYNOISE-API-KEY",
+    "SHODAN_API_KEY":    "SHODAN-API-KEY",       # CyTIM fallback in passive_osint.py
+    "GOOGLE_GEMINI_KEY": "GOOGLE-GEMINI-KEY",     # AI enrichment (deep scan)
+    "GVM_PASSWORD":      "GVM-PASSWORD",           # OpenVAS local scanner
+    "GVM_USER":          "GVM-USER",               # OpenVAS local scanner
 }
 
 

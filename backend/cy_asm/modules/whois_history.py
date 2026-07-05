@@ -33,22 +33,22 @@ def get_whois(domain: str) -> Dict[str, Any]:
         logger.error(f"WHOIS failed for {domain}: {e}")
         return {"error": str(e)}
 
-async def get_domain_history(domain: str, session: aiohttp.ClientSession) -> List[str]:
-    url = f"https://viewdns.info/reversewhois/?q={domain}"
-    # Adding a real browser header helps prevent some blocks
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
+def _cytim_whois_history(domain: str) -> List[str]:
+    """Reverse WHOIS history via CyTIM /api/cytim/recon (whois_history module / ViewDNS)."""
     try:
-        async with session.get(url, headers=headers, timeout=15) as resp:
-            if resp.status == 200:
-                text = await resp.text()
-                import re
-                matches = re.findall(r'<td>([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})</td>', text)
-                return [m for m in matches if m != domain]
-            else:
-                logger.warning(f"ViewDNS blocked history check: Status {resp.status}")
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), '..', '..'))
+        from core.helpers import cytim_recon
+        results = cytim_recon(domain, ["whois_history"])
+        return results.get("whois_history") or []
     except Exception as e:
-        logger.error(f"History check failed: {e}")
-    return []
+        logger.debug(f"[WHOIS] CyTIM whois_history recon failed: {e}")
+        return []
+
+
+async def get_domain_history(domain: str, session: aiohttp.ClientSession) -> List[str]:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _cytim_whois_history, domain)
 
 
 async def gather_whois_history(domain: str) -> Dict[str, Any]:

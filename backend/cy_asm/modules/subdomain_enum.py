@@ -12,51 +12,25 @@ from bs4 import BeautifulSoup
 
 import dns.asyncresolver
 
-from config import HTTP_TIMEOUT, BRUTE_FORCE_WORDLIST, SECURITYTRAILS_API_KEY, VIRUSTOTAL_API_KEY
+from config import HTTP_TIMEOUT, BRUTE_FORCE_WORDLIST
 
 _CRTSH_CACHE_DIR = Path("/var/log/cycentra/cy-asm/state/crtsh_cache")
 _CRTSH_CACHE_TTL = 21600  # 6 hours in seconds
-async def get_subdomains_securitytrails(domain: str, session: aiohttp.ClientSession) -> List[str]:
-    if not SECURITYTRAILS_API_KEY:
-        return []
-    url = f"https://api.securitytrails.com/v1/domain/{domain}/subdomains"
-    headers = {"APIKEY": SECURITYTRAILS_API_KEY}
-    try:
-        async with session.get(url, headers=headers, timeout=15) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                subs = data.get("subdomains", [])
-                return [f"{sub}.{domain}".lower() for sub in subs]
-    except Exception as e:
-        logger.debug(f"SecurityTrails failed: {e}")
-    return []
 
-async def get_subdomains_virustotal(domain: str, session: aiohttp.ClientSession) -> List[str]:
-    if not VIRUSTOTAL_API_KEY:
+def get_subdomains_cytim_recon(domain: str) -> List[str]:
+    """
+    Query CyTIM /api/cytim/recon for subdomain discovery (VT, OTX, SecurityTrails).
+    Returns a deduplicated list of subdomain strings. Falls back to [] if CyTIM unavailable.
+    """
+    try:
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), '..', '..'))
+        from core.helpers import cytim_recon
+        results = cytim_recon(domain, ["subdomains"])
+        subs = results.get("subdomains") or []
+        return [s.lower().strip() for s in subs if s and s.lower().strip().endswith(f".{domain}")]
+    except Exception as e:
         return []
-    url = f"https://www.virustotal.com/api/v3/domains/{domain}/subdomains"
-    headers = {"x-apikey": VIRUSTOTAL_API_KEY}
-    try:
-        async with session.get(url, headers=headers, timeout=10) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                subs = [item["id"] for item in data.get("data", []) if item["id"].endswith(domain)]
-                return subs
-    except Exception as e:
-        logger.error(f"VirusTotal error for {domain}: {e}")
-    return []
-
-async def get_subdomains_alienvault(domain: str, session: aiohttp.ClientSession) -> List[str]:
-    url = f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns"
-    try:
-        async with session.get(url, timeout=10) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                subs = [item["hostname"] for item in data.get("passive_dns", []) if item["hostname"].endswith(domain)]
-                return subs
-    except Exception as e:
-        logger.debug(f"AlienVault OTX failed: {e}")
-    return []
 from utils import setup_logging, create_async_session, get_misp_config
 
 
@@ -305,7 +279,7 @@ async def _check_live(subdomain: str, sem: asyncio.Semaphore) -> Dict[str, Any]:
 
 async def gather_subdomains(
     domain: str,
-    sources: List[str] = ['crtsh', 'misp', 'bruteforce', 'crawl', 'securitytrails', 'virustotal', 'alienvault'],
+    sources: List[str] = ['crtsh', 'misp', 'bruteforce', 'crawl', 'cytim'],
 ) -> Dict[str, Any]:
     """
     Collect subdomains from all passive + active sources, then validate each
@@ -313,11 +287,11 @@ async def gather_subdomains(
 
     Sources
     -------
-    - ``crtsh``     — certificate transparency logs (no API key needed)
-    - ``misp``      — passive DNS / hostname attributes from MISP (replaces
-                      SecurityTrails, VirusTotal, and AlienVault OTX)
+    - ``crtsh``     — certificate transparency logs (no API key needed, 6h cache)
+    - ``misp``      — passive DNS / hostname attributes from local MISP
     - ``bruteforce`` — DNS brute-force using the local wordlist
     - ``crawl``     — crawl the apex domain for linked subdomains
+    - ``cytim``     — CyTIM recon (VT subdomains + OTX passive DNS + SecurityTrails)
 
     Returns a list of enriched dicts:
         {subdomain, live, resolved_ips, cname, sources}
@@ -325,13 +299,18 @@ async def gather_subdomains(
     """
     async with await create_async_session() as session:
         task_specs: List[tuple[str, any]] = []
-        if 'crtsh'         in sources: task_specs.append(('crtsh',         get_subdomains_crtsh(domain, session)))
-        if 'misp'          in sources: task_specs.append(('misp',          get_subdomains_misp(domain, session)))
-        if 'bruteforce'    in sources: task_specs.append(('bruteforce',    brute_force_subdomains_async(domain)))
-        if 'crawl'         in sources: task_specs.append(('crawl',         crawl_for_subdomains(domain, session)))
-        if 'securitytrails' in sources: task_specs.append(('securitytrails', get_subdomains_securitytrails(domain, session)))
-        if 'virustotal'    in sources: task_specs.append(('virustotal',    get_subdomains_virustotal(domain, session)))
-        if 'alienvault'    in sources: task_specs.append(('alienvault',    get_subdomains_alienvault(domain, session)))
+        if 'crtsh'     in sources: task_specs.append(('crtsh',     get_subdomains_crtsh(domain, session)))
+        if 'misp'      in sources: task_specs.append(('misp',      get_subdomains_misp(domain, session)))
+        if 'bruteforce' in sources: task_specs.append(('bruteforce', brute_force_subdomains_async(domain)))
+        if 'crawl'     in sources: task_specs.append(('crawl',     crawl_for_subdomains(domain, session)))
+
+        # CyTIM recon (VT + OTX + SecurityTrails) — blocking call in executor so it
+        # doesn't hold the event loop; merged into seen map before async sources finish.
+        cytim_subs: List[str] = []
+        if 'cytim' in sources:
+            loop = asyncio.get_running_loop()
+            cytim_subs = await loop.run_in_executor(None, get_subdomains_cytim_recon, domain)
+            logger.info(f"[Subdomains] CyTIM recon returned {len(cytim_subs)} subdomain(s) for {domain}.")
 
         source_names  = [s for s, _ in task_specs]
         source_tasks  = [t for _, t in task_specs]
@@ -339,6 +318,13 @@ async def gather_subdomains(
 
         # Build {subdomain -> set(sources)} map
         seen: Dict[str, Set[str]] = {}
+
+        # Seed with CyTIM results first
+        for sub in cytim_subs:
+            sub = sub.lower().strip()
+            if sub:
+                seen.setdefault(sub, set()).add("cytim")
+
         for src_name, result in zip(source_names, source_results):
             if not isinstance(result, list):
                 continue

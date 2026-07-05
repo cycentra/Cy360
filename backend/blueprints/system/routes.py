@@ -966,21 +966,28 @@ def cytim_test():
             api_key = stored.get("cytim", {}).get("apiKey", "")
         except Exception:
             api_key = ""
+    if not api_key:
+        return jsonify({"ok": False, "message": "API key is required — generate one in the CyTIM admin panel (Admin → Keys)"})
     import requests as _req
     try:
-        headers = {}
-        if api_key:
-            headers["X-CyTIM-Key"] = api_key
-        r = _req.get(f"{url}/health", headers=headers, timeout=8)
-        if r.status_code not in (200, 503):
+        # /health is unauthenticated (Docker healthcheck) — always use the authenticated
+        # /api/cytim/sources endpoint so the key is validated against cytim_api_keys table.
+        r = _req.get(
+            f"{url}/api/cytim/sources",
+            headers={"X-CyTIM-Key": api_key},
+            timeout=8,
+        )
+        if r.status_code == 401:
+            return jsonify({"ok": False, "message": "Invalid CyTIM API key — key not found. Generate one via CyTIM Admin → Keys."})
+        if r.status_code == 403:
+            return jsonify({"ok": False, "message": "CyTIM API key is disabled — re-enable it in CyTIM Admin → Keys."})
+        if not r.ok:
             return jsonify({"ok": False, "message": f"CyTIM returned HTTP {r.status_code}"})
-        d = r.json()
-        sources = d.get("sources", {})
+        sources = r.json().get("sources", {})
         active  = sum(1 for v in sources.values() if v.get("ok"))
         total   = len(sources)
-        db_ok   = d.get("db") == "ok"
-        msg = f"Connected — DB {'ok' if db_ok else 'error'}, {active}/{total} TI sources active"
-        return jsonify({"ok": db_ok, "message": msg, "sources": sources})
+        msg = f"Connected — API key valid, {active}/{total} TI sources active"
+        return jsonify({"ok": True, "message": msg, "sources": sources})
     except Exception as exc:
         return jsonify({"ok": False, "message": f"Cannot reach CyTIM: {exc}"})
 

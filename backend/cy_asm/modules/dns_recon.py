@@ -7,7 +7,7 @@ import aiohttp
 import asyncio
 from typing import Dict, List, Any
 import asyncio
-from config import DNS_RECORD_TYPES, IPINFO_API_KEY, SAAS_PROVIDERS_FOR_TAKEOVER, HTTP_TIMEOUT
+from config import DNS_RECORD_TYPES, SAAS_PROVIDERS_FOR_TAKEOVER, HTTP_TIMEOUT
 from utils import setup_logging, validate_domain, create_async_session
 
 logger = setup_logging()
@@ -87,34 +87,54 @@ async def check_takeover_risk(cname: str, subdomain: str) -> bool:
                     logger.error(f"Takeover check failed for {subdomain}: {e}")
     return False
 
+def _cytim_geoip(domain: str, ips: List[str]) -> Dict[str, Any]:
+    """Batch GeoIP lookup via CyTIM /api/cytim/recon. Returns {ip: {country, city, org, asn, hostname}}."""
+    try:
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), '..', '..'))
+        from core.helpers import cytim_recon
+        results = cytim_recon(domain, ["geoip"], ips=ips)
+        return results.get("geoip") or {}
+    except Exception as e:
+        logger.debug(f"[DNS] CyTIM geoip failed: {e}")
+        return {}
+
+
 async def get_ip_addresses(domain: str, dns_records: Dict[str, List[str]]) -> List[Dict[str, Any]]:
-    ip_addresses = []
-    async with await create_async_session() as session:
-        for record_type in ["A", "AAAA"]:
-            for ip in dns_records.get(record_type, []):
-                ip_info = {"ip": ip, "reverse_dns": "None"}
-                try:
-                    hostname, _, _ = socket.gethostbyaddr(ip)
-                    ip_info["reverse_dns"] = hostname
-                except:
-                    pass
-                if IPINFO_API_KEY:
-                    try:
-                        async with session.get(f"https://ipinfo.io/{ip}/json?token={IPINFO_API_KEY}", timeout=5) as resp:
-                            if resp.status == 200:
-                                data = await resp.json()
-                                ip_info.update({
-                                    "asn": data.get("asn", "Unknown"),
-                                    "org": data.get("org", "Unknown"),
-                                    "country": data.get("country", "Unknown"),
-                                    "city": data.get("city", "Unknown"),
-                                    "hostname": data.get("hostname", ip_info["reverse_dns"]),
-                                    "cloud_provider": data.get("org", "").split()[0] if data.get("org") else "Unknown",
-                                })
-                    except Exception as e:
-                        logger.debug(f"ipinfo enrichment failed for {ip}: {e}")
-                ip_addresses.append(ip_info)
-    return ip_addresses
+    # Collect all IPs and reverse DNS first
+    raw_ips: List[Dict[str, Any]] = []
+    for record_type in ["A", "AAAA"]:
+        for ip in dns_records.get(record_type, []):
+            ip_info: Dict[str, Any] = {"ip": ip, "reverse_dns": "None"}
+            try:
+                hostname, _, _ = socket.gethostbyaddr(ip)
+                ip_info["reverse_dns"] = hostname
+            except Exception:
+                pass
+            raw_ips.append(ip_info)
+
+    if not raw_ips:
+        return []
+
+    # Single batch CyTIM geoip call for all collected IPs
+    ip_list = [entry["ip"] for entry in raw_ips]
+    loop = asyncio.get_running_loop()
+    geo_map: Dict[str, Any] = await loop.run_in_executor(None, _cytim_geoip, domain, ip_list)
+
+    for ip_info in raw_ips:
+        geo = geo_map.get(ip_info["ip"])
+        if geo:
+            org = geo.get("org", "Unknown")
+            ip_info.update({
+                "asn":            geo.get("asn", "Unknown"),
+                "org":            org,
+                "country":        geo.get("country", "Unknown"),
+                "city":           geo.get("city", "Unknown"),
+                "hostname":       geo.get("hostname") or ip_info["reverse_dns"],
+                "cloud_provider": org.split()[0] if org and org != "Unknown" else "Unknown",
+            })
+
+    return raw_ips
 
 async def gather_dns_intel(domain: str) -> Dict[str, Any]:
     records = get_dns_records(domain)

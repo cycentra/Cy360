@@ -62,16 +62,11 @@ except Exception:
 # ---------------------------------------------------------------------------
 # API Keys — all from env, empty string = feature disabled
 # ---------------------------------------------------------------------------
-IPINFO_API_KEY          = os.environ.get("IPINFO_API_KEY", "")
-SECURITYTRAILS_API_KEY  = os.environ.get("SECURITYTRAILS_API_KEY", "")
-VIRUSTOTAL_API_KEY      = os.environ.get("VIRUSTOTAL_API_KEY", "")
-NVD_API_KEY             = os.environ.get("NVD_API_KEY", "")
-SHODAN_API_KEY          = os.environ.get("SHODAN_API_KEY", "")
-GOOGLE_GEMINI_KEY       = os.environ.get("GOOGLE_GEMINI_KEY", "")
-HUNTER_API_KEY          = os.environ.get("HUNTER_API_KEY", "")
-HIBP_API_KEY            = os.environ.get("HIBP_API_KEY", "")
-GVM_PASSWORD            = os.environ.get("GVM_PASSWORD", "")
-GVM_USER                = os.environ.get("GVM_USER", "")
+# Keys now managed by CyTIM: IPINFO, SECURITYTRAILS, VIRUSTOTAL, NVD, HUNTER, HIBP
+SHODAN_API_KEY    = os.environ.get("SHODAN_API_KEY", "")     # CyTIM fallback in passive_osint.py
+GOOGLE_GEMINI_KEY = os.environ.get("GOOGLE_GEMINI_KEY", "")  # AI enrichment (deep scan)
+GVM_PASSWORD      = os.environ.get("GVM_PASSWORD", "")        # OpenVAS local scanner
+GVM_USER          = os.environ.get("GVM_USER", "")            # OpenVAS local scanner
 
 # ---------------------------------------------------------------------------
 # Network
@@ -116,11 +111,6 @@ PROTO_PROBE_TIMEOUT   = int(os.environ.get("PROTO_PROBE_TIMEOUT", "5"))
 ANON_CIPHERS       = {"ADH", "AECDH", "DH_anon", "EXP"}
 WEAK_CIPHERS       = {"RC4", "3DES", "DES", "MD5", "NULL", "EXPORT"}
 DEPRECATED_PROTOCOLS = {"TLSv1", "TLSv1.0", "TLSv1.1", "SSLv3", "SSLv2"}
-
-# ---------------------------------------------------------------------------
-# EPSS API (Exploit Prediction Scoring System — free, no key required)
-# ---------------------------------------------------------------------------
-EPSS_API_URL = "https://api.first.org/data/v1/epss"
 
 # ---------------------------------------------------------------------------
 # CVSSv3 severity thresholds
