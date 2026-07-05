@@ -116,6 +116,17 @@ async def get_subdomains_misp(domain: str, session: aiohttp.ClientSession) -> Li
     if not misp_cfg:
         return []
 
+    # When CyTIM is active it manages its own MISP credentials and routes all
+    # MISP traffic internally.  The direct call here would conflict and its
+    # separately-managed key is prone to going stale.  Skip to avoid 403 noise.
+    try:
+        from core.helpers import is_cytim_enabled
+        if is_cytim_enabled():
+            logger.debug("[Subdomains/MISP] CyTIM active — deferring MISP to CyTIM; skipping direct call.")
+            return []
+    except Exception:
+        pass
+
     url = f"{misp_cfg['url']}/attributes/restSearch"
     headers = {
         "Authorization": misp_cfg["apiKey"],

@@ -212,7 +212,7 @@ def is_cytim_enabled() -> bool:
 def cytim_bulk_enrich(iocs: list, profile: str = "default") -> dict:
     """POST /api/cytim/bulk-enrich. Returns {ioc_value_lower: result_dict}. Never raises."""
     import requests as _req
-    from core.config import CYTIM_TIMEOUT
+    from core.config import CYTIM_BULK_TIMEOUT
     url, api_key = _get_cytim_settings()
     if not url or not api_key:
         return {}
@@ -221,7 +221,7 @@ def cytim_bulk_enrich(iocs: list, profile: str = "default") -> dict:
             f"{url}/api/cytim/bulk-enrich",
             json={"iocs": iocs, "profile": profile},
             headers={"X-CyTIM-Key": api_key},
-            timeout=CYTIM_TIMEOUT,
+            timeout=CYTIM_BULK_TIMEOUT,
         )
         resp.raise_for_status()
         return {r["ioc_value"].lower(): r for r in resp.json().get("results", [])}

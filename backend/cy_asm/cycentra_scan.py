@@ -676,6 +676,39 @@ async def store_to_cymind_memory(findings: list, domain: str, provider: str) -> 
         logger.warning(f"⚠️ [CyMind Memory] store_to_cymind_memory failed: {e}")
 
 
+_SECURE_TLS13_CIPHERS = {
+    "TLS_AES_128_GCM_SHA256",
+    "TLS_AES_256_GCM_SHA384",
+    "TLS_CHACHA20_POLY1305_SHA256",
+}
+
+def _validate_findings(findings: list) -> list:
+    """
+    Post-parse deterministic filter: removes AI findings that contradict known-good
+    cipher/protocol facts.  Catches hallucinations like flagging TLS 1.3 ciphers
+    as weak — a 7B model error pattern observed in production.
+    """
+    from cy_asm.modules.crypto_checks import WEAK_CIPHERS, DEPRECATED_PROTOCOLS
+    validated = []
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        vuln = f.get("vulnerability", "")
+        mod  = f.get("module", "")
+        # Reject cipher findings that name a known-secure TLS 1.3 cipher as weak.
+        if "cipher" in vuln.lower() and mod in ("crypto", "crypto_deep", "web"):
+            evidence = f.get("evidence", "")
+            named_ciphers = [c for c in _SECURE_TLS13_CIPHERS if c in vuln or c in evidence]
+            if named_ciphers and not any(w.lower() in vuln.lower() for w in WEAK_CIPHERS):
+                logger.warning(
+                    f"⚠️ [AI Validate] Discarding hallucinated cipher finding: '{vuln}' "
+                    f"names secure TLS 1.3 cipher(s) {named_ciphers} as weak."
+                )
+                continue
+        validated.append(f)
+    return validated
+
+
 async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str, scan_type: str = "deep") -> tuple[List[Dict[str, Any]], str]:
     """Tries CyMind first, then Google Gemini, then local Ollama. Returns (findings, provider_name).
 
@@ -711,10 +744,15 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str, sca
     Focus on the most critical and actionable risks. Keep descriptions concise (2-3 sentences).
     Recommendations must be 1-2 sentences of plain-English guidance — no deep technical steps.
 
+    GROUND RULES — MANDATORY:
+    - ONLY report findings directly evidenced by the DATA section below. Do NOT infer, extrapolate, or fabricate.
+    - For TLS/cipher findings: ONLY flag protocols in [{', '.join(['SSLv2','SSLv3','TLSv1','TLSv1.1'])}] or ciphers containing [{', '.join(['RC4','DES','3DES','MD5','EXPORT','NULL','LOW'])}]. TLS 1.3 ciphers (TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256, TLS_CHACHA20_POLY1305_SHA256) are SECURE — never flag them as weak.
+    - If you cannot cite a specific data point from the DATA section as proof, omit the finding entirely.
+
     ANALYSIS AREAS:
     1. SUPPLY CHAIN: Third-party script risks (Magecart / data leakage)
     2. CLOUD: Multi-provider infrastructure and misconfiguration exposure
-    3. CRYPTO: Overall SSL/TLS posture and obvious weaknesses
+    3. CRYPTO: SSL/TLS posture — only flag deprecated protocols or known-weak ciphers listed above
     4. EMAIL: SPF / DKIM / DMARC gaps enabling phishing
     5. DARK WEB: Any breach or credential leak indicators
 
@@ -722,7 +760,8 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str, sca
     {json.dumps(context_payload)}
 
     Return a JSON LIST of AT MOST 10 objects each with:
-    "vulnerability", "severity", "risk_score" (1-10), "description", "recommendation", "module".
+    "vulnerability", "severity", "risk_score" (1-10), "description", "recommendation", "module",
+    "evidence" (the specific value from the DATA above that proves this finding — required; omit the finding if empty).
     Return ONLY the raw JSON list — no markdown, no explanation.
     """
     else:
@@ -732,10 +771,15 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str, sca
     SCOPE: Deep scan — provide comprehensive findings with detailed technical remediation steps.
     For each finding include: root cause, attack vector, business impact, and step-by-step remediation.
 
+    GROUND RULES — MANDATORY:
+    - ONLY report findings directly evidenced by the DATA section below. Do NOT infer, extrapolate, or fabricate.
+    - CRYPTO reference — deprecated protocols: {['SSLv2','SSLv3','TLSv1','TLSv1.1']}. Weak cipher keywords: {['RC4','DES','3DES','MD5','EXPORT','NULL','LOW']}. TLS 1.3 ciphers (TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256, TLS_CHACHA20_POLY1305_SHA256) are SECURE — never flag them.
+    - If you cannot cite a specific data point from the DATA section as proof, omit the finding entirely.
+
     CRITICAL ANALYSIS POINTS:
     1. SUPPLY CHAIN: Magecart / data leak risk from third-party JS; CDN integrity policy gaps
     2. CLOUD: Multi-provider footprint, public resource exposure, metadata API accessibility
-    3. CRYPTO: TLS version support, cipher suite weaknesses, PQC hybrid group support (X25519Kyber768, P256-Kyber768)
+    3. CRYPTO: TLS version support — only flag deprecated protocols or weak ciphers per the reference above
     4. CORRELATION: DNS records pointing to misconfigured cloud assets (subdomain takeover risk)
     5. DARK WEB: Credential leaks, breach indicators, paste site mentions
     6. SOCIAL ENGINEERING: Typosquatting domains, lookalike infrastructure, phishing kit indicators
@@ -748,7 +792,8 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str, sca
     "vulnerability", "severity", "risk_score" (1-10),
     "description" (detailed technical context: what was found, attack vector, business impact),
     "recommendation" (specific step-by-step remediation: tool names, config changes, priority, estimated effort),
-    "module".
+    "module",
+    "evidence" (the specific value from the DATA above that proves this finding — required; omit the finding if empty).
     Include CVEs where applicable. Provide full technical depth.
     Return ONLY the raw JSON list — no markdown, no explanation.
     """
@@ -757,6 +802,7 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str, sca
     logger.info(f"[AI Enrichment] Starting...")
     cymind_result = await enrich_with_cymind(context_payload, domain, prompt)
     if cymind_result is not None:
+        cymind_result = _validate_findings(cymind_result)
         await store_to_cymind_memory(cymind_result, domain, "CyMind")
         return cymind_result, "CyMind"
 
@@ -780,6 +826,7 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str, sca
         if not isinstance(result, list):
             logger.warning(f"⚠️ [AI] Gemini returned non-list ({type(result).__name__}), discarding.")
             raise ValueError("Gemini response is not a JSON list")
+        result = _validate_findings(result)
         logger.info(f"✅ [AI] Gemini enrichment succeeded for {domain}.")
         await store_to_cymind_memory(result, domain, "Gemini")
         return result, "Gemini (gemini-2.0-flash)"
@@ -805,11 +852,16 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str, sca
     High-level only: 2-3 sentence descriptions, 1-2 sentence recommendations (no deep technical steps).
     AREAS: Supply chain JS risk, cloud misconfiguration, SSL/TLS posture, email authentication gaps, dark web indicators.
 
+    RULES: Only report findings directly evidenced in DATA below. Do NOT fabricate.
+    SECURE TLS 1.3 ciphers (never flag as weak): TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256, TLS_CHACHA20_POLY1305_SHA256.
+    Weak cipher keywords: RC4, DES, 3DES, MD5, EXPORT, NULL, LOW. Deprecated protocols: SSLv2, SSLv3, TLSv1, TLSv1.1.
+
     DATA:
     {json.dumps(ollama_payload)}
 
     Return a JSON LIST of AT MOST 10 objects each with:
-    "vulnerability", "severity", "risk_score" (1-10), "description", "recommendation", "module".
+    "vulnerability", "severity", "risk_score" (1-10), "description", "recommendation", "module",
+    "evidence" (specific data point from DATA proving this finding — omit finding if empty).
     Return ONLY the raw JSON list — no markdown, no explanation.
     """
     else:
@@ -819,6 +871,10 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str, sca
     AREAS: Supply chain JS risk (Magecart), cloud exposure, TLS/cipher weaknesses, DNS correlation,
     dark web leaks, social engineering indicators, mobile/API endpoint exposure.
 
+    RULES: Only report findings directly evidenced in DATA below. Do NOT fabricate.
+    SECURE TLS 1.3 ciphers (never flag as weak): TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256, TLS_CHACHA20_POLY1305_SHA256.
+    Weak cipher keywords: RC4, DES, 3DES, MD5, EXPORT, NULL, LOW. Deprecated protocols: SSLv2, SSLv3, TLSv1, TLSv1.1.
+
     DATA:
     {json.dumps(ollama_payload)}
 
@@ -826,7 +882,8 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str, sca
     "vulnerability", "severity", "risk_score" (1-10),
     "description" (technical context, attack vector, business impact),
     "recommendation" (specific step-by-step remediation with tool names and priority),
-    "module".
+    "module",
+    "evidence" (specific data point from DATA proving this finding — omit finding if empty).
     Return ONLY the raw JSON list — no markdown, no explanation.
     """
 
@@ -866,6 +923,8 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str, sca
                         continue
 
         result = json.loads(full_response)
+        if isinstance(result, list):
+            result = _validate_findings(result)
         logger.info(f"✅ [AI] Ollama ({resolved_model}) enrichment succeeded for {domain} ({chunk_count} chunks).")
         await store_to_cymind_memory(result, domain, f"Ollama ({resolved_model})")
         return result, f"Ollama ({resolved_model})"
