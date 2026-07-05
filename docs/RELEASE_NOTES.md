@@ -1,5 +1,13 @@
 ## v1.0.160 -- 2026-07-05
 
+### New Features
+
+  - replace MISP/direct-TI with CyTIM broker; fix FP scoring efficacy
+
+---
+
+## v1.0.160 -- 2026-07-05
+
 ### Improvements
 
   - **MISP removal — CyTIM broker**: Removed all direct MISP/VT/AbuseIPDB/GreyNoise connections from Cy360 Flask layer. All TI enrichment now routes through CyTIM (single broker). CyMISP Docker module removed from Platform installer.
