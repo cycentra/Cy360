@@ -1,3 +1,11 @@
+## v1.0.161 -- 2026-07-05
+
+### New Features
+
+  - replace MISP/direct-TI with CyTIM broker; fix FP scoring efficacy
+
+---
+
 ## v1.0.160 -- 2026-07-05
 
 ### New Features
