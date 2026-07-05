@@ -898,23 +898,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
           </>
         )}
 
-        {/* MISP hits */}
-        {(misp.ioc_hits || []).length > 0 && (
-          <>
-            <SectionLabel>🔴 THREAT INTEL MATCHES (MISP)</SectionLabel>
-            <div style={{ background: "rgba(255,59,59,0.05)", border: "1px solid rgba(255,59,59,0.2)",
-              borderRadius: 4, padding: "12px 14px" }}>
-              {(misp.ioc_hits || []).map((hit, i) => (
-                <div key={i} style={{ color: "rgba(255,255,255,0.6)", fontSize: 12, marginBottom: 4 }}>
-                  <span style={{ color: "#ff3b3b", fontFamily: "monospace" }}>{hit.ioc}</span>
-                  {" — "}{hit.threat_level} threat · MISP events: {(hit.events || []).join(", ")}
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-
-        {/* Unified TI reputation panel (Phase 1) */}
+        {/* Unified TI reputation panel */}
         {inc.ti_reputation && (
           <>
             <SectionLabel>🌐 THREAT INTELLIGENCE REPUTATION</SectionLabel>
@@ -931,8 +915,6 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
 
               // Reconstruct per-source score contributions for the breakdown strip
               const scoreRows = [];
-              if ((ti.misp_hits ?? 0) > 0)
-                scoreRows.push({ label: "MISP", pts: Math.min(35, (ti.misp_hits ?? 0) * 35), detail: `${ti.misp_hits} IOC match${ti.misp_hits > 1 ? "es" : ""}`, color: "#b06eff" });
 
               (ti.ioc_hits || []).forEach(hit => {
                 (hit.sources || []).forEach(s => {
@@ -2797,7 +2779,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
                 <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 12,
                   fontFamily: "monospace" }}>{inc.alert_count}</div>
                 <div><StatBadge status={inc.status} /></div>
-                {/* Intel badges: AI narrative + MISP IOC hits */}
+                {/* Intel badges: AI narrative + CyTIM IOC hits */}
                 <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                   {inc.llm_summary && (
                     <span title="AI narrative available" style={{ background: "rgba(0,229,160,0.1)",
@@ -2807,8 +2789,8 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
                       🤖 AI
                     </span>
                   )}
-                  {(inc.misp_enrichment?.ioc_hits || []).length > 0 && (
-                    <span title={`${inc.misp_enrichment.ioc_hits.length} MISP IOC hit(s)`}
+                  {(inc.ti_reputation?.ioc_hits || []).length > 0 && (
+                    <span title={`${inc.ti_reputation.ioc_hits.length} TI IOC match(es) via CyTIM`}
                       style={{ background: "rgba(255,59,59,0.12)",
                       color: "#ff6b6b", border: "1px solid rgba(255,59,59,0.3)",
                       fontSize: 9, fontFamily: "monospace", padding: "1px 5px",

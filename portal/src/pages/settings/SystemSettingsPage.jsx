@@ -43,7 +43,7 @@ const BTN   = (color="#00e5a0") => ({ background: `rgba(${color === "#00e5a0" ? 
 // ── ENV targets ───────────────────────────────────────────────────────────────
 const ENV_TARGETS = [
   { id: "global",      label: "Global (.env)",        desc: "Core platform config: domain, OAuth, ports" },
-  { id: "cysiemstack", label: "CySIEM Stack",          desc: "Wazuh, Redis, PostgreSQL, MISP settings" },
+  { id: "cysiemstack", label: "CySIEM Stack",          desc: "Wazuh, Redis, PostgreSQL, SIEM settings" },
   { id: "cysoar",      label: "CySOAR",                desc: "SOAR / Node-RED automation settings" },
 ];
 
@@ -2745,23 +2745,21 @@ function BackupTab() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// ── Threat Intelligence Settings Tab (Phase 1) ───────────────────────────────
+// ── Threat Intelligence Settings Tab ─────────────────────────────────────────
 
 function ThreatIntelTab() {
   const _MASK = "●".repeat(8);
-  const [ti,        setTi]        = useState({ vtApiKey: "", abuseipdbApiKey: "", greynoiseApiKey: "" });
-  const [misp,      setMisp]      = useState({ mode: "disabled", url: "", apiKey: "" });
+  const [cytim,     setCytim]     = useState({ url: "", apiKey: "" });
   const [saved,     setSaved]     = useState(false);
   const [saving,    setSaving]    = useState(false);
-  const [testState, setTestState] = useState({});   // { [source]: "testing"|"ok"|"fail"|msg }
-  const [mispTest,  setMispTest]  = useState(null); // { ok, text }
+  const [testing,   setTesting]   = useState(false);
+  const [testResult, setTestResult] = useState(null); // { ok, text, sources }
 
   useEffect(() => {
     fetch(`${API_BASE}/api/ai/settings`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
       .then(d => {
-        if (d?.threat_intel) setTi(d.threat_intel);
-        if (d?.misp) setMisp(m => ({ ...m, ...d.misp }));
+        if (d?.cytim) setCytim(c => ({ ...c, ...d.cytim }));
       })
       .catch(() => {});
   }, []);
@@ -2772,184 +2770,123 @@ function ThreatIntelTab() {
       const r = await fetch(`${API_BASE}/api/ai/settings`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ threat_intel: ti, misp }),
+        body: JSON.stringify({ cytim }),
       });
       if (r.ok) { setSaved(true); setTimeout(() => setSaved(false), 2500); }
     } finally { setSaving(false); }
   };
 
-  const testMisp = async () => {
-    setMispTest({ ok: null, text: "Testing…" });
+  const testCytim = async () => {
+    setTesting(true);
+    setTestResult(null);
     try {
-      const r = await fetch(`${API_BASE}/api/system/misp/test`, {
+      const url = (cytim.url || "").trim().replace(/\/$/, "");
+      if (!url) { setTestResult({ ok: false, text: "Enter a CyTIM URL first" }); setTesting(false); return; }
+      const r = await fetch(`${API_BASE}/api/ai/settings/cytim/test`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: misp.url, apiKey: misp.apiKey || _MASK, useStored: !misp.apiKey }),
+        body: JSON.stringify({ url, apiKey: cytim.apiKey || _MASK }),
       });
       const d = await r.json();
-      setMispTest({ ok: d.ok, text: d.message || d.error || "" });
+      setTestResult({ ok: d.ok, text: d.message || d.error || "", sources: d.sources });
     } catch {
-      setMispTest({ ok: false, text: "Cannot reach backend" });
-    }
+      setTestResult({ ok: false, text: "Cannot reach backend" });
+    } finally { setTesting(false); }
   };
 
-  const testSource = async (source) => {
-    setTestState(s => ({ ...s, [source]: "testing" }));
-    const keyMap = { virustotal: "vtApiKey", abuseipdb: "abuseipdbApiKey", greynoise: "greynoiseApiKey" };
-    try {
-      const r = await fetch(`${API_BASE}/api/system/ti/test`, {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source, apiKey: ti[keyMap[source]] || _MASK }),
-      });
-      const d = await r.json();
-      setTestState(s => ({ ...s, [source]: d.ok ? "ok" : "fail", [`${source}_msg`]: d.message || d.error || "" }));
-    } catch {
-      setTestState(s => ({ ...s, [source]: "fail", [`${source}_msg`]: "Cannot reach backend" }));
-    }
-  };
-
-  const sources = [
-    {
-      id:          "virustotal",
-      label:       "VirusTotal",
-      key:         "vtApiKey",
-      placeholder: "VT API Key (v3)",
-      desc:        "Reputation for IPs, domains, and file hashes. Free tier: 4 requests/min.",
-      docs:        "https://developers.virustotal.com/reference/overview",
-    },
-    {
-      id:          "abuseipdb",
-      label:       "AbuseIPDB",
-      key:         "abuseipdbApiKey",
-      placeholder: "AbuseIPDB v2 API Key",
-      desc:        "IP abuse confidence score. Free tier: 1000 checks/day.",
-      docs:        "https://www.abuseipdb.com/api",
-    },
-    {
-      id:          "greynoise",
-      label:       "GreyNoise",
-      key:         "greynoiseApiKey",
-      placeholder: "GreyNoise API Key",
-      desc:        "Identifies benign internet scanners (riot) and malicious actors. Community tier available.",
-      docs:        "https://docs.greynoise.io/",
-    },
-  ];
-
-  const mispConnected = misp.mode !== "disabled" && misp.url && misp.apiKey;
+  const cytimConfigured = cytim.url && cytim.apiKey;
 
   return (
     <div>
-      <div style={{ ...LABEL, marginBottom: 6 }}>External Threat Intelligence Sources</div>
+      <div style={{ ...LABEL, marginBottom: 6 }}>Threat Intelligence Broker — CyTIM</div>
       <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, marginBottom: 24 }}>
-        Configure API keys for external TI sources. When set, these enrich every new incident
-        with multi-source reputation data visible in the Incidents drawer.
-        Keys are stored in <code style={{ color: "rgba(0,229,160,0.6)" }}>/opt/cycentra/ai_settings.json</code> and
-        synced to <code style={{ color: "rgba(0,229,160,0.6)" }}>cysiemstack.env</code> automatically.
+        CyTIM is the single TI broker for all CyCentra 360 instances. It queries MISP, VirusTotal,
+        AbuseIPDB, and GreyNoise, caches results for 30 days, and exposes a unified enrichment API.
+        Cy360 no longer holds individual TI API keys — configure them once in CyTIM.
       </div>
 
-      {/* ── MISP ──────────────────────────────────────────────────────────── */}
-      <div style={{ ...CARD, marginBottom: 16, borderLeft: `3px solid ${mispConnected ? "rgba(176,110,255,0.6)" : "rgba(255,255,255,0.08)"}` }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+      {/* ── CyTIM connection ──────────────────────────────────────────────── */}
+      <div style={{ ...CARD, marginBottom: 16, borderLeft: `3px solid ${cytimConfigured ? "rgba(0,229,160,0.6)" : "rgba(255,255,255,0.08)"}` }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 13, color: "#fff", marginBottom: 3 }}>MISP — Threat Intelligence Platform</div>
+            <div style={{ fontWeight: 700, fontSize: 13, color: "#fff", marginBottom: 3 }}>CyTIM — Threat Intelligence Manager</div>
             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
-              IOC feed for incident enrichment, ASM scans, and host intelligence. Supports on-prem and cloud (CyMISP) instances.
+              Single broker for MISP · VirusTotal · AbuseIPDB · GreyNoise. 30-day IOC cache.
+              Deploy at <code style={{ color: "rgba(0,229,160,0.5)" }}>/opt/cytim</code> on the CyMind server or any reachable host.
             </div>
           </div>
-          {mispConnected && <span style={{ fontSize: 11, color: "#b06eff" }}>● configured</span>}
+          {cytimConfigured && <span style={{ fontSize: 11, color: "#00e5a0" }}>● configured</span>}
         </div>
 
-        {/* Mode selector */}
-        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-          {["disabled", "local", "cloud"].map(m => (
-            <button key={m}
-              onClick={() => { setMisp(s => ({ ...s, mode: m })); setMispTest(null); }}
-              style={{
-                background: misp.mode === m ? "rgba(176,110,255,0.15)" : "rgba(255,255,255,0.03)",
-                border: `1px solid ${misp.mode === m ? "rgba(176,110,255,0.5)" : "rgba(255,255,255,0.1)"}`,
-                color: misp.mode === m ? "#b06eff" : "rgba(255,255,255,0.4)",
-                padding: "5px 14px", borderRadius: 4, fontFamily: "monospace", fontSize: 11,
-                fontWeight: 700, cursor: "pointer", textTransform: "uppercase",
-              }}>
-              {m === "disabled" ? "Disabled" : m === "local" ? "Local (on-prem)" : "Cloud (CyMISP)"}
-            </button>
-          ))}
-        </div>
-
-        {misp.mode !== "disabled" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div>
-              <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>
-                MISP Server URL {misp.mode === "cloud" && <span style={{ color: "rgba(255,255,255,0.3)", fontWeight: 400 }}>(leave blank to use cymisp.cycentra.com)</span>}
-              </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div>
+            <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyTIM Base URL</div>
+            <input
+              type="url"
+              value={cytim.url}
+              onChange={e => { setCytim(s => ({ ...s, url: e.target.value })); setTestResult(null); }}
+              placeholder="http://204.168.193.23:7443"
+              style={{ ...INPUT, width: "100%", boxSizing: "border-box" }}
+            />
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyTIM API Key</div>
               <input
-                type="url"
-                value={misp.url}
-                onChange={e => { setMisp(s => ({ ...s, url: e.target.value })); setMispTest(null); }}
-                placeholder={misp.mode === "cloud" ? "https://cymisp.cycentra.com" : "https://misp.corp.example.com"}
+                type="password"
+                value={cytim.apiKey}
+                onChange={e => { setCytim(s => ({ ...s, apiKey: e.target.value })); setTestResult(null); }}
+                placeholder="Cy360-xxxx (generate via CyTIM admin)"
                 style={{ ...INPUT, width: "100%", boxSizing: "border-box" }}
               />
             </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>MISP API Key</div>
-                <input
-                  type="password"
-                  value={misp.apiKey}
-                  onChange={e => { setMisp(s => ({ ...s, apiKey: e.target.value })); setMispTest(null); }}
-                  placeholder="Paste your MISP automation key"
-                  style={{ ...INPUT, width: "100%", boxSizing: "border-box" }}
-                />
-              </div>
-              <button
-                onClick={testMisp}
-                disabled={mispTest?.ok === null}
-                style={{ ...BTN("#4d9eff"), whiteSpace: "nowrap", opacity: mispTest?.ok === null ? 0.6 : 1 }}>
-                {mispTest?.ok === null ? "Testing…" : "Test"}
-              </button>
-            </div>
-            {mispTest && mispTest.ok !== null && (
-              <div style={{ fontSize: 11, fontFamily: "monospace",
-                color: mispTest.ok ? "#00e5a0" : "#ff6b6b" }}>
-                {mispTest.ok ? "✓" : "✗"} {mispTest.text}
-              </div>
-            )}
+            <button
+              onClick={testCytim}
+              disabled={testing}
+              style={{ ...BTN("#4d9eff"), whiteSpace: "nowrap", opacity: testing ? 0.6 : 1 }}>
+              {testing ? "Testing…" : "Test"}
+            </button>
           </div>
-        )}
+
+          {testResult && (
+            <div style={{ fontSize: 11, fontFamily: "monospace", color: testResult.ok ? "#00e5a0" : "#ff6b6b" }}>
+              {testResult.ok ? "✓" : "✗"} {testResult.text}
+              {testResult.ok && testResult.sources && (
+                <div style={{ marginTop: 6, color: "rgba(255,255,255,0.4)" }}>
+                  {Object.entries(testResult.sources).map(([src, info]) => (
+                    <span key={src} style={{ marginRight: 12 }}>
+                      {info?.ok ? "✓" : "○"} {src}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
-      {sources.map(src => {
-        const ts = testState[src.id];
-        const msg = testState[`${src.id}_msg`] || "";
-        return (
-          <div key={src.id} style={{ ...CARD, marginBottom: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 13, color: "#fff", marginBottom: 3 }}>{src.label}</div>
-                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{src.desc}</div>
-              </div>
-              {ts === "ok"   && <span style={{ fontSize: 11, color: "#00e5a0" }}>✓ Connected</span>}
-              {ts === "fail" && <span style={{ fontSize: 11, color: "#ff6b6b" }}>✗ {msg}</span>}
+      {/* ── Source info panel ─────────────────────────────────────────────── */}
+      <div style={{ ...CARD, marginBottom: 16, background: "rgba(0,229,160,0.03)", borderLeft: "3px solid rgba(0,229,160,0.15)" }}>
+        <div style={{ fontWeight: 700, fontSize: 12, color: "rgba(255,255,255,0.5)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+          Configured in CyTIM (not here)
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          {[
+            { label: "MISP",        desc: "Event-based IOC feed from on-prem or community MISP" },
+            { label: "VirusTotal",  desc: "Multi-engine file / IP / domain reputation" },
+            { label: "AbuseIPDB",   desc: "IP abuse confidence score (0–100)" },
+            { label: "GreyNoise",   desc: "Distinguishes scanners from targeted actors" },
+          ].map(s => (
+            <div key={s.label} style={{ background: "rgba(255,255,255,0.03)", borderRadius: 4, padding: "8px 12px" }}>
+              <div style={{ fontWeight: 700, fontSize: 12, color: "#fff", marginBottom: 2 }}>{s.label}</div>
+              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)" }}>{s.desc}</div>
             </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input
-                type="password"
-                value={ti[src.key] || ""}
-                onChange={e => setTi(s => ({ ...s, [src.key]: e.target.value }))}
-                placeholder={src.placeholder}
-                style={{ ...INPUT, flex: 1 }}
-              />
-              <button
-                onClick={() => testSource(src.id)}
-                disabled={ts === "testing"}
-                style={{ ...BTN(), whiteSpace: "nowrap", opacity: ts === "testing" ? 0.6 : 1 }}>
-                {ts === "testing" ? "Testing…" : "Test"}
-              </button>
-            </div>
-          </div>
-        );
-      })}
+          ))}
+        </div>
+        <div style={{ fontSize: 10, color: "rgba(255,255,255,0.25)", marginTop: 10 }}>
+          Add API keys in CyTIM admin UI → Sources tab, then restart CyTIM containers.
+        </div>
+      </div>
 
       <button onClick={handleSave} disabled={saving} style={{ ...BTN(), marginTop: 8 }}>
         {saving ? "Saving…" : saved ? "✓ Saved" : "Save TI Settings"}

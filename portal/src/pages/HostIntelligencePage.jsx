@@ -582,7 +582,7 @@ function RiskTab({ riskScores, loading }) {
                     <BreakdownRow label="Alert Severity"    value={bk.alert_severity    ?? 0} max={35} color="#ff3b3b" />
                     <BreakdownRow label="Incident Severity" value={bk.incident_severity ?? 0} max={30} color="#ff8c00" />
                     <BreakdownRow label="UEBA Anomalies"    value={bk.ueba_anomalies    ?? 0} max={25} color="#f5c518" />
-                    <BreakdownRow label="MISP IOC Hits"     value={bk.misp_ioc_hits     ?? 0} max={10} color="#b06eff" />
+                    <BreakdownRow label="TI IOC Hits"       value={bk.misp_ioc_hits     ?? 0} max={10} color="#b06eff" />
                     {entity.last_calculated && (
                       <div style={{ color: "#444", fontSize: 10, fontFamily: "monospace", marginTop: 8 }}>
                         Last calculated: {new Date(entity.last_calculated).toLocaleString()}

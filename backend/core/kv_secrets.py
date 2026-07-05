@@ -165,8 +165,6 @@ FLASK_KV_MAP: dict[str, str] = {
     # ── External integrations (company-level credentials) ─────────────────────
     "GH_TOKEN":                 "GH-TOKEN",
     "MAXMIND_KEY":              "MAXMIND-KEY",
-    "CLOUD_MISP_URL":           "CLOUD-MISP-URL",
-    "CLOUD_MISP_API_KEY":       "CLOUD-MISP-API-KEY",
     "CYMIND_API_URL":           "CYMIND-API-URL",
     "CYMIND_API_KEY":           "CYMIND-API-KEY",
     #
@@ -186,15 +184,10 @@ FLASK_KV_MAP: dict[str, str] = {
 # Only company-wide credentials here.  Install-specific values are excluded:
 #   CORRELATION_DB_URL — per-install PostgreSQL connection string
 #   WAZUH_API_*        — auto-detected by setup.sh from local Wazuh config
+#   CYTIM_URL / CYTIM_API_KEY — per-install (CyTIM runs locally; set in cysiemstack.env)
 ENGINE_KV_MAP: dict[str, str] = {
-    "CLOUD_MISP_URL":     "CLOUD-MISP-URL",
-    "CLOUD_MISP_API_KEY": "CLOUD-MISP-API-KEY",
-    "CYMIND_API_URL":     "CYMIND-API-URL",
-    "CYMIND_API_KEY":     "CYMIND-API-KEY",
-    # TI keys — shared vault secret, same name as ASM_KV_MAP so one vault entry covers both
-    "VIRUSTOTAL_API_KEY":  "VIRUSTOTAL-API-KEY",
-    "ABUSEIPDB_API_KEY":   "ABUSEIPDB-API-KEY",
-    "GREYNOISE_API_KEY":   "GREYNOISE-API-KEY",
+    "CYMIND_API_URL": "CYMIND-API-URL",
+    "CYMIND_API_KEY": "CYMIND-API-KEY",
 }
 
 # CyASM scanning modules

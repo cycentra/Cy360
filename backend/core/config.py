@@ -242,6 +242,13 @@ EDR_AUTO_ISOLATE_SCORE  = float(os.environ.get("EDR_AUTO_ISOLATE_SCORE", "90"))
 # gRPC collector listen address (for future native agent transport).
 EDR_GRPC_LISTEN         = os.environ.get("EDR_GRPC_LISTEN", "0.0.0.0:50051")
 
+# ── CyTIM — Threat Intelligence Module ────────────────────────────────────────
+# When CYTIM_URL is set, all MISP/VT calls route through CyTIM.
+# Leave blank to use direct MISP/VT connections (legacy mode).
+CYTIM_URL     = os.environ.get("CYTIM_URL", "").rstrip("/")
+CYTIM_API_KEY = os.environ.get("CYTIM_API_KEY", "")
+CYTIM_TIMEOUT = int(os.environ.get("CYTIM_TIMEOUT", "15"))
+
 # ── ITAM — IT Asset Management ────────────────────────────────────────────────
 # Internal subnet for nmap-based asset discovery (CIDR notation).
 # Leave empty to disable active scanning; discovery still works via ARP+CMDB.

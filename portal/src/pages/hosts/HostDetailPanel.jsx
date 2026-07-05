@@ -217,7 +217,7 @@ function EnrichmentPanel({
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: alreadyEnriched ? 10 : 0 }}>
           <span style={{ fontSize: 10, color: "#888", flex: 1 }}>
-            {alreadyEnriched ? "AI ANALYSIS" : "AI + MISP ENRICHMENT"}
+            {alreadyEnriched ? "AI ANALYSIS" : "AI + THREAT INTEL"}
           </span>
           <button
             onClick={doEnrich}
@@ -295,13 +295,13 @@ function EnrichmentPanel({
               </div>
             )}
 
-            {/* MISP hits */}
-            {result.misp_hits?.length > 0 && (
+            {/* CyTIM TI hits (ti_hits from siem_proxy enrichment) */}
+            {(result.ti_hits || result.misp_hits || []).length > 0 && (
               <div style={{ marginTop: 10 }}>
                 <div style={{ fontSize: 10, color: "#ff8c00", marginBottom: 5 }}>
-                  ⚠ MISP THREAT INTEL ({result.misp_hits.length} match{result.misp_hits.length > 1 ? "es" : ""})
+                  ⚠ THREAT INTEL MATCHES ({(result.ti_hits || result.misp_hits).length} match{(result.ti_hits || result.misp_hits).length > 1 ? "es" : ""} via CyTIM)
                 </div>
-                {result.misp_hits.map((hit, i) => (
+                {(result.ti_hits || result.misp_hits).map((hit, i) => (
                   <div key={i} style={{
                     background: "rgba(255,140,0,0.07)", border: "1px solid rgba(255,140,0,0.2)",
                     borderRadius: 4, padding: "5px 10px", marginBottom: 4, fontSize: 11,

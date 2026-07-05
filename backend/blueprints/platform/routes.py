@@ -63,10 +63,9 @@ def platform_status():
             continue
         # CyMISP stays "installing" until misp_ready flag is set by post-install
         if saved.get("status") == "installing" and docker_containers_running(module_id):
-            if module_id != "cymisp" or saved.get("misp_ready", False):
-                saved["status"]  = "running"
-                state[module_id] = saved
-                save_state(state)
+            saved["status"]  = "running"
+            state[module_id] = saved
+            save_state(state)
         if saved.get("status") in ("running", "degraded"):
             live             = docker_containers_running(module_id)
             saved["running"] = live
@@ -128,7 +127,6 @@ def platform_uninstall():
         # 2. Force-remove known orphaned containers
         for c in {
             "cysoar": ["cysoar"],
-            "cymisp": ["cymisp", "cymisp-db", "cymisp-redis"],
         }.get(module_id, []):
             run(f"docker rm -f {c} 2>/dev/null || true", timeout=10)
 
@@ -482,59 +480,11 @@ def _nginx_inject_cysoar(base_domain: str, log_fn):
     log_fn("cysoar: WARNING — could not find injection point — add location /cysoar/ manually")
 
 
-def _nginx_add_cymisp(base_domain: str, log_fn):
-    """
-    Add the cymisp.DOMAIN server block — exact string from original app.py.
-    Only called after MISP is confirmed live and config is patched.
-    """
-    if not NGINX_CONF.exists():
-        log_fn("cymisp: nginx config not found")
-        return
-    existing = NGINX_CONF.read_text()
-    if f"cymisp.{base_domain}" in existing:
-        log_fn("cymisp: nginx block already present")
-        return
-
-    block = (
-        "\nserver {\n"
-        "    listen 80; server_name cymisp." + base_domain + ";\n"
-        "    return 301 https://$host$request_uri;\n"
-        "}\n"
-        "server {\n"
-        "    listen 443 ssl http2; server_name cymisp." + base_domain + ";\n"
-        "    ssl_certificate     /etc/letsencrypt/live/cy360." + base_domain + "/fullchain.pem;\n"
-        "    ssl_certificate_key /etc/letsencrypt/live/cy360." + base_domain + "/privkey.pem;\n"
-        "    include             /etc/letsencrypt/options-ssl-nginx.conf;\n"
-        "    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;\n"
-        "    add_header Strict-Transport-Security \"max-age=31536000; includeSubDomains\" always;\n"
-        "    add_header X-Content-Type-Options \"nosniff\" always;\n"
-        "    location / {\n"
-        "        proxy_pass https://127.0.0.1:8243/;\n"
-        "        proxy_ssl_verify off;\n"
-        "        proxy_set_header Host $host;\n"
-        "        proxy_set_header X-Real-IP $remote_addr;\n"
-        "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
-        "        proxy_set_header X-Forwarded-Proto https;\n"
-        "        proxy_set_header X-Forwarded-Host $host;\n"
-        "        proxy_set_header X-Forwarded-Port 443;\n"
-        "        proxy_read_timeout 300s;\n"
-        "        add_header Content-Security-Policy \"default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:;\" always;\n"
-        "    }\n"
-        "}\n"
-    )
-    NGINX_CONF.write_text(existing + block)
-    rc, _, err = run("nginx -t && systemctl reload nginx", timeout=15)
-    log_fn("cymisp: nginx block added and reloaded" if rc == 0
-           else f"cymisp: WARNING — nginx reload failed: {err}")
-
 
 def _expand_ssl(module_id: str, base_domain: str, log_fn):
     """Expand the Let's Encrypt cert to cover a new module subdomain."""
     existing = NGINX_CONF.read_text() if NGINX_CONF.exists() else ""
     domains  = [f"cy360.{base_domain}", f"cyasm.{base_domain}", f"cysiem.{base_domain}"]
-    for mod in ("cymisp",):
-        if f"{mod}.{base_domain}" in existing:
-            domains.append(f"{mod}.{base_domain}")
     new_sub = f"{module_id}.{base_domain}"
     if new_sub not in domains:
         domains.append(new_sub)
@@ -623,9 +573,6 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
             log(f"CySOAR .env written")
 
         else:
-            # CyMISP and any future modules: write env_vars directly
-            # For CyMISP, env_vars contains MISP_ADMIN_EMAIL, MISP_ADMIN_PASSPHRASE,
-            # MISP_MYSQL_PASSWORD, MISP_MYSQL_ROOT_PASSWORD, REDIS_PASSWORD
             env_path.write_text("\n".join(f"{k}={v}" for k, v in env_vars.items()))
             log(f"Written .env with {len(env_vars)} variables")
 
@@ -676,98 +623,6 @@ def _install_module_async(module_id: str, compose_yaml: str, env_vars: dict):
         # POST-INSTALL HOOKS
         # ══════════════════════════════════════════════════════════════════════
 
-        # ── CyMISP: wait for live, patch config, set credentials, nginx, SSL ──
-        if module_id == "cymisp":
-            misp_url = "https://cymisp." + base_domain
-            log("CyMISP: waiting for MISP to initialise (8–12 min)...")
-            misp_live = False
-
-            for attempt in range(48):
-                time.sleep(15)
-                rc2, logs_out, _ = run(
-                    "docker logs cymisp 2>&1 | grep 'MISP is now live'", timeout=10
-                )
-                if logs_out.strip():
-                    misp_live = True
-                    log(f"CyMISP: MISP is live (attempt {attempt + 1})")
-                    break
-                log(f"CyMISP: waiting... ({attempt + 1}/48)")
-
-            if misp_live:
-                # Patch baseurl in config.php
-                sed_expr = (
-                    "s|'baseurl' => '.*'|'baseurl' => '" + misp_url + "'|g;"
-                    " s|'external_baseurl' => '.*'|'external_baseurl' => '" + misp_url + "'|g;"
-                    " s|'rest_client_baseurl' => '.*'|'rest_client_baseurl' => '" + misp_url + "'|g"
-                )
-                rc2, _, err2 = run(
-                    "docker exec cymisp sed -i \"" + sed_expr + "\" "
-                    "/var/www/MISP/app/Config/config.php",
-                    timeout=15
-                )
-                if rc2 == 0:
-                    log("CyMISP: baseurl patched to " + misp_url)
-                    # Save patched config to host — mounted as volume so it survives restarts
-                    rc3, config_out, _ = run(
-                        "docker exec cymisp cat /var/www/MISP/app/Config/config.php",
-                        timeout=10
-                    )
-                    if rc3 == 0 and config_out:
-                        (module_dir / "misp-config.php").write_text(config_out)
-                        log("CyMISP: config.php saved to host")
-                else:
-                    log(f"CyMISP: WARNING — baseurl patch failed: {err2}")
-
-                # Patch Redis password in config.php and PHP sessions
-                redis_pass = env_vars.get("REDIS_PASSWORD", "redispassword")
-                run(
-                    "docker exec cymisp sed -i "
-                    "\"s|'redis_password' => '.*'|'redis_password' => '" + redis_pass + "'|g\" "
-                    "/var/www/MISP/app/Config/config.php",
-                    timeout=10
-                )
-                run(
-                    "docker exec cymisp bash -c \"find /etc/php -name 'www.conf' "
-                    "-exec sed -i 's|auth=redispassword|auth=" + redis_pass + "|g' {} \\;\"",
-                    timeout=10
-                )
-                log("CyMISP: Redis password patched")
-
-                # Force admin credentials via database
-                # MISP always creates admin@admin.test — we override via PDO
-                admin_email = env_vars.get("MISP_ADMIN_EMAIL",      "admin@admin.test")
-                admin_pass  = env_vars.get("MISP_ADMIN_PASSPHRASE", "admin")
-                mysql_pass  = env_vars.get("MISP_MYSQL_PASSWORD",   "misp_db_pass")
-
-                rc4, hash_out, _ = run(
-                    "docker exec cymisp php -r \"echo password_hash('" +
-                    admin_pass + "', PASSWORD_BCRYPT, ['cost'=>10]);\"",
-                    timeout=10
-                )
-                if rc4 == 0 and hash_out.strip().startswith("$2y$"):
-                    pw_hash = hash_out.strip().replace("$", "\\$")
-                    run(
-                        "docker exec cymisp php -r \""
-                        "\\$conn = new PDO('mysql:host=cymisp-db;dbname=misp', 'misp', '" + mysql_pass + "');"
-                        "\\$stmt = \\$conn->prepare('UPDATE users SET email=?, password=?, change_pw=0 WHERE id=1');"
-                        "\\$stmt->execute(['" + admin_email + "', '" + pw_hash + "']);"
-                        "echo 'done';\"",
-                        timeout=15
-                    )
-                    log("CyMISP: credentials set — " + admin_email)
-                else:
-                    log("CyMISP: WARNING — could not hash password; defaults remain (admin@admin.test / admin)")
-
-                state = load_state()
-                state[module_id]["misp_ready"] = True
-                save_state(state)
-                log("CyMISP: fully ready — login at " + misp_url)
-            else:
-                log("CyMISP: WARNING — did not come live within 12 minutes")
-
-            # Add nginx + expand SSL (done regardless of misp_live — nginx needed for access)
-            _nginx_add_cymisp(base_domain, log)
-            _expand_ssl("cymisp", base_domain, log)
 
         # ── CySOAR: inject /cysoar/ location into portal server ───────────────
 

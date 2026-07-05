@@ -28,13 +28,10 @@ class Settings(BaseSettings):
     wazuh_api_user: str = "wazuh-wui"
     wazuh_api_password: str = ""
 
-    # MISP
-    # misp_mode is written by _sync_misp_to_siem_env() in system/routes.py whenever
-    # the portal saves MISP settings.  Values: "disabled" | "cloud" | "local"
-    misp_mode: str = "disabled"
-    misp_url: str = "http://127.0.0.1:8200"
-    misp_api_key: str = ""
-    misp_enabled: bool = False
+    # CyTIM — Threat Intelligence Manager (single broker for MISP, VT, AbuseIPDB, GreyNoise)
+    # Set CYTIM_URL and CYTIM_API_KEY in /opt/cycentra/cysiemstack.env to enable enrichment.
+    cytim_url:     str = ""
+    cytim_api_key: str = ""
 
     # LLM — provider and credentials are read from /opt/cycentra/ai_settings.json
     # (written by the AI Settings page in the portal — no separate config needed).
@@ -94,51 +91,19 @@ class Settings(BaseSettings):
     # Empty string disables key enforcement (MCP is still reachable internally).
     cymind_api_key: str = ""
 
-    # TLS CA bundle path for outbound httpx calls (MISP, IRIS).
+    # TLS CA bundle path for outbound httpx calls (IRIS).
     # Set to the path of a CA certificate bundle to verify self-signed certs.
     # Leave empty to use the system default CA store.
     tls_ca_bundle: str = ""
 
-    # ── External Threat Intelligence APIs (Phase 1) ───────────────────────────
-    # Written by _sync_ti_to_siem_env() in system/routes.py when the portal
-    # saves TI settings.  Leave empty to disable the respective source.
-    vt_api_key:        str = ""   # VirusTotal v3
-    abuseipdb_api_key: str = ""   # AbuseIPDB v2
-    greynoise_api_key: str = ""   # GreyNoise Community/Enterprise
-
     @model_validator(mode='after')
-    def _bridge_cloud_misp_creds(self) -> 'Settings':
-        """Bridge CLOUD_MISP_URL / CLOUD_MISP_API_KEY (injected by ENGINE_KV_MAP
-        vault bootstrap) into the engine MISP settings.  This ensures MISP
-        enrichment works without the removed UI widget or a manual MISP_ENABLED
-        flag in cysiemstack.env."""
-        cloud_url = os.environ.get("CLOUD_MISP_URL", "").strip().rstrip("/")
-        cloud_key = os.environ.get("CLOUD_MISP_API_KEY", "").strip()
-        # Fill url from CLOUD_MISP_URL if the local setting is still the default
-        if cloud_url and self.misp_url in ("", "http://127.0.0.1:8200"):
-            self.misp_url = cloud_url
-        # Fill api key from CLOUD_MISP_API_KEY if not already set in cysiemstack.env
-        if cloud_key and not self.misp_api_key:
-            self.misp_api_key = cloud_key
-        # Auto-enable when credentials are now present
-        if self.misp_api_key and not self.misp_enabled:
-            self.misp_enabled = True
-            if self.misp_mode == "disabled":
-                self.misp_mode = "cloud"
-        return self
-
-    @model_validator(mode='after')
-    def _bridge_ti_keys(self) -> 'Settings':
-        """Bridge VIRUSTOTAL_API_KEY / ABUSEIPDB_API_KEY / GREYNOISE_API_KEY from
-        os.environ (injected by ENGINE_KV_MAP vault bootstrap) into the TI fields.
-        UI-set values in cysiemstack.env (written by _sync_ti_to_siem_env) take
-        priority — this only fills the field when the UI has not configured it."""
-        if not self.vt_api_key:
-            self.vt_api_key = os.environ.get("VIRUSTOTAL_API_KEY", "").strip()
-        if not self.abuseipdb_api_key:
-            self.abuseipdb_api_key = os.environ.get("ABUSEIPDB_API_KEY", "").strip()
-        if not self.greynoise_api_key:
-            self.greynoise_api_key = os.environ.get("GREYNOISE_API_KEY", "").strip()
+    def _bridge_cytim_env(self) -> 'Settings':
+        """Pick up CYTIM_URL / CYTIM_API_KEY from os.environ (vault-injected)
+        when they are not already set in cysiemstack.env."""
+        if not self.cytim_url:
+            self.cytim_url = os.environ.get("CYTIM_URL", "").strip().rstrip("/")
+        if not self.cytim_api_key:
+            self.cytim_api_key = os.environ.get("CYTIM_API_KEY", "").strip()
         return self
 
     model_config = SettingsConfigDict(

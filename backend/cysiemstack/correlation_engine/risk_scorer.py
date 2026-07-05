@@ -8,7 +8,7 @@ Score breakdown (max 100):
   alert_severity    35   log-scale aggregation of base_scores
   incident_severity 30   weighted by severity level + correlated rules
   ueba_anomalies    25   sum of anomaly risk contributions (users only)
-  misp_ioc_hits     10   confirmed threat actor infrastructure
+  ti_ioc_hits       10   confirmed threat actor infrastructure (all CyTIM sources)
 
 Time decay: score decays linearly over RISK_DECAY_HOURS without new activity.
 Trend: rising / stable / falling based on previous score comparison.
@@ -117,7 +117,7 @@ def _asset_score(asset_tier: Optional[int], max_points: float = 20.0) -> float:
 def compute_fp_score(
     avg_conf: float,
     ueba_anomaly_count: int,
-    misp_ioc_hits: int,
+    ti_ioc_hits: int,
     kill_chain_stage_name: Optional[str],
     asset_tier: Optional[int],
 ) -> float:
@@ -126,7 +126,7 @@ def compute_fp_score(
     Factors (applied in order):
       1. Base: (1 − avg_rule_confidence) × 100
       2. UEBA penalty: each anomaly reduces FP probability by 8 pts (cap 30)
-      3. MISP IOC hit multiplier: ×0.6 per batch of hits; floor 5 if any hit
+      3. TI IOC hit multiplier: ×0.6 per batch of hits; floor 5 if any hit
       4. Kill-chain stage cap/floor
       5. Asset criticality cap/floor
     """
@@ -136,8 +136,8 @@ def compute_fp_score(
     ueba_penalty = min(ueba_anomaly_count * 8, 30)
     base -= ueba_penalty
 
-    # MISP IOC hit multiplier
-    if misp_ioc_hits > 0:
+    # CyTIM IOC hit multiplier (all sources: MISP, VT, AbuseIPDB, GreyNoise)
+    if ti_ioc_hits > 0:
         base *= 0.6
         base = max(base, 5.0)
 

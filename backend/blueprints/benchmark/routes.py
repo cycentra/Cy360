@@ -31,7 +31,6 @@ import requests as _req
 from flask import Blueprint, jsonify, request, session
 
 from core.config import SCANS_DIR
-from core.helpers import get_misp_config
 
 log = logging.getLogger("cycentra.benchmark")
 
@@ -1025,204 +1024,59 @@ def _collect_vuln_score() -> dict:
     }
 
 
-# ── 5. Threat Intelligence — direct MISP API ──────────────────────────────────
-
-def _read_cysiemstack_env() -> dict:
-    """Parse /opt/cycentra/cysiemstack.env → key/value dict. Mirrors ingestor pattern."""
-    env: dict = {}
-    env_file = Path("/opt/cycentra/cysiemstack.env")
-    if not env_file.exists():
-        return env
-    try:
-        for line in env_file.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, _, v = line.partition("=")
-            env[k.strip()] = v.strip().strip('"').strip("'")
-    except Exception:
-        pass
-    return env
-
-
-def _read_misp_config() -> dict | None:
-    """
-    Resolve MISP credentials using a four-level fallback chain.
-
-    Priority (first source with both url AND apiKey wins):
-      1. /opt/cycentra/ai_settings.json  → misp.url / misp.apiKey
-      2. os.environ CLOUD_MISP_*         → set by EnvironmentFile=/opt/cycentra/.env
-      3. /opt/cycentra/cysiemstack.env   → MISP_URL / MISP_API_KEY
-      4. os.environ MISP_*               → MISP_URL / MISP_API_KEY
-
-    CLOUD_MISP_* (Source 2) is checked before cysiemstack.env because the .env
-    file is updated by the UI and always carries the current key, whereas
-    cysiemstack.env may hold a stale key written during initial install.
-
-    Returns dict(url, apiKey, mode) or None if disabled/unconfigured.
-    """
-    import os as _os
-    url     = ""
-    api_key = ""
-    mode    = "disabled"
-
-    # Source 1: ai_settings.json
-    ai_file = Path("/opt/cycentra/ai_settings.json")
-    try:
-        if ai_file.exists():
-            stored  = json.loads(ai_file.read_text())
-            misp    = stored.get("misp") or {}
-            mode    = str(misp.get("mode", "disabled")).lower()
-            url     = str(misp.get("url",    "")).strip().rstrip("/")
-            api_key = str(misp.get("apiKey", "")).strip()
-    except Exception as exc:
-        log.warning("[benchmark] ai_settings.json read error: %s", exc)
-
-    # Source 2: os.environ CLOUD_MISP_* (written by UI to /opt/cycentra/.env)
-    if not url or not api_key:
-        cloud_url = _os.environ.get("CLOUD_MISP_URL", "").strip().rstrip("/")
-        cloud_key = _os.environ.get("CLOUD_MISP_API_KEY", "").strip()
-        if cloud_url and cloud_key:
-            url     = url     or cloud_url
-            api_key = api_key or cloud_key
-            if not mode or mode == "disabled":
-                mode = _os.environ.get("CLOUD_MISP_MODE", "cloud").lower()
-
-    # Source 3: cysiemstack.env
-    if not url or not api_key:
-        siem_env = _read_cysiemstack_env()
-        url      = url      or siem_env.get("MISP_URL",     "").strip().rstrip("/")
-        api_key  = api_key  or siem_env.get("MISP_API_KEY", "").strip()
-        if not mode or mode == "disabled":
-            mode = siem_env.get("MISP_MODE", "local").lower()
-        if siem_env.get("MISP_ENABLED", "true").lower() == "false":
-            return None
-
-    # Source 4: os.environ MISP_*
-    if not url or not api_key:
-        url     = url     or _os.environ.get("MISP_URL",     "").strip().rstrip("/")
-        api_key = api_key or _os.environ.get("MISP_API_KEY", "").strip()
-        if not mode or mode == "disabled":
-            mode = _os.environ.get("MISP_MODE", "local").lower()
-
-    if mode == "disabled":
-        return None
-    if not url or not api_key:
-        log.debug("[benchmark] MISP url/apiKey not found in any config source")
-        return None
-
-    return {"url": url, "apiKey": api_key, "mode": mode}
-
+# ── 5. Threat Intelligence — CyTIM ───────────────────────────────────────────
 
 def _collect_threat_intel_score() -> dict:
     """
-    Threat intelligence coverage score (0-100).
-
-    Reads MISP credentials from /opt/cycentra/ai_settings.json directly
-    (same source as ingestor.py — ai_settings.json is written by the
-    System Settings UI and is available to the Flask backend process).
+    Threat intelligence coverage score (0-100) based on CyTIM health.
 
     Sub-signals:
-      a) Enabled feed count        → 0-40 pts  (3+ feeds = full 40)
-      b) Total IOC attribute count → 0-30 pts  (10,000+ attrs = full 30)
-      c) Actionable ratio (to_ids) → 0-30 pts
+      a) CyTIM reachable + DB healthy  → 0-40 pts
+      b) Active TI sources configured  → 0-60 pts  (20 pts per source, capped)
     """
-    misp_cfg = _read_misp_config()
-    if not misp_cfg:
+    cytim_url = os.environ.get("CYTIM_URL", "").strip().rstrip("/")
+    if not cytim_url:
+        # Try reading from cysiemstack.env
+        try:
+            env_file = Path("/opt/cycentra/cysiemstack.env")
+            if env_file.exists():
+                for line in env_file.read_text().splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, _, v = line.partition("=")
+                    if k.strip() == "CYTIM_URL":
+                        cytim_url = v.strip().strip('"').strip("'").rstrip("/")
+                        break
+        except Exception:
+            pass
+
+    if not cytim_url:
         return {"score": None, "stale": False,
-                "detail": "MISP disabled or not configured — enable in System Settings → CyMISP"}
+                "detail": "CyTIM not configured — set CYTIM_URL in cysiemstack.env"}
 
-    url     = misp_cfg["url"]
-    api_key = misp_cfg["apiKey"]
-    headers = {
-        "Authorization": api_key,
-        "Accept":        "application/json",
-        "Content-Type":  "application/json",
-    }
-    timeout = 8
-    verify  = False   # MISP commonly uses self-signed certs
-
-    # ── a) Feed count — GET /feeds/index ──────────────────────────────────────
-    feed_score  = 0
-    feed_detail = "feeds unavailable"
-    enabled_n   = 0
     try:
-        r = _req.get(f"{url}/feeds/index", headers=headers,
-                     timeout=timeout, verify=verify)
-        if r.status_code == 200:
-            feeds     = r.json() if isinstance(r.json(), list) else []
-            # MISP wraps each feed under a "Feed" key: [{"Feed": {...}}, ...]
-            # Unwrap before reading "enabled" so the field is always accessible.
-            enabled_n = sum(1 for f in feeds if f.get("Feed", f).get("enabled"))
-            total_n   = len(feeds)
-            # 3+ enabled feeds = full 40 pts; proportional below 3
-            feed_score  = min(40, round((enabled_n / max(3, 1)) * 40))
-            feed_detail = f"{enabled_n}/{total_n} feeds enabled"
-        else:
-            log.debug("[benchmark] MISP /feeds/index returned HTTP %s", r.status_code)
+        r = _req.get(f"{cytim_url}/health", timeout=8)
+        if r.status_code not in (200, 503):
+            return {"score": 20, "stale": True,
+                    "detail": f"CyTIM returned HTTP {r.status_code}"}
+        data         = r.json()
+        sources      = data.get("sources", {})
+        active_count = sum(1 for v in sources.values() if v.get("ok"))
+        total_count  = len(sources)
+        conn_score   = 40 if data.get("db") == "ok" else 20
+        source_score = min(60, active_count * 20)
+        composite    = min(100, conn_score + source_score)
+        return {
+            "score":          composite,
+            "stale":          False,
+            "detail":         f"{active_count}/{total_count} TI sources active",
+            "sources_active": active_count,
+            "sources_total":  total_count,
+        }
     except Exception as exc:
-        log.debug("[benchmark] MISP feeds error: %s", exc)
-
-    # ── b) Total attribute count — POST /attributes/statistics/type ───────────
-    attr_score  = 0
-    attr_detail = "attribute count unavailable"
-    total_attrs = 0
-    try:
-        r = _req.post(f"{url}/attributes/statistics/type",
-                      headers=headers, json={},
-                      timeout=timeout, verify=verify)
-        if r.status_code == 200:
-            stats = r.json()
-            # Response is {type_name: count_str, ...}
-            total_attrs = sum(
-                int(v) for v in stats.values()
-                if str(v).isdigit()
-            )
-            # 10,000 attributes = full 30 pts
-            attr_score  = min(30, round((total_attrs / 10_000) * 30))
-            attr_detail = f"{total_attrs:,} IOC attributes"
-        else:
-            log.debug("[benchmark] MISP /attributes/statistics returned HTTP %s",
-                      r.status_code)
-    except Exception as exc:
-        log.debug("[benchmark] MISP attribute statistics error: %s", exc)
-
-    # ── c) Actionable ratio — to_ids=1 vs total ───────────────────────────────
-    active_score  = 0
-    active_detail = ""
-    try:
-        r_active = _req.post(
-            f"{url}/attributes/restSearch",
-            headers=headers,
-            json={"returnFormat": "count", "to_ids": 1},
-            timeout=timeout, verify=verify,
-        )
-        r_total = _req.post(
-            f"{url}/attributes/restSearch",
-            headers=headers,
-            json={"returnFormat": "count"},
-            timeout=timeout, verify=verify,
-        )
-        if r_active.status_code == 200 and r_total.status_code == 200:
-            active_n = int(r_active.json().get("response", {}).get("count", 0))
-            total_n  = int(r_total.json().get("response",  {}).get("count", 1))
-            ratio    = active_n / max(total_n, 1)
-            active_score  = min(30, round(ratio * 30))
-            active_detail = f"{ratio*100:.0f}% actionable"
-    except Exception as exc:
-        log.debug("[benchmark] MISP active ratio error: %s", exc)
-
-    composite = min(100, feed_score + attr_score + active_score)
-    parts     = [p for p in [feed_detail, attr_detail, active_detail] if p]
-
-    return {
-        "score":        composite,
-        "stale":        False,
-        "detail":       " · ".join(parts),
-        "mode":         misp_cfg.get("mode", "unknown"),
-        "feeds_enabled": enabled_n,
-        "total_attrs":  total_attrs,
-    }
+        log.debug("[benchmark] CyTIM health check failed: %s", exc)
+        return {"score": 20, "stale": True, "detail": "CyTIM unreachable — check connectivity"}
 
 
 # ── 6. External benchmark (Phase 1 estimate) ──────────────────────────────────

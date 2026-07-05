@@ -2405,45 +2405,28 @@ def _call_ai_for_enrichment(prompt: str, timeout: float = 90.0) -> tuple[str, st
         return "", "", f"call_failed: {exc}"
 
 
-def _misp_lookup_ioc(ioc: str, ioc_type: str = "any") -> list[dict]:
-    """Query MISP for a single IOC. Returns list of attribute hits (may be empty)."""
-    import logging as _log
-    _logger = _log.getLogger(__name__)
-    from core.helpers import get_misp_config
-
-    cfg = get_misp_config()
-    if not cfg:
+def _cytim_lookup_iocs(iocs: list[str]) -> list[dict]:
+    """Look up IOCs via CyTIM. Returns list of hit dicts (may be empty)."""
+    if not iocs:
         return []
-
-    misp_url = cfg["url"].rstrip("/")
-    misp_key = cfg["apiKey"]
-
-    try:
-        type_filter = {} if ioc_type == "any" else {"type": ioc_type}
-        resp = _req.post(
-            f"{misp_url}/attributes/restSearch",
-            headers={"Authorization": misp_key, "Accept": "application/json",
-                     "Content-Type": "application/json"},
-            json={"returnFormat": "json", "value": ioc, "limit": 5, **type_filter},
-            timeout=10,
-            verify=False,  # MISP often uses self-signed certs in local installs
-        )
-        resp.raise_for_status()
-        attrs = resp.json().get("response", {}).get("Attribute", [])
-        return [
-            {
-                "ioc":          a.get("value", ""),
-                "type":         a.get("type", ""),
-                "category":     a.get("category", ""),
-                "comment":      a.get("comment", ""),
-                "threat_level": a.get("Event", {}).get("threat_level_id", "3"),
-                "event_id":     a.get("event_id", ""),
-            }
-            for a in attrs[:5]
-        ]
-    except Exception as exc:
-        _logger.debug(f"[host-enrich] MISP lookup failed for {ioc!r}: {exc}")
+    from core.helpers import get_threat_intel_client
+    client = get_threat_intel_client()
+    if not client:
         return []
+    ioc_list = [{"type": "ip", "value": ioc} for ioc in iocs]
+    results = client.bulk_enrich(ioc_list)
+    hits = []
+    if isinstance(results, dict):
+        for key, result in results.items():
+            if result and result.get("score", 0) > 0:
+                hits.append({
+                    "ioc":     result.get("value", key),
+                    "type":    result.get("type", "ip"),
+                    "score":   result.get("score", 0),
+                    "verdict": result.get("verdict", "unknown"),
+                    "tags":    result.get("tags", []),
+                })
+    return hits
 
 
 def _build_enrich_prompt(item_type: str, item: dict, host_name: str) -> tuple[str, list[str]]:
@@ -2556,7 +2539,7 @@ def _build_enrich_prompt(item_type: str, item: dict, host_name: str) -> tuple[st
 @require_siem_analyst
 def siem_host_item_enrich(agent_id):
     """
-    AI + MISP enrichment for a single host posture item.
+    AI + Threat Intel enrichment for a single host posture item.
 
     Request body:
       {
@@ -2569,7 +2552,7 @@ def siem_host_item_enrich(agent_id):
       {
         "explanation": "...",
         "remediation": "...",
-        "misp_hits": [...],
+        "ti_hits": [...],
         "ai_available": true|false
       }
     """
@@ -2587,16 +2570,14 @@ def siem_host_item_enrich(agent_id):
     # Call AI
     explanation, remediation, ai_error = _call_ai_for_enrichment(prompt)
 
-    # MISP lookup for any IOCs found in the item
-    misp_hits: list[dict] = []
-    for ioc in iocs[:3]:  # cap at 3 to avoid long waits
-        hits = _misp_lookup_ioc(ioc)
-        misp_hits.extend(hits)
+    # CyTIM lookup for IOCs found in the item
+    ti_hits = _cytim_lookup_iocs(iocs[:3])
 
     return jsonify({
         "explanation":    explanation,
         "remediation":    remediation,
-        "misp_hits":      misp_hits,
+        "ti_hits":        ti_hits,
+        "misp_hits":      ti_hits,   # backward compat alias for frontend
         "ai_available":   bool(explanation),
         "ai_configured":  ai_error != "not_configured",
         "ai_error":       ai_error,

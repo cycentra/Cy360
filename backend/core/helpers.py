@@ -6,16 +6,20 @@ Import individual functions — do not import * from here.
 """
 
 import json
+import logging
 import os
 import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import requests as http_requests
 from flask import request
 
 from core.config import AUTH_LOG_FILE, CORS_ALLOWED_ORIGINS
+
+_log = logging.getLogger(__name__)
 
 
 # ── subprocess runner ──────────────────────────────────────────────────────────
@@ -95,62 +99,80 @@ def generate_tenant_id(domain: str) -> str:
     return f"{prefix}-ten-01"
 
 
-# ── MISP config resolver ───────────────────────────────────────────────────────
+# ── CyTIM client ───────────────────────────────────────────────────────────────
 
-_CLOUD_MISP_URL_DEFAULT = "https://cymisp.cycentra.com"
-
-
-def get_misp_config() -> dict | None:
+class CyTIMClient:
     """
-    Returns MISP connection config. Priority:
-      1. /opt/cycentra/ai_settings.json  misp.{mode,url,apiKey}  (set via UI)
-      2. CLOUD_MISP_URL / CLOUD_MISP_API_KEY  env vars (vault-injected)
-      3. MISP_URL / MISP_API_KEY  env vars (cysiemstack.env)
-
-    Returns dict with keys url, apiKey, mode — or None if not configured.
+    Thin client for CyTIM threat intelligence module.
+    Used by blueprints instead of calling MISP/VT directly when CyTIM is deployed.
     """
-    import logging as _log
-    import json  as _json
-    import pathlib as _pathlib
-    _logger = _log.getLogger(__name__)
 
-    # Source 1: UI-saved config in ai_settings.json
-    try:
-        _ai = _pathlib.Path("/opt/cycentra/ai_settings.json")
-        if _ai.exists():
-            stored = _json.loads(_ai.read_text())
-            misp   = stored.get("misp", {})
-            mode   = str(misp.get("mode", "disabled")).lower()
-            url    = str(misp.get("url",    "")).strip().rstrip("/")
-            key    = str(misp.get("apiKey", "")).strip()
-            if mode == "disabled":
-                return None
-            if mode == "local" and url and key:
-                return {"url": url, "apiKey": key, "mode": "local"}
-            if mode == "cloud":
-                url = url or os.environ.get("CLOUD_MISP_URL", _CLOUD_MISP_URL_DEFAULT).rstrip("/")
-                key = key or os.environ.get("CLOUD_MISP_API_KEY", "").strip()
-                if key:
-                    return {"url": url, "apiKey": key, "mode": "cloud"}
-    except Exception:
-        pass
+    def __init__(self, base_url: str, api_key: str, timeout: int = 15):
+        self._base = base_url.rstrip("/")
+        self._headers = {"X-CyTIM-Key": api_key, "Content-Type": "application/json"}
+        self._timeout = timeout
 
-    # Source 2: vault env vars
-    url = os.environ.get("CLOUD_MISP_URL", _CLOUD_MISP_URL_DEFAULT).rstrip("/")
-    key = os.environ.get("CLOUD_MISP_API_KEY", "").strip()
-    if key:
-        return {"url": url, "apiKey": key, "mode": "cloud"}
+    def enrich(self, ioc_type: str, ioc_value: str) -> Optional[dict]:
+        """
+        Returns enrichment dict {score, confidence, tags, sources, cache_hit}
+        or None if CyTIM is unreachable or IOC not found.
+        """
+        try:
+            r = http_requests.get(
+                f"{self._base}/api/cytim/enrich",
+                headers=self._headers,
+                params={"type": ioc_type, "value": ioc_value},
+                timeout=self._timeout,
+            )
+            if r.status_code == 200:
+                return r.json()
+            _log.warning("CyTIM enrich %s/%s → HTTP %s", ioc_type, ioc_value, r.status_code)
+            return None
+        except Exception as e:
+            _log.warning("CyTIM unreachable: %s", e)
+            return None
 
-    # Source 3: cysiemstack.env MISP_* vars
-    key = os.environ.get("MISP_API_KEY", "").strip()
-    if key:
-        url = os.environ.get("MISP_URL", url).rstrip("/")
-        return {"url": url, "apiKey": key, "mode": os.environ.get("MISP_MODE", "local")}
+    def bulk_enrich(self, iocs: list[dict]) -> list[dict]:
+        """
+        iocs: [{"type": "ip", "value": "1.2.3.4"}, ...]
+        Returns list of enrichment dicts, empty list on failure.
+        """
+        try:
+            r = http_requests.post(
+                f"{self._base}/api/cytim/bulk-enrich",
+                headers=self._headers,
+                json={"iocs": iocs},
+                timeout=self._timeout,
+            )
+            if r.status_code == 200:
+                return r.json().get("results", [])
+            return []
+        except Exception as e:
+            _log.warning("CyTIM bulk_enrich failed: %s", e)
+            return []
 
-    _logger.warning(
-        "⏭️  [MISP] Not configured — IOC lookups disabled. "
-        "Configure MISP in System Settings → Threat Intel or add CLOUD_MISP_API_KEY to vault."
-    )
+
+_cytim_client: Optional[CyTIMClient] = None
+
+
+def get_threat_intel_client() -> Optional[CyTIMClient]:
+    """
+    Returns a CyTIMClient if CyTIM is configured, otherwise None.
+    Callers that get None should fall back to direct MISP/VT calls.
+
+    Usage in blueprints:
+        client = get_threat_intel_client()
+        if client:
+            result = client.enrich("ip", "1.2.3.4")
+        else:
+            # existing MISP/VT logic here
+    """
+    global _cytim_client
+    from core.config import CYTIM_URL, CYTIM_API_KEY, CYTIM_TIMEOUT
+    if CYTIM_URL and CYTIM_API_KEY:
+        if _cytim_client is None:
+            _cytim_client = CyTIMClient(CYTIM_URL, CYTIM_API_KEY, CYTIM_TIMEOUT)
+        return _cytim_client
     return None
 
 

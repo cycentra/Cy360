@@ -1,3 +1,16 @@
+## v1.0.160 -- 2026-07-05
+
+### Improvements
+
+  - **MISP removal — CyTIM broker**: Removed all direct MISP/VT/AbuseIPDB/GreyNoise connections from Cy360 Flask layer. All TI enrichment now routes through CyTIM (single broker). CyMISP Docker module removed from Platform installer.
+  - **FP scoring fix**: `compute_fp_score()` now uses all CyTIM source hits (`ti_reputation.ioc_hits`) for false-positive probability, not MISP-only hits. VT/AbuseIPDB/GreyNoise threat hits now correctly reduce FP probability.
+  - **Settings UI — Threat Intel tab**: Replaced MISP card + individual TI API key cards with a single CyTIM connection card. URL and API key are saved and synced to `cysiemstack.env` automatically.
+  - **Frontend labels**: "MISP IOC Hits" → "TI IOC Hits" in risk score breakdowns; "AI + MISP ENRICHMENT" → "AI + THREAT INTEL" in host enrichment; IOC badge in incidents list now uses `ti_reputation.ioc_hits` (all sources).
+  - **Benchmark TI score**: Now reflects CyTIM health — 40 pts (DB ok) + up to 60 pts (20 per active TI source).
+  - **New backend route**: `POST /api/ai/settings/cytim/test` (analyst+) — tests CyTIM connectivity, returns source-level health status.
+
+---
+
 ## v1.0.159 -- 2026-07-02
 
 ### New Features

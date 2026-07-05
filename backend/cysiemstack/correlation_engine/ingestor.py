@@ -2,7 +2,7 @@
 ingestor.py
 Reads raw Wazuh alerts from Redis LIST (populated by Filebeat),
 normalises them, and drives the full pipeline:
-  normalise → group → correlate → UEBA → risk_score → MISP → LLM → WebSocket push
+  normalise → group → correlate → UEBA → risk_score → CyTIM → LLM → WebSocket push
 """
 import asyncio
 import time
@@ -22,8 +22,7 @@ from grouper import group_alert
 from correlator import run_correlation
 from ueba import analyse_alert
 from risk_scorer import calculate_entity_risk, compute_fp_score, CLOUD_ENTITY_NAMES
-from misp_enricher import enrich_incident
-from ti_enricher import enrich_incident_ti
+from cytim_enricher import enrich_incident as cytim_enrich_incident
 from llm_enricher import enrich_incident as llm_enrich_incident
 from models import write_audit
 from ueba_ml import ml_analyse_alert
@@ -218,12 +217,10 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                            "severity": incident.severity},
                 )
 
-            # 5. MISP enrichment (new incidents or new correlation rules)
+            # 5. Threat intelligence enrichment via CyTIM (new incidents or new rules)
             misp_result = {}
             if created or new_rules:
-                misp_result = await enrich_incident(db, incident)
-                # Phase 1: follow up with unified TI enrichment (VT + AbuseIPDB + GreyNoise)
-                await enrich_incident_ti(db, incident)
+                misp_result = await cytim_enrich_incident(db, incident)
 
             # 6. LLM enrichment (critical/high with ≥3 alerts, throttled)
             # NOTE: LLM runs BEFORE SOAR — SOAR uses the enriched narrative.
@@ -234,7 +231,7 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                 llm_result = await llm_enrich_incident(db, incident)
 
             # ── Compute multi-factor FP probability ──────────────────────────
-            def _fp_score_for(inc, ueba_anoms, misp_res) -> float:
+            def _fp_score_for(inc, ueba_anoms, ti_res) -> float:
                 rules = inc.correlated_rules or []
                 if rules:
                     avg_conf = sum(
@@ -245,14 +242,14 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                 return compute_fp_score(
                     avg_conf          = avg_conf,
                     ueba_anomaly_count= len(ueba_anoms),
-                    misp_ioc_hits     = len(misp_res.get("ioc_hits", [])),
+                    ti_ioc_hits       = len(ti_res.get("ioc_hits", [])),
                     kill_chain_stage_name = inc.kill_chain_stage_name,
                     asset_tier        = inc.asset_tier,
                 )
 
-            # Re-score with final enrichment state (MISP IOC hits may have updated)
+            # Re-score with all CyTIM sources (VT, AbuseIPDB, GreyNoise, MISP)
             fp_score = _fp_score_for(incident, ueba_anomalies,
-                                     incident.misp_enrichment or {})
+                                     incident.ti_reputation or {})
             incident.fp_probability = fp_score
 
             # Soft severity cap: when FP probability is ≥ 75 the incident is more
@@ -451,8 +448,7 @@ async def _reenrich_held_incident(incident_id: str) -> None:
             if not incident:
                 return   # already handled by analyst
 
-            misp_result = await enrich_incident(db, incident)
-            await enrich_incident_ti(db, incident)
+            misp_result = await cytim_enrich_incident(db, incident)
 
             rules = incident.correlated_rules or []
             avg_conf = (
@@ -462,7 +458,7 @@ async def _reenrich_held_incident(incident_id: str) -> None:
             fp_score = compute_fp_score(
                 avg_conf            = avg_conf,
                 ueba_anomaly_count  = len(incident.ueba_flags or []),
-                misp_ioc_hits       = len(misp_result.get("ioc_hits", [])),
+                ti_ioc_hits         = len(misp_result.get("ioc_hits", [])),
                 kill_chain_stage_name = incident.kill_chain_stage_name,
                 asset_tier          = incident.asset_tier,
             )

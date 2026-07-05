@@ -11,7 +11,6 @@ Integrations monitored
   - wazuh          : Wazuh manager API reachability + active-agent count
   - siem_engine    : CySIEM correlation engine /health
   - cymind         : CyMind AI /api/v1/health (only if enabled)
-  - misp           : MISP /servers/getPyMISPVersion.json (only if not disabled)
   - cysoar         : CySOAR Node-RED (only if module installed)
   - marketplace_*  : Office 365 / GCP log ingest gaps (only if integration installed)
 """
@@ -340,35 +339,6 @@ def check_cymind() -> dict:
                 "error": str(exc), "ingest_gap": None}
 
 
-def check_misp() -> dict:
-    """Check MISP threat intelligence connectivity."""
-    name    = "misp"
-    display = "MISP Threat Intelligence"
-    try:
-        from core.helpers import get_misp_config
-        cfg = get_misp_config()
-    except Exception:
-        cfg = None
-    if not cfg or cfg.get("mode") == "disabled":
-        return {"name": name, "display": display, "status": "skipped",
-                "error": "MISP is disabled or not configured", "ingest_gap": None}
-    misp_url = cfg.get("url", "").rstrip("/")
-    api_key  = cfg.get("apiKey", "")
-    try:
-        r = requests.get(
-            f"{misp_url}/servers/getPyMISPVersion.json",
-            headers={"Authorization": api_key, "Accept": "application/json"},
-            verify=False, timeout=_REQUEST_TIMEOUT,
-        )
-        if r.status_code == 200:
-            return {"name": name, "display": display, "status": "ok",
-                    "error": None, "ingest_gap": None}
-        return {"name": name, "display": display, "status": "down",
-                "error": f"HTTP {r.status_code}", "ingest_gap": None}
-    except requests.exceptions.RequestException as exc:
-        return {"name": name, "display": display, "status": "down",
-                "error": str(exc), "ingest_gap": None}
-
 
 def check_cysoar() -> dict:
     """Check CySOAR (Node-RED) — only if the module is installed."""
@@ -550,7 +520,6 @@ def run_all_checks() -> list:
         check_siem_engine(),
         check_wazuh(),
         check_cymind(),
-        check_misp(),
         check_cysoar(),
     ]
     checks += check_marketplace_integrations()

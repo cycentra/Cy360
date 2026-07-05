@@ -8,13 +8,12 @@ Routes:
   POST /api/ai/test              test external AI provider connectivity
   GET  /api/ai/settings          retrieve persisted AI settings
   POST /api/ai/settings          persist AI settings (provider/model/keys)
-  GET  /api/system/misp-config   resolved MISP config (mode-aware, no secrets)
   GET  /api/config               debug — dump non-secret env config
   GET  /api/system/version         current version + last 5 release notes
   GET  /api/system/latest-version   query GitHub Releases API for latest published version (ghToken required)
   POST /api/system/update           trigger cycentra-setup.sh --update (GH_TOKEN read from server .env)
   POST /api/system/upgrade          trigger cycentra-setup.sh full install (major upgrade)
-  GET  /api/system/env/<target>  read env file (global|cysiemstack|cysoar|cymisp|cysiem)
+  GET  /api/system/env/<target>  read env file (global|cysiemstack|cysoar|cysiem)
   PUT  /api/system/env/<target>  write env file
   GET  /api/system/license         current license status (type, days, customer, valid)
   POST /api/system/license/upload  upload a .lic file — validates and activates immediately
@@ -37,7 +36,7 @@ from pathlib import Path
 import requests as http_requests
 from flask import Blueprint, request, jsonify, make_response, session, current_app
 
-from core.helpers import add_cors_headers, get_misp_config, run as _run_cmd
+from core.helpers import add_cors_headers, run as _run_cmd
 from core.config import AI_SETTINGS_FILE
 
 system_bp = Blueprint("system", __name__)
@@ -47,7 +46,6 @@ _ENV_FILE_MAP = {
     "global":      "/opt/cycentra/.env",
     "cysiemstack": "/opt/cycentra/cysiemstack.env",
     "cysoar":      "/opt/cycentra/modules/cysoar/.env",
-    "cymisp":      "/opt/cycentra/modules/cymisp/.env",
 }
 
 # Keys that must never be returned or overwritten via the API (security)
@@ -163,108 +161,8 @@ def ai_test():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+
 # ── AI settings persistence ────────────────────────────────────────────────────
-
-def _sync_misp_to_siem_env(misp: dict) -> None:
-    """Resolve the effective MISP config (based on mode) and write it into
-    cysiemstack.env so the correlation engine picks it up without a manual
-    env file edit.  Also handles CLOUD and DISABLED modes."""
-    env_path = Path(_ENV_FILE_MAP["cysiemstack"])
-    if not env_path.parent.exists():
-        return  # Not installed yet — skip silently
-
-    mode = misp.get("mode", "disabled")
-
-    if mode == "cloud":
-        # Cloud CyMISP — key from env var, falling back to stored misp.apiKey
-        eff_url = os.environ.get("CLOUD_MISP_URL", "https://cymisp.cycentra.com").rstrip("/")
-        eff_key = os.environ.get("CLOUD_MISP_API_KEY", "").strip() or misp.get("apiKey", "").strip()
-        enabled = "true" if eff_key else "false"
-    elif mode == "local":
-        eff_url = misp.get("url", "").rstrip("/")
-        eff_key = misp.get("apiKey", "")
-        enabled = "true" if (eff_url and eff_key) else "false"
-    else:  # disabled
-        eff_url, eff_key, enabled = "", "", "false"
-
-    updates = {
-        "MISP_MODE":    mode,
-        "MISP_ENABLED": enabled,
-        "MISP_URL":     eff_url,
-        "MISP_API_KEY": eff_key,
-    }
-
-    # Also write url + apiKey into ai_settings.json so benchmark can read them.
-    # _sync_misp_to_siem_env() writes cysiemstack.env (for the engine process).
-    # ai_settings.json is what the Flask benchmark blueprint reads.
-    try:
-        import json as _j
-        _ai = Path("/opt/cycentra/ai_settings.json")
-        _d  = _j.loads(_ai.read_text()) if _ai.exists() else {}
-        _d["misp"] = {
-            "mode":   misp.get("mode", "disabled"),
-            "url":    misp.get("url", ""),
-            "apiKey": misp.get("apiKey", ""),
-        }
-        _ai.write_text(_j.dumps(_d, indent=4))
-    except Exception as _e:
-        current_app.logger.warning("[system] MISP ai_settings sync failed: %s", _e)
-
-    try:
-        lines = env_path.read_text().splitlines() if env_path.exists() else []
-    except Exception:
-        lines = []
-
-    # Update existing keys in-place; append any that are missing
-    result, seen = [], set()
-    for line in lines:
-        key = line.split("=", 1)[0].strip()
-        if key in updates:
-            result.append(f'{key}={updates[key]}')
-            seen.add(key)
-        else:
-            result.append(line)
-    for k, v in updates.items():
-        if k not in seen:
-            result.append(f'{k}={v}')
-    try:
-        env_path.write_text("\n".join(result) + "\n")
-    except Exception:
-        pass  # Non-fatal — server may not have write permission in dev mode
-
-
-
-def _sync_ti_to_siem_env(ti: dict) -> None:
-    """Write TI API keys from ai_settings.json into cysiemstack.env so the
-    correlation engine picks them up without a manual env edit."""
-    env_path = Path(_ENV_FILE_MAP["cysiemstack"])
-    if not env_path.parent.exists():
-        return
-    updates = {
-        "VT_API_KEY":        ti.get("vtApiKey", ""),
-        "ABUSEIPDB_API_KEY": ti.get("abuseipdbApiKey", ""),
-        "GREYNOISE_API_KEY": ti.get("greynoiseApiKey", ""),
-    }
-    try:
-        lines = env_path.read_text().splitlines() if env_path.exists() else []
-    except Exception:
-        lines = []
-    result, seen = [], set()
-    for line in lines:
-        key = line.split("=", 1)[0].strip()
-        if key in updates:
-            result.append(f'{key}={updates[key]}')
-            seen.add(key)
-        else:
-            result.append(line)
-    for k, v in updates.items():
-        if k not in seen:
-            result.append(f'{k}={v}')
-    try:
-        env_path.write_text("\n".join(result) + "\n")
-    except Exception:
-        pass
-
 
 @system_bp.route("/api/ai/settings", methods=["OPTIONS"])
 def ai_settings_options():
@@ -281,12 +179,8 @@ def ai_settings_get():
                 data["fields"]["apiKey"] = "••••••••"
             if "cymind_memory" in data and data["cymind_memory"].get("apiKey"):
                 data["cymind_memory"]["apiKey"] = "••••••••"
-            if "misp" in data and data["misp"].get("apiKey"):
-                data["misp"]["apiKey"] = "••••••••"
-            ti = data.get("threat_intel", {})
-            for key_field in ("vtApiKey", "abuseipdbApiKey", "greynoiseApiKey"):
-                if ti.get(key_field):
-                    ti[key_field] = "••••••••"
+            if "cytim" in data and data["cytim"].get("apiKey"):
+                data["cytim"]["apiKey"] = "••••••••"
             return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -297,7 +191,7 @@ def ai_settings_get():
 def ai_settings_post():
     data = request.get_json() or {}
     # Only accept known top-level keys to prevent arbitrary data storage
-    allowed = {"provider", "fields", "prompts", "cymind_memory", "misp", "system", "threat_intel"}
+    allowed = {"provider", "fields", "prompts", "cymind_memory", "system", "cytim"}
     payload = {k: v for k, v in data.items() if k in allowed}
     if not payload:
         return jsonify({"error": "No valid settings provided"}), 400
@@ -312,7 +206,6 @@ def ai_settings_post():
         incoming_fields = payload.get("fields", {})
         incoming_key    = incoming_fields.get("apiKey", "")
         if not incoming_key or incoming_key == _MASK:
-            # Preserve whatever key is already on disk
             existing_key = existing.get("fields", {}).get("apiKey", "")
             if existing_key:
                 payload.setdefault("fields", {})["apiKey"] = existing_key
@@ -328,209 +221,22 @@ def ai_settings_post():
             existing_cm_key = existing.get("cymind_memory", {}).get("apiKey", "")
             if existing_cm_key:
                 payload.setdefault("cymind_memory", {})["apiKey"] = existing_cm_key
-        # Same guard for the misp block
-        incoming_misp_key = payload.get("misp", {}).get("apiKey", "")
-        if not incoming_misp_key or incoming_misp_key == _MASK:
-            existing_misp_key = existing.get("misp", {}).get("apiKey", "")
-            if existing_misp_key:
-                payload.setdefault("misp", {})["apiKey"] = existing_misp_key
-        # Same guard for TI API keys
-        for ti_field in ("vtApiKey", "abuseipdbApiKey", "greynoiseApiKey"):
-            incoming_ti_key = payload.get("threat_intel", {}).get(ti_field, "")
-            if not incoming_ti_key or incoming_ti_key == _MASK:
-                existing_ti_key = existing.get("threat_intel", {}).get(ti_field, "")
-                if existing_ti_key:
-                    payload.setdefault("threat_intel", {})[ti_field] = existing_ti_key
+        # Guard: never overwrite a stored CyTIM API key with empty/mask
+        incoming_cytim_key = payload.get("cytim", {}).get("apiKey", "")
+        if not incoming_cytim_key or incoming_cytim_key == _MASK:
+            existing_cytim_key = existing.get("cytim", {}).get("apiKey", "")
+            if existing_cytim_key:
+                payload.setdefault("cytim", {})["apiKey"] = existing_cytim_key
         existing.update(payload)
         AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         AI_SETTINGS_FILE.write_text(json.dumps(existing, indent=2))
-        # Sync MISP settings into cysiemstack.env
-        if "misp" in existing:
-            _sync_misp_to_siem_env(existing["misp"])
-        # Sync TI API keys into cysiemstack.env
-        if "threat_intel" in existing:
-            _sync_ti_to_siem_env(existing["threat_intel"])
+        # Sync CYTIM_URL + CYTIM_API_KEY to cysiemstack.env for the correlation engine
+        cytim_block = existing.get("cytim", {})
+        if cytim_block.get("url"):
+            _sync_cytim_to_cysiemstack_env(cytim_block["url"], cytim_block.get("apiKey", ""))
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-# ── MISP connectivity test ───────────────────────────────────────────────────
-
-@system_bp.route("/api/system/misp/test", methods=["OPTIONS"])
-def misp_test_options():
-    return add_cors_headers(make_response('', 204))
-
-
-@system_bp.route("/api/system/misp/test", methods=["POST"])
-def misp_test():
-    """Test connectivity to a MISP instance using its REST API."""
-    data    = request.get_json() or {}
-    url     = data.get("url", "").rstrip("/")
-    api_key = data.get("apiKey", "")
-
-    # If the UI sent an empty key with useStored=True (cloud mode, masked placeholder),
-    # fall back to the key stored in ai_settings.json
-    if (not api_key or api_key == "\u2022" * 8) and data.get("useStored"):
-        try:
-            stored = json.loads(AI_SETTINGS_FILE.read_text()) if AI_SETTINGS_FILE.exists() else {}
-            api_key = stored.get("misp", {}).get("apiKey", "")
-        
-        except Exception:
-            api_key = ""
-        # Fallback to env var if still missing
-        if not api_key:
-            api_key = os.environ.get("CLOUD_MISP_API_KEY", "").strip()
-
-    if not url:
-        return jsonify({"ok": False, "error": "MISP Server URL is required"}), 400
-    if not api_key or api_key == "\u2022" * 8:
-        return jsonify({"ok": False, "error": "MISP API Key is required — enter your key in the field above"}), 400
-
-    try:
-        # GET /servers/getPyMISPVersion.json — fast, unauthenticated fields still need a valid key
-        resp = http_requests.get(
-            f"{url}/servers/getPyMISPVersion.json",
-            headers={"Authorization": api_key, "Accept": "application/json"},
-            timeout=8,
-            verify=False,   # MISP is commonly on self-signed certs in on-premise deployments
-        )
-        if resp.status_code == 403:
-            return jsonify({"ok": False, "error": "Invalid API key (403 Forbidden)"}), 400
-        if resp.ok:
-            version = resp.json().get("version", "unknown")
-            return jsonify({"ok": True, "message": f"MISP {version} responding"})
-        return jsonify({"ok": False, "error": f"MISP returned HTTP {resp.status_code}"}), 400
-    except http_requests.exceptions.SSLError as e:
-        return jsonify({"ok": False, "error": f"SSL error — {e}"}), 400
-    except http_requests.exceptions.ConnectionError:
-        return jsonify({"ok": False, "error": "Cannot reach MISP server — check URL and network"}), 400
-    except http_requests.exceptions.Timeout:
-        return jsonify({"ok": False, "error": "Connection timed out"}), 400
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-# ── TI source connectivity test ───────────────────────────────────────────────
-
-@system_bp.route("/api/system/ti/test", methods=["OPTIONS"])
-def ti_test_options():
-    return add_cors_headers(make_response('', 204))
-
-
-@system_bp.route("/api/system/ti/test", methods=["POST"])
-def ti_test():
-    """Test connectivity to VirusTotal, AbuseIPDB, or GreyNoise using stored or provided key."""
-    if not session.get("user_email"):
-        return jsonify({"error": "Unauthorized"}), 401
-
-    _MASK = "•" * 8
-    data   = request.get_json() or {}
-    source = data.get("source", "")   # "virustotal" | "abuseipdb" | "greynoise"
-
-    _TI_ENV_FALLBACK = {
-        "vtApiKey":        "VIRUSTOTAL_API_KEY",
-        "abuseipdbApiKey": "ABUSEIPDB_API_KEY",
-        "greynoiseApiKey": "GREYNOISE_API_KEY",
-    }
-
-    def _resolve_key(field: str) -> str:
-        key = data.get("apiKey", "")
-        if not key or key == _MASK:
-            try:
-                stored = json.loads(AI_SETTINGS_FILE.read_text()) if AI_SETTINGS_FILE.exists() else {}
-                key = stored.get("threat_intel", {}).get(field, "")
-            except Exception:
-                key = ""
-        # Fall back to vault-injected env var if UI has nothing configured
-        if not key:
-            key = os.environ.get(_TI_ENV_FALLBACK.get(field, ""), "")
-        return key
-
-    try:
-        if source == "virustotal":
-            api_key = _resolve_key("vtApiKey")
-            if not api_key:
-                return jsonify({"ok": False, "error": "VirusTotal API key not configured"}), 400
-            resp = http_requests.get(
-                "https://www.virustotal.com/api/v3/ip_addresses/8.8.8.8",
-                headers={"x-apikey": api_key},
-                timeout=8,
-            )
-            if resp.status_code == 401:
-                return jsonify({"ok": False, "error": "Invalid API key (401)"}), 400
-            if resp.ok:
-                return jsonify({"ok": True, "message": "VirusTotal API key is valid"})
-            return jsonify({"ok": False, "error": f"VirusTotal returned HTTP {resp.status_code}"}), 400
-
-        elif source == "abuseipdb":
-            api_key = _resolve_key("abuseipdbApiKey")
-            if not api_key:
-                return jsonify({"ok": False, "error": "AbuseIPDB API key not configured"}), 400
-            resp = http_requests.get(
-                "https://api.abuseipdb.com/api/v2/check",
-                headers={"Key": api_key, "Accept": "application/json"},
-                params={"ipAddress": "8.8.8.8", "maxAgeInDays": 1},
-                timeout=8,
-            )
-            if resp.status_code == 401:
-                return jsonify({"ok": False, "error": "Invalid API key (401)"}), 400
-            if resp.ok:
-                return jsonify({"ok": True, "message": "AbuseIPDB API key is valid"})
-            return jsonify({"ok": False, "error": f"AbuseIPDB returned HTTP {resp.status_code}"}), 400
-
-        elif source == "greynoise":
-            api_key = _resolve_key("greynoiseApiKey")
-            if not api_key:
-                return jsonify({"ok": False, "error": "GreyNoise API key not configured"}), 400
-            resp = http_requests.get(
-                "https://api.greynoise.io/v3/community/8.8.8.8",
-                headers={"key": api_key},
-                timeout=8,
-            )
-            if resp.status_code == 401:
-                return jsonify({"ok": False, "error": "Invalid API key (401)"}), 400
-            if resp.ok:
-                return jsonify({"ok": True, "message": "GreyNoise API key is valid"})
-            return jsonify({"ok": False, "error": f"GreyNoise returned HTTP {resp.status_code}"}), 400
-
-        else:
-            return jsonify({"ok": False, "error": "Unknown source — use virustotal, abuseipdb, or greynoise"}), 400
-
-    except http_requests.exceptions.ConnectionError:
-        return jsonify({"ok": False, "error": "Cannot reach TI service — check internet connectivity"}), 400
-    except http_requests.exceptions.Timeout:
-        return jsonify({"ok": False, "error": "Connection timed out"}), 400
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-# ── MISP effective config (single source of truth for other modules) ──────────
-
-@system_bp.route("/api/system/misp-config", methods=["OPTIONS"])
-def misp_config_options():
-    return add_cors_headers(make_response('', 204))
-
-
-@system_bp.route("/api/system/misp-config", methods=["GET"])
-def misp_config_get():
-    """
-    Return the resolved MISP connection parameters for the currently active mode.
-
-    Called by CySOAR / external modules that need MISP creds — they
-    should use this endpoint rather than reading ai_settings.json directly.
-    The API key is never returned; callers receive url + mode only, and must
-    authenticate through the portal backend to perform MISP calls.
-    """
-    cfg = get_misp_config()
-    if cfg is None:
-        return jsonify({"mode": "disabled", "enabled": False})
-    return jsonify({
-        "mode":    cfg["mode"],
-        "enabled": True,
-        "url":     cfg["url"],
-        # API key intentionally omitted — do not expose secrets via this endpoint
-    })
 
 
 # ── Config debug ──────────────────────────────────────────────────────────────
@@ -1204,6 +910,79 @@ _MCP_TOOLS = [
     {"name": "wazuh_active_response",      "access_level": "write", "requires_confirmation": True,  "description": "Trigger a Wazuh active-response command on an agent"},
     {"name": "update_incident",            "access_level": "write", "requires_confirmation": True,  "description": "Update incident fields: assigned_to, notes, severity (PATCH)"},
 ]
+
+
+def _sync_cytim_to_cysiemstack_env(url: str, api_key: str) -> None:
+    """Write CYTIM_URL and CYTIM_API_KEY into cysiemstack.env in-place."""
+    env_path = Path(_ENV_FILE_MAP["cysiemstack"])
+    if not env_path.parent.exists():
+        return
+    updates = {"CYTIM_URL": url.rstrip("/")}
+    if api_key:
+        updates["CYTIM_API_KEY"] = api_key
+    try:
+        lines = env_path.read_text().splitlines() if env_path.exists() else []
+    except Exception:
+        lines = []
+    result, written = [], set()
+    for line in lines:
+        m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\s*=', line)
+        if m and m.group(1) in updates:
+            result.append(f"{m.group(1)}={updates[m.group(1)]}")
+            written.add(m.group(1))
+        else:
+            result.append(line)
+    for key, val in updates.items():
+        if key not in written:
+            result.append(f"{key}={val}")
+    try:
+        env_path.write_text("\n".join(result) + "\n")
+    except Exception:
+        pass
+
+
+@system_bp.route("/api/ai/settings/cytim/test", methods=["OPTIONS"])
+def cytim_test_options():
+    return add_cors_headers(make_response('', 204))
+
+
+@system_bp.route("/api/ai/settings/cytim/test", methods=["POST"])
+def cytim_test():
+    """Test CyTIM connectivity. Expects {url, apiKey}. Returns {ok, message, sources}."""
+    if not session.get("user_email"):
+        return jsonify({"error": "Not authenticated"}), 401
+    from blueprints.rbac.manager import get_user_role
+    if get_user_role(session["user_email"]) not in ("admin", "analyst"):
+        return jsonify({"error": "Analyst or admin role required"}), 403
+    data    = request.get_json() or {}
+    url     = (data.get("url") or "").strip().rstrip("/")
+    api_key = (data.get("apiKey") or "").strip()
+    if not url:
+        return jsonify({"ok": False, "message": "url is required"}), 400
+    _MASK = "•" * 8
+    if not api_key or api_key == _MASK:
+        try:
+            stored = json.loads(AI_SETTINGS_FILE.read_text()) if AI_SETTINGS_FILE.exists() else {}
+            api_key = stored.get("cytim", {}).get("apiKey", "")
+        except Exception:
+            api_key = ""
+    import requests as _req
+    try:
+        headers = {}
+        if api_key:
+            headers["X-CyTIM-Key"] = api_key
+        r = _req.get(f"{url}/health", headers=headers, timeout=8)
+        if r.status_code not in (200, 503):
+            return jsonify({"ok": False, "message": f"CyTIM returned HTTP {r.status_code}"})
+        d = r.json()
+        sources = d.get("sources", {})
+        active  = sum(1 for v in sources.values() if v.get("ok"))
+        total   = len(sources)
+        db_ok   = d.get("db") == "ok"
+        msg = f"Connected — DB {'ok' if db_ok else 'error'}, {active}/{total} TI sources active"
+        return jsonify({"ok": db_ok, "message": msg, "sources": sources})
+    except Exception as exc:
+        return jsonify({"ok": False, "message": f"Cannot reach CyTIM: {exc}"})
 
 
 def _read_mcp_enabled() -> bool:
