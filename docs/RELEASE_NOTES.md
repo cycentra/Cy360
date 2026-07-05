@@ -1,5 +1,13 @@
 ## v1.0.168 -- 2026-07-05
 
+### New Features
+
+  - Route all ASM external APIs through CyTIM recon endpoint
+
+---
+
+## v1.0.168 -- 2026-07-05
+
 ### Architecture — CyTIM Recon Consolidation (Full External API Migration)
 
 All ASM external API calls are now routed through CyTIM as the single intelligence
