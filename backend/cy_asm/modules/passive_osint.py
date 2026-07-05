@@ -112,25 +112,53 @@ def _attr_to_issue(attr: dict, domain: str) -> str | None:
     return None
 
 
+def _cytim_domain_to_osint_attrs(ti_result: dict, domain: str) -> list:
+    """Map a CyTIM enrichment result to the MISP-attribute list shape for backward compat."""
+    score = ti_result.get("score", 0)
+    tags  = ti_result.get("tags", [])
+    if score <= 0 and not tags:
+        return []
+    return [{
+        "value":   domain,
+        "type":    "domain",
+        "source":  "cytim",
+        "score":   score,
+        "tags":    tags,
+        "comment": f"CyTIM score {score}: {', '.join(tags) if tags else 'no flags'}",
+    }]
+
+
 async def gather_passive_osint(domain: str) -> Dict[str, Any]:
     """
-    Run MISP-backed passive OSINT for *domain*.
-
-    Returns::
-
-        {
-            "results": [<misp_attribute_dict>, ...],
-            "issues":  ["IOC hit ...", ...],
-            "summary": "Found N OSINT attributes from MISP",
-        }
+    Run passive OSINT for *domain* — via CyTIM when configured, direct MISP+Shodan otherwise.
     """
+    _use_cytim = False
+    _cytim_bulk_enrich = None
+    try:
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), '..', '..'))
+        from core.helpers import is_cytim_enabled, cytim_bulk_enrich as _cbe
+        _use_cytim = is_cytim_enabled()
+        _cytim_bulk_enrich = _cbe
+    except ImportError:
+        pass
+
     misp_cfg = get_misp_config()
     async with await create_async_session() as session:
-        # MISP
         attrs = []
         misp_issues = []
         misp_summary = ""
-        if misp_cfg:
+
+        if _use_cytim and _cytim_bulk_enrich is not None:
+            loop = asyncio.get_running_loop()
+            ti_map = await loop.run_in_executor(
+                None, lambda: _cytim_bulk_enrich([{"type": "domain", "value": domain}], profile="asm")
+            )
+            ti_result = ti_map.get(domain.lower(), {})
+            attrs = _cytim_domain_to_osint_attrs(ti_result, domain)
+            misp_issues = [f"TI hit: {a['comment']}" for a in attrs if a.get("score", 0) > 0]
+            misp_summary = f"CyTIM: score {ti_result.get('score', 0)}, {len(attrs)} enrichment(s)"
+        elif misp_cfg:
             attrs = await search_misp_domain(domain, session, misp_cfg)
             misp_issues = [i for attr in attrs for i in [_attr_to_issue(attr, domain)] if i]
             misp_summary = f"Found {len(attrs)} OSINT attribute(s) from MISP"

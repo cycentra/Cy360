@@ -176,3 +176,61 @@ def get_threat_intel_client() -> Optional[CyTIMClient]:
     return None
 
 
+# ── Centralized CyTIM gateway helpers (used by all ASM + SIEM modules) ────────
+
+def is_cytim_enabled() -> bool:
+    from core.config import CYTIM_URL, CYTIM_API_KEY, CYTIM_ENABLED
+    return bool(CYTIM_ENABLED and CYTIM_URL and CYTIM_API_KEY)
+
+
+def cytim_bulk_enrich(iocs: list, profile: str = "default") -> dict:
+    """POST /api/cytim/bulk-enrich. Returns {ioc_value_lower: result_dict}. Never raises."""
+    import requests as _req
+    from core.config import CYTIM_URL, CYTIM_API_KEY, CYTIM_TIMEOUT
+    try:
+        resp = _req.post(
+            f"{CYTIM_URL}/api/cytim/bulk-enrich",
+            json={"iocs": iocs, "profile": profile},
+            headers={"X-CyTIM-Key": CYTIM_API_KEY},
+            timeout=CYTIM_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return {r["ioc_value"].lower(): r for r in resp.json().get("results", [])}
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("[CyTIM] bulk_enrich failed: %s", e)
+        return {}
+
+
+def cytim_darkweb_enrich(iocs: list) -> dict:
+    """POST /api/cytim/darkweb-enrich. Returns raw response dict. Never raises."""
+    import requests as _req
+    from core.config import CYTIM_URL, CYTIM_API_KEY, CYTIM_TIMEOUT
+    try:
+        resp = _req.post(
+            f"{CYTIM_URL}/api/cytim/darkweb-enrich",
+            json={"iocs": iocs},
+            headers={"X-CyTIM-Key": CYTIM_API_KEY},
+            timeout=CYTIM_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("[CyTIM] darkweb_enrich failed: %s", e)
+        return {"enabled": False, "results": []}
+
+
+def is_darkweb_enabled() -> bool:
+    """GET /api/cytim/darkweb-status. Returns False if CyTIM not configured or unreachable."""
+    if not is_cytim_enabled():
+        return False
+    import requests as _req
+    from core.config import CYTIM_URL
+    try:
+        resp = _req.get(f"{CYTIM_URL}/api/cytim/darkweb-status", timeout=5)
+        return resp.json().get("enabled", False)
+    except Exception:
+        return False
+
+

@@ -248,6 +248,7 @@ EDR_GRPC_LISTEN         = os.environ.get("EDR_GRPC_LISTEN", "0.0.0.0:50051")
 CYTIM_URL     = os.environ.get("CYTIM_URL", "").rstrip("/")
 CYTIM_API_KEY = os.environ.get("CYTIM_API_KEY", "")
 CYTIM_TIMEOUT = int(os.environ.get("CYTIM_TIMEOUT", "15"))
+CYTIM_ENABLED = os.environ.get("CYTIM_ENABLED", "true").lower() != "false"
 
 # ── ITAM — IT Asset Management ────────────────────────────────────────────────
 # Internal subnet for nmap-based asset discovery (CIDR notation).

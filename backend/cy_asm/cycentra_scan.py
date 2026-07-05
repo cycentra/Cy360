@@ -1119,7 +1119,7 @@ def main():
     else:
         logger.info("⏭️  [State] Subdomain state save skipped — guest scan.")
 
-    # ── MISP IOC Lookup (runs BEFORE AI enrichment, never blocks scan) ────────
+    # ── TI IOC Lookup via CyTIM (runs BEFORE AI enrichment, never blocks scan) ─
     _all_scan_ips: list = []
     _all_scan_ips += result["results"].get("dns", {}).get("results", {}).get("ips", [])
     for _sub in enriched_sub_entries:
@@ -1128,15 +1128,29 @@ def main():
     misp_hit_map: dict = {}
     if _all_scan_ips:
         try:
-            misp_hit_map = asyncio.run(lookup_misp_iocs(_all_scan_ips))
-            if misp_hit_map:
-                logger.info(f"🔴 [MISP] {len(misp_hit_map)} IOC hit(s) across {len(_all_scan_ips)} IPs for {domain}.")
+            import sys as _sys, os as _os
+            _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), '..'))
+            from core.helpers import is_cytim_enabled, cytim_bulk_enrich
+            if is_cytim_enabled():
+                _ioc_list = [{"type": "ip", "value": str(ip)} for ip in _all_scan_ips if ip]
+                _ti_results = cytim_bulk_enrich(_ioc_list, profile="asm")
+                for ip_val, ti_data in _ti_results.items():
+                    if ti_data.get("score", 0) > 0 or "misp" in ti_data.get("sources", {}):
+                        misp_hit_map[ip_val] = ti_data
+                if misp_hit_map:
+                    logger.info(f"🔴 [CyTIM] {len(misp_hit_map)} TI hit(s) across {len(_all_scan_ips)} IPs for {domain}.")
+                else:
+                    logger.info(f"✅ [CyTIM] No TI hits for {len(_all_scan_ips)} IPs for {domain}.")
             else:
-                logger.info(f"✅ [MISP] No IOC hits for {len(_all_scan_ips)} IPs for {domain}.")
-        except Exception as _misp_err:
-            logger.warning(f"⚠️ [MISP] Lookup block failed (scan continues): {_misp_err}")
+                misp_hit_map = asyncio.run(lookup_misp_iocs(_all_scan_ips))
+                if misp_hit_map:
+                    logger.info(f"🔴 [MISP] {len(misp_hit_map)} IOC hit(s) across {len(_all_scan_ips)} IPs for {domain}.")
+                else:
+                    logger.info(f"✅ [MISP] No IOC hits for {len(_all_scan_ips)} IPs for {domain}.")
+        except Exception as _ti_err:
+            logger.warning(f"⚠️ [TI] Lookup block failed (scan continues): {_ti_err}")
     else:
-        logger.debug(f"[MISP] No IPs collected from DNS/subdomains for {domain} — IOC lookup skipped.")
+        logger.debug(f"[TI] No IPs collected from DNS/subdomains for {domain} — IOC lookup skipped.")
     # ─────────────────────────────────────────────────────────────────────────
 
     # AI Enrichment — Deep and Standard scans; Passive is always skipped
