@@ -252,11 +252,11 @@ async def gather_cloud_infra(
             logger.warning(f"DNS enrichment failed: {e}", exc_info=False)
             ips = []
 
-    # Collect detected cloud providers from IP metadata
+    # Collect detected cloud providers from IP metadata (strip trailing commas injected by some GeoIP responses)
     cloud_providers = {
-        ip.get("cloud_provider")
+        ip.get("cloud_provider").rstrip(",").strip()
         for ip in (ips or [])
-        if ip.get("cloud_provider") and ip.get("cloud_provider") != "Unknown"
+        if ip.get("cloud_provider") and ip.get("cloud_provider").rstrip(",").strip() not in ("", "Unknown")
     }
 
     async with await create_async_session() as session:
@@ -283,7 +283,11 @@ async def gather_cloud_infra(
             "providers": list(cloud_providers),
             "buckets": buckets_result.get("displayed_findings", []),
             "k8s_exposed": k8s_exposed,
-            "bucket_summary": buckets_result.get("summary", "No buckets found")
+            "bucket_summary": {
+                "public":  buckets_result.get("public_or_listable", 0),
+                "private": max(0, buckets_result.get("total_existing_buckets", 0) - buckets_result.get("public_or_listable", 0)),
+                "total":   buckets_result.get("total_existing_buckets", 0),
+            }
         },
         "issues": issues,
         "summary": summary

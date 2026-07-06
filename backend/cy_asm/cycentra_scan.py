@@ -695,11 +695,18 @@ def _validate_findings(findings: list) -> list:
             continue
         vuln = f.get("vulnerability", "")
         mod  = f.get("module", "")
-        # Reject cipher findings that name a known-secure TLS 1.3 cipher as weak.
-        if "cipher" in vuln.lower() and mod in ("crypto", "crypto_deep", "web"):
+        # Reject cipher/TLS findings that name a known-secure TLS 1.3 cipher as weak.
+        # Checks both the vulnerability title AND description — models often smuggle the
+        # hallucination into the description while using a generic title like "TLS Configuration Issues".
+        is_cipher_title = "cipher" in vuln.lower()
+        desc = f.get("description", "")
+        is_tls_module = mod in ("crypto", "crypto_deep", "web")
+        if is_tls_module and (is_cipher_title or "tls" in vuln.lower() or "ssl" in vuln.lower()):
             evidence = f.get("evidence", "")
-            named_ciphers = [c for c in _SECURE_TLS13_CIPHERS if c in vuln or c in evidence]
-            if named_ciphers and not any(w.lower() in vuln.lower() for w in WEAK_CIPHERS):
+            all_text = f"{vuln} {desc} {evidence}"
+            named_ciphers = [c for c in _SECURE_TLS13_CIPHERS if c in all_text]
+            has_real_weak = any(w.lower() in all_text.lower() for w in WEAK_CIPHERS)
+            if named_ciphers and not has_real_weak:
                 logger.warning(
                     f"⚠️ [AI Validate] Discarding hallucinated cipher finding: '{vuln}' "
                     f"names secure TLS 1.3 cipher(s) {named_ciphers} as weak."

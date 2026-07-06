@@ -249,6 +249,7 @@ CYTIM_URL     = os.environ.get("CYTIM_URL", "").rstrip("/")
 CYTIM_API_KEY = os.environ.get("CYTIM_API_KEY", "")
 CYTIM_TIMEOUT      = int(os.environ.get("CYTIM_TIMEOUT", "15"))
 CYTIM_BULK_TIMEOUT = int(os.environ.get("CYTIM_BULK_TIMEOUT", "45"))
+CYTIM_RECON_TIMEOUT = int(os.environ.get("CYTIM_RECON_TIMEOUT", "30"))
 CYTIM_ENABLED = os.environ.get("CYTIM_ENABLED", "true").lower() != "false"
 
 # ── ITAM — IT Asset Management ────────────────────────────────────────────────

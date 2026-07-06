@@ -269,7 +269,7 @@ def is_darkweb_enabled() -> bool:
 def cytim_recon(domain: str, modules: list, **kwargs) -> dict:
     """POST /api/cytim/recon. Returns results dict keyed by module. Never raises."""
     import requests as _req
-    from core.config import CYTIM_TIMEOUT
+    from core.config import CYTIM_RECON_TIMEOUT
     url, api_key = _get_cytim_settings()
     if not url or not api_key:
         return {}
@@ -280,7 +280,7 @@ def cytim_recon(domain: str, modules: list, **kwargs) -> dict:
             f"{url}/api/cytim/recon",
             json=payload,
             headers={"X-CyTIM-Key": api_key},
-            timeout=CYTIM_TIMEOUT,
+            timeout=CYTIM_RECON_TIMEOUT,
         )
         resp.raise_for_status()
         return resp.json().get("results", {})
