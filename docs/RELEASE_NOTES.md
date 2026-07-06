@@ -1,5 +1,13 @@
 ## v1.0.175 -- 2026-07-06
 
+### New Features
+
+  - asm): AI enrichment uses CyMind only; remove Gemini and Ollama fallbacks
+
+---
+
+## v1.0.175 -- 2026-07-06
+
 ### Architecture — AI Enrichment, CyTIM Connection & ASM Dashboard (2026-07-06)
 
 #### AI Enrichment — CyMind Only
