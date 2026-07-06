@@ -1,3 +1,11 @@
+## v1.0.174 -- 2026-07-06
+
+### Bug Fixes
+
+  - asm): bucket_summary dict, provider name cleanup, validator broadened, recon timeout
+
+---
+
 ## v1.0.173 -- 2026-07-06
 
 ### Improvements
