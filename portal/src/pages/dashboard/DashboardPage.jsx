@@ -77,6 +77,53 @@ function BarRow({ label, value, max, color, lw = 90 }) {
   );
 }
 
+/** Speedometer / gauge arc — value 0-100, sweeps 200° */
+function Speedometer({ value = 0, size = 104, color, label }) {
+  const cx = size / 2, cy = size / 2 + size * 0.07;
+  const r = size * 0.4;
+  const startAngle = -200; // degrees from 3-o'clock
+  const sweepTotal = 200;  // total arc
+  const toR = d => (d * Math.PI) / 180;
+  const arcPt = (angle) => ({
+    x: cx + r * Math.cos(toR(angle)),
+    y: cy + r * Math.sin(toR(angle)),
+  });
+  const a0 = startAngle, a1 = startAngle + (value / 100) * sweepTotal;
+  const p0 = arcPt(a0), p1 = arcPt(a1);
+  const pEnd = arcPt(startAngle + sweepTotal);
+  const bigBg = sweepTotal > 180 ? 1 : 0;
+  const bigFg = (value / 100) * sweepTotal > 180 ? 1 : 0;
+  const c = color || (value >= 80 ? "#00e5a0" : value >= 50 ? "#f5c518" : value >= 25 ? "#ff8c00" : "#ff3b3b");
+  // Needle
+  const needleAngle = startAngle + (value / 100) * sweepTotal;
+  const nr = r * 0.72;
+  const nx = cx + nr * Math.cos(toR(needleAngle));
+  const ny = cy + nr * Math.sin(toR(needleAngle));
+  return (
+    <svg width={size} height={size * 0.78} style={{ flexShrink: 0, overflow: "visible" }}>
+      {/* Track */}
+      <path d={`M${p0.x} ${p0.y} A${r} ${r} 0 ${bigBg} 1 ${pEnd.x} ${pEnd.y}`}
+        fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={size * 0.09} strokeLinecap="round" />
+      {/* Fill */}
+      {value > 0 && (
+        <path d={`M${p0.x} ${p0.y} A${r} ${r} 0 ${bigFg} 1 ${p1.x} ${p1.y}`}
+          fill="none" stroke={c} strokeWidth={size * 0.09} strokeLinecap="round"
+          style={{ filter: `drop-shadow(0 0 4px ${c}80)` }} />
+      )}
+      {/* Needle dot */}
+      <circle cx={nx} cy={ny} r={size * 0.035} fill={c} opacity={0.9} />
+      <circle cx={cx} cy={cy} r={size * 0.05} fill="#1a1f2e" stroke={c} strokeWidth={1.5} />
+      {/* Value */}
+      <text x={cx} y={cy - size * 0.02} textAnchor="middle" fill="white"
+        fontSize={size * 0.2} fontWeight="800" fontFamily="'Space Mono',monospace">{value}</text>
+      {label && (
+        <text x={cx} y={cy + size * 0.14} textAnchor="middle" fill="rgba(255,255,255,0.3)"
+          fontSize={size * 0.08} fontFamily="monospace" letterSpacing="0.5">{label}</text>
+      )}
+    </svg>
+  );
+}
+
 /** Reusable donut/ring SVG chart */
 function Donut({ segs, size = 104, hole = 0.52, center }) {
   const cx = size / 2, cy = size / 2, r = size * 0.43, ir = r * hole;
@@ -284,34 +331,60 @@ function StatCard({ label, value, accent, sub }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Widget 1 inner — Risk Donut (wide layout)
+// Widget 1 inner — Risk Overview (full-width text + stacked bar, no ring)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function RiskDonut({ assets, onClick }) {
+function RiskOverviewFull({ assets, onClick }) {
   const counts = { critical: 0, high: 0, medium: 0, low: 0 };
   assets.forEach(a => (a.vulnerabilities || []).forEach(v => {
     const s = v.severity?.toLowerCase();
     if (counts[s] !== undefined) counts[s]++;
   }));
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
-  const COLS = ["#ff3b3b", "#ff8c00", "#f5c518", "#00e5a0"];
-  const KEYS = ["critical", "high", "medium", "low"];
-  const segs = KEYS.map((k, i) => ({ value: counts[k], color: COLS[i], label: k.charAt(0).toUpperCase() + k.slice(1) }));
+  const COLS  = { critical: "#ff3b3b", high: "#ff8c00", medium: "#f5c518", low: "#00e5a0" };
+  const KEYS  = ["critical", "high", "medium", "low"];
+  const segs  = KEYS.map(k => ({ value: counts[k], color: COLS[k], label: k.charAt(0).toUpperCase() + k.slice(1) }));
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-      <div style={{ cursor: onClick ? "pointer" : "default" }} onClick={onClick}>
-        <Donut segs={segs} size={130}
-          center={{ v: total.toString(), sub: "FINDINGS", vSize: 22 }} />
+    <div>
+      {/* 4 KPI boxes */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
+        {KEYS.map(k => (
+          <div key={k} onClick={onClick} style={{
+            background: `${COLS[k]}0d`, border: `1px solid ${COLS[k]}30`,
+            borderTop: `2px solid ${COLS[k]}`, borderRadius: 4,
+            padding: "12px 14px", cursor: onClick ? "pointer" : "default",
+          }}>
+            <div style={{ color: COLS[k], fontSize: 30, fontWeight: 800,
+              fontFamily: "'Space Mono',monospace", lineHeight: 1 }}>
+              <AnimCounter value={counts[k]} />
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.38)", fontSize: 10,
+              letterSpacing: "1.5px", marginTop: 4, textTransform: "uppercase" }}>{k}</div>
+            <div style={{ height: 3, background: "rgba(255,255,255,0.06)", borderRadius: 2, marginTop: 8 }}>
+              <div style={{ height: "100%", background: COLS[k], borderRadius: 2,
+                width: total > 0 ? `${(counts[k] / total) * 100}%` : "0%",
+                transition: "width 0.8s ease" }} />
+            </div>
+          </div>
+        ))}
       </div>
-      <div style={{ flex: 1 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {KEYS.map((k, i) => (
-            <BarRow key={k} label={KEYS[i].charAt(0).toUpperCase() + KEYS[i].slice(1)}
-              value={counts[k]} max={total || 1} color={COLS[i]} lw={60} />
-          ))}
+      {/* Full-width stacked bar */}
+      <div style={{ marginBottom: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+          <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 9,
+            fontFamily: "monospace", letterSpacing: "1.5px" }}>FINDING DISTRIBUTION</span>
+          <span style={{ color: "rgba(255,255,255,0.42)", fontSize: 9,
+            fontFamily: "monospace" }}>{total} total</span>
         </div>
-        <div style={{ marginTop: 10 }}>
-          <MiniStackedBar segs={segs} height={8} />
+        <MiniStackedBar segs={segs} height={10} />
+        <div style={{ display: "flex", gap: 14, marginTop: 6 }}>
+          {segs.filter(s => s.value > 0).map(s => (
+            <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <div style={{ width: 8, height: 8, borderRadius: 2, background: s.color }} />
+              <span style={{ color: "rgba(255,255,255,0.38)", fontSize: 10,
+                fontFamily: "monospace" }}>{s.label}: <span style={{ color: s.color, fontWeight: 700 }}>{s.value}</span></span>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -524,28 +597,31 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
         onViewScan={() => setActiveTab("scan")}
       />
 
-      {/* ══ ROW 1: Risk, SSL, Email ══════════════════════════════════════════ */}
+      {/* ══ ROW 1: Overall Risk — full width, no ring ════════════════════════ */}
       <SectionDivider label="Risk & Security Posture" />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
-
-        {/* W1 — Overall Risk */}
+      <div style={{ marginBottom: 14 }}>
         <ASMWidget title="1. Overall Risk Overview" accent="#ff3b3b" onViewAll={() => setActiveTab("vulns")}>
-          <RiskDonut assets={assets} onClick={() => setActiveTab("vulns")} />
+          <RiskOverviewFull assets={assets} onClick={() => setActiveTab("vulns")} />
         </ASMWidget>
+      </div>
 
-        {/* W2 — SSL / Crypto Health */}
+      {/* ══ ROW 2: SSL + Email — 2 columns ══════════════════════════════════ */}
+      <SectionDivider label="SSL & Email Security" />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+
+        {/* W2 — SSL / Crypto Health — Ring */}
         <ASMWidget title="2. SSL / Crypto Health" accent="#f5c518"
           badge={sslData.expired > 0 ? `${sslData.expired} EXPIRED` : null}>
           <DonutRow
-            donut={<Donut segs={sslSegs} size={104}
-              center={{ v: sslData.total.toString(), sub: "CERTS", vSize: 20 }} />}
+            donut={<Donut segs={sslSegs} size={108}
+              center={{ v: sslData.total.toString(), sub: "CERTS", vSize: 22 }} />}
             legend={<DonutLegend segs={sslSegs} />}
           />
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {kv("Monitored",    sslData.total,    "rgba(255,255,255,0.65)")}
-            {kv("Expired",      sslData.expired,  sslData.expired > 0 ? "#ff3b3b" : "#00e5a0")}
-            {kv("Expiring <30d",sslData.critical, sslData.critical > 0 ? "#ff8c00" : "#00e5a0")}
-            {kv("Weak TLS ≤1.0",sslData.weakTLS,  sslData.weakTLS > 0 ? "#f5c518" : "#00e5a0")}
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+            {kv("Monitored",     sslData.total,    "rgba(255,255,255,0.65)")}
+            {kv("Expired",       sslData.expired,  sslData.expired > 0 ? "#ff3b3b" : "#00e5a0")}
+            {kv("Expiring <30d", sslData.critical, sslData.critical > 0 ? "#ff8c00" : "#00e5a0")}
+            {kv("Weak TLS ≤1.0", sslData.weakTLS,  sslData.weakTLS > 0 ? "#f5c518" : "#00e5a0")}
           </div>
           {primaryAsset?.pqc_data && (
             <div style={{ marginTop: 8, padding: "6px 0", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
@@ -565,17 +641,40 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
           )}
         </ASMWidget>
 
-        {/* W3 — Email Security */}
+        {/* W3 — Email Security — Speedometer gauge */}
         <ASMWidget title="3. Email Security" accent="#b06eff"
           badge={emailSec?.spoofing_risk && emailSec.spoofing_risk !== "Low"
             ? `${emailSec.spoofing_risk} SPOOFING` : null}>
           {emailSec ? (
             <>
-              <DonutRow
-                donut={<Donut segs={emailSegs} size={104}
-                  center={{ v: `${emailPassed}/${emailChecks.length}`, sub: "PASS", vSize: 16 }} />}
-                legend={<DonutLegend segs={emailSegs} />}
-              />
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 18, marginBottom: 14 }}>
+                <Speedometer
+                  value={emailSec.elite_score ?? Math.round((emailPassed / Math.max(emailChecks.length, 1)) * 100)}
+                  size={110}
+                  label="EMAIL SCORE"
+                />
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    {[
+                      { label: "Pass",  value: emailPassed,  color: "#00e5a0" },
+                      { label: "Fail",  value: emailFailed,  color: "#ff3b3b" },
+                      { label: "N/A",   value: emailUnknown, color: "rgba(255,255,255,0.2)" },
+                    ].map(s => (
+                      <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                        <div style={{ width: 8, height: 8, borderRadius: 2, background: s.color, flexShrink: 0 }} />
+                        <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 10,
+                          fontFamily: "monospace", flex: 1 }}>{s.label}</span>
+                        <span style={{ color: s.color, fontWeight: 700, fontSize: 12, fontFamily: "monospace" }}>
+                          {s.value}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ marginTop: 10 }}>
+                    <MiniStackedBar segs={emailSegs} height={6} />
+                  </div>
+                </div>
+              </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
                 <ESecRow label="SPF"     value={emailSec.spf?.value}      pass={emailSec.spf?.pass} />
                 <ESecRow label="DKIM"    value={emailSec.dkim?.value}     pass={emailSec.dkim?.pass} />
@@ -585,19 +684,6 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
                 <ESecRow label="MTA-STS" value={emailSec.mta_sts?.value}  pass={emailSec.mta_sts?.pass} />
                 <ESecRow label="TLS-RPT" value={emailSec.tls_rpt?.value}  pass={emailSec.tls_rpt?.pass ?? null} />
               </div>
-              {emailSec.elite_score != null && (
-                <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between",
-                  padding: "6px 0", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-                  <span style={{ color: "rgba(255,255,255,0.42)", fontSize: 11, fontFamily: "monospace" }}>
-                    Elite Score
-                  </span>
-                  <span style={{ color: emailSec.elite_score >= 80 ? "#00e5a0"
-                    : emailSec.elite_score >= 50 ? "#f5c518" : "#ff3b3b",
-                    fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>
-                    {emailSec.elite_score}/100
-                  </span>
-                </div>
-              )}
             </>
           ) : (
             <div style={{ color: "rgba(255,255,255,0.22)", fontSize: 12,
@@ -608,18 +694,18 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
         </ASMWidget>
       </div>
 
-      {/* ══ ROW 2: Infra, Web, Attack Surface ════════════════════════════════ */}
+      {/* ══ ROW 3: Infra, Web, Attack Surface — 3 columns ════════════════════ */}
       <SectionDivider label="Attack Surface Inventory" />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
 
-        {/* W4 — Infrastructure & Cloud */}
+        {/* W4 — Infrastructure & Cloud — Solid Pie (hole=0) */}
         <ASMWidget title="4. Infrastructure & Cloud" accent="#4d9eff">
           <DonutRow
-            donut={<Donut segs={infraSegs} size={104}
-              center={{ v: assets.length.toString(), sub: "ASSETS", vSize: 20 }} />}
+            donut={<Donut segs={infraSegs} size={104} hole={0}
+              center={null} />}
             legend={<DonutLegend segs={infraSegs} />}
           />
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
             {kv("IP Addresses", infra.ips,   "#4d9eff")}
             {kv("Open Ports",   infra.ports, infra.ports > 0 ? "#ff8c00" : "#00e5a0")}
             {kv("Cloud Assets", infra.cloud, "#b06eff")}
@@ -672,13 +758,13 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
           )}
         </ASMWidget>
 
-        {/* W5 — Web Security */}
+        {/* W5 — Web Security — Ring/Donut */}
         <ASMWidget title="5. Web Security" accent="#ff8c00" onViewAll={() => setActiveTab("vulns")}>
           <DonutRow
             donut={<Donut
               segs={[
-                { value: webScore,       color: wsColor,                    label: "Secure" },
-                { value: 100 - webScore, color: "rgba(255,255,255,0.05)",   label: "At Risk" },
+                { value: webScore,       color: wsColor,                   label: "Secure" },
+                { value: 100 - webScore, color: "rgba(255,255,255,0.05)",  label: "At Risk" },
               ]}
               size={104}
               center={{ v: webScore.toString(), sub: "WEB SCORE", vSize: 22 }}
@@ -702,7 +788,6 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
               </div>
             }
           />
-          {/* Always-visible severity bars */}
           <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 10 }}>
             {["critical", "high", "medium", "low"].map((s, i) => (
               <BarRow key={s}
@@ -727,7 +812,6 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
               (primaryAsset?.js_secrets?.length || 0) > 0 ? "#ff3b3b" : "#00e5a0")}
             {kv("Missing Sec Headers", missingHdrs, missingHdrs > 0 ? "#ff8c00" : "#00e5a0")}
           </div>
-          {/* Top vulns */}
           {webVulns.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 10 }}>
               {webVulns.slice(0, 3).map((v, i) => {
@@ -751,38 +835,44 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
           )}
         </ASMWidget>
 
-        {/* W6 — Attack Surface Map */}
+        {/* W6 — Attack Surface Map — pure bars, no chart */}
         <ASMWidget title="6. Attack Surface Map" accent="#00e5a0" onViewAll={() => setActiveTab("assets")}>
-          <DonutRow
-            donut={<Donut segs={riskSegs} size={104}
-              center={{ v: assets.length.toString(), sub: "ASSETS", vSize: 20 }} />}
-            legend={<DonutLegend segs={riskSegs} />}
-          />
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
-            {kv("Primary Domains",  assets.filter(a => a.tags?.includes("primary")).length, "#00e5a0")}
-            {kv("Subdomains",       subCount,    "#4d9eff")}
-            {kv("New Subdomains",   newSubCount, "#4d9eff")}
-            {kv("Typosquats",       assets.filter(a => a.type?.includes("Typosquat")).length,
+          {/* Asset type stat boxes */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+            {[
+              { label: "Subdomains", value: subCount,   color: "#4d9eff" },
+              { label: "Web / App",  value: webACount,  color: "#ff8c00" },
+              { label: "IP Ranges",  value: ipCount,    color: "#00e5a0" },
+              { label: "Cloud",      value: cloudCount, color: "#b06eff" },
+            ].map(s => (
+              <div key={s.label} style={{ background: `${s.color}0d`,
+                border: `1px solid ${s.color}25`, borderRadius: 4, padding: "10px 12px" }}>
+                <div style={{ color: s.color, fontSize: 22, fontWeight: 800,
+                  fontFamily: "'Space Mono',monospace", lineHeight: 1 }}>
+                  <AnimCounter value={s.value} />
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 9,
+                  letterSpacing: "1px", marginTop: 4, textTransform: "uppercase" }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+          {/* Risk distribution bars */}
+          <div style={{ color: "rgba(255,255,255,0.22)", fontSize: 9,
+            fontFamily: "monospace", marginBottom: 7 }}>RISK DISTRIBUTION</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 12 }}>
+            {["critical", "high", "medium", "low"].map((k, i) => (
+              <BarRow key={k} label={k.charAt(0).toUpperCase() + k.slice(1)}
+                value={riskC[k]} max={assets.length || 1}
+                color={["#ff3b3b", "#ff8c00", "#f5c518", "#00e5a0"][i]} lw={60} />
+            ))}
+          </div>
+          <MiniStackedBar segs={riskSegs} height={7} style={{ marginBottom: 12 }} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {kv("Primary Domains", assets.filter(a => a.tags?.includes("primary")).length, "#00e5a0")}
+            {kv("New Subdomains",  newSubCount, "#4d9eff")}
+            {kv("Typosquats",      assets.filter(a => a.type?.includes("Typosquat")).length,
               assets.filter(a => a.type?.includes("Typosquat")).length > 0 ? "#ff8c00" : "#00e5a0")}
           </div>
-          {/* Asset bar breakdown */}
-          {assets.length > 0 && (() => {
-            const rows = [
-              { label: "Subdomains", count: subCount, color: "#4d9eff" },
-              { label: "Web/App",    count: webACount,  color: "#ff8c00" },
-              { label: "IPs",        count: ipCount,    color: "#00e5a0" },
-              { label: "Cloud",      count: cloudCount, color: "#b06eff" },
-            ];
-            const mx = Math.max(...rows.map(r => r.count), 1);
-            return (
-              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                {rows.map(r => (
-                  <BarRow key={r.label} label={r.label} value={r.count}
-                    max={mx} color={r.color} lw={72} />
-                ))}
-              </div>
-            );
-          })()}
           {primaryAsset?.dns_ips?.length > 0 && (
             <div style={{ marginTop: 12 }}>
               <div style={{ color: "rgba(255,255,255,0.22)", fontSize: 9,
@@ -792,7 +882,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
                   padding: "3px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
                   <span style={{ color: "#4d9eff", fontFamily: "monospace", fontSize: 10 }}>{ip.ip}</span>
                   <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10 }}>
-                    {ip.country || "?"} · {(ip.org || "Unknown ASN").slice(0, 20)}
+                    {ip.country || "?"} · {(ip.org || "Unknown ASN").slice(0, 18)}
                   </span>
                 </div>
               ))}
@@ -801,11 +891,11 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
         </ASMWidget>
       </div>
 
-      {/* ══ ROW 3: Supply Chain + Brand Exposure ════════════════════════════ */}
+      {/* ══ ROW 4: Supply Chain + Brand Exposure — 2 columns ════════════════ */}
       <SectionDivider label="External Threat Exposure" />
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
 
-        {/* W7 — Supply Chain Risk */}
+        {/* W7 — Supply Chain Risk — Ring + library list */}
         <ASMWidget title="7. Supply Chain Risk" accent="#f5c518"
           badge={supply.high > 0 ? `${supply.high} HIGH` : null}>
           {supply.count > 0 ? (
@@ -859,21 +949,52 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
               )}
             </>
           ) : (
-            <div style={{ color: "rgba(255,255,255,0.22)", fontSize: 12,
-              fontFamily: "monospace", padding: "16px 0" }}>No supply chain data in scan.</div>
+            <div style={{ padding: "12px 0" }}>
+              <div style={{ color: "rgba(255,255,255,0.22)", fontSize: 12,
+                fontFamily: "monospace", marginBottom: 10 }}>No supply chain data in current scan.</div>
+              <div style={{ background: "rgba(245,197,24,0.06)", border: "1px solid rgba(245,197,24,0.2)",
+                borderRadius: 4, padding: "10px 14px" }}>
+                <div style={{ color: "#f5c518", fontSize: 10, fontFamily: "monospace",
+                  fontWeight: 700, marginBottom: 4 }}>REQUIRES DEEP SCAN</div>
+                <div style={{ color: "rgba(255,255,255,0.38)", fontSize: 11, lineHeight: 1.5 }}>
+                  Supply Chain analysis (third-party JS libraries via OSV.dev) only runs during a
+                  <strong style={{ color: "#b06eff" }}> Deep scan</strong>. Standard and Passive scans skip this module.
+                  To populate: run a new Deep scan from Scan Operations.
+                </div>
+              </div>
+            </div>
           )}
         </ASMWidget>
 
-        {/* W8 — Brand & External Exposure */}
+        {/* W8 — Brand & External Exposure — Stacked bar as primary visual */}
         <ASMWidget title="8. Brand & External Exposure" accent="#ff3b3b"
           badge={brand.typos > 0 ? `${brand.typos} TYPOSQUATS` : null}>
-          <DonutRow
-            donut={<Donut segs={brandSegs.filter(s => s.value > 0).length > 0 ? brandSegs
-              : [{ value: 1, color: "rgba(255,255,255,0.08)", label: "Clean" }]}
-              size={104}
-              center={{ v: brandTotal.toString(), sub: "EXPOSURES", vSize: 20 }} />}
-            legend={<DonutLegend segs={brandSegs} />}
-          />
+          {/* Primary visual: large stacked bar */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+              <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 9,
+                fontFamily: "monospace", letterSpacing: "1.5px" }}>EXPOSURE BREAKDOWN</span>
+              <span style={{ color: brandTotal > 0 ? "#ff3b3b" : "rgba(255,255,255,0.2)",
+                fontSize: 11, fontFamily: "monospace", fontWeight: 700 }}>
+                {brandTotal} total
+              </span>
+            </div>
+            <MiniStackedBar segs={brandTotal > 0 ? brandSegs
+              : [{ value: 1, color: "rgba(255,255,255,0.06)", label: "Clean" }]}
+              height={12} style={{ borderRadius: 4 }} />
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 8 }}>
+              {brandSegs.map(s => (
+                <div key={s.label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: 2, background: s.color }} />
+                  <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace" }}>
+                    {s.label}:{" "}
+                    <span style={{ color: s.value > 0 ? s.color : "rgba(255,255,255,0.2)",
+                      fontWeight: 700 }}>{s.value}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
             {kv("Registered Typosquats", brand.typos,   brand.typos > 0 ? "#ff3b3b" : "#00e5a0")}
             {kv("Dark Web Mentions",     brand.darkweb, brand.darkweb > 0 ? "#ff8c00" : "#00e5a0")}
@@ -882,6 +1003,18 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
             {social && kv("Exposed Emails", social.emails.length,
               social.emails.length > 0 ? "#f5c518" : "#00e5a0")}
           </div>
+          {brandTotal === 0 && !social && (
+            <div style={{ background: "rgba(255,59,59,0.05)", border: "1px solid rgba(255,59,59,0.18)",
+              borderRadius: 4, padding: "10px 14px", marginBottom: 12 }}>
+              <div style={{ color: "#ff8c00", fontSize: 10, fontFamily: "monospace",
+                fontWeight: 700, marginBottom: 4 }}>PARTIAL DATA — DEEP SCAN NEEDED</div>
+              <div style={{ color: "rgba(255,255,255,0.38)", fontSize: 11, lineHeight: 1.5 }}>
+                Dark Web monitoring runs on <strong style={{ color: "#4d9eff" }}>Passive+</strong> scans.
+                Typosquat detection, Social Engineering intel, and HIBP breach data require a
+                <strong style={{ color: "#b06eff" }}> Deep scan</strong>.
+              </div>
+            </div>
+          )}
           {brand.hibp?.length > 0 && (
             <div style={{ marginBottom: 10 }}>
               <div style={{ color: "rgba(255,255,255,0.22)", fontSize: 9,
