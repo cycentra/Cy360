@@ -1,3 +1,11 @@
+## v1.0.172 -- 2026-07-06
+
+### Bug Fixes
+
+  - siem+edr): CyTIM enrichment format mismatch, ioc-feed route, TI panel render
+
+---
+
 ## v1.0.171 -- 2026-07-06
 
 ### Improvements
