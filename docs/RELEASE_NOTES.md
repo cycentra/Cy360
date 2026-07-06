@@ -1,3 +1,11 @@
+## v1.0.177 -- 2026-07-06
+
+### New Features
+
+  - dashboard): remove SIEM widgets, add donut charts to all 8 ASM widgets
+
+---
+
 ## v1.0.176 -- 2026-07-06
 
 ### New Features
