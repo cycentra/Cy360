@@ -17,7 +17,6 @@ python_nmap==0.7.1
 Requests==2.32.5
 urllib3==2.6.3
 python-whois==0.8.0
-google-genai
 APScheduler>=3.10.0
 # PDF report generation (Executive + Technical ASM reports)
 reportlab>=4.0

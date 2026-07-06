@@ -194,7 +194,6 @@ ENGINE_KV_MAP: dict[str, str] = {
 # IPINFO, SECURITYTRAILS, VIRUSTOTAL, NVD, HUNTER, HIBP now managed by CyTIM.
 ASM_KV_MAP: dict[str, str] = {
     "SHODAN_API_KEY":    "SHODAN-API-KEY",       # CyTIM fallback in passive_osint.py
-    "GOOGLE_GEMINI_KEY": "GOOGLE-GEMINI-KEY",     # AI enrichment (deep scan)
     "GVM_PASSWORD":      "GVM-PASSWORD",           # OpenVAS local scanner
     "GVM_USER":          "GVM-USER",               # OpenVAS local scanner
 }

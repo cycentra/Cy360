@@ -1,3 +1,49 @@
+## v1.0.175 -- 2026-07-06
+
+### Architecture — AI Enrichment, CyTIM Connection & ASM Dashboard (2026-07-06)
+
+#### AI Enrichment — CyMind Only
+
+ASM deep-scan AI enrichment now uses **CyMind exclusively** (configured via Platform Configuration → Extensions). The Gemini and Ollama fallback providers have been removed:
+
+- Removed `google-genai` dependency from `requirements.txt`
+- Removed `_get_gemini_key()`, `_get_ollama_config()`, `resolve_ollama_model()`, `_trim_payload()`, `get_available_ollama_models()` from `cycentra_scan.py`
+- Removed `GOOGLE_GEMINI_KEY` from `cy_asm/config.py`, `kv_secrets.py`, and `.env.example`
+- If CyMind is not configured, AI enrichment is skipped gracefully — the scan completes normally without AI findings
+- Log message now clearly directs to Platform Configuration → Extensions when CyMind is unavailable
+
+#### CyTIM Connection — UI-Only (No Env Var Fallback)
+
+The CyTIM URL and API key are now exclusively read from `/opt/cycentra/ai_settings.json` (set via Platform Configuration → Extensions). No `.env` fallback:
+
+- Removed `CYTIM_URL` and `CYTIM_API_KEY` from `core/config.py`
+- `_get_cytim_settings()` in `core/helpers.py` returns `("", "")` if ai_settings.json has no CyTIM config — no env var fallback
+- `get_threat_intel_client()` updated to use `_get_cytim_settings()` directly
+- Benchmark route `_collect_threat_intel_score()` now reads CyTIM URL from ai_settings.json instead of OS env / cysiemstack.env
+- Note: the **correlation engine** (`cysiemstack/correlation_engine/`) still reads from `cysiemstack.env` — this is synced automatically when CyTIM settings are saved in the UI
+
+#### ASM Timeout Increases
+
+- `CYTIM_BULK_TIMEOUT`: 45s → **90s** — prevents false timeout failures on 31-IOC enrichment batches
+- `CYTIM_RECON_TIMEOUT`: 30s → **45s** — allows slower recon modules (CVE, WHOIS history) to complete
+
+#### ASM — Shodan Direct Call Removed
+
+`passive_osint.py`: Shodan is no longer called directly when CyTIM is active. Shodan data now arrives exclusively via `POST /api/cytim/bulk-enrich` (profile=asm). Direct Shodan call retained only as a CyTIM-unavailable fallback.
+
+#### External Attack Posture Dashboard — Data Gap Fixes
+
+All scan JSON data that was present but not displayed has been surfaced:
+
+- **Widget 3 (Network/DNS)**: Added WHOIS domain expiry countdown with colour-coded urgency bar (red <30d, amber <90d), DNS takeover risk banner, IP Geo/ASN table (up to 3 IPs with country + org)
+- **Widget 5 (Vulnerabilities)**: Added EPSS probability badge on every vuln row; added HTTP security headers checklist (missing headers in red, present headers in green) from `http_analysis`
+- **Widget 6 (Inventory)**: Added "Unregistered Typosquats" and "DNS Takeover Risks" counts
+- **Widget 8 (Exposure)**: Added Shodan exposed services detail and Mobile/API exposure block from `mobile_api.api_findings`
+- **Bottom vuln table**: EPSS badge alongside CVSS score on every row
+- **Removed**: High Confidence Incidents widget and SOAR Activity widget from the External Attack Posture page
+
+---
+
 ## v1.0.174 -- 2026-07-06
 
 ### Bug Fixes

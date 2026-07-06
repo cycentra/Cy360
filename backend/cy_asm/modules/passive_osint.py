@@ -166,8 +166,11 @@ async def gather_passive_osint(domain: str) -> Dict[str, Any]:
             logger.info("[OSINT] MISP not configured — passive OSINT skipped.")
             misp_summary = "MISP not configured — passive OSINT skipped"
 
-        # Shodan
-        shodan_results = await search_shodan(domain, session)
+        # Shodan — direct only when CyTIM is not available (fallback).
+        # When CyTIM is active, Shodan data comes via bulk-enrich (profile=asm).
+        shodan_results = []
+        if not _use_cytim:
+            shodan_results = await search_shodan(domain, session)
         shodan_issues: List[str] = []
         shodan_cve_findings: List[Dict[str, Any]] = []
 

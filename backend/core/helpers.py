@@ -168,10 +168,11 @@ def get_threat_intel_client() -> Optional[CyTIMClient]:
             # existing MISP/VT logic here
     """
     global _cytim_client
-    from core.config import CYTIM_URL, CYTIM_API_KEY, CYTIM_TIMEOUT
-    if CYTIM_URL and CYTIM_API_KEY:
+    from core.config import CYTIM_TIMEOUT
+    url, api_key = _get_cytim_settings()
+    if url and api_key:
         if _cytim_client is None:
-            _cytim_client = CyTIMClient(CYTIM_URL, CYTIM_API_KEY, CYTIM_TIMEOUT)
+            _cytim_client = CyTIMClient(url, api_key, CYTIM_TIMEOUT)
         return _cytim_client
     return None
 
@@ -179,12 +180,11 @@ def get_threat_intel_client() -> Optional[CyTIMClient]:
 # ── Centralized CyTIM gateway helpers (used by all ASM + SIEM modules) ────────
 
 def _get_cytim_settings() -> tuple[str, str]:
-    """Return (cytim_url, api_key) from ai_settings.json, falling back to env vars.
+    """Return (cytim_url, api_key) from ai_settings.json.
 
-    ai_settings.json is the source of truth — CYTIM_URL / CYTIM_API_KEY in os.environ
-    are only populated if the admin explicitly added them to /opt/cycentra/.env.
-    Reading from the settings file at call-time means the values are always current
-    without requiring a Flask restart after the user saves CyTIM config in the UI.
+    ai_settings.json is the sole source of truth — configured via
+    Platform Configuration → Extensions in the Cy360 UI.
+    Returns ("", "") when CyTIM is not configured.
     """
     import json as _json
     from core.config import AI_SETTINGS_FILE
@@ -198,9 +198,7 @@ def _get_cytim_settings() -> tuple[str, str]:
                 return url, api_key
     except Exception:
         pass
-    # Fallback: honour explicit env-var override
-    from core.config import CYTIM_URL, CYTIM_API_KEY
-    return CYTIM_URL, CYTIM_API_KEY
+    return "", ""
 
 
 def is_cytim_enabled() -> bool:

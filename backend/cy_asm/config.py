@@ -64,7 +64,6 @@ except Exception:
 # ---------------------------------------------------------------------------
 # Keys now managed by CyTIM: IPINFO, SECURITYTRAILS, VIRUSTOTAL, NVD, HUNTER, HIBP
 SHODAN_API_KEY    = os.environ.get("SHODAN_API_KEY", "")     # CyTIM fallback in passive_osint.py
-GOOGLE_GEMINI_KEY = os.environ.get("GOOGLE_GEMINI_KEY", "")  # AI enrichment (deep scan)
 GVM_PASSWORD      = os.environ.get("GVM_PASSWORD", "")        # OpenVAS local scanner
 GVM_USER          = os.environ.get("GVM_USER", "")            # OpenVAS local scanner
 

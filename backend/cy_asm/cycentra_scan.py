@@ -46,8 +46,6 @@ from modules.debug_crypto import audit_crypto_deep
 from modules.nuclei_scanner import gather_nuclei_scanner
 
 # --- ENRICHMENT IMPORTS ---
-from google import genai
-from google.genai import types
 
 logger = setup_logging()
 
@@ -319,11 +317,6 @@ def _apply_asset_states(
 # --- AI SETTINGS: dynamic read from /opt/cycentra/ai_settings.json ---
 _AI_SETTINGS_FILE = Path("/opt/cycentra/ai_settings.json")
 
-# Hardcoded fallbacks (used when no settings file exists)
-_FALLBACK_OLLAMA_URL   = "http://116.203.115.95:11434"
-_FALLBACK_OLLAMA_MODEL = "mranv/siem-llama-3.1:v1"
-
-
 def _load_ai_settings() -> dict:
     """Load AI settings persisted by the UI. Returns empty dict on any failure."""
     try:
@@ -332,33 +325,6 @@ def _load_ai_settings() -> dict:
     except Exception as e:
         logger.warning(f"⚠️ [AI] Could not load ai_settings.json: {e}")
     return {}
-
-
-def _get_ollama_config() -> tuple[str, str]:
-    """Return (base_url, model) from saved settings or fallback defaults.
-    Only reads fields when provider == 'local' — other providers (cymind,
-    gemini, etc.) store different URLs/keys in the same fields dict and must
-    never bleed into the Ollama fallback.
-    """
-    settings = _load_ai_settings()
-    if settings.get("provider", "") == "local":
-        fields = settings.get("fields", {})
-        url    = fields.get("baseUrl", "").strip() or _FALLBACK_OLLAMA_URL
-        model  = fields.get("model",   "").strip() or _FALLBACK_OLLAMA_MODEL
-        return url, model
-    # Non-local provider is active — always use the hardcoded Ollama fallback
-    return _FALLBACK_OLLAMA_URL, _FALLBACK_OLLAMA_MODEL
-
-
-def _get_gemini_key() -> str:
-    """Return Gemini API key from saved settings or env/config fallback."""
-    settings = _load_ai_settings()
-    provider = settings.get("provider", "")
-    if provider == "gemini":
-        key = settings.get("fields", {}).get("apiKey", "").strip()
-        if key:
-            return key
-    return os.environ.get("GOOGLE_GEMINI_KEY", "")
 
 
 def _get_misp_config() -> dict | None:
@@ -514,56 +480,6 @@ async def enrich_with_cymind(
         logger.error(f"❌ [CyMind] HTTP {e.response.status_code}: {e.response.text[:300]}")
     except Exception as e:
         logger.error(f"❌ [CyMind] Request failed: {type(e).__name__}: {e}")
-    return None
-
-
-def _trim_payload(context_payload: dict, max_chars: int = 3000) -> dict:
-    """Truncates the payload to avoid overwhelming smaller local models."""
-    raw = json.dumps(context_payload)
-    if len(raw) > max_chars:
-        logger.warning(f"⚠️ [AI] Payload trimmed from {len(raw)} to {max_chars} chars for Ollama.")
-        return {"truncated_data": raw[:max_chars] + "... [truncated]"}
-    return context_payload
-
-
-async def get_available_ollama_models() -> List[str]:
-    """Fetches the list of pulled models from Ollama (URL read from ai_settings.json)."""
-    ollama_url, _ = _get_ollama_config()
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{ollama_url}/api/tags")
-            response.raise_for_status()
-            models = response.json().get("models", [])
-            return [m["name"] for m in models]
-    except Exception as e:
-        logger.warning(f"⚠️ [Ollama] Could not reach Ollama at {ollama_url}: {e}")
-        return []
-
-
-async def resolve_ollama_model(desired: str) -> str | None:
-    """Validates the desired model exists on server B, with fuzzy matching."""
-    available = await get_available_ollama_models()
-
-    if not available:
-        logger.error("❌ [Ollama] No models found or server B unreachable.")
-        return None
-
-    # Exact match first
-    if desired in available:
-        logger.info(f"✅ [Ollama] Model '{desired}' confirmed on server B.")
-        return desired
-
-    # Fuzzy match: 'llama3' should match 'llama3:latest'
-    for model in available:
-        if model.startswith(desired.split(":")[0]):
-            logger.warning(f"⚠️ [Ollama] '{desired}' not exact — using '{model}' instead.")
-            return model
-
-    logger.error(
-        f"❌ [Ollama] Model '{desired}' not found on server B.\n"
-        f"   Available models: {', '.join(available)}\n"
-        f"   Run: ollama pull {desired}  (on server B)"
-    )
     return None
 
 
@@ -805,7 +721,7 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str, sca
     Return ONLY the raw JSON list — no markdown, no explanation.
     """
 
-    # ── ATTEMPT 1: CyMind (on-premise, authenticated, preferred) ─────────────
+    # ── CyMind (sole AI provider — configured via Platform Configuration > Extensions) ──
     logger.info(f"[AI Enrichment] Starting...")
     cymind_result = await enrich_with_cymind(context_payload, domain, prompt)
     if cymind_result is not None:
@@ -813,140 +729,8 @@ async def enrich_findings_with_ai(full_results: Dict[str, Any], domain: str, sca
         await store_to_cymind_memory(cymind_result, domain, "CyMind")
         return cymind_result, "CyMind"
 
-    # ── ATTEMPT 2: Google Gemini ──────────────────────────────────────────────
-    try:
-        logger.info(f"🤖 [AI] Trying Google Gemini for {domain}...")
-        gemini_key = _get_gemini_key()
-        client = genai.Client(api_key=gemini_key)
-        # 90-second hard timeout — prevents indefinite hang if the Gemini API
-        # is slow or unresponsive, ensuring the portal JSON is always saved.
-        response = await asyncio.wait_for(
-            asyncio.to_thread(
-                client.models.generate_content,
-                model="gemini-2.0-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(response_mime_type="application/json"),
-            ),
-            timeout=90.0,
-        )
-        result = response.parsed if response.parsed else json.loads(response.text)
-        if not isinstance(result, list):
-            logger.warning(f"⚠️ [AI] Gemini returned non-list ({type(result).__name__}), discarding.")
-            raise ValueError("Gemini response is not a JSON list")
-        result = _validate_findings(result)
-        logger.info(f"✅ [AI] Gemini enrichment succeeded for {domain}.")
-        await store_to_cymind_memory(result, domain, "Gemini")
-        return result, "Gemini (gemini-2.0-flash)"
-
-    except Exception as gemini_err:
-        logger.warning(f"⚠️ [AI] Gemini failed: {type(gemini_err).__name__}: {gemini_err}")
-        _, ollama_model = _get_ollama_config()
-        logger.info(f"🔄 [AI] Falling back to Ollama ({ollama_model}) for {domain}...")
-
-    # ── ATTEMPT 3: Ollama (trimmed payload + extended timeout) ────────────────
-    ollama_url, ollama_model = _get_ollama_config()
-    resolved_model = await resolve_ollama_model(ollama_model)
-
-    if resolved_model is None:
-        logger.error("❌ [AI] Ollama unavailable or model missing. Returning empty.")
-        return [], "None (all providers failed)"
-
-    ollama_payload = _trim_payload(context_payload, max_chars=3000)
-
-    if _is_standard:
-        prompt_ollama = f"""
-    Analyze the top security risks for {domain}. Standard scan — return AT MOST 10 findings.
-    High-level only: 2-3 sentence descriptions, 1-2 sentence recommendations (no deep technical steps).
-    AREAS: Supply chain JS risk, cloud misconfiguration, SSL/TLS posture, email authentication gaps, dark web indicators.
-
-    RULES: Only report findings directly evidenced in DATA below. Do NOT fabricate.
-    SECURE TLS 1.3 ciphers (never flag as weak): TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256, TLS_CHACHA20_POLY1305_SHA256.
-    Weak cipher keywords: RC4, DES, 3DES, MD5, EXPORT, NULL, LOW. Deprecated protocols: SSLv2, SSLv3, TLSv1, TLSv1.1.
-
-    DATA:
-    {json.dumps(ollama_payload)}
-
-    Return a JSON LIST of AT MOST 10 objects each with:
-    "vulnerability", "severity", "risk_score" (1-10), "description", "recommendation", "module",
-    "evidence" (specific data point from DATA proving this finding — omit finding if empty).
-    Return ONLY the raw JSON list — no markdown, no explanation.
-    """
-    else:
-        prompt_ollama = f"""
-    As a Senior Security Architect, perform an in-depth attack surface analysis for {domain}.
-    Provide comprehensive findings with detailed technical remediation steps.
-    AREAS: Supply chain JS risk (Magecart), cloud exposure, TLS/cipher weaknesses, DNS correlation,
-    dark web leaks, social engineering indicators, mobile/API endpoint exposure.
-
-    RULES: Only report findings directly evidenced in DATA below. Do NOT fabricate.
-    SECURE TLS 1.3 ciphers (never flag as weak): TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256, TLS_CHACHA20_POLY1305_SHA256.
-    Weak cipher keywords: RC4, DES, 3DES, MD5, EXPORT, NULL, LOW. Deprecated protocols: SSLv2, SSLv3, TLSv1, TLSv1.1.
-
-    DATA:
-    {json.dumps(ollama_payload)}
-
-    Return a JSON LIST of objects each with:
-    "vulnerability", "severity", "risk_score" (1-10),
-    "description" (technical context, attack vector, business impact),
-    "recommendation" (specific step-by-step remediation with tool names and priority),
-    "module",
-    "evidence" (specific data point from DATA proving this finding — omit finding if empty).
-    Return ONLY the raw JSON list — no markdown, no explanation.
-    """
-
-    try:
-        # Use streaming=True so each token resets the read timeout,
-        # avoiding ReadTimeout on large/slow responses from the 8B model.
-        timeout_config = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
-        full_response = ""
-        chunk_count = 0
-
-        async with httpx.AsyncClient(timeout=timeout_config) as http_client:
-            logger.info(f"⏳ [AI] Sending to Ollama (streaming, may take a few mins)...")
-            async with http_client.stream(
-                "POST",
-                f"{ollama_url}/api/generate",
-                json={
-                    "model": resolved_model,
-                    "prompt": prompt_ollama,
-                    "stream": True,   # ← streaming keeps read timeout alive per chunk
-                    "format": "json"
-                }
-            ) as stream_response:
-                stream_response.raise_for_status()
-                async for line in stream_response.aiter_lines():
-                    if not line.strip():
-                        continue
-                    try:
-                        chunk = json.loads(line)
-                        full_response += chunk.get("response", "")
-                        chunk_count += 1
-                        # Log a heartbeat every 20 chunks so we know it's alive
-                        if chunk_count % 20 == 0:
-                            logger.info(f"⏳ [AI] Ollama still generating... ({len(full_response)} chars so far)")
-                        if chunk.get("done"):
-                            break
-                    except json.JSONDecodeError:
-                        continue
-
-        result = json.loads(full_response)
-        if isinstance(result, list):
-            result = _validate_findings(result)
-        logger.info(f"✅ [AI] Ollama ({resolved_model}) enrichment succeeded for {domain} ({chunk_count} chunks).")
-        await store_to_cymind_memory(result, domain, f"Ollama ({resolved_model})")
-        return result, f"Ollama ({resolved_model})"
-
-    except json.JSONDecodeError as e:
-        logger.error(f"❌ [AI] Ollama returned malformed JSON: {e}\nRaw: {full_response[:500]}")
-    except Exception as ollama_err:
-        logger.error(
-            f"❌ [AI] Ollama fallback failed: {type(ollama_err).__name__}: {ollama_err}\n"
-            f"{traceback.format_exc()}"
-        )
-
-    # ── ALL PROVIDERS EXHAUSTED (CyMind → Gemini → Ollama) ───────────────────
-    logger.error(f"❌ [AI] All enrichment providers exhausted for {domain}. Returning empty.")
-    return [], "None (all providers exhausted)"
+    logger.warning(f"⚠️ [AI] CyMind unavailable for {domain} — AI enrichment skipped. Configure CyMind in Platform Configuration → Extensions.")
+    return [], "None (CyMind unavailable)"
 
 
 async def run_full_scan(

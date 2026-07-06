@@ -243,13 +243,11 @@ EDR_AUTO_ISOLATE_SCORE  = float(os.environ.get("EDR_AUTO_ISOLATE_SCORE", "90"))
 EDR_GRPC_LISTEN         = os.environ.get("EDR_GRPC_LISTEN", "0.0.0.0:50051")
 
 # ── CyTIM — Threat Intelligence Module ────────────────────────────────────────
-# When CYTIM_URL is set, all MISP/VT calls route through CyTIM.
-# Leave blank to use direct MISP/VT connections (legacy mode).
-CYTIM_URL     = os.environ.get("CYTIM_URL", "").rstrip("/")
-CYTIM_API_KEY = os.environ.get("CYTIM_API_KEY", "")
+# URL and API key are UI-managed (Platform Configuration → Extensions → CyTIM).
+# They are read from /opt/cycentra/ai_settings.json at call-time — no env vars.
 CYTIM_TIMEOUT      = int(os.environ.get("CYTIM_TIMEOUT", "15"))
-CYTIM_BULK_TIMEOUT = int(os.environ.get("CYTIM_BULK_TIMEOUT", "45"))
-CYTIM_RECON_TIMEOUT = int(os.environ.get("CYTIM_RECON_TIMEOUT", "30"))
+CYTIM_BULK_TIMEOUT = int(os.environ.get("CYTIM_BULK_TIMEOUT", "90"))
+CYTIM_RECON_TIMEOUT = int(os.environ.get("CYTIM_RECON_TIMEOUT", "45"))
 CYTIM_ENABLED = os.environ.get("CYTIM_ENABLED", "true").lower() != "false"
 
 # ── ITAM — IT Asset Management ────────────────────────────────────────────────

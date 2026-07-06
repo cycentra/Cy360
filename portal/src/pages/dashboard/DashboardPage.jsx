@@ -682,6 +682,54 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
               ))}
             </div>
           </div>
+          {/* WHOIS expiry countdown */}
+          {primaryAsset?.whois_full?.expiration_date && (() => {
+            const exp = new Date(primaryAsset.whois_full.expiration_date);
+            const daysLeft = Math.round((exp - new Date()) / (1000 * 60 * 60 * 24));
+            const expColor = daysLeft < 30 ? "#ff3b3b" : daysLeft < 90 ? "#ff8c00" : "#00e5a0";
+            return (
+              <div style={{ marginTop:10, padding:"8px 0", borderTop:"1px solid rgba(255,255,255,0.06)" }}>
+                <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:4 }}>DOMAIN EXPIRY</div>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ color:"rgba(255,255,255,0.45)", fontSize:11 }}>
+                    {primaryAsset.whois_full.registrar || "Unknown registrar"}
+                  </span>
+                  <span style={{ color:expColor, fontFamily:"monospace", fontSize:12, fontWeight:700 }}>
+                    {daysLeft > 0 ? `${daysLeft}d` : "EXPIRED"}
+                  </span>
+                </div>
+                <div style={{ height:3, background:"rgba(255,255,255,0.07)", borderRadius:2, marginTop:4 }}>
+                  <div style={{ height:"100%", width:`${Math.min(100,Math.max(0,(daysLeft/365)*100))}%`, background:expColor, borderRadius:2 }}/>
+                </div>
+                <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:3 }}>
+                  Expires {primaryAsset.whois_full.expiration_date?.slice(0,10)}
+                </div>
+              </div>
+            );
+          })()}
+          {/* DNS Takeover risk banner */}
+          {primaryAsset?.dns_takeovers?.length > 0 && (
+            <div style={{ marginTop:8, background:"rgba(255,59,59,0.08)", border:"1px solid rgba(255,59,59,0.25)", borderRadius:3, padding:"6px 10px" }}>
+              <div style={{ color:"#ff3b3b", fontSize:10, fontFamily:"monospace", fontWeight:700 }}>
+                ⚠ {primaryAsset.dns_takeovers.length} DNS TAKEOVER RISK{primaryAsset.dns_takeovers.length>1?"S":""}
+              </div>
+              <div style={{ color:"rgba(255,255,255,0.4)", fontSize:10, marginTop:2 }}>
+                Dangling DNS records detected — review subdomains immediately
+              </div>
+            </div>
+          )}
+          {/* IP Geo / ASN table */}
+          {primaryAsset?.dns_ips?.length > 0 && (
+            <div style={{ marginTop:10 }}>
+              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>IP GEO / ASN</div>
+              {primaryAsset.dns_ips.slice(0,3).map((ipObj, i) => (
+                <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"3px 0", borderBottom:"1px solid rgba(255,255,255,0.04)" }}>
+                  <span style={{ color:"#4d9eff", fontFamily:"monospace", fontSize:10 }}>{ipObj.ip}</span>
+                  <span style={{ color:"rgba(255,255,255,0.35)", fontSize:10 }}>{ipObj.country||"?"} · {(ipObj.org||"Unknown ASN").slice(0,22)}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </ASMWidget>
       </div>
 
@@ -734,12 +782,43 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
                 <div key={i} style={{ display:"flex", gap:8, alignItems:"center" }}>
                   <span style={{ width:6, height:6, borderRadius:"50%", background:cfg.color, flexShrink:0 }}/>
                   <span style={{ color:"rgba(255,255,255,0.5)", fontSize:11, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{v.vulnerability}</span>
-                  {v.cvss && <span style={{ color:"rgba(255,140,0,0.5)", fontSize:9, fontFamily:"monospace", flexShrink:0 }}>{v.cvss}</span>}
+                  {v.cvss && <span style={{ color:"rgba(255,140,0,0.5)", fontSize:9, fontFamily:"monospace", flexShrink:0 }}>CVSS {v.cvss}</span>}
+                  {v.epss != null && v.epss > 0 && <span style={{ color:"rgba(255,100,100,0.6)", fontSize:9, fontFamily:"monospace", flexShrink:0 }}>EPSS {(v.epss*100).toFixed(1)}%</span>}
                 </div>
               );
             })}
             {webVulns.length === 0 && <div style={{ color:"rgba(0,229,160,0.5)", fontSize:11, fontFamily:"monospace" }}>✓ No web vulnerabilities</div>}
           </div>
+          {/* HTTP Security Headers checklist */}
+          {primaryAsset?.http_analysis?.http_headers?.length > 0 && (
+            <div style={{ marginTop:10 }}>
+              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:5 }}>MISSING SECURITY HEADERS</div>
+              {primaryAsset.http_analysis.http_headers.slice(0,4).map((h, i) => (
+                <div key={i} style={{ display:"flex", gap:6, alignItems:"center", padding:"2px 0" }}>
+                  <span style={{ color:"#ff3b3b", fontSize:10, flexShrink:0 }}>✗</span>
+                  <span style={{ color:"rgba(255,255,255,0.4)", fontSize:10, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {h.replace(/^Header:\s*/,"").replace(/^Missing\s*/,"")}
+                  </span>
+                </div>
+              ))}
+              {primaryAsset.http_analysis.http_headers.length > 4 && (
+                <div style={{ color:"rgba(255,255,255,0.2)", fontSize:9, fontFamily:"monospace", marginTop:2 }}>
+                  +{primaryAsset.http_analysis.http_headers.length-4} more missing headers
+                </div>
+              )}
+              {primaryAsset.http_analysis.header_detail && Object.keys(primaryAsset.http_analysis.header_detail).length > 0 && (
+                <div style={{ marginTop:5 }}>
+                  <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:3 }}>PRESENT HEADERS</div>
+                  {Object.entries(primaryAsset.http_analysis.header_detail).slice(0,3).map(([k]) => (
+                    <div key={k} style={{ display:"flex", gap:6, alignItems:"center", padding:"2px 0" }}>
+                      <span style={{ color:"#00e5a0", fontSize:10, flexShrink:0 }}>✓</span>
+                      <span style={{ color:"rgba(255,255,255,0.35)", fontSize:10 }}>{k}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </ASMWidget>
 
         {/* Widget 6 — Attack Surface Inventory */}
@@ -751,8 +830,10 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
               { label:"New Subdomains",   count:newSubCount,                                             color:"#4d9eff" },
               { label:"IP Addresses",     count:assets.filter(a=>a.tags?.includes("ip")).length,        color:"#4d9eff" },
               { label:"Typosquats",       count:assets.filter(a=>a.type?.includes("Typosquat")).length, color:"#ff8c00" },
-              { label:"Critical Risk",    count:assets.filter(a=>a.risk==="critical").length,           color:"#ff3b3b" },
-              { label:"High Risk",        count:assets.filter(a=>a.risk==="high").length,               color:"#ff8c00" },
+              { label:"Critical Risk",        count:assets.filter(a=>a.risk==="critical").length,                      color:"#ff3b3b" },
+              { label:"High Risk",            count:assets.filter(a=>a.risk==="high").length,                          color:"#ff8c00" },
+              { label:"Unregistered Typosquats", count:primaryAsset?.dns_unregistered?.length ?? 0,                  color:"rgba(255,140,0,0.6)" },
+              { label:"DNS Takeover Risks",   count:primaryAsset?.dns_takeovers?.length ?? 0,                         color: (primaryAsset?.dns_takeovers?.length ?? 0) > 0 ? "#ff3b3b" : "rgba(0,229,160,0.5)" },
             ].map(r=>(
               <div key={r.label} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"3px 0" }}>
                 <span style={{ color:"rgba(255,255,255,0.45)", fontSize:12 }}>{r.label}</span>
@@ -878,6 +959,46 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
               ))}
             </div>
           )}
+          {/* Mobile / API exposure block */}
+          {primaryAsset?.mobile_api?.api_findings?.length > 0 && (
+            <div style={{ marginTop:10, padding:"8px 0", borderTop:"1px solid rgba(255,255,255,0.06)" }}>
+              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>MOBILE / API EXPOSURE</div>
+              <div style={{ display:"flex", justifyContent:"space-between", padding:"3px 0" }}>
+                <span style={{ color:"rgba(255,255,255,0.45)", fontSize:11 }}>Exposed API Endpoints</span>
+                <span style={{ color:"#ff8c00", fontFamily:"monospace", fontSize:12, fontWeight:700 }}>{primaryAsset.mobile_api.api_findings.length}</span>
+              </div>
+              {(primaryAsset.mobile_api.deeplinks?.length ?? 0) > 0 && (
+                <div style={{ display:"flex", justifyContent:"space-between", padding:"3px 0" }}>
+                  <span style={{ color:"rgba(255,255,255,0.45)", fontSize:11 }}>Deep-Link Configs</span>
+                  <span style={{ color:"rgba(255,255,255,0.5)", fontFamily:"monospace", fontSize:12 }}>{primaryAsset.mobile_api.deeplinks.length}</span>
+                </div>
+              )}
+              {primaryAsset.mobile_api.api_findings.slice(0,2).map((ep, i) => (
+                <div key={i} style={{ color:"rgba(255,140,0,0.55)", fontSize:9, fontFamily:"monospace", marginTop:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                  {ep.issues?.[0] || ep.url}
+                </div>
+              ))}
+              {primaryAsset.mobile_api.api_findings.length > 2 && (
+                <div style={{ color:"rgba(255,255,255,0.2)", fontSize:9, fontFamily:"monospace", marginTop:2 }}>
+                  +{primaryAsset.mobile_api.api_findings.length-2} more endpoints
+                </div>
+              )}
+            </div>
+          )}
+          {/* Shodan exposed services */}
+          {osint.shodan?.length > 0 && (
+            <div style={{ marginTop:8, padding:"8px 0", borderTop:"1px solid rgba(255,255,255,0.06)" }}>
+              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>SHODAN EXPOSED SERVICES</div>
+              {osint.shodan.slice(0,3).map((s, i) => (
+                <div key={i} style={{ display:"flex", gap:8, alignItems:"center", padding:"2px 0" }}>
+                  {s.port && <span style={{ color:"#4d9eff", fontFamily:"monospace", fontSize:10 }}>:{s.port}</span>}
+                  <span style={{ color:"rgba(255,255,255,0.4)", fontSize:10, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                    {s.product || s.data?.slice(0,40) || "Unknown service"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </ASMWidget>
 
       </div>
@@ -906,11 +1027,6 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
         </div>
       )}
 
-      {/* High Confidence Incidents (Phase 4 AI Investigation Engine) */}
-      <HighConfidenceWidget onViewAll={() => setActiveTab("siem-incidents")} />
-
-      {/* SOAR Activity (Phase 5 AI Investigation Engine) */}
-      <SoarActivityWidget />
 
       {/* Critical & High vuln list */}
       <div style={{ background:"rgba(255,255,255,0.025)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:4, padding:"18px 22px" }}>
@@ -946,6 +1062,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
                     <div style={{ display:"flex", gap:6, justifyContent:"flex-end", marginTop:2 }}>
                       {v.module && <span style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace" }}>{v.module}</span>}
                       {v.cvss   && <span style={{ color:"rgba(255,140,0,0.6)", fontSize:10, fontFamily:"monospace" }}>CVSS {v.cvss}</span>}
+                      {v.epss != null && v.epss > 0 && <span style={{ color:"rgba(255,100,100,0.6)", fontSize:10, fontFamily:"monospace" }}>EPSS {(v.epss*100).toFixed(1)}%</span>}
                     </div>
                   </div>
                   <span style={{ color:"rgba(255,255,255,0.2)", fontSize:11 }}>↗</span>

@@ -1034,26 +1034,19 @@ def _collect_threat_intel_score() -> dict:
       a) CyTIM reachable + DB healthy  → 0-40 pts
       b) Active TI sources configured  → 0-60 pts  (20 pts per source, capped)
     """
-    cytim_url = os.environ.get("CYTIM_URL", "").strip().rstrip("/")
-    if not cytim_url:
-        # Try reading from cysiemstack.env
-        try:
-            env_file = Path("/opt/cycentra/cysiemstack.env")
-            if env_file.exists():
-                for line in env_file.read_text().splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#") or "=" not in line:
-                        continue
-                    k, _, v = line.partition("=")
-                    if k.strip() == "CYTIM_URL":
-                        cytim_url = v.strip().strip('"').strip("'").rstrip("/")
-                        break
-        except Exception:
-            pass
+    try:
+        import json as _json
+        _ai = Path("/opt/cycentra/ai_settings.json")
+        cytim_url = ""
+        if _ai.exists():
+            _d = _json.loads(_ai.read_text())
+            cytim_url = (_d.get("cytim", {}).get("url") or "").strip().rstrip("/")
+    except Exception:
+        cytim_url = ""
 
     if not cytim_url:
         return {"score": None, "stale": False,
-                "detail": "CyTIM not configured — set CYTIM_URL in cysiemstack.env"}
+                "detail": "CyTIM not configured — set it in Platform Configuration → Extensions"}
 
     try:
         r = _req.get(f"{cytim_url}/health", timeout=8)
