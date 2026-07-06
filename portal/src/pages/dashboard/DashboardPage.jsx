@@ -682,13 +682,31 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
               ))}
             </div>
           </div>
+          {/* DNS Takeover risk banner */}
+          {primaryAsset?.dns_takeovers?.length > 0 && (
+            <div style={{ marginTop:8, background:"rgba(255,59,59,0.08)", border:"1px solid rgba(255,59,59,0.25)", borderRadius:3, padding:"6px 10px" }}>
+              <div style={{ color:"#ff3b3b", fontSize:10, fontFamily:"monospace", fontWeight:700 }}>
+                ⚠ {primaryAsset.dns_takeovers.length} DNS TAKEOVER RISK{primaryAsset.dns_takeovers.length>1?"S":""}
+              </div>
+              <div style={{ color:"rgba(255,255,255,0.4)", fontSize:10, marginTop:2 }}>
+                Dangling DNS records detected — review subdomains immediately
+              </div>
+            </div>
+          )}
+        </ASMWidget>
+      </div>
+
+      {/* ROW 2 */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:14 }}>
+        {/* IP Geo & Domain Intelligence — split from Widget 3 */}
+        <ASMWidget title="IP Geo & Domain" accent="#4d9eff">
           {/* WHOIS expiry countdown */}
-          {primaryAsset?.whois_full?.expiration_date && (() => {
+          {primaryAsset?.whois_full?.expiration_date ? (() => {
             const exp = new Date(primaryAsset.whois_full.expiration_date);
             const daysLeft = Math.round((exp - new Date()) / (1000 * 60 * 60 * 24));
             const expColor = daysLeft < 30 ? "#ff3b3b" : daysLeft < 90 ? "#ff8c00" : "#00e5a0";
             return (
-              <div style={{ marginTop:10, padding:"8px 0", borderTop:"1px solid rgba(255,255,255,0.06)" }}>
+              <div style={{ marginBottom:12 }}>
                 <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:4 }}>DOMAIN EXPIRY</div>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                   <span style={{ color:"rgba(255,255,255,0.45)", fontSize:11 }}>
@@ -706,35 +724,37 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
                 </div>
               </div>
             );
-          })()}
-          {/* DNS Takeover risk banner */}
-          {primaryAsset?.dns_takeovers?.length > 0 && (
-            <div style={{ marginTop:8, background:"rgba(255,59,59,0.08)", border:"1px solid rgba(255,59,59,0.25)", borderRadius:3, padding:"6px 10px" }}>
-              <div style={{ color:"#ff3b3b", fontSize:10, fontFamily:"monospace", fontWeight:700 }}>
-                ⚠ {primaryAsset.dns_takeovers.length} DNS TAKEOVER RISK{primaryAsset.dns_takeovers.length>1?"S":""}
-              </div>
-              <div style={{ color:"rgba(255,255,255,0.4)", fontSize:10, marginTop:2 }}>
-                Dangling DNS records detected — review subdomains immediately
-              </div>
-            </div>
+          })() : (
+            <div style={{ color:"rgba(255,255,255,0.15)", fontSize:10, fontFamily:"monospace", marginBottom:12 }}>No WHOIS data available</div>
           )}
-          {/* IP Geo / ASN table */}
-          {primaryAsset?.dns_ips?.length > 0 && (
-            <div style={{ marginTop:10 }}>
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>IP GEO / ASN</div>
-              {primaryAsset.dns_ips.slice(0,3).map((ipObj, i) => (
-                <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"3px 0", borderBottom:"1px solid rgba(255,255,255,0.04)" }}>
-                  <span style={{ color:"#4d9eff", fontFamily:"monospace", fontSize:10 }}>{ipObj.ip}</span>
-                  <span style={{ color:"rgba(255,255,255,0.35)", fontSize:10 }}>{ipObj.country||"?"} · {(ipObj.org||"Unknown ASN").slice(0,22)}</span>
-                </div>
+          {/* WHOIS registrant / name servers if available */}
+          {primaryAsset?.whois_full?.name_servers?.length > 0 && (
+            <div style={{ marginBottom:12, padding:"6px 0", borderTop:"1px solid rgba(255,255,255,0.06)" }}>
+              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:4 }}>NAME SERVERS</div>
+              {primaryAsset.whois_full.name_servers.slice(0,3).map((ns, i) => (
+                <div key={i} style={{ color:"rgba(255,255,255,0.4)", fontSize:10, fontFamily:"monospace", padding:"1px 0" }}>{ns}</div>
               ))}
             </div>
           )}
+          {/* IP Geo / ASN table */}
+          {primaryAsset?.dns_ips?.length > 0 ? (
+            <div style={{ borderTop:"1px solid rgba(255,255,255,0.06)", paddingTop:10 }}>
+              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>IP GEO / ASN</div>
+              {primaryAsset.dns_ips.slice(0,6).map((ipObj, i) => (
+                <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"4px 0", borderBottom:"1px solid rgba(255,255,255,0.04)" }}>
+                  <span style={{ color:"#4d9eff", fontFamily:"monospace", fontSize:10 }}>{ipObj.ip}</span>
+                  <span style={{ color:"rgba(255,255,255,0.35)", fontSize:10 }}>{ipObj.country||"?"} · {(ipObj.org||"Unknown ASN").slice(0,24)}</span>
+                </div>
+              ))}
+              {primaryAsset.dns_ips.length > 6 && (
+                <div style={{ color:"rgba(255,255,255,0.2)", fontSize:9, fontFamily:"monospace", marginTop:4 }}>+{primaryAsset.dns_ips.length-6} more IPs</div>
+              )}
+            </div>
+          ) : (
+            <div style={{ color:"rgba(255,255,255,0.15)", fontSize:10, fontFamily:"monospace", borderTop:"1px solid rgba(255,255,255,0.06)", paddingTop:10 }}>No IP geo data available</div>
+          )}
         </ASMWidget>
-      </div>
 
-      {/* ROW 2 */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:14 }}>
         {/* Widget 4 — Email Security (expanded) */}
         <ASMWidget title="4. Email Security" accent="#b06eff"
           badge={emailSec?.spoofing_risk && emailSec.spoofing_risk !== "Low" ? `${emailSec.spoofing_risk} SPOOFING RISK` : null}>
@@ -764,8 +784,8 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
           )}
         </ASMWidget>
 
-        {/* Widget 5 — Web Security (fixed module filter) */}
-        <ASMWidget title="5. Web Security" accent="#ff8c00" onViewAll={()=>setActiveTab("vulns")}>
+        {/* Web Vulnerabilities — split from Widget 5 */}
+        <ASMWidget title="5. Web Vulnerabilities" accent="#ff8c00" onViewAll={()=>setActiveTab("vulns")}>
           <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:12 }}>
             {statRow([
               { label:"Web Vulnerabilities", val:webVulns.length,  color:webVulns.length>0?"#ff8c00":"#00e5a0" },
@@ -776,7 +796,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
             ])}
           </div>
           <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
-            {webVulns.slice(0,4).map((v,i)=>{
+            {webVulns.slice(0,6).map((v,i)=>{
               const cfg=RISK_CONFIG[v.severity?.toLowerCase()]||RISK_CONFIG.low;
               return (
                 <div key={i} style={{ display:"flex", gap:8, alignItems:"center" }}>
@@ -788,64 +808,69 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
               );
             })}
             {webVulns.length === 0 && <div style={{ color:"rgba(0,229,160,0.5)", fontSize:11, fontFamily:"monospace" }}>✓ No web vulnerabilities</div>}
+            {webVulns.length > 6 && (
+              <div style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace" }}>+{webVulns.length-6} more — see Vulnerability Explorer</div>
+            )}
           </div>
-          {/* HTTP Security Headers checklist */}
-          {primaryAsset?.http_analysis?.http_headers?.length > 0 && (
-            <div style={{ marginTop:10 }}>
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:5 }}>MISSING SECURITY HEADERS</div>
-              {primaryAsset.http_analysis.http_headers.slice(0,4).map((h, i) => (
-                <div key={i} style={{ display:"flex", gap:6, alignItems:"center", padding:"2px 0" }}>
+        </ASMWidget>
+      </div>
+
+      {/* ROW 3 */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:14, marginBottom:14 }}>
+        {/* Security Headers — split from Widget 5 */}
+        <ASMWidget title="Security Headers" accent="#ff8c00">
+          {primaryAsset?.http_analysis?.http_headers?.length > 0 ? (
+            <div>
+              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>MISSING SECURITY HEADERS</div>
+              {primaryAsset.http_analysis.http_headers.map((h, i) => (
+                <div key={i} style={{ display:"flex", gap:6, alignItems:"center", padding:"3px 0", borderBottom:"1px solid rgba(255,255,255,0.04)" }}>
                   <span style={{ color:"#ff3b3b", fontSize:10, flexShrink:0 }}>✗</span>
                   <span style={{ color:"rgba(255,255,255,0.4)", fontSize:10, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
                     {h.replace(/^Header:\s*/,"").replace(/^Missing\s*/,"")}
                   </span>
                 </div>
               ))}
-              {primaryAsset.http_analysis.http_headers.length > 4 && (
-                <div style={{ color:"rgba(255,255,255,0.2)", fontSize:9, fontFamily:"monospace", marginTop:2 }}>
-                  +{primaryAsset.http_analysis.http_headers.length-4} more missing headers
-                </div>
-              )}
               {primaryAsset.http_analysis.header_detail && Object.keys(primaryAsset.http_analysis.header_detail).length > 0 && (
-                <div style={{ marginTop:5 }}>
-                  <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:3 }}>PRESENT HEADERS</div>
-                  {Object.entries(primaryAsset.http_analysis.header_detail).slice(0,3).map(([k]) => (
-                    <div key={k} style={{ display:"flex", gap:6, alignItems:"center", padding:"2px 0" }}>
+                <div style={{ marginTop:10 }}>
+                  <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:5 }}>PRESENT HEADERS</div>
+                  {Object.entries(primaryAsset.http_analysis.header_detail).map(([k]) => (
+                    <div key={k} style={{ display:"flex", gap:6, alignItems:"center", padding:"3px 0", borderBottom:"1px solid rgba(255,255,255,0.04)" }}>
                       <span style={{ color:"#00e5a0", fontSize:10, flexShrink:0 }}>✓</span>
                       <span style={{ color:"rgba(255,255,255,0.35)", fontSize:10 }}>{k}</span>
                     </div>
                   ))}
                 </div>
               )}
+              {/* Header score summary */}
+              {(() => {
+                const missing = primaryAsset.http_analysis.http_headers.length;
+                const present = Object.keys(primaryAsset.http_analysis.header_detail||{}).length;
+                const total = missing + present;
+                const score = total > 0 ? Math.round((present / total) * 100) : 0;
+                const scoreColor = score >= 80 ? "#00e5a0" : score >= 50 ? "#f5c518" : "#ff3b3b";
+                return total > 0 ? (
+                  <div style={{ marginTop:12, padding:"8px 0", borderTop:"1px solid rgba(255,255,255,0.06)" }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                      <span style={{ color:"rgba(255,255,255,0.35)", fontSize:11 }}>Header Coverage</span>
+                      <span style={{ color:scoreColor, fontFamily:"monospace", fontSize:13, fontWeight:700 }}>{score}%</span>
+                    </div>
+                    <div style={{ height:3, background:"rgba(255,255,255,0.07)", borderRadius:2, marginTop:5 }}>
+                      <div style={{ height:"100%", width:`${score}%`, background:scoreColor, borderRadius:2 }}/>
+                    </div>
+                    <div style={{ color:"rgba(255,255,255,0.2)", fontSize:9, fontFamily:"monospace", marginTop:3 }}>
+                      {present} present · {missing} missing
+                    </div>
+                  </div>
+                ) : null;
+              })()}
+            </div>
+          ) : (
+            <div style={{ color:"rgba(255,255,255,0.25)", fontSize:12, fontFamily:"monospace", padding:"16px 0" }}>
+              No HTTP header data in scan.<br/>Run a scan with the Web Security module enabled.
             </div>
           )}
         </ASMWidget>
 
-        {/* Widget 6 — Attack Surface Inventory */}
-        <ASMWidget title="6. Attack Surface Inventory" accent="#00e5a0" onViewAll={()=>setActiveTab("assets")}>
-          <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
-            {[
-              { label:"Primary Domains",  count:assets.filter(a=>a.tags?.includes("primary")).length,  color:"#00e5a0" },
-              { label:"Subdomains",       count:assets.filter(a=>a.type==="Subdomain").length,          color:"rgba(0,229,160,0.6)" },
-              { label:"New Subdomains",   count:newSubCount,                                             color:"#4d9eff" },
-              { label:"IP Addresses",     count:assets.filter(a=>a.tags?.includes("ip")).length,        color:"#4d9eff" },
-              { label:"Typosquats",       count:assets.filter(a=>a.type?.includes("Typosquat")).length, color:"#ff8c00" },
-              { label:"Critical Risk",        count:assets.filter(a=>a.risk==="critical").length,                      color:"#ff3b3b" },
-              { label:"High Risk",            count:assets.filter(a=>a.risk==="high").length,                          color:"#ff8c00" },
-              { label:"Unregistered Typosquats", count:primaryAsset?.dns_unregistered?.length ?? 0,                  color:"rgba(255,140,0,0.6)" },
-              { label:"DNS Takeover Risks",   count:primaryAsset?.dns_takeovers?.length ?? 0,                         color: (primaryAsset?.dns_takeovers?.length ?? 0) > 0 ? "#ff3b3b" : "rgba(0,229,160,0.5)" },
-            ].map(r=>(
-              <div key={r.label} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"3px 0" }}>
-                <span style={{ color:"rgba(255,255,255,0.45)", fontSize:12 }}>{r.label}</span>
-                <span style={{ color:r.color, fontFamily:"monospace", fontSize:13, fontWeight:700 }}>{r.count}</span>
-              </div>
-            ))}
-          </div>
-        </ASMWidget>
-      </div>
-
-      {/* ROW 3 */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
         {/* Widget 7 — Supply Chain (expanded with risk list) */}
         <ASMWidget title="7. Supply Chain Risk" accent="#f5c518" badge={supply.high>0?`${supply.high} HIGH`:null}>
           {supply.count>0 ? (
