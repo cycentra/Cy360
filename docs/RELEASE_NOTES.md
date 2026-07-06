@@ -1,3 +1,11 @@
+## v1.0.176 -- 2026-07-06
+
+### New Features
+
+  - dashboard): redesign External Attack Posture page layout and visuals
+
+---
+
 ## v1.0.175 -- 2026-07-06
 
 ### New Features
