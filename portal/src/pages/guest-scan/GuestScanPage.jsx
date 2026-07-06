@@ -33,6 +33,8 @@ const MODULES = [
   "DNS Reconnaissance", "Subdomain Enumeration", "Web Analysis",
   "Crypto & SSL Audit", "Email Security Check", "WHOIS & History",
   "OSINT Gathering", "Cloud Infrastructure",
+  "Dark Web Monitoring", "Supply Chain Analysis",
+  "Social Engineering Intel", "Mobile & API Checks",
   "Generating Report",
 ];
 
@@ -660,6 +662,119 @@ function PartialLockedWidget({ title, accent = "#00e5a0", teaser }) {
   );
 }
 
+function DarkWebWidget({ asset }) {
+  const dw     = asset?.raw_results?.dark_web?.results || {};
+  const hibp   = Array.isArray(dw.hibp)   ? dw.hibp   : [];
+  const pastes = Array.isArray(dw.pastes) ? dw.pastes : [];
+  const hits   = hibp.length;
+  const breachColor = hits > 0 ? "#ff3b3b" : "#00e5a0";
+
+  return (
+    <ASMWidget title="7. Dark Web Monitoring" accent="#ff3b3b" badge={hits > 0 ? `${hits} BREACH${hits > 1 ? "ES" : ""}` : null}>
+      <StatRows items={[
+        { label: "Breach Records",  val: hits,          color: breachColor },
+        { label: "Paste Mentions",  val: pastes.length, color: pastes.length > 0 ? "#ff8c00" : "#00e5a0" },
+      ]}/>
+      {hits === 0 && pastes.length === 0 && (
+        <div style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace",
+          display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+          <CheckIcon color="#00e5a0"/> No breach data found
+        </div>
+      )}
+      {hits > 0 && (
+        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+          {hibp.slice(0, 3).map((b, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#ff3b3b", flexShrink: 0 }}/>
+              <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 10, fontFamily: "monospace" }}>
+                {typeof b === "string" ? b : (b.Name || b.name || "Breach record").slice(0, 40)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <WidgetNote>Breach records via CyTIM dark web feeds. Full credential monitoring in Deep Scan.</WidgetNote>
+    </ASMWidget>
+  );
+}
+
+function SupplyChainWidget({ asset }) {
+  const sc       = asset?.raw_results?.supply_chain?.results || {};
+  const scripts  = Array.isArray(sc.scripts) ? sc.scripts : [];
+  const count    = sc.count ?? scripts.length;
+  const risks    = scripts.filter(s => s.risk === "high" || s.risk_level === "high").length;
+  const noSri    = scripts.filter(s => !s.integrity && !s.sri).length;
+  const riskColor = risks > 0 ? "#ff3b3b" : count > 0 ? "#ff8c00" : "#00e5a0";
+
+  return (
+    <ASMWidget title="8. Supply Chain Risk" accent="#4d9eff" badge={risks > 0 ? `${risks} HIGH RISK` : null}>
+      <StatRows items={[
+        { label: "Third-party Scripts", val: count,  color: count > 0 ? "#ff8c00" : "#00e5a0" },
+        { label: "High Risk Scripts",   val: risks,  color: riskColor },
+        { label: "No SRI Integrity",    val: noSri,  color: noSri > 0 ? "#f5c518" : "#00e5a0" },
+      ]}/>
+      {count === 0 && (
+        <div style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace",
+          display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+          <CheckIcon color="#00e5a0"/> No external scripts detected
+        </div>
+      )}
+      <WidgetNote>CDN integrity and Magecart-pattern detection. Step-by-step remediation in Deep Scan.</WidgetNote>
+    </ASMWidget>
+  );
+}
+
+function SocialEngWidget({ asset }) {
+  const se      = asset?.raw_results?.social_eng?.results || {};
+  const typos   = Array.isArray(se.typosquats)       ? se.typosquats       : [];
+  const emails  = Array.isArray(se.emails)            ? se.emails            : [];
+  const phishing = Array.isArray(se.phishing_domains) ? se.phishing_domains : [];
+  const regTypos = typos.filter(t => t.registered).length;
+
+  return (
+    <ASMWidget title="9. Social Engineering" accent="#b06eff">
+      <StatRows items={[
+        { label: "Typosquat Domains",     val: typos.length,   color: typos.length > 0 ? "#ff8c00" : "#00e5a0" },
+        { label: "Registered Typosquats", val: regTypos,       color: regTypos > 0 ? "#ff3b3b" : "#00e5a0" },
+        { label: "Exposed Emails",        val: emails.length,  color: emails.length > 0 ? "#f5c518" : "#00e5a0" },
+        ...(phishing.length > 0 ? [{ label: "Phishing Domains", val: phishing.length, color: "#ff3b3b" }] : []),
+      ]}/>
+      {typos.length === 0 && emails.length === 0 && (
+        <div style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace",
+          display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+          <CheckIcon color="#00e5a0"/> No social engineering indicators found
+        </div>
+      )}
+    </ASMWidget>
+  );
+}
+
+function MobileApiWidget({ asset }) {
+  const ma         = asset?.raw_results?.mobile_api?.results || {};
+  const endpoints  = Array.isArray(ma.api_findings) ? ma.api_findings
+                   : Array.isArray(ma.endpoints)    ? ma.endpoints : [];
+  const deeplinks  = Array.isArray(ma.deeplinks)   ? ma.deeplinks  : [];
+  const appLinks   = Array.isArray(ma.app_links)   ? ma.app_links  : [];
+  const exposed    = endpoints.filter(e => e.risk === "high" || e.severity === "high").length;
+
+  return (
+    <ASMWidget title="10. Mobile & API Checks" accent="#f5c518">
+      <StatRows items={[
+        { label: "API Endpoints Found", val: endpoints.length, color: endpoints.length > 0 ? "#f5c518" : "#00e5a0" },
+        { label: "High-Risk Exposed",   val: exposed,          color: exposed > 0 ? "#ff3b3b" : "#00e5a0" },
+        { label: "Deep Links",          val: deeplinks.length, color: deeplinks.length > 0 ? "#4d9eff" : "#00e5a0" },
+        { label: "App Links",           val: appLinks.length,  color: appLinks.length > 0 ? "#4d9eff" : "#00e5a0" },
+      ]}/>
+      {endpoints.length === 0 && deeplinks.length === 0 && (
+        <div style={{ color: "#00e5a0", fontSize: 12, fontFamily: "monospace",
+          display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+          <CheckIcon color="#00e5a0"/> No mobile/API exposure detected
+        </div>
+      )}
+    </ASMWidget>
+  );
+}
+
 function GuestDashboard({ data, onRescan }) {
   const assets   = data?.assets || [];
   const asset    = assets[0] || {};
@@ -681,15 +796,6 @@ function GuestDashboard({ data, onRescan }) {
     ? (postureScore >= 80 ? "#00e5a0" : postureScore >= 70 ? "#4d9eff" : postureScore >= 55 ? "#f5c518" : postureScore >= 35 ? "#ff8c00" : "#ff3b3b")
     : "#4d9eff";
 
-  // Dark web / supply chain — only present if deep scan
-  const darkWebRaw     = asset?.raw_results?.dark_web;
-  const supplyChainRaw = asset?.raw_results?.supply_chain;
-  const darkWebTeaser  = darkWebRaw
-    ? `${(darkWebRaw.results?.hibp || darkWebRaw.results?.hits || []).length} breach record(s) found`
-    : "No data — requires Deep Scan";
-  const supplyChainTeaser = supplyChainRaw
-    ? `${(supplyChainRaw.results?.count || (supplyChainRaw.results?.scripts || []).length)} third-party scripts detected`
-    : "No data — requires Deep Scan";
 
   return (
     <div style={{ minHeight: "100vh", background: "#090b10",
@@ -800,12 +906,18 @@ function GuestDashboard({ data, onRescan }) {
           <CloudWidget asset={asset}/>
         </div>
 
-        {/* ── Row 3: 3 partial-locked premium widgets ── */}
-        <div style={{ display: "flex", gap: 14, marginBottom: 24, flexWrap: "wrap" }}>
-          <PartialLockedWidget title="Dark Web Monitoring" accent="#ff3b3b" teaser={darkWebTeaser}/>
-          <PartialLockedWidget title="Supply Chain Risk" accent="#4d9eff" teaser={supplyChainTeaser}/>
+        {/* ── Row 3: Dark Web + Supply Chain (now standard) + AI locked ── */}
+        <div style={{ display: "flex", gap: 14, marginBottom: 14, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 280px" }}><DarkWebWidget asset={asset}/></div>
+          <div style={{ flex: "1 1 280px" }}><SupplyChainWidget asset={asset}/></div>
           <PartialLockedWidget title="AI Risk Score & Remediation" accent="#b06eff"
             teaser="AI-powered scoring requires Deep Scan"/>
+        </div>
+
+        {/* ── Row 4: Social Engineering + Mobile & API (now standard) ── */}
+        <div style={{ display: "flex", gap: 14, marginBottom: 24, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 280px" }}><SocialEngWidget asset={asset}/></div>
+          <div style={{ flex: "1 1 280px" }}><MobileApiWidget asset={asset}/></div>
         </div>
 
         {/* ── Upsell banner ── */}
@@ -821,14 +933,12 @@ function GuestDashboard({ data, onRescan }) {
               </div>
             </div>
             <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 12, lineHeight: 1.7, maxWidth: 560 }}>
-              This report covers your active attack surface across 7 modules.
+              This report covers your full external attack surface across 12 detection modules.
             </div>
             <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, lineHeight: 1.7, marginTop: 6 }}>
-              Deep Scan adds 4 more modules + AI enrichment for complete coverage:{" "}
-              <span style={{ color: "#ff8c00" }}>dark web</span>,{" "}
-              <span style={{ color: "#4d9eff" }}>supply chain JS</span>,{" "}
-              <span style={{ color: "#b06eff" }}>social engineering</span>,
-              mobile/API exposure, and step-by-step remediation.
+              <span style={{ color: "#b06eff" }}>Deep Scan</span> elevates every finding with{" "}
+              <span style={{ color: "#ff8c00" }}>AI-powered root-cause analysis</span>{" "}
+              and step-by-step technical remediation — plus a full PDF Technical Report.
             </div>
           </div>
           <a href="https://cycentra.com/#contact" target="_blank" rel="noreferrer"
@@ -1094,14 +1204,14 @@ export function GuestScanPage() {
               {[
                 { feature: "DNS / WHOIS",            passive: true,  standard: true,  deep: true  },
                 { feature: "Email Security",          passive: true,  standard: true,  deep: true  },
-                { feature: "Dark Web / OSINT",        passive: true,  standard: false, deep: true  },
+                { feature: "Dark Web / OSINT",        passive: true,  standard: true,  deep: true  },
                 { feature: "Subdomain Enumeration",   passive: false, standard: true,  deep: true  },
                 { feature: "Web Security Analysis",   passive: false, standard: true,  deep: true  },
                 { feature: "SSL / Crypto Audit",      passive: false, standard: true,  deep: true  },
                 { feature: "Cloud Exposure",          passive: false, standard: true,  deep: true  },
-                { feature: "Supply Chain Risk",       passive: false, standard: false, deep: true  },
-                { feature: "Social Engineering",      passive: false, standard: false, deep: true  },
-                { feature: "Mobile & API Checks",     passive: false, standard: false, deep: true  },
+                { feature: "Supply Chain Risk",       passive: false, standard: true,  deep: true  },
+                { feature: "Social Engineering",      passive: false, standard: true,  deep: true  },
+                { feature: "Mobile & API Checks",     passive: false, standard: true,  deep: true  },
                 { feature: "AI Risk Remediation",     passive: false, standard: false, deep: "step-by-step" },
                 { feature: "PDF Technical Report",    passive: false, standard: false, deep: true  },
               ].map((row, i, arr) => (

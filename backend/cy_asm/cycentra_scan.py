@@ -100,12 +100,13 @@ SCAN_PROFILES = {
         "ai_enrichment_limit": 0,
     },
     "standard": {
-        # Active probes across core modules. No AI enrichment — that is a Deep scan
-        # exclusive feature (as shown in the guest comparison table).
-        # Dark web and supply chain / social eng / mobile_api are Deep-only.
+        # Active probes across all attacker-visible surface modules.
+        # Includes dark web, supply chain, social engineering, and mobile/API checks.
+        # AI enrichment remains a Deep scan exclusive.
         "run_subdomains":      True,
         "modules":             [
             "web", "crypto", "email_sec", "cloud", "whois", "osint",
+            "dark_web", "supply_chain", "social_eng", "mobile_api",
         ],
         "run_vuln_scanner":    True,
         "ai_enrichment":       False,
