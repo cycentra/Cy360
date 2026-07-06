@@ -916,23 +916,24 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
               // Reconstruct per-source score contributions for the breakdown strip
               const scoreRows = [];
 
+              // hit.sources is a dict {source_name: {score, confidence, tags, details}}
               (ti.ioc_hits || []).forEach(hit => {
-                (hit.sources || []).forEach(s => {
+                Object.entries(hit.sources || {}).forEach(([srcName, s]) => {
                   const d = s.details || {};
-                  if (s.source === "virustotal") {
-                    const pts = s.verdict === "malicious" ? 25 : s.verdict === "suspicious" ? 10 : 0;
+                  if (srcName === "virustotal") {
+                    const pts = s.score >= 60 ? 25 : s.score >= 30 ? 10 : 0;
                     if (pts > 0 && !scoreRows.find(r => r.label === "VirusTotal"))
                       scoreRows.push({ label: "VirusTotal", pts, detail: `${d.malicious ?? "?"}/${d.total ?? "?"} engines flagged`, color: "#4d9eff" });
-                  } else if (s.source === "abuseipdb") {
+                  } else if (srcName === "abuseipdb") {
                     const score = d.abuse_score ?? 0;
                     const pts = score >= 50 ? 20 : score >= 25 ? 10 : 0;
                     if (pts > 0 && !scoreRows.find(r => r.label === "AbuseIPDB"))
                       scoreRows.push({ label: "AbuseIPDB", pts, detail: `abuse score ${score}/100`, color: "#ff8c00" });
-                  } else if (s.source === "greynoise") {
+                  } else if (srcName === "greynoise") {
                     if (d.riot) {
                       if (!scoreRows.find(r => r.label === "GreyNoise"))
                         scoreRows.push({ label: "GreyNoise", pts: -15, detail: "known benign scanner (RIOT)", color: "#00e5a0" });
-                    } else if (s.verdict === "malicious") {
+                    } else if (s.score >= 60) {
                       if (!scoreRows.find(r => r.label === "GreyNoise"))
                         scoreRows.push({ label: "GreyNoise", pts: 20, detail: `classified malicious${d.name ? ` · ${d.name}` : ""}`, color: "#ff3b3b" });
                     }
@@ -940,30 +941,31 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
                 });
               });
 
-              // Per-source detail line for each source within an IOC hit
-              function renderSourceDetail(s) {
+              // Per-source detail line — srcName is the dict key, s is the source data object
+              function renderSourceDetail(srcName, s) {
                 const d = s.details || {};
-                const vc = VERDICT_COLOR[s.verdict] || "#888";
+                const verdict = s.score >= 60 ? "malicious" : s.score >= 30 ? "suspicious" : "unknown";
+                const vc = VERDICT_COLOR[verdict] || "#888";
                 let detail = null;
-                if (s.source === "virustotal") {
+                if (srcName === "virustotal") {
                   detail = d.total != null
                     ? `${d.malicious ?? 0}/${d.total} engines · rep ${d.community_score ?? 0}`
-                    : s.verdict;
-                } else if (s.source === "abuseipdb") {
+                    : verdict;
+                } else if (srcName === "abuseipdb") {
                   detail = d.abuse_score != null
                     ? `abuse ${d.abuse_score}/100 · ${d.total_reports ?? 0} reports${d.country ? ` · ${d.country}` : ""}`
-                    : s.verdict;
-                } else if (s.source === "greynoise") {
+                    : verdict;
+                } else if (srcName === "greynoise") {
                   detail = d.riot ? "RIOT — known benign scanner"
                           : d.noise ? `noise · ${d.classification ?? "unknown"}${d.name ? ` (${d.name})` : ""}`
                           : `not seen · ${d.classification ?? "unknown"}`;
                 }
                 return (
-                  <div key={s.source} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
+                  <div key={srcName} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
                     <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4,
                       background: `${vc}15`, border: `1px solid ${vc}30`,
                       color: vc, fontFamily: "monospace", fontWeight: 700 }}>
-                      {s.source}
+                      {srcName}
                     </span>
                     <span style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", fontFamily: "monospace" }}>
                       {detail}
@@ -1064,7 +1066,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
                                 {(hit.verdict || "unknown").toUpperCase()}
                               </span>
                             </div>
-                            {(hit.sources || []).map(s => renderSourceDetail(s))}
+                            {Object.entries(hit.sources || {}).map(([srcName, s]) => renderSourceDetail(srcName, s))}
                           </div>
                         );
                       })}
@@ -2909,7 +2911,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
                       🗂️ CASE
                     </span>
                   )}
-                  {!inc.llm_summary && !(inc.misp_enrichment?.ioc_hits || []).length && !inc.case_opened_at && !(inc.hypotheses || []).length && inc.confidence_score == null && (
+                  {!inc.llm_summary && !(inc.ti_reputation?.ioc_hits || []).length && !inc.case_opened_at && !(inc.hypotheses || []).length && inc.confidence_score == null && (
                     <span style={{ color: "rgba(255,255,255,0.42)", fontSize: 10 }}>—</span>
                   )}
                 </div>

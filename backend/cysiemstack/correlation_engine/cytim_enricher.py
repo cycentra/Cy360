@@ -113,7 +113,10 @@ async def enrich_incident(db: AsyncSession, incident: Incident) -> dict:
             headers=_cytim_headers(),
             timeout=_TIMEOUT,
         ) as client:
-            resp = await client.post("/api/cytim/bulk-enrich", json={"iocs": iocs})
+            resp = await client.post(
+                "/api/cytim/bulk-enrich",
+                json={"iocs": iocs, "profile": "siem"},
+            )
             if resp.status_code != 200:
                 log.warning("cytim_enricher: bulk-enrich returned %s", resp.status_code)
                 return {}
@@ -122,26 +125,42 @@ async def enrich_incident(db: AsyncSession, incident: Incident) -> dict:
         log.warning("cytim_enricher: request failed", error=str(e))
         return {}
 
-    results = data.get("results", {})
+    # CyTIM bulk-enrich returns {"results": [list], "errors": []}.
+    # Each list item: {ioc_type, ioc_value, score, confidence, tags, sources: {src_name: {...}}}
+    raw_list = data.get("results", [])
+    if not isinstance(raw_list, list):
+        log.warning("cytim_enricher: unexpected results type %s", type(raw_list).__name__)
+        return {}
 
-    # Build ioc_hits list — one entry per IOC that had any score > 0 or any source data
-    ioc_hits = []
-    for key, result in results.items():
-        if not result:
+    def _score_to_verdict(score: int) -> str:
+        if score >= 60:
+            return "malicious"
+        if score >= 30:
+            return "suspicious"
+        return "unknown"
+
+    ioc_hits: list[dict] = []
+    sources_seen: set[str] = set()
+    for result in raw_list:
+        if not isinstance(result, dict):
             continue
-        ioc_type, ioc_value = key.split(":", 1) if ":" in key else ("unknown", key)
+        score  = result.get("score", 0)
+        srcs   = result.get("sources", {})   # dict: {source_name: {score, confidence, tags, details}}
+        # Skip IOCs with no reputation signal at all
+        if score == 0 and not srcs:
+            continue
+        sources_seen.update(srcs.keys())
         hit = {
-            "ioc":      ioc_value,
-            "type":     ioc_type,
-            "score":    result.get("score", 0),
-            "verdict":  result.get("verdict", "unknown"),
-            "sources":  result.get("sources", {}),
-            "tags":     result.get("tags", []),
+            "ioc":     result.get("ioc_value", ""),
+            "type":    result.get("ioc_type", "unknown"),
+            "score":   score,
+            "verdict": _score_to_verdict(score),
+            "sources": srcs,
+            "tags":    result.get("tags", []),
         }
         ioc_hits.append(hit)
 
     # Derive overall incident verdict from worst IOC
-    _order = {"malicious": 3, "suspicious": 2, "benign": 1, "unknown": 0}
     overall_verdict = "unknown"
     max_score = 0
     for hit in ioc_hits:
@@ -156,7 +175,7 @@ async def enrich_incident(db: AsyncSession, incident: Incident) -> dict:
         "verdict":      overall_verdict,
         "confidence":   round(confidence * 100),
         "ioc_hits":     ioc_hits,
-        "sources_used": list(data.get("sources_queried", [])),
+        "sources_used": sorted(sources_seen),
         "checked_at":   datetime.now(timezone.utc).isoformat(),
     }
 

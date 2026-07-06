@@ -1667,6 +1667,98 @@ def self_enroll_agent():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# IOC FEED — Agent-side blocklist sync
+# Agents poll GET /api/edr/ioc-feed every 3600 s (IOCRefresher thread).
+# Returns hashes confirmed by YARA detections + malicious IPs from CyTIM-
+# enriched correlation alerts so agents can block IOCs on the endpoint.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@edr_bp.route("/ioc-feed", methods=["OPTIONS"])
+def edr_ioc_feed_options():
+    return add_cors_headers(make_response("", 204))
+
+
+@edr_bp.route("/ioc-feed", methods=["GET"])
+def edr_ioc_feed():
+    """
+    Agent-facing: return current IOC blocklist {hashes, ips, domains}.
+    Auth: Bearer <enrollment_token> — any active agent token is accepted.
+    """
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return jsonify({"error": "Bearer token required"}), 401
+    token = auth[7:]
+
+    # Validate against any active enrollment token (feed is not agent-specific)
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM edr_agents WHERE enrollment_token=%s AND status='active' LIMIT 1",
+                [token],
+            )
+            valid = cur.fetchone() is not None
+        conn.close()
+    except psycopg2.Error:
+        valid = False
+
+    if not valid:
+        return jsonify({"error": "Invalid or expired enrollment token"}), 401
+
+    hashes: list[str] = []
+    ips: list[str] = []
+
+    # Confirmed malicious file hashes from YARA / custom-YARA detections
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT file_hash
+                FROM edr_detections
+                WHERE file_hash IS NOT NULL AND file_hash <> ''
+                  AND match_type IN ('yara', 'custom_yara')
+                LIMIT 2000
+            """)
+            for row in cur.fetchall():
+                hashes.append(row["file_hash"].lower())
+        conn.close()
+    except psycopg2.Error as exc:
+        _log.warning("ioc_feed: edr_detections query failed: %s", exc)
+
+    # Malicious IPs from CyTIM-enriched correlation alerts (last 30 days)
+    try:
+        import os as _os
+        _corr = (
+            _os.environ.get("CORR_DB_URL")
+            or _os.environ.get("CORRELATION_DB_URL")
+            or _os.environ.get("DATABASE_URL", "postgresql://corruser:@127.0.0.1:5433/correlation")
+        ).replace("+asyncpg", "")
+        conn2 = psycopg2.connect(_corr, cursor_factory=psycopg2.extras.RealDictCursor)
+        with conn2.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT src_ip::text
+                FROM alerts
+                WHERE src_ip IS NOT NULL
+                  AND ti_reputation->>'verdict' = 'malicious'
+                  AND timestamp >= NOW() - INTERVAL '30 days'
+                LIMIT 5000
+            """)
+            for row in cur.fetchall():
+                if row["src_ip"]:
+                    ips.append(row["src_ip"])
+        conn2.close()
+    except Exception as exc:
+        _log.debug("ioc_feed: correlation DB query skipped: %s", exc)
+
+    return jsonify({
+        "hashes":       hashes,
+        "ips":          ips,
+        "domains":      [],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # CUSTOM YARA RULES — Zero-Day / Threat Intel Hunting
 # Admins upload analyst-authored YARA rules. Agents fetch merged ruleset on
 # their hourly IOC sync. Fleet-scan pushes RUN_SCAN to all active agents.
