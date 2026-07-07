@@ -16,8 +16,11 @@ Populates:
 Falls back silently when CyTIM is not configured (CYTIM_URL empty).
 """
 
+import json
+import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -31,17 +34,40 @@ from config import get_settings
 log     = structlog.get_logger()
 settings = get_settings()
 
-_TIMEOUT   = 15.0
-_MAX_IOCS  = 15   # cap per-incident to avoid slow enrichment on noisy incidents
-_FQDN_RE   = re.compile(
+_TIMEOUT    = 15.0
+_MAX_IOCS   = 15   # cap per-incident to avoid slow enrichment on noisy incidents
+_FQDN_RE    = re.compile(
     r'\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b'
 )
 _SHA256_LEN = 64
+_AI_SETTINGS = Path("/opt/cycentra/ai_settings.json")
 
 
-def _cytim_headers() -> dict:
+def _load_cytim_config() -> tuple[str, str]:
+    """Return (cytim_url, api_key) — checked at call time so UI changes take effect
+    without restarting the correlation engine.
+
+    Priority: cysiemstack.env / os.environ (already in settings object) →
+              ai_settings.json (UI-configured, no env file entry needed).
+    """
+    url = settings.cytim_url
+    key = settings.cytim_api_key
+    if url and key:
+        return url, key
+    try:
+        if _AI_SETTINGS.exists():
+            d = json.loads(_AI_SETTINGS.read_text())
+            cytim = d.get("cytim", {})
+            url = url or (cytim.get("url") or "").strip().rstrip("/")
+            key = key or (cytim.get("apiKey") or "").strip()
+    except Exception:
+        pass
+    return url, key
+
+
+def _cytim_headers(api_key: str) -> dict:
     return {
-        "X-CyTIM-Key":  settings.cytim_api_key,
+        "X-CyTIM-Key":  api_key,
         "Content-Type": "application/json",
     }
 
@@ -94,7 +120,8 @@ async def enrich_incident(db: AsyncSession, incident: Incident) -> dict:
     Updates incident.ti_reputation and incident.misp_enrichment.
     Returns ti_reputation dict (or {} on failure/not-configured).
     """
-    if not settings.cytim_url or not settings.cytim_api_key:
+    cytim_url, cytim_api_key = _load_cytim_config()
+    if not cytim_url or not cytim_api_key:
         return {}
 
     # Load alerts for this incident
@@ -109,8 +136,8 @@ async def enrich_incident(db: AsyncSession, incident: Incident) -> dict:
 
     try:
         async with httpx.AsyncClient(
-            base_url=settings.cytim_url,
-            headers=_cytim_headers(),
+            base_url=cytim_url,
+            headers=_cytim_headers(cytim_api_key),
             timeout=_TIMEOUT,
         ) as client:
             resp = await client.post(

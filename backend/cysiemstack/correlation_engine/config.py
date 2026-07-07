@@ -99,11 +99,26 @@ class Settings(BaseSettings):
     @model_validator(mode='after')
     def _bridge_cytim_env(self) -> 'Settings':
         """Pick up CYTIM_URL / CYTIM_API_KEY from os.environ (vault-injected)
-        when they are not already set in cysiemstack.env."""
+        or ai_settings.json (UI-configured) when not set in cysiemstack.env."""
         if not self.cytim_url:
             self.cytim_url = os.environ.get("CYTIM_URL", "").strip().rstrip("/")
         if not self.cytim_api_key:
             self.cytim_api_key = os.environ.get("CYTIM_API_KEY", "").strip()
+        # Final fallback: read from ai_settings.json (written by the portal UI).
+        # This means no env file entry is needed when CyTIM is configured via the UI.
+        if not self.cytim_url or not self.cytim_api_key:
+            try:
+                import json as _json
+                _p = "/opt/cycentra/ai_settings.json"
+                if os.path.exists(_p):
+                    _d = _json.loads(open(_p).read())
+                    _cytim = _d.get("cytim", {})
+                    if not self.cytim_url:
+                        self.cytim_url = (_cytim.get("url") or "").strip().rstrip("/")
+                    if not self.cytim_api_key:
+                        self.cytim_api_key = (_cytim.get("apiKey") or "").strip()
+            except Exception:
+                pass
         return self
 
     model_config = SettingsConfigDict(
