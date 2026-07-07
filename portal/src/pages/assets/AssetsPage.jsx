@@ -713,8 +713,12 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
   };
 
   // Discovery predicates for alert banners (scanner-driven, not analyst state)
+  // change="new" → brand-new asset on a subsequent scan
+  // change="appeared" → previously-seen subdomain now live
+  // asset_state="new" + no prior record → new on this scan
   const isNew     = a => a.is_new === true || a.change === "new" || a.change === "appeared";
-  const isDropped = a => a.change === "disappeared";
+  // change="disappeared" → scanner-emitted ghost; asset_state="dropped" → auto-dropped baseline asset
+  const isDropped = a => a.change === "disappeared" || a.asset_state === "dropped";
 
   const newCount      = assets.filter(isNew).length;
   const droppedCount  = assets.filter(isDropped).length;

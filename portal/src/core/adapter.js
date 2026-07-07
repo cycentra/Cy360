@@ -228,13 +228,15 @@ export function adaptCyCentraJSON(raw) {
     })();
 
     // ── PRIMARY ASSET ─────────────────────────────────────────────────────────
+    // Ghost entries (change="disappeared") have no raw_results — skip enrichment there
+    const isGhost = a.change === "disappeared";
     allAssets.push({
       id:            a.id,
       host:          a.host,
       ip:            dnsIps[0]?.ip || "—",
-      type,
+      type:          isGhost ? "Dropped Asset" : type,
       ports:         ports.map?.(p => p.port ?? p).filter(Boolean) || [],
-      risk:          topSev,
+      risk:          isGhost ? "low" : topSev,
       risk_score:    a.risk_score ?? 0,
       cves:          vulns.map(v => v.vulnerability),
       vulnerabilities: vulns,
@@ -242,9 +244,11 @@ export function adaptCyCentraJSON(raw) {
       cert_days:     certInfo?.days_to_expiry ?? null,
       owner:         raw.meta?.org || "Unknown",
       asset_state:   a.asset_state || "new",
+      change:        a.change || null,
+      is_new:        a.change === "new",
       first_seen:    raw.meta?.last_scan?.split("T")[0] || "—",
       last_seen:     raw.meta?.last_scan?.split("T")[0] || "—",
-      tags:          ["external", "primary"],
+      tags:          isGhost ? ["external", "dropped"] : ["external", "primary"],
       subdomains,
       exposed_paths: a.raw_results?.web?.results?.exposed_paths || [],
       // Previously-rendered data

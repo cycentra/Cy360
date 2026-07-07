@@ -250,26 +250,31 @@ def _apply_asset_states(
     primary_domain: str,
     subdomain_entries: list,
     is_guest: bool,
-) -> tuple[dict, dict]:
+) -> tuple[dict, dict, dict, list]:
     """Compute asset states for all hosts discovered in this scan.
 
     Returns:
         state_by_host  — {hostname: state_string}   (injected into portal JSON)
+        change_by_host — {hostname: change_string}  "first_scan"|"new"|"persisted"|"dropped"
         updated_store  — full state store to be saved after portal JSON is written
                          (empty dict when is_guest=True; guests are never persisted)
+        dropped_hosts  — list of {host, last_seen} for assets auto-dropped this scan
 
     State rules:
-    - First time seeing a host (no record) → "new"
-    - Existing record → preserve current state (do not overwrite user decisions)
-    - Baseline host not found in this scan → auto-transition to "dropped"
+    - First scan (no prior records at all) → all hosts auto-baselined; change="first_scan"
+    - Known host (has a record) → preserve current state; change="persisted"
+    - Brand-new host on subsequent scan → "new"; change="new"
+    - Baseline host not found in this scan → auto-transition to "dropped"; change="disappeared"
     - Guest scans: all hosts get ephemeral "new"; nothing is persisted
     """
     if is_guest:
-        state_by_host = {primary_domain: "new"}
+        state_by_host  = {primary_domain: "new"}
+        change_by_host = {primary_domain: "new"}
         for e in subdomain_entries:
             sub = e["subdomain"] if isinstance(e, dict) else e
-            state_by_host[sub] = "new"
-        return state_by_host, {}
+            state_by_host[sub]  = "new"
+            change_by_host[sub] = "new"
+        return state_by_host, change_by_host, {}, []
 
     store         = _load_asm_asset_states(uid)
     assets        = store.setdefault("assets", {})
@@ -277,24 +282,41 @@ def _apply_asset_states(
     baseline_set  = set(baseline_cfg.get("assets", []))
     now           = datetime.now().isoformat()
 
+    # First scan: no prior asset records exist at all
+    is_first_scan = len(assets) == 0
+
     # Build set of all hosts discovered in this scan
     detected: set = {primary_domain}
     for e in subdomain_entries:
         sub = e["subdomain"] if isinstance(e, dict) else e
         detected.add(sub)
 
-    state_by_host: dict = {}
+    state_by_host:  dict = {}
+    change_by_host: dict = {}
     for host in detected:
         entry = assets.get(host)
         if entry is None:
-            assets[host] = {"state": "new", "first_seen": now, "last_seen": now, "audit_log": []}
-            state_by_host[host] = "new"
+            if is_first_scan:
+                # First scan establishes the baseline — all discovered assets start as baseline
+                assets[host] = {"state": "baseline", "first_seen": now, "last_seen": now,
+                                "audit_log": [{"action": "auto_baselined", "from_state": "new",
+                                               "to_state": "baseline", "reason": "First scan baseline",
+                                               "created_at": now}]}
+                state_by_host[host]  = "baseline"
+                change_by_host[host] = "first_scan"
+            else:
+                # Genuinely new asset on a subsequent scan
+                assets[host] = {"state": "new", "first_seen": now, "last_seen": now, "audit_log": []}
+                state_by_host[host]  = "new"
+                change_by_host[host] = "new"
         else:
             # Preserve the user-set state; only refresh last_seen
             assets[host]["last_seen"] = now
-            state_by_host[host] = entry.get("state", "new")
+            state_by_host[host]  = entry.get("state", "new")
+            change_by_host[host] = "persisted"
 
     # Auto-drop: baseline hosts not detected in this scan → "dropped"
+    dropped_hosts: list = []
     for host in baseline_set:
         if host not in detected:
             entry = assets.get(host, {})
@@ -309,10 +331,11 @@ def _apply_asset_states(
                     "created_at":  now,
                 }]
                 assets[host] = entry
+                dropped_hosts.append({"host": host, "last_seen": entry.get("last_seen", now)})
                 logger.info(f"🔻 [AssetState] {host} auto-dropped (not detected in scan of {primary_domain})")
 
     store["assets"] = assets
-    return state_by_host, store
+    return state_by_host, change_by_host, store, dropped_hosts
 # ─────────────────────────────────────────────────────────────────────────────
 
 # --- AI SETTINGS: dynamic read from /opt/cycentra/ai_settings.json ---
@@ -1234,20 +1257,54 @@ def main():
         # Compute and persist per-user asset lifecycle states.
         # Must happen before building portal_payload so we can inject asset_state.
         try:
-            state_by_host, updated_store = _apply_asset_states(
+            state_by_host, change_by_host, updated_store, dropped_hosts = _apply_asset_states(
                 uid=final_tenant_id,
                 primary_domain=domain,
                 subdomain_entries=enriched_sub_entries,
                 is_guest=is_guest,
             )
-            # Annotate each subdomain entry with its current asset state
+            # Annotate each subdomain entry with its current asset state and change
             for e in enriched_sub_entries:
                 if isinstance(e, dict):
-                    e["asset_state"] = state_by_host.get(e.get("subdomain", ""), "new")
+                    sub = e.get("subdomain", "")
+                    e["asset_state"] = state_by_host.get(sub, "new")
+                    # Only set change if not already annotated by _annotate_subdomains
+                    if "change" not in e:
+                        e["change"] = change_by_host.get(sub, "new")
         except Exception as _state_err:
             logger.warning(f"⚠️ [AssetState] State computation failed (scan unaffected): {_state_err}")
             state_by_host  = {}
+            change_by_host = {}
             updated_store  = {}
+            dropped_hosts  = []
+
+        # Build the primary asset entry with change annotation
+        primary_change = change_by_host.get(domain, "persisted")
+        primary_asset  = {
+            "id":              f"{domain}-{timestamp}",
+            "host":            domain,
+            "asset_state":     state_by_host.get(domain, "new"),
+            "change":          primary_change,
+            "risk_score":      ai_score,
+            "summary":         summary_text,
+            "vulnerabilities": final_vulns,
+            "raw_results":     result['results'],
+        }
+
+        # Ghost entries for auto-dropped baseline assets (appeared in previous scans, now missing)
+        ghost_assets = []
+        for dh in dropped_hosts:
+            ghost_assets.append({
+                "id":              f"{dh['host']}-dropped-{timestamp}",
+                "host":            dh["host"],
+                "asset_state":     "dropped",
+                "change":          "disappeared",
+                "risk_score":      0,
+                "summary":         f"Asset last seen {dh.get('last_seen', 'unknown')} — not detected in current scan",
+                "vulnerabilities": [],
+                "raw_results":     {},
+            })
+            logger.info(f"🔻 [AssetState] Ghost entry added for dropped asset: {dh['host']}")
 
         portal_payload = {
             "meta": {
@@ -1263,16 +1320,9 @@ def main():
                 "live":       len(live_subs),
                 "historical": len(hist_subs),
                 "new":        len(new_subs),
+                "dropped":    len(dropped_hosts),
             },
-            "assets": [{
-                "id":              f"{domain}-{timestamp}",
-                "host":            domain,
-                "asset_state":     state_by_host.get(domain, "new"),
-                "risk_score":      ai_score,
-                "summary":         summary_text,
-                "vulnerabilities": final_vulns,
-                "raw_results":     result['results'],
-            }]
+            "assets": [primary_asset] + ghost_assets,
         }
 
         # ── Embed posture score in scan JSON before writing to disk ──────────

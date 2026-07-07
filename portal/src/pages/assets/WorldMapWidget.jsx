@@ -78,8 +78,12 @@ function Tooltip({ dot }) {
     <g style={{ pointerEvents: "none" }}>
       <rect x={tx} y={ty} width={142} height={54} rx={4}
         fill="rgba(8,10,18,0.95)" stroke={color} strokeWidth={0.7} strokeOpacity={0.4}/>
-      <text x={tx+9} y={ty+15} fill={color} fontSize={9.5} fontFamily="monospace" fontWeight={700}>{dot.host?.slice(0,20)}</text>
-      <text x={tx+9} y={ty+27} fill="rgba(255,255,255,0.52)" fontSize={8} fontFamily="monospace">{dot.ip}</text>
+      <text x={tx+9} y={ty+15} fill={color} fontSize={9.5} fontFamily="monospace" fontWeight={700}>
+        {dot.count > 1 ? `${dot.count} assets` : dot.host?.slice(0,20)}
+      </text>
+      <text x={tx+9} y={ty+27} fill="rgba(255,255,255,0.52)" fontSize={8} fontFamily="monospace">
+        {dot.ips?.length > 1 ? `${dot.ips.length} IPs` : dot.ip}
+      </text>
       <text x={tx+9} y={ty+39} fill="rgba(255,255,255,0.35)" fontSize={8} fontFamily="monospace">
         {dot.flag} {[dot.city, dot.country].filter(Boolean).join(", ")}
       </text>
@@ -133,17 +137,26 @@ export function WorldMapWidget({ assets }) {
 
   useEffect(() => { fetchGeo(); }, [fetchGeo]);
 
-  // Build dot list — one dot per unique IP, count = number of assets sharing that IP
-  const dotsByIP = {};
+  // Build dot list — cluster assets within ~1° lat/lon (~100 km) into a single dot.
+  // This prevents stacked invisible dots when multiple IPs share the same city/datacenter,
+  // ensuring the map legend ("N mapped across M locations") matches the visual dot count.
+  const GEO_CELL = 1.0; // degrees
+  const dotsByLoc = {};
+  const riskOrder = { critical:0, high:1, medium:2, low:3 };
   assetIPs.filter(x => geoMap[x.ip]).forEach(({ a, ip }) => {
-    const geo = geoMap[ip];
-    if (!dotsByIP[ip]) dotsByIP[ip] = { ...a, ip, ...geo, xy: project(geo.lon, geo.lat), count: 0, hosts: [] };
-    dotsByIP[ip].count++;
-    dotsByIP[ip].hosts.push(a.host);
-    const order = { critical:0, high:1, medium:2, low:3 };
-    if ((order[a.risk] ?? 3) < (order[dotsByIP[ip].risk] ?? 3)) dotsByIP[ip].risk = a.risk;
+    const geo  = geoMap[ip];
+    const clat = Math.round(geo.lat / GEO_CELL) * GEO_CELL;
+    const clon = Math.round(geo.lon / GEO_CELL) * GEO_CELL;
+    const key  = `${clat},${clon}`;
+    if (!dotsByLoc[key]) {
+      dotsByLoc[key] = { ...a, ip, ...geo, xy: project(geo.lon, geo.lat), count: 0, hosts: [], ips: [] };
+    }
+    dotsByLoc[key].count++;
+    dotsByLoc[key].hosts.push(a.host);
+    dotsByLoc[key].ips.push(ip);
+    if ((riskOrder[a.risk] ?? 3) < (riskOrder[dotsByLoc[key].risk] ?? 3)) dotsByLoc[key].risk = a.risk;
   });
-  const dots = Object.values(dotsByIP);
+  const dots = Object.values(dotsByLoc);
   const mappedTotal = dots.reduce((s, d) => s + d.count, 0);
 
   // CSS keyframes injected once
@@ -253,11 +266,12 @@ export function WorldMapWidget({ assets }) {
           {/* Asset dots */}
           {dots.map((dot, i) => {
             const [x, y] = dot.xy;
-            const color  = riskColor(dot.risk);
-            const isHover = tooltip?.ip === dot.ip;
-            const delay  = `${(i * 0.4) % 2.4}s`;
+            const color   = riskColor(dot.risk);
+            const locKey  = `${dot.lat},${dot.lon}`;
+            const isHover = tooltip && tooltip.lat === dot.lat && tooltip.lon === dot.lon;
+            const delay   = `${(i * 0.4) % 2.4}s`;
             return (
-              <g key={dot.ip} style={{ cursor:"pointer" }}
+              <g key={locKey} style={{ cursor:"pointer" }}
                 onMouseEnter={() => setTooltip(dot)}
                 onMouseLeave={() => setTooltip(null)}>
                 {/* Expanding ring */}
