@@ -28,6 +28,7 @@ const FW_META = {
   pci_dss:   { label: "PCI DSS v4.0",        color: "#f97316", region: "PCI" },
   gdpr:      { label: "GDPR",                color: "#8b5cf6", region: "EU" },
   eu_ai_act: { label: "EU AI Act",           color: "#06b6d4", region: "EU" },
+  iso42001:  { label: "ISO 42001:2023",      color: "#10b981", region: "AI" },
 };
 
 function _getEnabledFws() {

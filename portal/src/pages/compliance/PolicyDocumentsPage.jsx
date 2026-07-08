@@ -341,6 +341,31 @@ export function PolicyDocumentsPage() {
   const [analysisRunning, setAnalysisRunning]     = useState(false);
   const pollRef = useRef(null);
 
+  // AI Policy Draft
+  const [draftFw, setDraftFw]           = useState("iso27001");
+  const [draftControl, setDraftControl] = useState("");
+  const [draftGap, setDraftGap]         = useState("");
+  const [draftLoading, setDraftLoading] = useState(false);
+  const [draftResult, setDraftResult]   = useState(null);
+
+  const handleDraft = () => {
+    if (!draftGap.trim()) return;
+    setDraftLoading(true); setDraftResult(null);
+    fetch(`${API_BASE}/api/comp/policy-docs/draft`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        framework:       draftFw,
+        control_id:      draftControl.trim(),
+        control_name:    draftControl.trim(),
+        gap_description: draftGap.trim(),
+      }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { setDraftResult(d); setDraftLoading(false); })
+      .catch(e => { setDraftResult({ error: String(e) }); setDraftLoading(false); });
+  };
+
   const load = () => {
     setLoading(true);
     fetch(`${API_BASE}/api/comp/policy-docs/collections/${ORG_COLLECTION}/documents`,
@@ -489,13 +514,15 @@ export function PolicyDocumentsPage() {
                 color: C.text, borderRadius: 4, padding: "7px 12px", fontFamily: "monospace",
                 fontSize: 11, cursor: "pointer", minWidth: 160 }}>
               {[
-                { value: "nis2",     label: "NIS2"     },
-                { value: "dora",     label: "DORA"     },
-                { value: "iso27001", label: "ISO 27001" },
-                { value: "soc2",     label: "SOC 2"    },
-                { value: "nist_csf", label: "NIST CSF" },
-                { value: "pci_dss",  label: "PCI DSS"  },
-                { value: "gdpr",     label: "GDPR"     },
+                { value: "nis2",      label: "NIS2"       },
+                { value: "dora",      label: "DORA"       },
+                { value: "iso27001",  label: "ISO 27001"  },
+                { value: "soc2",      label: "SOC 2"      },
+                { value: "nist_csf",  label: "NIST CSF"   },
+                { value: "pci_dss",   label: "PCI DSS"    },
+                { value: "gdpr",      label: "GDPR"       },
+                { value: "eu_ai_act", label: "EU AI Act"  },
+                { value: "iso42001",  label: "ISO 42001"  },
               ].map(fw => <option key={fw.value} value={fw.value}>{fw.label}</option>)}
             </select>
           </div>
@@ -604,6 +631,123 @@ export function PolicyDocumentsPage() {
                   {analysisJob.message}
                 </div>
               </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* AI Policy Draft */}
+      <div style={{ background: C.surface, border: `1px solid rgba(176,110,255,0.22)`,
+        borderRadius: 8, padding: 20, marginBottom: 24 }}>
+        <div style={{ color: C.purple, fontSize: 9, fontFamily: "monospace",
+          textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 4 }}>
+          AI · POLICY CLAUSE DRAFT
+        </div>
+        <div style={{ color: C.text, fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
+          AI Policy Creation
+        </div>
+        <div style={{ color: C.muted, fontSize: 10, fontFamily: "monospace",
+          lineHeight: 1.7, marginBottom: 16, maxWidth: 680 }}>
+          Describe a compliance gap or control you need to address. CyMind will draft a
+          policy clause with implementation guidance tailored to the selected framework.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 10, marginBottom: 10 }}>
+          <div>
+            <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+              textTransform: "uppercase", letterSpacing: "1px", marginBottom: 5 }}>Framework</div>
+            <select value={draftFw} onChange={e => setDraftFw(e.target.value)}
+              style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`,
+                color: C.text, borderRadius: 4, padding: "7px 10px", fontFamily: "monospace",
+                fontSize: 11, cursor: "pointer", width: "100%" }}>
+              {[
+                ["nis2","NIS2"],["dora","DORA"],["iso27001","ISO 27001"],["soc2","SOC 2"],
+                ["nist_csf","NIST CSF"],["pci_dss","PCI DSS"],["gdpr","GDPR"],
+                ["eu_ai_act","EU AI Act"],["iso42001","ISO 42001"],
+              ].map(([v,l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+              textTransform: "uppercase", letterSpacing: "1px", marginBottom: 5 }}>
+              Control / Reference (optional)
+            </div>
+            <input value={draftControl} onChange={e => setDraftControl(e.target.value)}
+              placeholder="e.g. A.8.3, Art.21(2)(e), CC6.1"
+              style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`,
+                color: C.text, borderRadius: 4, padding: "7px 10px", fontFamily: "monospace",
+                fontSize: 11, width: "100%", outline: "none", boxSizing: "border-box" }} />
+          </div>
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+            textTransform: "uppercase", letterSpacing: "1px", marginBottom: 5 }}>
+            Gap Description *
+          </div>
+          <textarea value={draftGap} onChange={e => setDraftGap(e.target.value)}
+            placeholder="Describe the compliance gap or policy area you need to address…"
+            style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`,
+              color: C.text, borderRadius: 4, padding: "9px 12px", fontFamily: "monospace",
+              fontSize: 11, width: "100%", outline: "none", resize: "vertical",
+              height: 72, boxSizing: "border-box" }} />
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <button onClick={handleDraft} disabled={draftLoading || !draftGap.trim()}
+            style={{ background: `rgba(176,110,255,0.12)`, border: `1px solid rgba(176,110,255,0.40)`,
+              color: C.purple, padding: "8px 20px", borderRadius: 4, fontFamily: "monospace",
+              fontSize: 11, fontWeight: 700,
+              cursor: (draftLoading || !draftGap.trim()) ? "not-allowed" : "pointer",
+              opacity: (draftLoading || !draftGap.trim()) ? 0.5 : 1 }}>
+            {draftLoading ? "Drafting…" : "Draft Policy Clause"}
+          </button>
+          {draftResult && !draftResult.error && (
+            <button onClick={() => setDraftResult(null)}
+              style={{ background: "none", border: "none", color: C.muted,
+                fontFamily: "monospace", fontSize: 10, cursor: "pointer" }}>
+              Clear
+            </button>
+          )}
+        </div>
+        {draftResult && (
+          <div style={{ marginTop: 14, padding: "14px 18px", borderRadius: 6,
+            background: draftResult.error ? `${C.red}08` : "rgba(176,110,255,0.06)",
+            border: `1px solid ${draftResult.error ? `${C.red}30` : "rgba(176,110,255,0.20)"}` }}>
+            {draftResult.error ? (
+              <div style={{ color: C.red, fontSize: 11, fontFamily: "monospace" }}>
+                {draftResult.error}
+              </div>
+            ) : (
+              <>
+                {draftResult.policy_clause && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ color: C.purple, fontSize: 9, fontFamily: "monospace",
+                      letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 8 }}>
+                      Policy Clause
+                    </div>
+                    <div style={{ color: C.text, fontSize: 12, fontFamily: "monospace",
+                      lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
+                      {draftResult.policy_clause}
+                    </div>
+                  </div>
+                )}
+                {draftResult.implementation_guidance && (
+                  <div>
+                    <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+                      letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 8 }}>
+                      Implementation Guidance
+                    </div>
+                    <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11,
+                      fontFamily: "monospace", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
+                      {draftResult.implementation_guidance}
+                    </div>
+                  </div>
+                )}
+                {!draftResult.policy_clause && !draftResult.implementation_guidance && (
+                  <div style={{ color: C.text, fontSize: 11, fontFamily: "monospace",
+                    lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
+                    {JSON.stringify(draftResult, null, 2)}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

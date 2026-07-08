@@ -186,6 +186,9 @@ function FindingsTab() {
   const [aiMap, setAiMap]         = useState({});
   const [aiLoading, setAiLoading] = useState({});
   const [aiHidden, setAiHidden]   = useState({});
+  const [recMap, setRecMap]       = useState({});
+  const [recLoading, setRecLoading] = useState({});
+  const [recHidden, setRecHidden] = useState({});
   const [remOpen, setRemOpen]     = useState(null);
   const [genning, setGenning]     = useState(false);
   const [genMsg, setGenMsg]       = useState(null);
@@ -239,6 +242,20 @@ function FindingsTab() {
       .then(d => setAiMap(m => ({ ...m, [finding.id]: d.analysis })))
       .catch(() => {})
       .finally(() => setAiLoading(m => ({ ...m, [finding.id]: false })));
+  };
+
+  const handleRecommend = (finding) => {
+    setRecLoading(m => ({ ...m, [finding.id]: true }));
+    const gap = [finding.title, finding.description].filter(Boolean).join(" — ");
+    fetch(`${API_BASE}/api/comp/controls/recommend`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ framework: finding.framework, gap_description: gap }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => setRecMap(m => ({ ...m, [finding.id]: d })))
+      .catch(e => setRecMap(m => ({ ...m, [finding.id]: { error: String(e) } })))
+      .finally(() => setRecLoading(m => ({ ...m, [finding.id]: false })));
   };
 
   const handleAutoGenerate = () => {
@@ -537,6 +554,29 @@ function FindingsTab() {
                           {aiLoading[f.id] ? "AI..." : "AI Analyze"}
                         </button>
                       )}
+                      {/* AI Control Recommendations */}
+                      {(recMap[f.id] && !recMap[f.id].error) && !recLoading[f.id] ? (
+                        <button
+                          onClick={() => setRecHidden(m => ({ ...m, [f.id]: !m[f.id] }))}
+                          style={{ background: recHidden[f.id] ? `${C.accent}15` : `${C.accent}08`,
+                            border: `1px solid ${C.accent}${recHidden[f.id] ? "50" : "25"}`,
+                            color: C.accent, padding: "3px 8px", borderRadius: 3,
+                            fontFamily: "monospace", fontSize: 9, fontWeight: 700,
+                            cursor: "pointer", whiteSpace: "nowrap" }}>
+                          {recHidden[f.id] ? "Show Recs" : "Hide Recs"}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleRecommend(f)}
+                          disabled={recLoading[f.id]}
+                          style={{ background: `${C.accent}08`, border: `1px solid ${C.accent}25`,
+                            color: C.accent, padding: "3px 8px", borderRadius: 3,
+                            fontFamily: "monospace", fontSize: 9, fontWeight: 700,
+                            cursor: "pointer", opacity: recLoading[f.id] ? 0.6 : 1,
+                            whiteSpace: "nowrap" }}>
+                          {recLoading[f.id] ? "Loading…" : "AI Recs"}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>,
@@ -553,7 +593,7 @@ function FindingsTab() {
                 rows.push(
                   <tr key={`${f.id}-ai`} style={{ background: "rgba(176,110,255,0.04)",
                     borderBottom: `1px solid rgba(255,255,255,0.03)` }}>
-                    <td colSpan={8} style={{ padding: "10px 20px" }}>
+                    <td colSpan={9} style={{ padding: "10px 20px" }}>
                       <div style={{ display: "flex", justifyContent: "space-between",
                         alignItems: "center", marginBottom: 6 }}>
                         <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
@@ -571,6 +611,56 @@ function FindingsTab() {
                         whiteSpace: "pre-wrap", maxWidth: 900 }}>
                         {aiMap[f.id] || f.ai_analysis}
                       </div>
+                    </td>
+                  </tr>
+                );
+              }
+
+              // AI Control Recommendations row
+              if (recMap[f.id] && !recHidden[f.id]) {
+                const rec = recMap[f.id];
+                rows.push(
+                  <tr key={`${f.id}-rec`} style={{ background: "rgba(0,229,160,0.03)",
+                    borderBottom: `1px solid rgba(255,255,255,0.03)` }}>
+                    <td colSpan={9} style={{ padding: "10px 20px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between",
+                        alignItems: "center", marginBottom: 6 }}>
+                        <div style={{ color: C.accent, fontSize: 9, fontFamily: "monospace",
+                          letterSpacing: "1px", textTransform: "uppercase" }}>
+                          AI Control Recommendations
+                        </div>
+                        <button onClick={() => setRecHidden(m => ({ ...m, [f.id]: true }))}
+                          style={{ background: "none", border: "none", color: C.muted,
+                            cursor: "pointer", fontSize: 12, padding: "0 2px",
+                            lineHeight: 1, opacity: 0.6 }}
+                          title="Hide">✕</button>
+                      </div>
+                      {rec.error ? (
+                        <div style={{ color: C.red, fontSize: 11, fontFamily: "monospace" }}>{rec.error}</div>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8, maxWidth: 900 }}>
+                          {(rec.recommendations || []).map((r, i) => (
+                            <div key={i} style={{ padding: "8px 12px", borderRadius: 4,
+                              background: "rgba(0,229,160,0.04)", border: `1px solid rgba(0,229,160,0.12)` }}>
+                              <div style={{ color: C.accent, fontSize: 10, fontFamily: "monospace",
+                                fontWeight: 700, marginBottom: 4 }}>
+                                {r.control_id || `REC-${i+1}`}
+                                {r.priority && <span style={{ color: C.muted, fontWeight: 400 }}> · Priority: {r.priority}</span>}
+                              </div>
+                              <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 11,
+                                fontFamily: "monospace", lineHeight: 1.5 }}>
+                                {r.recommendation || r.description || r.text || JSON.stringify(r)}
+                              </div>
+                            </div>
+                          ))}
+                          {!rec.recommendations && (
+                            <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11,
+                              fontFamily: "monospace", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                              {rec.text || rec.analysis || JSON.stringify(rec, null, 2)}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 );
@@ -606,16 +696,52 @@ const TABS = [
 ];
 
 export function ComplianceFindingsPage() {
-  const [tab, setTab] = useState("findings");
+  const [tab, setTab]         = useState("findings");
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
+
+  const handleEvidenceSync = () => {
+    setSyncing(true); setSyncMsg(null);
+    fetch(`${API_BASE}/api/comp/evidence/sync-siem`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit: 200 }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => {
+        const imported = d.imported ?? d.created ?? 0;
+        const skipped  = d.skipped ?? 0;
+        setSyncMsg(`${imported} evidence items imported, ${skipped} already present`);
+      })
+      .catch(e => setSyncMsg(`Sync failed (${e})`))
+      .finally(() => setSyncing(false));
+  };
+
   return (
     <div>
       {/* Shared page header */}
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ color: C.muted, fontSize: 9, letterSpacing: "2px", fontFamily: "monospace",
-          textTransform: "uppercase", marginBottom: 4 }}>SECURITY COMPLIANCE</div>
-        <h1 style={{ color: C.text, fontSize: 20, fontWeight: 700, margin: 0 }}>Findings & Alerts</h1>
-        <div style={{ color: C.muted, fontSize: 11, marginTop: 4, fontFamily: "monospace" }}>
-          Compliance findings, live correlation alerts and enrichment
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between",
+        marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <div style={{ color: C.muted, fontSize: 9, letterSpacing: "2px", fontFamily: "monospace",
+            textTransform: "uppercase", marginBottom: 4 }}>SECURITY COMPLIANCE</div>
+          <h1 style={{ color: C.text, fontSize: 20, fontWeight: 700, margin: 0 }}>Findings & Alerts</h1>
+          <div style={{ color: C.muted, fontSize: 11, marginTop: 4, fontFamily: "monospace" }}>
+            Compliance findings, live correlation alerts and enrichment
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+          {syncMsg && (
+            <span style={{ color: syncMsg.includes("failed") ? C.red : C.accent,
+              fontSize: 10, fontFamily: "monospace" }}>{syncMsg}</span>
+          )}
+          <button onClick={handleEvidenceSync} disabled={syncing}
+            style={{ background: "rgba(77,158,255,0.10)", border: `1px solid ${C.blue}35`,
+              color: C.blue, padding: "7px 14px", borderRadius: 4, fontFamily: "monospace",
+              fontSize: 10, fontWeight: 700, cursor: syncing ? "not-allowed" : "pointer",
+              opacity: syncing ? 0.6 : 1, whiteSpace: "nowrap" }}>
+            {syncing ? "Syncing…" : "⇄ Sync SIEM Evidence"}
+          </button>
         </div>
       </div>
 
