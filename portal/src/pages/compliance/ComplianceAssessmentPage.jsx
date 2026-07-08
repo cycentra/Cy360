@@ -1282,11 +1282,10 @@ function SimulateView({ framework, color }) {
     <div style={{ color: C.red, fontFamily: "monospace", fontSize: 11, padding: 24 }}>Failed to load questionnaire.</div>
   );
 
-  const templates  = data.templates || [];
-  const responses  = data.responses || [];
-  const respMap    = {};
-  responses.forEach(r => { respMap[r.question_id] = r; });
-  const changed    = Object.keys(overrides).length;
+  const templates = data.templates || [];
+  // responses is returned as a dict keyed by question_id (not a list)
+  const respMap   = data.responses || {};
+  const changed   = Object.keys(overrides).length;
 
   return (
     <div style={{ padding: "20px 0" }}>
@@ -1376,7 +1375,7 @@ function SimulateView({ framework, color }) {
                 {scoreLabel}{isChanged ? "*" : ""}
               </div>
               <div style={{ flex: 1, fontSize: 11, color: C.text, lineHeight: 1.4 }}>
-                {q.question_text || q.control_id}
+                {q.question || q.control_ref || q.question_id}
               </div>
               <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
                 flexShrink: 0 }}>w:{q.weight ?? 1}</div>
