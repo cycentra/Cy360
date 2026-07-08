@@ -17,6 +17,7 @@ import json
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests
@@ -309,3 +310,122 @@ Only include frameworks where a genuine mapping exists. Use exact control IDs.""
         parsed = {"error": "Could not parse", "raw": text[:200]}
 
     return {"framework": framework, "suggestions": parsed, "raw": text}
+
+
+def generate_policy_draft(
+    framework: str,
+    control_id: str,
+    control_name: str,
+    gap_description: str,
+    created_by: str = "system",
+    existing_policy_snippet: str = "",
+) -> dict:
+    """
+    Generate a draft policy clause for a specific compliance gap.
+
+    Uses the same CyMind endpoint as other AI calls. Returns structured text
+    ready for insertion into a policy document, plus implementation guidance.
+    Logged to cy_comp_ai_audit_log.
+
+    Returns {framework, control_id, draft_clause, implementation_guidance, raw}.
+    """
+    existing_ctx = (
+        f"\nExisting Policy Snippet (to be updated):\n{existing_policy_snippet[:800]}"
+        if existing_policy_snippet else ""
+    )
+
+    prompt = f"""You are drafting a policy clause to address a compliance gap.
+
+Framework:     {framework.upper()}
+Control:       {control_id} — {control_name}
+Gap Identified: {gap_description}{existing_ctx}
+
+Write a professional, implementation-ready policy clause that:
+1. Directly addresses the identified gap
+2. Uses clear mandatory language (MUST/SHALL/WILL)
+3. Is 150-250 words — concise enough for a real policy document
+4. Cites the specific control reference
+
+Then provide 3-5 bullet points of implementation guidance.
+
+Respond in exactly this JSON format (no markdown fences):
+{{
+  "draft_clause": "<the policy text>",
+  "implementation_guidance": ["<step 1>", "<step 2>", ...]
+}}"""
+
+    model = _get_model()
+    text, duration_ms = _call_llm(prompt, max_tokens=700)
+    _log_audit("policy_draft", f"{framework}:{control_id}", prompt, text, model, duration_ms, created_by)
+
+    try:
+        clean  = text.strip().replace("```json", "").replace("```", "").strip()
+        parsed = json.loads(clean) if clean else {}
+    except Exception:
+        parsed = {"draft_clause": text, "implementation_guidance": []}
+
+    return {
+        "framework":               framework,
+        "control_id":              control_id,
+        "draft_clause":            parsed.get("draft_clause", text),
+        "implementation_guidance": parsed.get("implementation_guidance", []),
+        "raw":                     text,
+    }
+
+
+def ask_copilot(
+    question: str,
+    context_data: dict,
+    created_by: str = "system",
+) -> str:
+    """
+    Executive Risk Copilot — answer a natural-language question about the
+    organisation's live compliance posture, risk register, and open findings.
+
+    ``context_data`` should be the output of get_dashboard_summary() or a subset,
+    so the LLM reasons over live data rather than training-time knowledge.
+
+    Logged to cy_comp_ai_audit_log under entity_type='copilot'.
+    """
+    # Build a compact, token-efficient context string from live data
+    scores_text = "\n".join(
+        f"  {s.get('framework','?').upper()}: {s.get('score', 0):.1f}%"
+        for s in context_data.get("framework_scores", [])
+    ) or "  (no framework scores available)"
+
+    risk_summary = context_data.get("risk_summary", {})
+    findings     = context_data.get("findings_summary", {})
+
+    ctx = f"""
+LIVE COMPLIANCE POSTURE DATA (as of {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}):
+
+Framework Scores:
+{scores_text}
+
+Overall Score: {context_data.get('overall_score', 'N/A')}%
+
+Risk Register: {risk_summary.get('total', 0)} total risks
+  Critical: {risk_summary.get('critical', 0)} | High: {risk_summary.get('high', 0)} | Open: {risk_summary.get('open', 0)}
+
+Open Findings: {sum(findings.values()) if findings else 0}
+  {' | '.join(f"{k}: {v}" for k, v in findings.items()) if findings else 'none'}
+
+Active Compliance Alerts (last 7 days): {context_data.get('active_alerts', 0)}
+  Critical: {context_data.get('alert_by_severity', {}).get('critical', 0)} | High: {context_data.get('alert_by_severity', {}).get('high', 0)}
+"""
+
+    system = (
+        "You are an Executive Risk Copilot for a cybersecurity platform. "
+        "You answer questions about the organisation's compliance posture, risk exposure, "
+        "and recommended actions using the live data provided. "
+        "Be concise, use plain language suitable for a board member or CISO, "
+        "and always ground your answer in the data shown. "
+        "If the data shows a critical gap, say so clearly."
+    )
+
+    prompt = f"{ctx}\n\nExecutive Question: {question}"
+    model  = _get_model()
+    text, duration_ms = _call_llm(prompt, system=system, max_tokens=600)
+    _log_audit("copilot", "executive_query", prompt, text, model, duration_ms, created_by)
+
+    return text or "I'm unable to answer right now — CyMind is unreachable. Please check CyMind configuration in Settings."

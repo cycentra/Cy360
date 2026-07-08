@@ -1636,6 +1636,175 @@ EU_AI_ACT = [
     },
 ]
 
+# ── ISO 42001:2023 (AI Management System) ────────────────────────────────────
+# 26 questions across 7 clause groups and key Annex A controls.
+# Complements EU AI Act (regulatory) with the management system standard.
+ISO_42001 = [
+    # ── Context & Leadership (Cl.4–5) ─────────────────────────────────────────
+    {
+        "qid": "iso42-ctx-01", "section": "Context — AI Scope & Stakeholders",
+        "question": "Has the organisation defined the scope of its AI Management System (AIMS), identifying which AI systems are in scope, relevant stakeholders, and the organisation's role as provider, operator, or user of AI?",
+        "guidance": "Cl.4.1–4.3. Evidence: AIMS scope statement, stakeholder register, AI system register with roles identified.",
+        "control_ref": "ISO 42001 Cl.4.1-4.3", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 1,
+    },
+    {
+        "qid": "iso42-ctx-02", "section": "Context — AI Policy",
+        "question": "Is there a documented organisational AI policy, approved by top management, stating AI management objectives, commitments to responsible AI, and human rights considerations — communicated to all relevant parties?",
+        "guidance": "Cl.5.2. Evidence: AI policy document, management approval record, policy communication evidence (intranet, training).",
+        "control_ref": "ISO 42001 Cl.5.2", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 2,
+    },
+    {
+        "qid": "iso42-ctx-03", "section": "Leadership — Roles & Accountability",
+        "question": "Has top management assigned clear roles, responsibilities, and authorities for AI governance, including a designated AI governance lead or committee with a documented accountability framework?",
+        "guidance": "Cl.5.3 / Annex A.3.2. Evidence: RACI matrix, role descriptions, AI governance committee charter.",
+        "control_ref": "ISO 42001 Cl.5.3 / A.3.2", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 3,
+    },
+    {
+        "qid": "iso42-ctx-04", "section": "Leadership — Management Commitment",
+        "question": "How mature is top management commitment to AI governance? (1=ad-hoc, 5=fully integrated — AI risks reported at board level, dedicated resources allocated, AI strategy embedded in business planning)",
+        "guidance": "Cl.5.1. Evidence: board minutes referencing AI risk, resource allocation records, executive AI risk reporting.",
+        "control_ref": "ISO 42001 Cl.5.1", "weight": 2, "question_type": "score_1_5", "options": [], "order_idx": 4,
+    },
+    {
+        "qid": "iso42-ctx-05", "section": "Context — Internal Organisation for AI",
+        "question": "Is there a cross-functional AI governance body that meets regularly to review AI risks, incidents, and policy compliance, with membership from legal, security, data, and business units?",
+        "guidance": "Annex A.3.1–A.3.3. Evidence: AI governance committee terms of reference, meeting records, cross-functional membership list.",
+        "control_ref": "ISO 42001 Annex A.3", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 5,
+    },
+    # ── Planning (Cl.6) ───────────────────────────────────────────────────────
+    {
+        "qid": "iso42-plan-01", "section": "Planning — AI Risk Assessment",
+        "question": "Does the organisation conduct formal AI risk assessments identifying risks from AI systems (bias, safety, robustness, misuse) to individuals, society, and the organisation, with documented outcomes per system?",
+        "guidance": "Cl.6.1.2 / Annex A.5. Evidence: AI risk assessment methodology, completed assessments per AI system, risk register.",
+        "control_ref": "ISO 42001 Cl.6.1.2 / A.5", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 6,
+    },
+    {
+        "qid": "iso42-plan-02", "section": "Planning — AI Impact Assessment",
+        "question": "Is an AI Impact Assessment (AIIA) conducted before deployment of each AI system, documenting potential impacts on individuals and society, with results informing design decisions?",
+        "guidance": "Cl.6.1.4 / Annex A.6. Evidence: AIIA template, completed AIIAs per system, design decision records referencing AIIA findings.",
+        "control_ref": "ISO 42001 Cl.6.1.4 / A.6", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 7,
+    },
+    {
+        "qid": "iso42-plan-03", "section": "Planning — AI Objectives",
+        "question": "Are measurable AI management objectives established, aligned with the AI policy, covering responsible AI, bias minimisation, and safety targets, with defined owners, timelines, and regular progress review?",
+        "guidance": "Cl.6.2. Evidence: AI objectives register, KPI dashboard, progress review records.",
+        "control_ref": "ISO 42001 Cl.6.2", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 8,
+    },
+    {
+        "qid": "iso42-plan-04", "section": "Planning — Legal & Regulatory Compliance",
+        "question": "Has the organisation identified all applicable legal and regulatory requirements for its AI systems (EU AI Act, sector regulations, data protection law) with a compliance calendar tracking obligations?",
+        "guidance": "Cl.4.2 / Annex A.2.6. Evidence: regulatory requirements register, compliance calendar, legal register updated for EU AI Act.",
+        "control_ref": "ISO 42001 Cl.4.2 / A.2.6", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 9,
+    },
+    {
+        "qid": "iso42-plan-05", "section": "Planning — AI Policy Suite",
+        "question": "Does the organisation maintain AI-specific policies (acceptable use, data governance for AI, algorithmic transparency, human oversight) reviewed and updated at least annually?",
+        "guidance": "Annex A.2. Evidence: policy register, AI policy suite, review records with dates.",
+        "control_ref": "ISO 42001 Annex A.2", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 10,
+    },
+    # ── Support (Cl.7) ────────────────────────────────────────────────────────
+    {
+        "qid": "iso42-sup-01", "section": "Support — AI Competence & Training",
+        "question": "Is there a defined AI competence framework for roles involved in AI development, deployment, and oversight, with structured training ensuring staff can identify AI risks, biases, and ethical concerns?",
+        "guidance": "Cl.7.2 / Annex A.3.5. Evidence: competence framework, training programme, completion records, skills assessments.",
+        "control_ref": "ISO 42001 Cl.7.2 / A.3.5", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 11,
+    },
+    {
+        "qid": "iso42-sup-02", "section": "Support — Awareness",
+        "question": "Are all staff who interact with AI systems aware of the organisation's AI policy, responsible AI obligations, how to report AI concerns, and the implications of AI errors?",
+        "guidance": "Cl.7.3. Evidence: awareness campaign records, all-staff communications, AI policy acknowledgement records.",
+        "control_ref": "ISO 42001 Cl.7.3", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 12,
+    },
+    {
+        "qid": "iso42-sup-03", "section": "Support — Documentation & Knowledge Management",
+        "question": "Are AI system documentation requirements met — system cards, model cards, data provenance records, and technical documentation — stored in a controlled, version-managed system?",
+        "guidance": "Cl.7.5 / Annex A.7.8. Evidence: document management system, AI system cards, model cards, documentation control procedure.",
+        "control_ref": "ISO 42001 Cl.7.5 / A.7.8", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 13,
+    },
+    {
+        "qid": "iso42-sup-04", "section": "Support — Resources for AI Governance",
+        "question": "How mature is the allocation of resources (compute, data tools, security controls, specialist expertise) to operate, monitor, and govern AI systems per the AIMS? (1=ad-hoc, 5=fully resourced with dedicated AI governance budget)",
+        "guidance": "Cl.7.1 / Annex A.4. Evidence: resource allocation records, infrastructure inventory, specialist role appointments.",
+        "control_ref": "ISO 42001 Cl.7.1 / A.4", "weight": 2, "question_type": "score_1_5", "options": [], "order_idx": 14,
+    },
+    # ── Operation / AI System Lifecycle (Cl.8 + Annex A.7–A.10) ─────────────
+    {
+        "qid": "iso42-ops-01", "section": "Operation — AI System Inventory & Classification",
+        "question": "Is there a maintained inventory of all AI systems, each classified by risk level (e.g., prohibited/high-risk/limited/minimal per EU AI Act taxonomy) with an assigned system owner and last-reviewed date?",
+        "guidance": "Annex A.6.1 / A.2.2. Evidence: AI system register, risk classification records, owner assignments.",
+        "control_ref": "ISO 42001 A.6.1 / A.2.2", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 15,
+    },
+    {
+        "qid": "iso42-ops-02", "section": "Operation — Data Governance for AI",
+        "question": "Are data governance controls in place for AI training and operational data, including data quality checks, lineage tracking, consent management, bias testing, and data minimisation, with documented processes?",
+        "guidance": "Annex A.8. Evidence: data quality reports, data lineage documentation, consent records, bias testing results.",
+        "control_ref": "ISO 42001 Annex A.8", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 16,
+    },
+    {
+        "qid": "iso42-ops-03", "section": "Operation — AI Design & Development Controls",
+        "question": "Are secure and responsible AI development practices embedded across the lifecycle, including threat modelling for adversarial attacks, model poisoning, privacy-by-design, and fairness evaluation during development?",
+        "guidance": "Annex A.7.2 / A.7.3. Evidence: secure SDLC for AI, threat model outputs, fairness evaluation reports, privacy impact assessments.",
+        "control_ref": "ISO 42001 A.7.2-7.3", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 17,
+    },
+    {
+        "qid": "iso42-ops-04", "section": "Operation — Validation & Testing",
+        "question": "Are AI systems subject to rigorous pre-deployment testing (accuracy, adversarial robustness, fairness/bias, security) with results documented and mandatory sign-off required before production deployment?",
+        "guidance": "Annex A.7.4 / A.7.5. Evidence: test plans, results, sign-off records, adversarial testing reports, AI red-team exercises.",
+        "control_ref": "ISO 42001 A.7.4-7.5", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 18,
+    },
+    {
+        "qid": "iso42-ops-05", "section": "Operation — Human Oversight",
+        "question": "Are human oversight mechanisms implemented for AI systems making or informing decisions affecting individuals, including the ability to override AI outputs, with clear escalation paths and oversight training?",
+        "guidance": "Annex A.9.3 / A.7.6. Evidence: human-in-the-loop design docs, override procedures, escalation runbooks, oversight training records.",
+        "control_ref": "ISO 42001 A.9.3 / A.7.6", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 19,
+    },
+    {
+        "qid": "iso42-ops-06", "section": "Operation — AI Change Management",
+        "question": "Is there a formal change management process for deploying and updating AI models, with mandatory re-validation gates, rollback procedures, and version control of models and data pipelines?",
+        "guidance": "Annex A.7.6 / A.7.7. Evidence: change management procedure, deployment checklist, model version control records, rollback test evidence.",
+        "control_ref": "ISO 42001 A.7.6-7.7", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 20,
+    },
+    {
+        "qid": "iso42-ops-07", "section": "Operation — AI Supplier Management",
+        "question": "Are due diligence checks performed on AI vendors and third-party AI tools, including review of their AI governance practices, contractual accountability clauses, and ongoing monitoring of third-party AI compliance?",
+        "guidance": "Annex A.10.3. Evidence: vendor AI assessment questionnaires, contract terms referencing AI governance, third-party monitoring reports.",
+        "control_ref": "ISO 42001 A.10.3", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 21,
+    },
+    # ── Performance Evaluation (Cl.9) ─────────────────────────────────────────
+    {
+        "qid": "iso42-perf-01", "section": "Performance — AI System Monitoring",
+        "question": "How mature is continuous monitoring of deployed AI systems for performance degradation, bias drift, adversarial attacks, and unexpected behaviour? (1=manual/ad-hoc, 5=fully automated with alerts and periodic review feeding the risk register)",
+        "guidance": "Cl.9.1 / Annex A.9. Evidence: monitoring dashboards, alert configurations, bias drift reports, periodic performance review records.",
+        "control_ref": "ISO 42001 Cl.9.1 / A.9", "weight": 3, "question_type": "score_1_5", "options": [], "order_idx": 22,
+    },
+    {
+        "qid": "iso42-perf-02", "section": "Performance — Internal Audit",
+        "question": "Is the AIMS subject to scheduled internal audits by competent, independent auditors, with findings documented, corrective actions tracked, and results reported to top management?",
+        "guidance": "Cl.9.2. Evidence: audit schedule, completed audit reports, corrective action log, management report on audit findings.",
+        "control_ref": "ISO 42001 Cl.9.2", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 23,
+    },
+    {
+        "qid": "iso42-perf-03", "section": "Performance — Management Review",
+        "question": "Does top management conduct periodic AIMS management reviews covering AI risk posture, compliance status, AI incidents, objective achievement, and strategic direction for AI governance?",
+        "guidance": "Cl.9.3. Evidence: management review agenda, meeting minutes, AI risk posture reports presented to management.",
+        "control_ref": "ISO 42001 Cl.9.3", "weight": 2, "question_type": "yes_no", "options": [], "order_idx": 24,
+    },
+    # ── Improvement (Cl.10) ───────────────────────────────────────────────────
+    {
+        "qid": "iso42-imp-01", "section": "Improvement — Nonconformity & Corrective Action",
+        "question": "Is there a formal process to identify, classify, and respond to AI nonconformities (bias incidents, safety failures, regulatory breaches, ethical violations), with root cause analysis and preventive controls implemented to avoid recurrence?",
+        "guidance": "Cl.10.1. Evidence: incident register, root cause analysis records, corrective action tracker, lessons-learned documentation.",
+        "control_ref": "ISO 42001 Cl.10.1", "weight": 3, "question_type": "yes_no", "options": [], "order_idx": 25,
+    },
+    {
+        "qid": "iso42-imp-02", "section": "Improvement — Continual Improvement",
+        "question": "How mature is the continual improvement programme for AI governance, using audit outputs, monitoring results, stakeholder feedback, and emerging regulation to evolve the AIMS? (1=reactive only, 5=proactive with annual maturity uplift targets)",
+        "guidance": "Cl.10.2. Evidence: improvement register, AI governance roadmap, evidence of year-on-year maturity progression, stakeholder feedback mechanism.",
+        "control_ref": "ISO 42001 Cl.10.2", "weight": 2, "question_type": "score_1_5", "options": [], "order_idx": 26,
+    },
+]
+
+
 ALL_QUESTIONNAIRES: dict[str, list[dict]] = {
     "nis2":       NIS2,
     "dora":       DORA,
@@ -1645,6 +1814,7 @@ ALL_QUESTIONNAIRES: dict[str, list[dict]] = {
     "pci_dss":    PCI_DSS,
     "gdpr":       GDPR,
     "eu_ai_act":  EU_AI_ACT,
+    "iso42001":   ISO_42001,
 }
 
 FRAMEWORK_META: dict[str, dict] = {
@@ -1656,4 +1826,5 @@ FRAMEWORK_META: dict[str, dict] = {
     "pci_dss":   {"label": "PCI DSS v4.0",        "color": "#f97316", "total": len(PCI_DSS)},
     "gdpr":      {"label": "GDPR",                "color": "#8b5cf6", "total": len(GDPR)},
     "eu_ai_act": {"label": "EU AI Act",            "color": "#06b6d4", "total": len(EU_AI_ACT)},
+    "iso42001":  {"label": "ISO 42001:2023",       "color": "#10b981", "total": len(ISO_42001)},
 }

@@ -25,14 +25,15 @@ const CARD = {
 };
 
 const FW_META = {
-  nis2:      { label: "NIS2",      color: "#6378ff" },
-  dora:      { label: "DORA",      color: "#ffd166" },
-  iso27001:  { label: "ISO 27001", color: "#00e5c0" },
-  soc2:      { label: "SOC 2",     color: "#ff6b6b" },
-  nist_csf:  { label: "NIST CSF",  color: "#38bdf8" },
-  pci_dss:   { label: "PCI DSS",   color: "#f97316" },
-  gdpr:      { label: "GDPR",      color: "#8b5cf6" },
-  eu_ai_act: { label: "EU AI Act", color: "#06b6d4" },
+  nis2:      { label: "NIS2",       color: "#6378ff" },
+  dora:      { label: "DORA",       color: "#ffd166" },
+  iso27001:  { label: "ISO 27001",  color: "#00e5c0" },
+  soc2:      { label: "SOC 2",      color: "#ff6b6b" },
+  nist_csf:  { label: "NIST CSF",   color: "#38bdf8" },
+  pci_dss:   { label: "PCI DSS",    color: "#f97316" },
+  gdpr:      { label: "GDPR",       color: "#8b5cf6" },
+  eu_ai_act: { label: "EU AI Act",  color: "#06b6d4" },
+  iso42001:  { label: "ISO 42001",  color: "#10b981" },
 };
 
 // Shared localStorage key — other compliance pages read this to inherit the global filter
@@ -324,6 +325,28 @@ export function ComplianceDashboardPage({ setActiveTab }) {
   }, []); // stable — reads frameworks via ref, not closure
 
   useEffect(() => { load(); }, [load]);
+
+  // SSE — real-time score push when new compliance alerts arrive (#2)
+  useEffect(() => {
+    let es;
+    try {
+      es = new EventSource(`${API_BASE}/api/comp/dashboard/stream`, { withCredentials: true });
+      es.addEventListener("score-update", e => {
+        try {
+          const payload = JSON.parse(e.data);
+          if (payload.reason !== "connected" && payload.scores?.length) {
+            // Merge updated scores into existing summary without a full reload
+            setSummary(prev => prev
+              ? { ...prev, framework_scores: payload.scores }
+              : prev
+            );
+          }
+        } catch { /* malformed event — ignore */ }
+      });
+      es.onerror = () => { es.close(); };  // server or network error — stop reconnecting
+    } catch { /* EventSource not supported or HTTPS restriction */ }
+    return () => { if (es) es.close(); };
+  }, []); // stable — never re-subscribe
 
   if (loading) return (
     <div style={{ color: C.muted, fontFamily: "monospace", fontSize: 12, padding: 40 }}>

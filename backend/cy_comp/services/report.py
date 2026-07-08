@@ -29,12 +29,15 @@ log = logging.getLogger("cycentra.cy_comp.report")
 REPORTS_DIR = Path(os.environ.get("COMP_REPORTS_DIR", "/var/log/cycentra/cy-comp/reports"))
 
 FRAMEWORK_LABELS = {
-    "nis2":     "NIS2",
-    "dora":     "DORA",
-    "iso27001": "ISO 27001",
-    "soc2":     "SOC 2",
-    "nist_csf": "NIST CSF",
-    "pci_dss":  "PCI DSS",
+    "nis2":      "NIS2",
+    "dora":      "DORA",
+    "iso27001":  "ISO 27001",
+    "soc2":      "SOC 2",
+    "nist_csf":  "NIST CSF",
+    "pci_dss":   "PCI DSS",
+    "gdpr":      "GDPR",
+    "eu_ai_act": "EU AI Act",
+    "iso42001":  "ISO 42001",
 }
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
@@ -967,3 +970,378 @@ def generate_report_job(job_id: str) -> None:
 
 def poll_job(job_id: str) -> dict:
     return _get_job(job_id)
+
+
+# ── Unified Board-Ready Report ────────────────────────────────────────────────
+
+def create_board_report_job(requested_by: str, period_start: str, period_end: str) -> str:
+    """Create a board report job record. Returns job_id."""
+    job_id = str(uuid.uuid4())
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO cy_comp_report_jobs
+                    (job_id, status, requested_by, framework,
+                     period_start, period_end, progress, created_at, updated_at)
+                VALUES (%s,'pending',%s,'board',%s,%s,0,NOW(),NOW());
+                """,
+                (job_id, requested_by, period_start, period_end)
+            )
+    except Exception as exc:
+        log.error("create_board_report_job: %s", exc)
+    return job_id
+
+
+def generate_board_report_job(job_id: str) -> None:
+    """
+    Generate a unified board-ready report that aggregates:
+      - All framework compliance scores with trend
+      - Top critical/high risks (by financial_impact_eur if set)
+      - Open critical findings per framework
+      - 30-day compliance alert trend
+      - Resilience score
+      - Supply chain exposure items (top 10 open)
+
+    Output: JSON + PDF in REPORTS_DIR. The PDF is designed to be
+    attached to board pack emails — executive language, no technical jargon.
+    """
+    log.info("generate_board_report_job: starting job_id=%s", job_id)
+    _update_job(job_id, "running", progress=5)
+
+    try:
+        job = _get_job(job_id)
+        if not job:
+            log.error("generate_board_report_job: job_id=%s not found", job_id)
+            return
+
+        requested_by = job.get("requested_by")
+        _update_job(job_id, "running", progress=15)
+
+        # ── 1. Framework scores ───────────────────────────────────────────────
+        scores = get_latest_scores()  # all frameworks
+        overall = round(sum(s.get("score", 0) for s in scores) / len(scores), 1) if scores else 0.0
+
+        _update_job(job_id, "running", progress=30)
+
+        # ── 2. Risk register summary + top risks ─────────────────────────────
+        top_risks    = []
+        risk_summary = {}
+        try:
+            with db() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT COUNT(*), COUNT(*) FILTER (WHERE risk_score >= 20),
+                           COUNT(*) FILTER (WHERE risk_score >= 12 AND risk_score < 20),
+                           COUNT(*) FILTER (WHERE status = 'open')
+                    FROM cy_comp_risks;
+                    """
+                )
+                row = cur.fetchone() or (0, 0, 0, 0)
+                risk_summary = {
+                    "total": int(row[0] or 0),
+                    "critical": int(row[1] or 0),
+                    "high": int(row[2] or 0),
+                    "open": int(row[3] or 0),
+                }
+                cur.execute(
+                    """
+                    SELECT title, risk_score, status, treatment, frameworks,
+                           financial_impact, financial_impact_eur, business_unit
+                    FROM cy_comp_risks
+                    WHERE status IN ('open','in_progress')
+                    ORDER BY risk_score DESC NULLS LAST, financial_impact_eur DESC NULLS LAST
+                    LIMIT 10;
+                    """
+                )
+                for r in cur.fetchall():
+                    top_risks.append({
+                        "title":               r[0],
+                        "risk_score":          r[1],
+                        "status":              r[2],
+                        "treatment":           r[3],
+                        "frameworks":          r[4] or [],
+                        "financial_impact":    r[5],
+                        "financial_impact_eur": r[6],
+                        "business_unit":       r[7],
+                    })
+        except Exception as exc:
+            log.warning("generate_board_report_job: risk query: %s", exc)
+
+        _update_job(job_id, "running", progress=45)
+
+        # ── 3. Open critical/high findings per framework ───────────────────────
+        critical_findings = []
+        try:
+            with db() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT framework, severity, COUNT(*) AS cnt
+                    FROM cy_comp_findings
+                    WHERE status IN ('open','in_progress')
+                      AND severity IN ('critical','high')
+                    GROUP BY framework, severity
+                    ORDER BY framework, severity;
+                    """
+                )
+                for fw, sev, cnt in cur.fetchall():
+                    critical_findings.append({"framework": fw, "severity": sev, "count": int(cnt)})
+        except Exception as exc:
+            log.warning("generate_board_report_job: findings query: %s", exc)
+
+        _update_job(job_id, "running", progress=55)
+
+        # ── 4. 30-day compliance alert trend ──────────────────────────────────
+        alert_trend = []
+        try:
+            with db() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT DATE_TRUNC('week', timestamp) AS week,
+                           COUNT(*) FILTER (WHERE rule_level >= 12) AS critical,
+                           COUNT(*) FILTER (WHERE rule_level >= 10 AND rule_level < 12) AS high,
+                           COUNT(*) AS total
+                    FROM alerts
+                    WHERE is_compliance_relevant = TRUE
+                      AND timestamp > NOW() - INTERVAL '30 days'
+                    GROUP BY week ORDER BY week;
+                    """
+                )
+                for row in cur.fetchall():
+                    alert_trend.append({
+                        "week":     row[0].isoformat() if row[0] else None,
+                        "critical": int(row[1] or 0),
+                        "high":     int(row[2] or 0),
+                        "total":    int(row[3] or 0),
+                    })
+        except Exception as exc:
+            log.warning("generate_board_report_job: alert trend: %s", exc)
+
+        _update_job(job_id, "running", progress=65)
+
+        # ── 5. Cyber resilience score ─────────────────────────────────────────
+        resilience = {}
+        try:
+            from cy_comp.services.compliance import get_resilience_score
+            resilience = get_resilience_score()
+        except Exception as exc:
+            log.warning("generate_board_report_job: resilience score: %s", exc)
+
+        _update_job(job_id, "running", progress=75)
+
+        # ── 6. Top open exposure items (supply chain + vulnerabilities) ────────
+        top_exposures = []
+        try:
+            with db() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT asset, exposure_type, severity, title, cvss_score, status
+                    FROM cy_comp_exposure
+                    WHERE status = 'open'
+                    ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,
+                             cvss_score DESC NULLS LAST
+                    LIMIT 10;
+                    """
+                )
+                for r in cur.fetchall():
+                    top_exposures.append({
+                        "asset": r[0], "type": r[1], "severity": r[2],
+                        "title": r[3], "cvss": r[4], "status": r[5],
+                    })
+        except Exception as exc:
+            log.debug("generate_board_report_job: exposure query: %s", exc)
+
+        _update_job(job_id, "running", progress=80)
+
+        # ── 7. Build report content dict ──────────────────────────────────────
+        report_content = {
+            "job_id":              job_id,
+            "report_type":         "board",
+            "generated_at":        datetime.now(timezone.utc).isoformat(),
+            "generated_by":        requested_by,
+            "period_start":        job.get("period_start"),
+            "period_end":          job.get("period_end"),
+            "overall_score":       overall,
+            "score_label":         _score_label(overall),
+            "score_grade":         _score_grade(overall),
+            "framework_scores":    [
+                {**s, "label": FRAMEWORK_LABELS.get(s.get("framework", ""), s.get("framework", ""))}
+                for s in scores
+            ],
+            "risk_summary":        risk_summary,
+            "top_risks":           top_risks,
+            "critical_findings":   critical_findings,
+            "alert_trend":         alert_trend,
+            "resilience":          resilience,
+            "top_exposures":       top_exposures,
+        }
+
+        # ── 8. Write JSON ─────────────────────────────────────────────────────
+        REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+        json_path = REPORTS_DIR / f"board_{job_id}.json"
+        json_path.write_text(json.dumps(report_content, indent=2, default=str))
+        _update_job(job_id, "running", progress=88)
+
+        # ── 9. Write PDF (board-optimised layout) ─────────────────────────────
+        pdf_path = None
+        try:
+            pdf_file = REPORTS_DIR / f"board_{job_id}.pdf"
+            _build_board_pdf(str(pdf_file), report_content)
+            pdf_path = str(pdf_file)
+        except ImportError:
+            log.info("generate_board_report_job: reportlab not installed — JSON only")
+        except Exception as exc:
+            log.warning("generate_board_report_job: PDF error: %s", exc)
+
+        # ── 10. Persist report record ─────────────────────────────────────────
+        report_id = str(uuid.uuid4())
+        try:
+            with db() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    INSERT INTO cy_comp_reports
+                        (id, title, framework, overall_score, content_json, pdf_path,
+                         generated_by, created_at)
+                    VALUES (%s,%s,'board',%s,%s,%s,%s,NOW());
+                    """,
+                    (
+                        report_id,
+                        "Board Risk & Compliance Report",
+                        overall,
+                        json.dumps(report_content, default=str),
+                        pdf_path,
+                        requested_by,
+                    )
+                )
+        except Exception as exc:
+            log.warning("generate_board_report_job: DB insert: %s", exc)
+
+        _update_job(job_id, "complete", progress=100, result_path=str(json_path))
+        log.info("generate_board_report_job: completed job_id=%s", job_id)
+
+    except Exception as exc:
+        log.error("generate_board_report_job: FATAL job_id=%s: %s", job_id, exc)
+        _update_job(job_id, "failed", error=str(exc)[:500])
+
+
+def _build_board_pdf(pdf_path: str, data: dict) -> None:
+    """Generate a concise executive PDF — one page executive summary + framework table."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    )
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+
+    doc  = SimpleDocTemplate(pdf_path, pagesize=A4,
+                             leftMargin=20*mm, rightMargin=20*mm,
+                             topMargin=20*mm, bottomMargin=20*mm)
+    styles = getSampleStyleSheet()
+    story  = []
+
+    # Title
+    title_style = ParagraphStyle("BoardTitle", parent=styles["Title"],
+                                 fontSize=20, spaceAfter=4*mm)
+    story.append(Paragraph("Board Risk &amp; Compliance Report", title_style))
+    story.append(Paragraph(
+        f"Generated: {data.get('generated_at','')[:10]}  |  "
+        f"Period: {data.get('period_start','N/A')} – {data.get('period_end','N/A')}",
+        styles["Normal"]
+    ))
+    story.append(Spacer(1, 6*mm))
+
+    # Overall posture box
+    overall = data.get("overall_score", 0)
+    grade   = data.get("score_grade", "?")
+    clr_map = {"A": colors.HexColor("#00c875"), "B": colors.HexColor("#fdad4b"),
+                "C": colors.HexColor("#e8697d"), "D": colors.HexColor("#d0021b"),
+                "F": colors.HexColor("#770000")}
+    box_clr = clr_map.get(grade, colors.grey)
+
+    posture_table = Table(
+        [[Paragraph(f"<b>Overall Posture: {overall:.1f}%  [{grade}]</b>", styles["Heading2"])]],
+        colWidths=[170*mm],
+    )
+    posture_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), box_clr),
+        ("TEXTCOLOR",  (0, 0), (-1, -1), colors.white),
+        ("ROWPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    story.append(posture_table)
+    story.append(Spacer(1, 5*mm))
+
+    # Framework scores table
+    story.append(Paragraph("<b>Compliance Framework Scores</b>", styles["Heading3"]))
+    fw_rows = [["Framework", "Score", "Grade", "Controls", "Critical Gaps"]]
+    for s in data.get("framework_scores", []):
+        fw_rows.append([
+            s.get("label") or s.get("framework", "").upper(),
+            f"{s.get('score', 0):.1f}%",
+            _score_grade(s.get("score", 0)),
+            str(s.get("total_controls", "")),
+            str(s.get("critical_gaps", "")),
+        ])
+    fw_table = Table(fw_rows, colWidths=[60*mm, 25*mm, 20*mm, 30*mm, 35*mm])
+    fw_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a1a2e")),
+        ("TEXTCOLOR",  (0, 0), (-1, 0), colors.white),
+        ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f5f5")]),
+        ("GRID",       (0, 0), (-1, -1), 0.5, colors.lightgrey),
+        ("ROWPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(fw_table)
+    story.append(Spacer(1, 5*mm))
+
+    # Risk summary
+    rs = data.get("risk_summary", {})
+    story.append(Paragraph(
+        f"<b>Risk Register:</b> {rs.get('total',0)} total | "
+        f"<font color='red'>{rs.get('critical',0)} critical</font> | "
+        f"{rs.get('high',0)} high | {rs.get('open',0)} open",
+        styles["Normal"]
+    ))
+    story.append(Spacer(1, 3*mm))
+
+    # Top risks
+    if data.get("top_risks"):
+        story.append(Paragraph("<b>Top Open Risks</b>", styles["Heading3"]))
+        risk_rows = [["Risk", "Score", "Treatment", "Financial Impact", "Business Unit"]]
+        for r in data["top_risks"][:8]:
+            eur = f"€{r['financial_impact_eur']:,}" if r.get("financial_impact_eur") else r.get("financial_impact") or "—"
+            risk_rows.append([
+                Paragraph(r.get("title","")[:60], styles["Normal"]),
+                str(r.get("risk_score","")),
+                r.get("treatment",""),
+                eur,
+                r.get("business_unit","—"),
+            ])
+        r_table = Table(risk_rows, colWidths=[60*mm, 20*mm, 25*mm, 35*mm, 30*mm])
+        r_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a1a2e")),
+            ("TEXTCOLOR",  (0, 0), (-1, 0), colors.white),
+            ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f5f5")]),
+            ("GRID",       (0, 0), (-1, -1), 0.5, colors.lightgrey),
+            ("ROWPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(r_table)
+        story.append(Spacer(1, 5*mm))
+
+    # Resilience score
+    res = data.get("resilience", {})
+    if res.get("overall_score") is not None:
+        story.append(Paragraph(
+            f"<b>Cyber Resilience Score:</b> {res['overall_score']:.1f}% ({res.get('rating','').title()})",
+            styles["Normal"]
+        ))
+        story.append(Spacer(1, 3*mm))
+
+    doc.build(story)

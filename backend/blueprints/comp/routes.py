@@ -1588,3 +1588,634 @@ def get_finding_remediation(finding_id):
     except Exception as exc:
         log.error("get_finding_remediation: %s", exc)
         return jsonify({"error": str(exc)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NEW ROUTES — Gap closure enhancements
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── 1. AI Control Recommendations ────────────────────────────────────────────
+
+@comp_bp.route("/controls/recommend", methods=["POST"])
+@require_analyst
+def recommend_controls():
+    """
+    POST /api/comp/controls/recommend
+    Body: {framework, gap_description}
+    Returns AI-suggested control IDs and remediation priority.
+    Uses existing suggest_controls() service — no new AI logic.
+    """
+    body = request.get_json(silent=True) or {}
+    framework       = body.get("framework", "")
+    gap_description = body.get("gap_description", "")
+    if not framework or not gap_description:
+        return jsonify({"error": "framework and gap_description are required"}), 400
+    try:
+        from cy_comp.services.ai_analysis import suggest_controls
+        result = suggest_controls(framework, gap_description, created_by=_email())
+        return jsonify(result)
+    except Exception as exc:
+        log.error("recommend_controls: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── 2. AI Policy Draft Generation ────────────────────────────────────────────
+
+@comp_bp.route("/policy-docs/draft", methods=["POST"])
+@require_analyst
+def draft_policy_clause():
+    """
+    POST /api/comp/policy-docs/draft
+    Body: {framework, control_id, control_name, gap_description, existing_policy_snippet?}
+    Returns a draft policy clause + implementation guidance.
+    """
+    body = request.get_json(silent=True) or {}
+    framework       = body.get("framework", "")
+    control_id      = body.get("control_id", "")
+    control_name    = body.get("control_name", "")
+    gap_description = body.get("gap_description", "")
+    if not framework or not gap_description:
+        return jsonify({"error": "framework and gap_description are required"}), 400
+    try:
+        from cy_comp.services.ai_analysis import generate_policy_draft
+        result = generate_policy_draft(
+            framework=framework,
+            control_id=control_id,
+            control_name=control_name,
+            gap_description=gap_description,
+            existing_policy_snippet=body.get("existing_policy_snippet", ""),
+            created_by=_email(),
+        )
+        return jsonify(result)
+    except Exception as exc:
+        log.error("draft_policy_clause: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── 3. Executive Risk Copilot ─────────────────────────────────────────────────
+
+@comp_bp.route("/ask", methods=["POST"])
+@require_viewer
+def executive_copilot():
+    """
+    POST /api/comp/ask
+    Body: {question, frameworks?}
+    Answers a natural-language question about the live compliance posture.
+    Pre-loads the dashboard summary as context before calling CyMind.
+    """
+    body      = request.get_json(silent=True) or {}
+    question  = (body.get("question") or "").strip()
+    if not question:
+        return jsonify({"error": "question is required"}), 400
+
+    try:
+        from cy_comp.services.compliance import get_dashboard_summary
+        from cy_comp.services.ai_analysis import ask_copilot
+        frameworks   = body.get("frameworks") or None
+        context_data = get_dashboard_summary(frameworks=frameworks)
+        answer       = ask_copilot(question, context_data, created_by=_email())
+        return jsonify({"question": question, "answer": answer})
+    except Exception as exc:
+        log.error("executive_copilot: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── 4. What-If Score Simulation ───────────────────────────────────────────────
+
+@comp_bp.route("/simulate", methods=["POST"])
+@require_viewer
+def simulate_score():
+    """
+    POST /api/comp/simulate
+    Body: {framework, overrides: [{question_id, score}]}
+    Returns {actual_score, simulated_score, delta, changed_questions}.
+    Stateless — no DB writes.
+    """
+    body      = request.get_json(silent=True) or {}
+    framework = body.get("framework", "")
+    overrides = body.get("overrides", [])
+    if not framework:
+        return jsonify({"error": "framework is required"}), 400
+    if not isinstance(overrides, list):
+        return jsonify({"error": "overrides must be a list of {question_id, score}"}), 400
+    try:
+        from cy_comp.services.compliance import simulate_framework_score
+        result = simulate_framework_score(framework, overrides)
+        return jsonify(result)
+    except Exception as exc:
+        log.error("simulate_score: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── 5. On-Demand Score Refresh ────────────────────────────────────────────────
+
+@comp_bp.route("/dashboard/refresh", methods=["POST"])
+@require_analyst
+def refresh_dashboard():
+    """
+    POST /api/comp/dashboard/refresh
+    Triggers incremental SIEM sync + recomputes all framework scores.
+    Returns updated scores immediately.
+    Optional body: {frameworks: [...]} to scope refresh.
+    """
+    body       = request.get_json(silent=True) or {}
+    frameworks = body.get("frameworks") or None
+    try:
+        from cy_comp.services.compliance import refresh_scores
+        result = refresh_scores(frameworks=frameworks)
+        return jsonify(result)
+    except Exception as exc:
+        log.error("refresh_dashboard: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── 6. Cyber Resilience Score ─────────────────────────────────────────────────
+
+@comp_bp.route("/resilience-score", methods=["GET"])
+@require_viewer
+def get_resilience_score():
+    """
+    GET /api/comp/resilience-score
+    Returns composite cyber resilience score (0-100) across 4 dimensions:
+    resilience testing, incident recovery (MTTR), backup/recovery, continuity planning.
+    """
+    try:
+        from cy_comp.services.compliance import get_resilience_score as _score
+        return jsonify(_score())
+    except Exception as exc:
+        log.error("get_resilience_score: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── 7. Unified Board Report ────────────────────────────────────────────────────
+
+@comp_bp.route("/reports/generate-board", methods=["POST"])
+@require_analyst
+def generate_board_report():
+    """
+    POST /api/comp/reports/generate-board
+    Body: {period_start, period_end}
+    Creates a job and schedules a board-ready PDF/JSON report.
+    Aggregates all frameworks, top risks, critical findings, resilience score,
+    alert trend, and top exposures into a single executive document.
+    """
+    body         = request.get_json(silent=True) or {}
+    period_start = body.get("period_start", "")
+    period_end   = body.get("period_end", "")
+    if not period_start or not period_end:
+        return jsonify({"error": "period_start and period_end are required"}), 400
+    try:
+        from cy_comp.services.report import create_board_report_job, generate_board_report_job
+        job_id = create_board_report_job(
+            requested_by=_email(),
+            period_start=period_start,
+            period_end=period_end,
+        )
+        try:
+            from blueprints.scheduler.routes import _scheduler, _scheduler_owner
+            _scheduler.add_job(
+                generate_board_report_job,
+                args=[job_id],
+                id=f"board_report_{job_id}",
+                replace_existing=True,
+            )
+        except Exception:
+            import threading
+            threading.Thread(target=generate_board_report_job, args=(job_id,), daemon=True).start()
+
+        return jsonify({"job_id": job_id, "status": "pending"}), 202
+    except Exception as exc:
+        log.error("generate_board_report: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── 8. SIEM Evidence → cy_comp_evidence Bridge ────────────────────────────────
+
+@comp_bp.route("/evidence/sync-siem", methods=["POST"])
+@require_analyst
+def sync_evidence_from_siem():
+    """
+    POST /api/comp/evidence/sync-siem
+    Imports autonomous evidence items collected by the SIEM Investigation Engine
+    into cy_comp_evidence, linked to compliance findings where possible.
+    Idempotent — skips already-imported items via source_ref deduplication.
+    Optional body: {limit: 200}
+    """
+    body  = request.get_json(silent=True) or {}
+    limit = int(body.get("limit", 200))
+    try:
+        from cy_comp.services.siem_bridge import sync_siem_evidence_to_comp
+        result = sync_siem_evidence_to_comp(limit=limit)
+        return jsonify(result)
+    except Exception as exc:
+        log.error("sync_evidence_from_siem: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── 9. Exposure Register CRUD ─────────────────────────────────────────────────
+
+@comp_bp.route("/exposure", methods=["GET"])
+@require_viewer
+def list_exposures():
+    """
+    GET /api/comp/exposure?status=open&severity=critical&asset=example.com
+    Returns the exposure register, optionally filtered.
+    """
+    from cy_comp.models import db
+    status   = request.args.get("status")
+    severity = request.args.get("severity")
+    asset    = request.args.get("asset")
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            where, params = [], []
+            if status:
+                where.append("status = %s"); params.append(status)
+            if severity:
+                where.append("severity = %s"); params.append(severity)
+            if asset:
+                where.append("asset ILIKE %s"); params.append(f"%{asset}%")
+            clause = ("WHERE " + " AND ".join(where)) if where else ""
+            cur.execute(
+                f"""
+                SELECT id, asset, asset_type, exposure_type, severity, title,
+                       description, source, source_ref, cvss_score, cves,
+                       remediation, status, financial_impact, business_impact,
+                       assigned_to, due_date, resolved_at, created_by, created_at, updated_at
+                FROM cy_comp_exposure
+                {clause}
+                ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1
+                                       WHEN 'medium' THEN 2 ELSE 3 END,
+                         cvss_score DESC NULLS LAST, created_at DESC
+                LIMIT 500;
+                """,
+                params
+            )
+            cols = ["id","asset","asset_type","exposure_type","severity","title",
+                    "description","source","source_ref","cvss_score","cves",
+                    "remediation","status","financial_impact","business_impact",
+                    "assigned_to","due_date","resolved_at","created_by","created_at","updated_at"]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+            for r in rows:
+                if r.get("due_date"):
+                    r["due_date"] = r["due_date"].isoformat()
+                if r.get("resolved_at"):
+                    r["resolved_at"] = r["resolved_at"].isoformat()
+                if r.get("created_at"):
+                    r["created_at"] = r["created_at"].isoformat()
+                if r.get("updated_at"):
+                    r["updated_at"] = r["updated_at"].isoformat()
+        return jsonify(rows)
+    except Exception as exc:
+        log.error("list_exposures: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/exposure", methods=["POST"])
+@require_analyst
+def create_exposure():
+    """POST /api/comp/exposure — create a new exposure item."""
+    import uuid as _uuid
+    from cy_comp.models import db
+    body = request.get_json(silent=True) or {}
+    if not body.get("asset") or not body.get("title"):
+        return jsonify({"error": "asset and title are required"}), 400
+    try:
+        import json as _json
+        eid = str(_uuid.uuid4())
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO cy_comp_exposure
+                    (id, asset, asset_type, exposure_type, severity, title,
+                     description, source, source_ref, cvss_score, cves,
+                     remediation, status, financial_impact, business_impact,
+                     assigned_to, due_date, created_by, created_at, updated_at)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                RETURNING id;
+                """,
+                (
+                    eid,
+                    body.get("asset"),
+                    body.get("asset_type", "host"),
+                    body.get("exposure_type", "vulnerability"),
+                    body.get("severity", "medium"),
+                    body.get("title"),
+                    body.get("description"),
+                    body.get("source", "manual"),
+                    body.get("source_ref"),
+                    body.get("cvss_score"),
+                    body.get("cves", []),
+                    body.get("remediation"),
+                    body.get("status", "open"),
+                    body.get("financial_impact"),
+                    body.get("business_impact"),
+                    body.get("assigned_to"),
+                    body.get("due_date"),
+                    _email(),
+                )
+            )
+        return jsonify({"id": eid, "status": "created"}), 201
+    except Exception as exc:
+        log.error("create_exposure: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/exposure/<exposure_id>", methods=["PUT"])
+@require_analyst
+def update_exposure(exposure_id):
+    """PUT /api/comp/exposure/<id> — update status, remediation, assigned_to, etc."""
+    from cy_comp.models import db
+    body = request.get_json(silent=True) or {}
+    try:
+        fields, params = [], []
+        for col in ("status","severity","remediation","assigned_to","due_date",
+                    "resolved_at","financial_impact","business_impact","description"):
+            if col in body:
+                fields.append(f"{col} = %s"); params.append(body[col])
+        if "status" in body and body["status"] == "resolved" and "resolved_at" not in body:
+            fields.append("resolved_at = NOW()")
+        if not fields:
+            return jsonify({"error": "no updatable fields provided"}), 400
+        fields.append("updated_at = NOW()")
+        params.append(exposure_id)
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"UPDATE cy_comp_exposure SET {', '.join(fields)} WHERE id = %s;",
+                params
+            )
+            if cur.rowcount == 0:
+                return jsonify({"error": "Exposure not found"}), 404
+        return jsonify({"id": exposure_id, "status": "updated"})
+    except Exception as exc:
+        log.error("update_exposure: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── 10. Import ASM supply-chain scan → exposure register ─────────────────────
+
+@comp_bp.route("/exposure/import-asm", methods=["POST"])
+@require_analyst
+def import_asm_to_exposure():
+    """
+    POST /api/comp/exposure/import-asm
+    Body: {scan_id} or empty (uses latest ASM scan JSON).
+    Reads the ASM scan result file and imports supply_chain + vuln findings
+    into cy_comp_exposure. Idempotent via source_ref deduplication.
+    """
+    import uuid as _uuid, os
+    from cy_comp.models import db
+    body    = request.get_json(silent=True) or {}
+    scan_id = body.get("scan_id")
+    ASM_DIR = os.environ.get("ASM_REPORTS_DIR", "/opt/cycentra/asm_scans")
+
+    try:
+        import json as _json, glob
+        if scan_id:
+            candidates = [f"{ASM_DIR}/{scan_id}.json"]
+        else:
+            candidates = sorted(glob.glob(f"{ASM_DIR}/*.json"), reverse=True)
+
+        scan_data = None
+        used_file = None
+        for fpath in candidates:
+            try:
+                with open(fpath) as fh:
+                    scan_data = _json.load(fh)
+                    used_file = fpath
+                    break
+            except Exception:
+                continue
+
+        if not scan_data:
+            return jsonify({"error": "No ASM scan file found"}), 404
+
+        imported = skipped = 0
+        domain   = scan_data.get("domain") or scan_data.get("target", "unknown")
+        scan_ref = scan_id or os.path.basename(used_file).replace(".json", "")
+
+        supply  = scan_data.get("supply_chain", {}).get("results", {})
+        vulns   = supply.get("risks", [])
+        scripts = supply.get("scripts", [])
+
+        with db() as conn:
+            cur = conn.cursor()
+            for v in vulns:
+                lib    = v.get("library", "unknown")
+                osv_id = v.get("osv_id") or ""
+                cves   = v.get("cve_ids") or []
+                source_ref = f"asm:{scan_ref}:supply:{lib}:{osv_id}"
+                cur.execute("SELECT id FROM cy_comp_exposure WHERE source_ref = %s LIMIT 1;", (source_ref,))
+                if cur.fetchone():
+                    skipped += 1
+                    continue
+                sev = v.get("severity", "medium").lower()
+                if sev not in ("critical","high","medium","low"):
+                    sev = "medium"
+                cur.execute(
+                    """
+                    INSERT INTO cy_comp_exposure
+                        (id, asset, asset_type, exposure_type, severity, title,
+                         description, source, source_ref, cves, status, created_by, created_at, updated_at)
+                    VALUES (%s,%s,'web_asset','supply_chain',%s,%s,%s,'asm',%s,%s,'open',%s,NOW(),NOW());
+                    """,
+                    (
+                        str(_uuid.uuid4()), domain, sev,
+                        f"Supply Chain: {lib} — {v.get('reason','vulnerable dependency')[:120]}",
+                        v.get("reason",""),
+                        source_ref, cves, _email(),
+                    )
+                )
+                imported += 1
+
+            # Also import vuln scanner findings if present
+            vuln_results = scan_data.get("vuln_scan", {}).get("results", []) or []
+            for vr in vuln_results[:100]:
+                source_ref = f"asm:{scan_ref}:vuln:{vr.get('host','')}:{vr.get('port','')}"
+                cur.execute("SELECT id FROM cy_comp_exposure WHERE source_ref = %s LIMIT 1;", (source_ref,))
+                if cur.fetchone():
+                    skipped += 1
+                    continue
+                sev = vr.get("severity", "medium").lower()
+                if sev not in ("critical","high","medium","low"):
+                    sev = "medium"
+                cur.execute(
+                    """
+                    INSERT INTO cy_comp_exposure
+                        (id, asset, asset_type, exposure_type, severity, title,
+                         description, source, source_ref, cvss_score, status, created_by, created_at, updated_at)
+                    VALUES (%s,%s,'host','vulnerability',%s,%s,%s,'asm',%s,%s,'open',%s,NOW(),NOW());
+                    """,
+                    (
+                        str(_uuid.uuid4()),
+                        vr.get("host", domain),
+                        sev,
+                        vr.get("title") or vr.get("name") or f"Vulnerability on {vr.get('host','')}:{vr.get('port','')}",
+                        vr.get("description",""),
+                        source_ref,
+                        vr.get("cvss_score"),
+                        _email(),
+                    )
+                )
+                imported += 1
+
+        return jsonify({
+            "imported": imported, "skipped": skipped,
+            "scan_file": used_file, "domain": domain,
+        })
+    except Exception as exc:
+        log.error("import_asm_to_exposure: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── #2 Real-time risk scoring — SSE stream ────────────────────────────────────
+
+@comp_bp.route("/dashboard/stream")
+@require_viewer
+def dashboard_stream():
+    """
+    GET /api/comp/dashboard/stream
+    Server-Sent Events stream for live compliance score updates.
+    Pushes 'score-update' events when new compliance-relevant alerts arrive.
+    Emits 'heartbeat' every 30 s to keep the connection alive.
+
+    Frontend:  const es = new EventSource('/api/comp/dashboard/stream', {withCredentials: true});
+               es.addEventListener('score-update', e => setScores(JSON.parse(e.data).scores));
+    """
+    import time as _time
+    from flask import Response, stream_with_context
+
+    def _last_alert_ts():
+        try:
+            from cy_comp.models import db as _db
+            with _db() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT MAX(timestamp) FROM alerts WHERE is_compliance_relevant = TRUE;"
+                )
+                row = cur.fetchone()
+                return str(row[0]) if row and row[0] else None
+        except Exception:
+            return None
+
+    def _scores():
+        try:
+            from cy_comp.services.compliance import get_latest_scores
+            return get_latest_scores()
+        except Exception:
+            return []
+
+    def generate():
+        last_ts = _last_alert_ts()
+        init = _scores()
+        yield f"event: score-update\ndata: {json.dumps({'scores': init, 'reason': 'connected'})}\n\n"
+        tick = 0
+        while True:
+            _time.sleep(30)
+            tick += 1
+            current_ts = _last_alert_ts()
+            if current_ts != last_ts:
+                scores = _scores()
+                payload = {"scores": scores, "reason": "new_alerts", "ts": current_ts}
+                yield f"event: score-update\ndata: {json.dumps(payload, default=str)}\n\n"
+                last_ts = current_ts
+            else:
+                yield f"event: heartbeat\ndata: {json.dumps({'tick': tick})}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control":     "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection":        "keep-alive",
+        },
+    )
+
+
+# ── #7 Continuous control validation ─────────────────────────────────────────
+
+@comp_bp.route("/control-validations", methods=["GET"])
+@require_viewer
+def list_control_validations():
+    """
+    GET /api/comp/control-validations
+    Returns latest result per technical validator.
+    """
+    try:
+        from cy_comp.services.control_validator import get_validation_summary
+        data = get_validation_summary()
+        return jsonify({"validations": data, "count": len(data)})
+    except Exception as exc:
+        log.error("list_control_validations: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/control-validations/run", methods=["POST"])
+@require_analyst
+def run_control_validations():
+    """
+    POST /api/comp/control-validations/run
+    Trigger an on-demand control validation run.
+    Optional body: {"auto_finding": true}
+    """
+    try:
+        body         = request.get_json(silent=True) or {}
+        auto_finding = bool(body.get("auto_finding", True))
+        from cy_comp.services.control_validator import run_all_validators
+        result = run_all_validators(auto_finding=auto_finding)
+        return jsonify(result)
+    except Exception as exc:
+        log.error("run_control_validations: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── #17 Predictive risk modeling ─────────────────────────────────────────────
+
+@comp_bp.route("/predict", methods=["GET"])
+@require_viewer
+def predict_risk():
+    """
+    GET /api/comp/predict?framework=nis2&horizon=30,60,90
+    Returns linear-regression + EWMA predictions for a framework.
+    Omit framework param for portfolio-level summary.
+    """
+    try:
+        framework = request.args.get("framework", "").strip() or None
+        raw_h     = request.args.get("horizon", "30,60,90")
+        horizons  = tuple(int(h) for h in raw_h.split(",") if h.strip().isdigit())
+        if not horizons:
+            horizons = (30, 60, 90)
+
+        from cy_comp.services.prediction import predict_framework_score, get_portfolio_trend
+
+        if framework:
+            from cy_comp.services.compliance import SUPPORTED_FRAMEWORKS
+            if framework not in SUPPORTED_FRAMEWORKS:
+                return jsonify({"error": f"Unknown framework: {framework}"}), 400
+            data = predict_framework_score(framework, horizons=horizons)
+        else:
+            data = get_portfolio_trend()
+
+        return jsonify(data)
+    except Exception as exc:
+        log.error("predict_risk: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@comp_bp.route("/predict/all", methods=["GET"])
+@require_viewer
+def predict_all():
+    """
+    GET /api/comp/predict/all
+    Returns 30/60/90-day predictions for every supported framework.
+    """
+    try:
+        from cy_comp.services.prediction import predict_all_frameworks
+        data = predict_all_frameworks()
+        return jsonify(data)
+    except Exception as exc:
+        log.error("predict_all: %s", exc)
+        return jsonify({"error": str(exc)}), 500

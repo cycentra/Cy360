@@ -39,35 +39,41 @@ def _row_to_risk(row: tuple) -> dict:
     """Convert a DB row tuple to a risk dict."""
     (rid, title, description, category, owner, likelihood, impact, risk_score,
      appetite, status, treatment, due_date, frameworks, controls, ai_analysis,
-     ai_mapped_controls, created_by, created_at, updated_at) = row
+     ai_mapped_controls, created_by, created_at, updated_at,
+     financial_impact, financial_impact_eur, business_unit, risk_category_erp) = row
     return {
-        "id":                 rid,
-        "title":              title,
-        "description":        description,
-        "category":           category,
-        "owner":              owner,
-        "likelihood":         likelihood,
-        "impact":             impact,
-        "risk_score":         risk_score,
-        "severity":           severity_label(risk_score or 0),
-        "appetite":           appetite,
-        "status":             status,
-        "treatment":          treatment,
-        "due_date":           due_date.isoformat() if due_date else None,
-        "frameworks":         frameworks or [],
-        "controls":           controls or [],
-        "ai_analysis":        ai_analysis,
-        "ai_mapped_controls": ai_mapped_controls or {},
-        "created_by":         created_by,
-        "created_at":         created_at.isoformat() if created_at else None,
-        "updated_at":         updated_at.isoformat() if updated_at else None,
+        "id":                   rid,
+        "title":                title,
+        "description":          description,
+        "category":             category,
+        "owner":                owner,
+        "likelihood":           likelihood,
+        "impact":               impact,
+        "risk_score":           risk_score,
+        "severity":             severity_label(risk_score or 0),
+        "appetite":             appetite,
+        "status":               status,
+        "treatment":            treatment,
+        "due_date":             due_date.isoformat() if due_date else None,
+        "frameworks":           frameworks or [],
+        "controls":             controls or [],
+        "ai_analysis":          ai_analysis,
+        "ai_mapped_controls":   ai_mapped_controls or {},
+        "financial_impact":     financial_impact,
+        "financial_impact_eur": financial_impact_eur,
+        "business_unit":        business_unit,
+        "risk_category_erp":    risk_category_erp,
+        "created_by":           created_by,
+        "created_at":           created_at.isoformat() if created_at else None,
+        "updated_at":           updated_at.isoformat() if updated_at else None,
     }
 
 
 _SELECT_RISK = """
     SELECT id, title, description, category, owner, likelihood, impact,
            risk_score, appetite, status, treatment, due_date, frameworks,
-           controls, ai_analysis, ai_mapped_controls, created_by, created_at, updated_at
+           controls, ai_analysis, ai_mapped_controls, created_by, created_at, updated_at,
+           financial_impact, financial_impact_eur, business_unit, risk_category_erp
     FROM cy_comp_risks
 """
 
@@ -118,8 +124,10 @@ def create_risk(data: dict, created_by: str) -> dict:
             INSERT INTO cy_comp_risks
                 (id, title, description, category, owner, likelihood, impact,
                  risk_score, appetite, status, treatment, due_date, frameworks,
-                 controls, created_by, created_at, updated_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                 controls, financial_impact, financial_impact_eur,
+                 business_unit, risk_category_erp,
+                 created_by, created_at, updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
             RETURNING id;
             """,
             (
@@ -135,6 +143,10 @@ def create_risk(data: dict, created_by: str) -> dict:
                 data.get("due_date"),
                 _json.dumps(data.get("frameworks", [])),
                 _json.dumps(data.get("controls", [])),
+                data.get("financial_impact", "unknown"),
+                data.get("financial_impact_eur"),
+                data.get("business_unit"),
+                data.get("risk_category_erp"),
                 created_by,
             )
         )
@@ -150,9 +162,14 @@ def update_risk(risk_id: str, data: dict) -> Optional[dict]:
     fields, params = [], []
 
     for col in ("title", "description", "category", "owner", "appetite",
-                "status", "treatment", "due_date"):
+                "status", "treatment", "due_date",
+                "financial_impact", "business_unit", "risk_category_erp"):
         if col in data:
             fields.append(f"{col} = %s"); params.append(data[col])
+
+    if "financial_impact_eur" in data:
+        fields.append("financial_impact_eur = %s")
+        params.append(int(data["financial_impact_eur"]) if data["financial_impact_eur"] is not None else None)
 
     for col in ("frameworks", "controls", "ai_mapped_controls"):
         if col in data:

@@ -101,10 +101,14 @@ export function buildNavSections({ installedModules = {}, data = null }) {
     {
       section: "SECURITY COMPLIANCE",
       items: [
+        { id: "comp-unified",    label: "Unified Console",      icon: <span style={{ fontSize: 13 }}>🖥</span>,  accent: "#4d9eff" },
         { id: "comp-dashboard",  label: "GRC Posture",          icon: SvgComp,   accent: "#00e5a0" },
         { id: "comp-assessment", label: "Assessments",          icon: <span style={{ fontSize: 13 }}>📋</span>, accent: "#6378ff" },
         { id: "comp-findings",   label: "Findings & Alerts",    icon: SvgRisk,   accent: "#ff3b3b" },
         { id: "comp-risks",      label: "Risk Management",      icon: SvgRisk,   accent: "#ff8c00" },
+        { id: "comp-exposure",   label: "Exposure Register",    icon: <span style={{ fontSize: 13 }}>📡</span>, accent: "#f97316" },
+        { id: "comp-supplychain",label: "Supply Chain Risk",    icon: <span style={{ fontSize: 13 }}>📦</span>, accent: "#ffd166" },
+        { id: "comp-predict",    label: "Risk Prediction",      icon: <span style={{ fontSize: 13 }}>📈</span>, accent: "#10b981" },
         { id: "comp-reports",    label: "Reports",              icon: SvgReport, accent: "#b06eff" },
       ],
     },

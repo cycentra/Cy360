@@ -21,7 +21,10 @@ from cy_comp.models import db
 
 log = logging.getLogger("cycentra.cy_comp.compliance")
 
-SUPPORTED_FRAMEWORKS = ["nis2", "dora", "iso27001", "soc2", "nist_csf", "pci_dss", "gdpr", "eu_ai_act"]
+SUPPORTED_FRAMEWORKS = [
+    "nis2", "dora", "iso27001", "soc2", "nist_csf", "pci_dss", "gdpr",
+    "eu_ai_act", "iso42001",
+]
 
 # Canonical question/control count per framework (matches questionnaire data)
 # Used as total_controls denominator when no manual controls exist
@@ -34,6 +37,7 @@ FRAMEWORK_CONTROL_COUNTS = {
     "pci_dss":   30,   # 30 questions covering all 12 PCI DSS v4 requirements
     "gdpr":      30,   # 30 questions covering key GDPR articles (Art.5-49, Art.83)
     "eu_ai_act": 30,   # 30 questions covering Arts. 5-6, 9-17, 27, 43-55, 72-73, 85-86
+    "iso42001":  26,   # 26 questions covering Cl.4-10 + key Annex A controls
 }
 
 
@@ -637,4 +641,258 @@ def get_dashboard_summary(frameworks: Optional[list] = None) -> dict:
         "questionnaire_hub":   questionnaire_hub,
         "alerts_by_day":       get_alerts_by_day(14),
         "score_history":       get_score_history(),
+    }
+
+
+# ── On-demand score refresh ───────────────────────────────────────────────────
+
+def refresh_scores(frameworks: Optional[list] = None) -> dict:
+    """
+    Trigger an incremental SIEM sync then recompute and persist framework scores.
+    Called by POST /api/comp/dashboard/refresh — returns updated scores immediately.
+    """
+    sync_result = {}
+    try:
+        from cy_comp.services.siem_bridge import sync as siem_sync
+        sync_result = siem_sync()
+    except Exception as exc:
+        log.warning("refresh_scores: siem_sync failed (non-fatal): %s", exc)
+
+    scores = compute_framework_scores(frameworks=frameworks)
+    return {
+        "scores":      scores,
+        "siem_synced": sync_result,
+        "refreshed_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ── What-if simulation ────────────────────────────────────────────────────────
+
+def simulate_framework_score(framework: str, overrides: list[dict]) -> dict:
+    """
+    Compute a hypothetical compliance score for *framework* by substituting
+    *overrides* (list of {question_id, score}) into the current saved responses.
+
+    No DB writes — purely stateless computation using the canonical formula
+    identical to _compute_score_for_framework() and score_framework().
+
+    Returns:
+        {framework, actual_score, simulated_score, delta,
+         changed_questions, alert_penalty}
+    """
+    # Build override map {question_id: score}
+    override_map = {o["question_id"]: int(o["score"]) for o in overrides if "question_id" in o}
+
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+
+            # 1. Load templates (weight per question)
+            cur.execute(
+                "SELECT question_id, weight FROM cy_comp_questionnaire_templates WHERE framework = %s;",
+                (framework,)
+            )
+            templates = {row[0]: int(row[1] or 2) for row in cur.fetchall()}
+
+            # 2. Load current responses
+            cur.execute(
+                "SELECT question_id, score FROM cy_comp_questionnaire_responses WHERE framework = %s;",
+                (framework,)
+            )
+            responses = {row[0]: int(row[1] or 0) for row in cur.fetchall()}
+
+            # 3. Alert penalty (same as _compute_score_for_framework)
+            try:
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (WHERE rule_level >= 12)                       AS crit,
+                        COUNT(*) FILTER (WHERE rule_level >= 10 AND rule_level < 12)   AS high,
+                        COUNT(*) FILTER (WHERE rule_level >= 7  AND rule_level < 10)   AS med
+                    FROM alerts
+                    WHERE is_compliance_relevant = TRUE
+                      AND %s = ANY(compliance_frameworks)
+                      AND timestamp > NOW() - INTERVAL '30 days';
+                    """,
+                    (framework,)
+                )
+                ar = cur.fetchone() or (0, 0, 0)
+            except Exception:
+                ar = (0, 0, 0)
+            alert_penalty = min(40, int(ar[0] or 0) * 8 + int(ar[1] or 0) * 4 + int(ar[2] or 0))
+
+    except Exception as exc:
+        log.error("simulate_framework_score(%s): %s", framework, exc)
+        return {"error": str(exc), "framework": framework}
+
+    def _score_from_responses(resp: dict) -> float:
+        total_w = sum(templates.values()) or 1
+        pass_w  = sum(w for qid, w in templates.items() if resp.get(qid, 0) >= 2)
+        part_w  = sum(w for qid, w in templates.items() if resp.get(qid, 0) == 1)
+        q_score = (pass_w + part_w * 0.5) / total_w * 100 if resp else 100.0
+        return round(max(0.0, q_score - alert_penalty), 1)
+
+    # Actual score (current responses)
+    actual_score = _score_from_responses(responses)
+
+    # Simulated score (responses merged with overrides)
+    simulated_responses = {**responses, **override_map}
+    simulated_score = _score_from_responses(simulated_responses)
+
+    # Identify what changed and whether it helped / hurt
+    changed = []
+    for qid, new_score in override_map.items():
+        old_score = responses.get(qid)
+        changed.append({"question_id": qid, "from": old_score, "to": new_score})
+
+    return {
+        "framework":       framework,
+        "actual_score":    actual_score,
+        "simulated_score": simulated_score,
+        "delta":           round(simulated_score - actual_score, 1),
+        "alert_penalty":   alert_penalty,
+        "changed_questions": changed,
+        "simulated_at":    datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ── Cyber Resilience Score ────────────────────────────────────────────────────
+
+def get_resilience_score() -> dict:
+    """
+    Compute a composite Cyber Resilience Score (0-100) from 4 measurable dimensions:
+
+      1. DORA Resilience Testing (questionnaire sub-score, weight 30%)
+      2. Incident Recovery — mean MTTR from cases_bp (weight 25%)
+      3. Backup & Recovery Controls (DORA + ISO 27001 questionnaire sub-score, weight 25%)
+      4. Continuity Planning Maturity (DORA BCP + NIST CSF RS/RC sub-score, weight 20%)
+
+    Each dimension falls back gracefully if data is unavailable.
+    Returns a dict with overall score, per-dimension breakdown, and rating label.
+    """
+    dimensions: dict[str, dict] = {
+        "resilience_testing":   {"score": None, "weight": 0.30, "label": "Resilience Testing"},
+        "incident_recovery":    {"score": None, "weight": 0.25, "label": "Incident Recovery (MTTR)"},
+        "backup_recovery":      {"score": None, "weight": 0.25, "label": "Backup & Recovery Controls"},
+        "continuity_planning":  {"score": None, "weight": 0.20, "label": "Continuity Planning"},
+    }
+
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+
+            # ── Dim 1: DORA resilience testing questions (Art.24–26) ──────────
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(t.weight),0), COALESCE(SUM(t.weight) FILTER (WHERE r.score >= 2),0),
+                       COALESCE(SUM(t.weight) FILTER (WHERE r.score = 1),0)
+                FROM cy_comp_questionnaire_templates t
+                LEFT JOIN cy_comp_questionnaire_responses r
+                       ON r.question_id = t.question_id AND r.framework = t.framework
+                WHERE t.framework = 'dora'
+                  AND t.section ILIKE '%resilience%';
+                """
+            )
+            row = cur.fetchone() or (0, 0, 0)
+            if row[0]:
+                dimensions["resilience_testing"]["score"] = round(
+                    (row[1] + row[2] * 0.5) / row[0] * 100, 1
+                )
+
+            # ── Dim 2: MTTR from resolved cases (lower = better; map to 0-100) ─
+            try:
+                cur.execute(
+                    """
+                    SELECT AVG(EXTRACT(EPOCH FROM (resolved_at - created_at))/3600.0)
+                    FROM cases
+                    WHERE status = 'resolved'
+                      AND resolved_at IS NOT NULL
+                      AND created_at > NOW() - INTERVAL '90 days';
+                    """
+                )
+                mttr_row = cur.fetchone()
+                if mttr_row and mttr_row[0] is not None:
+                    mttr_hours = float(mttr_row[0])
+                    # <4h→100, 4-8h→85, 8-24h→65, 24-72h→40, >72h→15
+                    if   mttr_hours < 4:   mttr_score = 100.0
+                    elif mttr_hours < 8:   mttr_score = 85.0
+                    elif mttr_hours < 24:  mttr_score = 65.0
+                    elif mttr_hours < 72:  mttr_score = 40.0
+                    else:                  mttr_score = 15.0
+                    dimensions["incident_recovery"]["score"] = mttr_score
+                    dimensions["incident_recovery"]["mttr_hours"] = round(mttr_hours, 1)
+            except Exception:
+                pass   # cases table may not exist — degrade gracefully
+
+            # ── Dim 3: Backup/recovery controls across DORA + ISO 27001 ─────
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(t.weight),0),
+                       COALESCE(SUM(t.weight) FILTER (WHERE r.score >= 2),0),
+                       COALESCE(SUM(t.weight) FILTER (WHERE r.score = 1),0)
+                FROM cy_comp_questionnaire_templates t
+                LEFT JOIN cy_comp_questionnaire_responses r
+                       ON r.question_id = t.question_id AND r.framework = t.framework
+                WHERE (t.framework = 'dora'     AND t.section ILIKE '%bcp%')
+                   OR (t.framework = 'iso27001' AND t.section ILIKE '%availability%')
+                   OR (t.section ILIKE '%backup%' OR t.section ILIKE '%recovery%');
+                """
+            )
+            row = cur.fetchone() or (0, 0, 0)
+            if row[0]:
+                dimensions["backup_recovery"]["score"] = round(
+                    (row[1] + row[2] * 0.5) / row[0] * 100, 1
+                )
+
+            # ── Dim 4: Continuity planning (DORA BCP + NIST CSF RS/RC) ──────
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(t.weight),0),
+                       COALESCE(SUM(t.weight) FILTER (WHERE r.score >= 2),0),
+                       COALESCE(SUM(t.weight) FILTER (WHERE r.score = 1),0)
+                FROM cy_comp_questionnaire_templates t
+                LEFT JOIN cy_comp_questionnaire_responses r
+                       ON r.question_id = t.question_id AND r.framework = t.framework
+                WHERE (t.framework = 'dora'    AND t.section ILIKE '%continuity%')
+                   OR (t.framework = 'nist_csf' AND (t.section ILIKE '%respond%' OR t.section ILIKE '%recover%'));
+                """
+            )
+            row = cur.fetchone() or (0, 0, 0)
+            if row[0]:
+                dimensions["continuity_planning"]["score"] = round(
+                    (row[1] + row[2] * 0.5) / row[0] * 100, 1
+                )
+
+    except Exception as exc:
+        log.error("get_resilience_score: %s", exc)
+
+    # Weighted composite — use available dimensions only (reweight proportionally)
+    available = {k: v for k, v in dimensions.items() if v["score"] is not None}
+    if available:
+        total_weight = sum(v["weight"] for v in available.values())
+        overall = round(sum(v["score"] * v["weight"] for v in available.values()) / total_weight, 1)
+    else:
+        overall = None
+
+    def _rating(s: Optional[float]) -> str:
+        if s is None:   return "unknown"
+        if s >= 85:     return "strong"
+        if s >= 70:     return "adequate"
+        if s >= 50:     return "developing"
+        return "critical"
+
+    return {
+        "overall_score":  overall,
+        "rating":         _rating(overall),
+        "dimensions":     {
+            k: {
+                "label":  v["label"],
+                "score":  v["score"],
+                "weight": v["weight"],
+                "rating": _rating(v["score"]),
+                **({kk: vv for kk, vv in v.items() if kk not in ("label","score","weight")}),
+            }
+            for k, v in dimensions.items()
+        },
+        "computed_at": datetime.now(timezone.utc).isoformat(),
     }

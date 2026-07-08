@@ -327,3 +327,121 @@ def register_compliance_scheduler(scheduler) -> None:
         log.info("[compliance] Hourly enrichment sync job registered")
     except Exception as exc:
         log.warning("[compliance] Could not register enrichment sync job: %s", exc)
+
+
+# ── SIEM Autonomous Evidence → cy_comp_evidence bridge ────────────────────────
+
+def sync_siem_evidence_to_comp(limit: int = 200) -> dict:
+    """
+    Bridge evidence items collected by the SIEM AI Investigation Engine
+    (incidents.evidence_log JSONB) into cy_comp_evidence rows, linked to any
+    associated compliance finding.
+
+    Only processes COLLECTED items from compliance-breach incidents that have
+    not already been imported (deduplicates on source_ref = 'siem:<incident_id>:<evidence_type>').
+
+    Writes to cy_comp_evidence — never modifies the incidents table.
+    Returns {imported, skipped, errors}.
+    """
+    imported = skipped = errors = 0
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+
+            # Fetch compliance-breach incidents with non-empty evidence_log
+            cur.execute(
+                """
+                SELECT id, evidence_log, compliance_frameworks
+                FROM incidents
+                WHERE compliance_breach = TRUE
+                  AND evidence_log IS NOT NULL
+                  AND jsonb_array_length(evidence_log) > 0
+                ORDER BY last_seen DESC
+                LIMIT %s;
+                """,
+                (limit,)
+            )
+            incidents = cur.fetchall()
+
+            for inc_id, evidence_log, frameworks in incidents:
+                if not isinstance(evidence_log, list):
+                    continue
+                for item in evidence_log:
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("status") != "COLLECTED":
+                        skipped += 1
+                        continue
+
+                    ev_type  = item.get("evidence_type", "unknown")
+                    source_ref = f"siem:{inc_id}:{ev_type}"
+
+                    # Check deduplication by source_ref
+                    cur.execute(
+                        "SELECT id FROM cy_comp_evidence WHERE source_ref = %s LIMIT 1;",
+                        (source_ref,)
+                    )
+                    if cur.fetchone():
+                        skipped += 1
+                        continue
+
+                    # Map evidence type → comp evidence type
+                    ev_map = {
+                        "process_tree":       "process_artifact",
+                        "file_hash":          "file_artifact",
+                        "dns_history":        "network_log",
+                        "user_privilege":     "access_log",
+                        "vulnerability_scan": "vuln_report",
+                    }
+                    comp_type = ev_map.get(ev_type, "siem_evidence")
+
+                    # Find linked finding (if any) via alert_id FK
+                    finding_id = None
+                    try:
+                        cur.execute(
+                            """
+                            SELECT id FROM cy_comp_findings
+                            WHERE source_type = 'auto'
+                              AND framework = ANY(%s::text[])
+                              AND created_at > NOW() - INTERVAL '30 days'
+                            ORDER BY created_at DESC LIMIT 1;
+                            """,
+                            (frameworks or [],)
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            finding_id = row[0]
+                    except Exception:
+                        pass
+
+                    try:
+                        import uuid as _uuid, json as _json
+                        summary = item.get("summary", f"SIEM evidence: {ev_type}")
+                        data_snippet = _json.dumps(item.get("data") or {})[:500]
+                        cur.execute(
+                            """
+                            INSERT INTO cy_comp_evidence
+                                (id, title, type, description, finding_id,
+                                 source_ref, uploaded_by, created_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, 'siem_bridge', NOW());
+                            """,
+                            (
+                                str(_uuid.uuid4()),
+                                f"SIEM: {ev_type.replace('_', ' ').title()} [{inc_id[:8]}]",
+                                comp_type,
+                                f"{summary}\n\nData: {data_snippet}",
+                                finding_id,
+                                source_ref,
+                            )
+                        )
+                        imported += 1
+                    except Exception as ins_exc:
+                        log.warning("sync_siem_evidence: insert failed for %s: %s", source_ref, ins_exc)
+                        errors += 1
+
+    except Exception as exc:
+        log.error("sync_siem_evidence_to_comp: %s", exc)
+        errors += 1
+
+    log.info("sync_siem_evidence: imported=%d skipped=%d errors=%d", imported, skipped, errors)
+    return {"imported": imported, "skipped": skipped, "errors": errors}

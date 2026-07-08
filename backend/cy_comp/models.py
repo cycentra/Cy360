@@ -402,6 +402,69 @@ _MIGRATE_COLUMNS: list[str] = [
     # ── Multi-framework document mapping ──────────────────────────────────────
     # mapped_frameworks: detected framework keys the document covers (replaces single 'framework' text)
     "ALTER TABLE cy_comp_policy_docs ADD COLUMN IF NOT EXISTS mapped_frameworks TEXT[] DEFAULT '{}';",
+
+    # ── Evidence source tracking (for SIEM bridge deduplication) ─────────────
+    "ALTER TABLE cy_comp_evidence ADD COLUMN IF NOT EXISTS source_ref TEXT;",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_cy_comp_evidence_source_ref ON cy_comp_evidence(source_ref) WHERE source_ref IS NOT NULL;",
+
+    # ── Financial impact & business context on risks ───────────────────────────
+    # Adds enterprise risk fields without duplicating the scoring logic
+    "ALTER TABLE cy_comp_risks ADD COLUMN IF NOT EXISTS financial_impact TEXT DEFAULT 'unknown';",
+    "ALTER TABLE cy_comp_risks ADD COLUMN IF NOT EXISTS financial_impact_eur BIGINT;",
+    "ALTER TABLE cy_comp_risks ADD COLUMN IF NOT EXISTS business_unit TEXT;",
+    "ALTER TABLE cy_comp_risks ADD COLUMN IF NOT EXISTS risk_category_erp TEXT;",
+
+    # ── Control Validation Results ────────────────────────────────────────────
+    # Stores latest result per technical control validator (cv-*.py service).
+    # One row per validator_id — UPSERTED on every validation run.
+    """
+    CREATE TABLE IF NOT EXISTS cy_comp_control_validations (
+        id              TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+        run_id          TEXT        NOT NULL,
+        validator_id    TEXT        NOT NULL UNIQUE,
+        title           TEXT        NOT NULL,
+        category        TEXT        NOT NULL,
+        frameworks      TEXT[]      DEFAULT '{}',
+        status          TEXT        NOT NULL DEFAULT 'unknown',
+        score           NUMERIC(5,1),
+        detail          TEXT,
+        evidence_json   JSONB       DEFAULT '{}',
+        validated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_cy_comp_cv_status ON cy_comp_control_validations (status, score);
+    """,
+
+    # ── Exposure register ─────────────────────────────────────────────────────
+    # Tracks attack surface findings as trackable exposure items with remediation state.
+    # Populated from ASM scans + manual entry. No FK to alerts (read-only SIEM bridge).
+    """
+    CREATE TABLE IF NOT EXISTS cy_comp_exposure (
+        id              TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+        asset           TEXT        NOT NULL,
+        asset_type      TEXT        DEFAULT 'host',
+        exposure_type   TEXT        NOT NULL DEFAULT 'vulnerability',
+        severity        TEXT        NOT NULL DEFAULT 'medium',
+        title           TEXT        NOT NULL,
+        description     TEXT,
+        source          TEXT        DEFAULT 'manual',
+        source_ref      TEXT,
+        cvss_score      NUMERIC(4,1),
+        cves            TEXT[]      DEFAULT '{}',
+        remediation     TEXT,
+        status          TEXT        NOT NULL DEFAULT 'open',
+        financial_impact TEXT,
+        business_impact  TEXT,
+        assigned_to     TEXT,
+        due_date        TIMESTAMPTZ,
+        resolved_at     TIMESTAMPTZ,
+        created_by      TEXT,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_cy_comp_exposure_status   ON cy_comp_exposure (status, severity);
+    CREATE INDEX IF NOT EXISTS idx_cy_comp_exposure_asset    ON cy_comp_exposure (asset);
+    CREATE INDEX IF NOT EXISTS idx_cy_comp_exposure_source   ON cy_comp_exposure (source);
+    """,
 ]
 
 
