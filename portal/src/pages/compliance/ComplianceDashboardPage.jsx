@@ -14,6 +14,14 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { API_BASE } from "../../core/constants.js";
 
+// Domain groupings for the domain-view toggle
+const FW_DOMAINS = [
+  { id: "cyber",      label: "Cyber Security",   color: "#4d9eff", frameworks: ["nis2","dora","nist_csf"] },
+  { id: "compliance", label: "Compliance",        color: "#00e5a0", frameworks: ["iso27001","soc2","pci_dss"] },
+  { id: "privacy",    label: "Privacy",           color: "#b06eff", frameworks: ["gdpr"] },
+  { id: "ai",         label: "AI Governance",     color: "#06b6d4", frameworks: ["eu_ai_act","iso42001"] },
+];
+
 const C = {
   bg: "#090b10", surface: "#0d1117", border: "rgba(255,255,255,0.07)",
   text: "rgba(255,255,255,0.82)", muted: "rgba(255,255,255,0.45)",
@@ -283,6 +291,13 @@ export function ComplianceDashboardPage({ setActiveTab }) {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError]           = useState(null);
   const [enabled, setEnabled]       = useState(_loadEnabled);
+  const [domainView, setDomainView] = useState(false);
+
+  // Posture header data — fetched independently so failures don't block the main dashboard
+  const [cspi, setCspi]         = useState(null);
+  const [resilience, setResil]  = useState(null);
+  const [predictions, setPred]  = useState(null);
+  const [validators, setValid]  = useState([]);
 
   // Ref keeps the current framework list accessible inside stable callbacks without
   // adding `enabled` as a dependency (which would cause double-fetches on toggle).
@@ -348,6 +363,21 @@ export function ComplianceDashboardPage({ setActiveTab }) {
     return () => { if (es) es.close(); };
   }, []); // stable — never re-subscribe
 
+  // Load posture header data (CSPI, resilience, predictions, validators) independently
+  useEffect(() => {
+    Promise.allSettled([
+      fetch(`${API_BASE}/api/benchmark/score`,          { credentials: "include" }).then(r => r.json()),
+      fetch(`${API_BASE}/api/comp/resilience-score`,    { credentials: "include" }).then(r => r.json()),
+      fetch(`${API_BASE}/api/comp/predict`,             { credentials: "include" }).then(r => r.json()),
+      fetch(`${API_BASE}/api/comp/control-validations`, { credentials: "include" }).then(r => r.json()),
+    ]).then(([c, r, p, v]) => {
+      if (c.status === "fulfilled") setCspi(c.value);
+      if (r.status === "fulfilled") setResil(r.value);
+      if (p.status === "fulfilled") setPred(p.value);
+      if (v.status === "fulfilled") setValid(v.value?.validations || []);
+    });
+  }, []);
+
   if (loading) return (
     <div style={{ color: C.muted, fontFamily: "monospace", fontSize: 12, padding: 40 }}>
       Loading GRC posture…
@@ -384,6 +414,17 @@ export function ComplianceDashboardPage({ setActiveTab }) {
 
   const totalFindings = Object.values(findSumm).reduce((s, v) => s + v, 0);
 
+  // Posture header derived values
+  const cspiScore   = cspi?.total_score ?? cspi?.score ?? null;
+  const resilScore  = resilience?.composite_score ?? null;
+  const predTrend   = predictions?.overall_direction;
+  const validFail   = validators.filter(v => v.status === "fail").length;
+  const validWarn   = validators.filter(v => v.status === "warning").length;
+
+  // Domain-view: build scoreMap for domain grouping
+  const scoreMap = {};
+  allScores.forEach(f => { scoreMap[f.framework] = f.score; });
+
   return (
     <div>
       {/* ── Header ────────────────────────────────────────────────────────── */}
@@ -407,6 +448,47 @@ export function ComplianceDashboardPage({ setActiveTab }) {
             fontSize: 10, cursor: "pointer", opacity: refreshing ? 0.6 : 1 }}>
           {refreshing ? "Refreshing…" : "↻ Refresh Scores"}
         </button>
+      </div>
+
+      {/* ── Posture Strip: CSPI · Resilience · Portfolio Trend · Validators ── */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+        {[
+          {
+            label: "Security Posture Index",
+            value: cspiScore != null ? `${Math.round(cspiScore)}%` : "—",
+            color: cspiScore == null ? C.muted : cspiScore >= 80 ? C.accent : cspiScore >= 60 ? C.orange : C.red,
+            sub: "CSPI",
+          },
+          {
+            label: "Cyber Resilience",
+            value: resilScore != null ? `${Math.round(resilScore)}%` : "—",
+            color: resilScore == null ? C.muted : resilScore >= 80 ? C.accent : resilScore >= 60 ? C.orange : C.red,
+            sub: "Composite",
+          },
+          {
+            label: "Portfolio Trend",
+            value: predTrend === "improving" ? "↑ Improving" : predTrend === "declining" ? "↓ Declining" : predTrend ? "→ Mixed" : "—",
+            color: predTrend === "improving" ? C.accent : predTrend === "declining" ? C.red : C.muted,
+            sub: `${predictions?.count_improving ?? "—"} up · ${predictions?.count_declining ?? "—"} down`,
+          },
+          {
+            label: "Control Validators",
+            value: validators.length ? `${validFail} fail` : "—",
+            color: validFail > 0 ? C.red : validators.length ? C.accent : C.muted,
+            sub: `${validWarn} warning`,
+          },
+        ].map(({ label, value, color, sub }) => (
+          <div key={label} style={{ flex: "1 1 160px", background: "rgba(255,255,255,0.02)",
+            border: `1px solid rgba(255,255,255,0.07)`, borderRadius: 8,
+            padding: "14px 18px", minWidth: 140 }}>
+            <div style={{ fontSize: 9, color: C.muted, fontFamily: "monospace",
+              textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: 6 }}>{label}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color, fontFamily: "monospace", lineHeight: 1.1 }}>
+              {value}
+            </div>
+            {sub && <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>{sub}</div>}
+          </div>
+        ))}
       </div>
 
       {/* ── Row 1: Overall donut + Framework bars ─────────────────────────── */}
@@ -452,7 +534,19 @@ export function ComplianceDashboardPage({ setActiveTab }) {
               fontFamily: "monospace", textTransform: "uppercase" }}>
               Framework Posture Scores
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {/* Domain-view toggle */}
+              <button onClick={() => setDomainView(v => !v)}
+                title={domainView ? "Switch to flat list" : "Group by governance domain"}
+                style={{
+                  background: domainView ? `${C.blue}22` : "none",
+                  border: `1px solid ${domainView ? C.blue : "rgba(255,255,255,0.1)"}`,
+                  color: domainView ? C.blue : C.muted,
+                  fontFamily: "monospace", fontSize: 9, cursor: "pointer",
+                  padding: "2px 8px", borderRadius: 4,
+                }}>
+                {domainView ? "Domain" : "Flat"}
+              </button>
               <button onClick={() => saveEnabled(ALL_FRAMEWORKS.slice())}
                 style={{ background: "none", border: "none", color: C.accent,
                   fontFamily: "monospace", fontSize: 9, cursor: "pointer", padding: 0 }}>
@@ -489,19 +583,54 @@ export function ComplianceDashboardPage({ setActiveTab }) {
             })}
           </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {scores.map(fw => (
-              <FwScoreBar key={fw.framework}
-                fw={fw}
-                onClick={() => setActiveTab && setActiveTab("comp-assessment")}
-              />
-            ))}
-          </div>
-          {scores.length === 0 && (
-            <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 11, fontFamily: "monospace" }}>
-              {allScores.length === 0
-                ? "No scores yet. Click ↻ Refresh Scores to compute."
-                : "No frameworks selected. Use the chips above to show frameworks."}
+          {domainView ? (
+            // Domain-grouped view
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              {FW_DOMAINS.map(domain => {
+                const domainScores = scores.filter(fw => domain.frameworks.includes(fw.framework));
+                if (domainScores.length === 0) return null;
+                const avg = domainScores.reduce((s, fw) => s + (fw.score || 0), 0) / domainScores.length;
+                return (
+                  <div key={domain.id}>
+                    <div style={{ display: "flex", justifyContent: "space-between",
+                      alignItems: "center", marginBottom: 8 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: domain.color,
+                        fontFamily: "monospace", textTransform: "uppercase", letterSpacing: "0.8px" }}>
+                        {domain.label}
+                      </span>
+                      <span style={{ fontSize: 10, color: scoreColor(avg), fontFamily: "monospace" }}>
+                        avg {avg.toFixed(0)}%
+                      </span>
+                    </div>
+                    {domainScores.map(fw => (
+                      <FwScoreBar key={fw.framework} fw={fw}
+                        onClick={() => setActiveTab && setActiveTab("comp-assessment")} />
+                    ))}
+                  </div>
+                );
+              })}
+              {scores.length === 0 && (
+                <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 11, fontFamily: "monospace" }}>
+                  No frameworks selected. Use the chips above to show frameworks.
+                </div>
+              )}
+            </div>
+          ) : (
+            // Flat list view
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {scores.map(fw => (
+                <FwScoreBar key={fw.framework}
+                  fw={fw}
+                  onClick={() => setActiveTab && setActiveTab("comp-assessment")}
+                />
+              ))}
+              {scores.length === 0 && (
+                <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 11, fontFamily: "monospace" }}>
+                  {allScores.length === 0
+                    ? "No scores yet. Click ↻ Refresh Scores to compute."
+                    : "No frameworks selected. Use the chips above to show frameworks."}
+                </div>
+              )}
             </div>
           )}
         </div>

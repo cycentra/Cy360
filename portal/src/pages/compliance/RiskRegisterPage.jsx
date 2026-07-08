@@ -8,7 +8,7 @@
  * Accepts optional `initialView` prop ("heatmap"|"list"|"appetite").
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { API_BASE } from "../../core/constants.js";
 import { CY_FW_FILTER_KEY } from "./ComplianceDashboardPage.jsx";
 
@@ -264,6 +264,354 @@ function RiskForm({ initial, onSave, onCancel }) {
   );
 }
 
+// ── Exposure Tab Component ────────────────────────────────────────────────────
+
+const EXP_SEV_COLORS = { critical: C.red, high: C.orange, medium: C.blue, low: C.muted };
+const EXP_SEV_ORDER  = { critical: 0, high: 1, medium: 2, low: 3 };
+
+const EXP_TYPE_LABELS = {
+  vulnerability: { label: "Vulnerability", color: C.blue },
+  supply_chain:  { label: "Supply Chain",  color: C.orange },
+  configuration: { label: "Config",        color: C.purple },
+  manual:        { label: "Manual",        color: C.muted },
+};
+
+const EXP_TABS = [
+  { id: "all",           label: "All" },
+  { id: "vulnerability", label: "Vulnerabilities" },
+  { id: "supply_chain",  label: "Supply Chain" },
+  { id: "other",         label: "Other" },
+];
+
+function ExposureTab() {
+  const [items, setItems]       = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [activeType, setType]   = useState("all");
+  const [filter, setFilter]     = useState({ sev: "all", status: "all", search: "" });
+  const [showCreate, setCreate] = useState(false);
+  const [createForm, setCreateForm] = useState({
+    asset: "", asset_type: "host", exposure_type: "vulnerability",
+    severity: "medium", title: "", description: "", cvss_score: "",
+  });
+  const [saving, setSaving]   = useState(false);
+  const [msg, setMsg]         = useState(null);
+  const abortRef              = useRef(null);
+
+  const load = useCallback(async () => {
+    if (abortRef.current) abortRef.current.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: 300 });
+      if (activeType !== "all" && activeType !== "other") params.set("exposure_type", activeType);
+      const r = await fetch(`${API_BASE}/api/comp/exposure?${params}`, {
+        credentials: "include", signal: ctrl.signal,
+      });
+      const d = await r.json();
+      const sorted = (d.items || []).sort(
+        (a, b) => (EXP_SEV_ORDER[a.severity] ?? 9) - (EXP_SEV_ORDER[b.severity] ?? 9)
+      );
+      setItems(sorted);
+    } catch (e) {
+      if (e.name !== "AbortError") setMsg({ type: "error", text: "Failed to load exposure items." });
+    } finally {
+      setLoading(false);
+    }
+  }, [activeType]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const updateStatus = async (id, status) => {
+    try {
+      const r = await fetch(`${API_BASE}/api/comp/exposure/${id}`, {
+        method: "PUT", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (!r.ok) throw new Error("Update failed");
+      setItems(prev => prev.map(i => i.id === id ? { ...i, status } : i));
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    }
+  };
+
+  const submitCreate = async () => {
+    if (!createForm.asset || !createForm.title) {
+      setMsg({ type: "error", text: "Asset and title are required." }); return;
+    }
+    setSaving(true); setMsg(null);
+    try {
+      const body = { ...createForm };
+      if (createForm.cvss_score) body.cvss_score = parseFloat(createForm.cvss_score);
+      else delete body.cvss_score;
+      const r = await fetch(`${API_BASE}/api/comp/exposure`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Create failed");
+      setItems(prev => [d.exposure, ...prev]);
+      setCreate(false);
+      setCreateForm({ asset: "", asset_type: "host", exposure_type: "vulnerability",
+        severity: "medium", title: "", description: "", cvss_score: "" });
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const total    = items.length;
+  const critical = items.filter(i => i.severity === "critical").length;
+  const open     = items.filter(i => i.status === "open").length;
+  const resolved = items.filter(i => i.status === "resolved" || i.status === "accepted").length;
+
+  const visible = items.filter(i => {
+    if (activeType === "other"
+      && (i.exposure_type === "vulnerability" || i.exposure_type === "supply_chain")) return false;
+    if (filter.sev !== "all" && i.severity !== filter.sev) return false;
+    if (filter.status !== "all" && i.status !== filter.status) return false;
+    if (filter.search) {
+      const q = filter.search.toLowerCase();
+      return (i.asset || "").toLowerCase().includes(q)
+        || (i.title || "").toLowerCase().includes(q);
+    }
+    return true;
+  });
+
+  const inp = {
+    width: "100%", background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`,
+    borderRadius: 6, padding: "7px 10px", color: C.text, fontSize: 12,
+    boxSizing: "border-box", outline: "none",
+  };
+
+  return (
+    <div>
+      {/* Stats row */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+        {[
+          { label: "Total",    value: total,    color: C.text },
+          { label: "Critical", value: critical, color: C.red },
+          { label: "Open",     value: open,     color: C.orange },
+          { label: "Resolved", value: resolved, color: C.teal },
+        ].map(({ label, value, color }) => (
+          <div key={label} style={{ background: C.surface, border: `1px solid ${C.border}`,
+            borderRadius: 8, padding: "12px 18px", textAlign: "center", minWidth: 90 }}>
+            <div style={{ fontSize: 24, fontWeight: 800, color, fontFamily: "monospace" }}>{value}</div>
+            <div style={{ fontSize: 10, color: C.muted, marginTop: 2, fontFamily: "monospace" }}>{label}</div>
+          </div>
+        ))}
+        <div style={{ marginLeft: "auto", alignSelf: "center" }}>
+          <button onClick={() => setCreate(c => !c)}
+            style={{ background: `${C.accent}10`, border: `1px solid ${C.accent}40`,
+              color: C.accent, padding: "8px 16px", borderRadius: 4,
+              fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+            + Add Item
+          </button>
+        </div>
+      </div>
+
+      {/* Inline create form */}
+      {showCreate && (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`,
+          borderRadius: 8, padding: 18, marginBottom: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 14 }}>New Exposure Item</div>
+          {msg?.type === "error" && (
+            <div style={{ color: C.red, fontSize: 11, marginBottom: 10 }}>{msg.text}</div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {[
+              { key: "asset",       label: "Asset / Library",       placeholder: "e.g. acme.example.com" },
+              { key: "title",       label: "Title",                  placeholder: "Short description" },
+            ].map(f => (
+              <div key={f.key}>
+                <div style={{ fontSize: 9, color: C.muted, fontFamily: "monospace",
+                  textTransform: "uppercase", letterSpacing: "1px", marginBottom: 4 }}>{f.label}</div>
+                <input style={inp} placeholder={f.placeholder} value={createForm[f.key]}
+                  onChange={e => setCreateForm(p => ({ ...p, [f.key]: e.target.value }))} />
+              </div>
+            ))}
+            <div style={{ gridColumn: "1/-1" }}>
+              <div style={{ fontSize: 9, color: C.muted, fontFamily: "monospace",
+                textTransform: "uppercase", letterSpacing: "1px", marginBottom: 4 }}>Description</div>
+              <textarea style={{ ...inp, height: 60, resize: "vertical" }}
+                value={createForm.description}
+                onChange={e => setCreateForm(p => ({ ...p, description: e.target.value }))} />
+            </div>
+            {[
+              { key: "exposure_type", label: "Type",      opts: ["vulnerability","supply_chain","configuration","manual"] },
+              { key: "asset_type",    label: "Asset Type", opts: ["host","web_asset","api","service","dependency"] },
+              { key: "severity",      label: "Severity",   opts: ["critical","high","medium","low"] },
+            ].map(f => (
+              <div key={f.key}>
+                <div style={{ fontSize: 9, color: C.muted, fontFamily: "monospace",
+                  textTransform: "uppercase", letterSpacing: "1px", marginBottom: 4 }}>{f.label}</div>
+                <select style={{ ...inp, cursor: "pointer" }} value={createForm[f.key]}
+                  onChange={e => setCreateForm(p => ({ ...p, [f.key]: e.target.value }))}>
+                  {f.opts.map(o => <option key={o} value={o}>{o.replace(/_/g," ")}</option>)}
+                </select>
+              </div>
+            ))}
+            <div>
+              <div style={{ fontSize: 9, color: C.muted, fontFamily: "monospace",
+                textTransform: "uppercase", letterSpacing: "1px", marginBottom: 4 }}>CVSS Score (optional)</div>
+              <input style={inp} type="number" placeholder="0.0 – 10.0"
+                value={createForm.cvss_score}
+                onChange={e => setCreateForm(p => ({ ...p, cvss_score: e.target.value }))} />
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+            <button onClick={() => setCreate(false)}
+              style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`,
+                color: C.muted, padding: "7px 16px", borderRadius: 4,
+                fontFamily: "monospace", fontSize: 11, cursor: "pointer" }}>Cancel</button>
+            <button onClick={submitCreate} disabled={saving}
+              style={{ background: `${C.accent}10`, border: `1px solid ${C.accent}40`,
+                color: C.accent, padding: "7px 16px", borderRadius: 4,
+                fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer",
+                opacity: saving ? 0.6 : 1 }}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Message banner */}
+      {msg && !showCreate && (
+        <div style={{ marginBottom: 12, padding: "8px 14px", borderRadius: 6, fontSize: 11,
+          fontFamily: "monospace",
+          background: msg.type === "error" ? `${C.red}08` : `${C.teal}08`,
+          border: `1px solid ${msg.type === "error" ? `${C.red}30` : `${C.teal}30`}`,
+          color: msg.type === "error" ? C.red : C.teal }}>
+          {msg.text}
+          <button onClick={() => setMsg(null)}
+            style={{ float: "right", background: "none", border: "none", cursor: "pointer",
+              color: C.muted, fontSize: 13 }}>×</button>
+        </div>
+      )}
+
+      {/* Type tabs */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 14,
+        borderBottom: `1px solid ${C.border}`, paddingBottom: 0 }}>
+        {EXP_TABS.map(t => (
+          <button key={t.id} onClick={() => setType(t.id)}
+            style={{ background: "none", border: "none", padding: "7px 14px", cursor: "pointer",
+              fontFamily: "monospace", fontSize: 11, fontWeight: 500,
+              color: activeType === t.id ? C.accent : C.muted,
+              borderBottom: activeType === t.id ? `2px solid ${C.accent}` : "2px solid transparent" }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+        <input placeholder="Search asset, title…"
+          value={filter.search} onChange={e => setFilter(f => ({ ...f, search: e.target.value }))}
+          style={{ flex: 1, minWidth: 180, background: "rgba(255,255,255,0.04)",
+            border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px",
+            color: C.text, fontSize: 12, outline: "none" }} />
+        {[
+          { key: "sev",    opts: ["all","critical","high","medium","low"],                             label: "Severity" },
+          { key: "status", opts: ["all","open","in_progress","resolved","accepted","false_positive"],  label: "Status" },
+        ].map(({ key, opts, label }) => (
+          <select key={key} value={filter[key]}
+            onChange={e => setFilter(f => ({ ...f, [key]: e.target.value }))}
+            style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`,
+              borderRadius: 6, padding: "6px 10px", color: C.text, fontSize: 12 }}>
+            {opts.map(o => <option key={o} value={o}>{o === "all" ? `All ${label}` : o.replace(/_/g," ")}</option>)}
+          </select>
+        ))}
+      </div>
+
+      {/* Table */}
+      {loading ? (
+        <div style={{ color: C.muted, fontFamily: "monospace", fontSize: 12, padding: 24 }}>Loading…</div>
+      ) : visible.length === 0 ? (
+        <div style={{ color: C.muted, fontFamily: "monospace", fontSize: 12, padding: 24 }}>
+          No exposure items match the current filter.
+        </div>
+      ) : (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${C.border}`, color: C.muted,
+                  fontSize: 9, textTransform: "uppercase", letterSpacing: 0.8 }}>
+                  {["Asset","Type","Title","Sev","CVSS","Source","Status","Age",""].map(h => (
+                    <th key={h} style={{ padding: "8px 12px", textAlign: "left", whiteSpace: "nowrap",
+                      fontFamily: "monospace" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map(item => {
+                  const sevC = EXP_SEV_COLORS[item.severity] || C.muted;
+                  const typM = EXP_TYPE_LABELS[item.exposure_type] || { label: item.exposure_type || "Other", color: C.muted };
+                  const ageDays = item.created_at
+                    ? Math.floor((Date.now() - new Date(item.created_at)) / 86400000) : null;
+                  return (
+                    <tr key={item.id} style={{ borderBottom: `1px solid rgba(255,255,255,0.04)` }}>
+                      <td style={{ padding: "9px 12px", color: C.accent, fontFamily: "monospace", fontSize: 11 }}>
+                        {item.asset || "—"}
+                      </td>
+                      <td style={{ padding: "9px 12px" }}>
+                        <span style={{ color: typM.color, fontSize: 11, fontFamily: "monospace" }}>{typM.label}</span>
+                      </td>
+                      <td style={{ padding: "9px 12px", color: C.text, maxWidth: 220 }}>
+                        <div style={{ fontWeight: 500 }}>{item.title}</div>
+                      </td>
+                      <td style={{ padding: "9px 12px" }}>
+                        <span style={{ background: `${sevC}22`, color: sevC, border: `1px solid ${sevC}44`,
+                          borderRadius: 4, padding: "2px 7px", fontSize: 10, fontWeight: 600,
+                          textTransform: "uppercase", letterSpacing: 0.8 }}>{item.severity || "—"}</span>
+                      </td>
+                      <td style={{ padding: "9px 12px", color: C.muted, fontFamily: "monospace", fontSize: 11 }}>
+                        {item.cvss_score ?? "—"}
+                      </td>
+                      <td style={{ padding: "9px 12px", color: C.muted, fontSize: 11 }}>
+                        {item.source || "manual"}
+                      </td>
+                      <td style={{ padding: "9px 12px" }}>
+                        <select value={item.status}
+                          onChange={e => updateStatus(item.id, e.target.value)}
+                          style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`,
+                            borderRadius: 4, padding: "3px 6px", color: C.text, fontSize: 11 }}>
+                          {["open","in_progress","resolved","accepted","false_positive"].map(s => (
+                            <option key={s} value={s}>{s.replace(/_/g," ")}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td style={{ padding: "9px 12px", color: ageDays > 30 ? C.orange : C.muted,
+                        fontFamily: "monospace", fontSize: 11, whiteSpace: "nowrap" }}>
+                        {ageDays !== null ? `${ageDays}d` : "—"}
+                      </td>
+                      <td style={{ padding: "9px 12px" }}>
+                        {(item.status === "open" || item.status === "in_progress") && (
+                          <button onClick={() => updateStatus(item.id, "resolved")}
+                            style={{ background: `${C.teal}22`, color: C.teal, border: `1px solid ${C.teal}44`,
+                              borderRadius: 4, padding: "3px 8px", fontSize: 10, cursor: "pointer" }}>
+                            Resolve
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: "8px 12px", color: C.muted, fontSize: 11, fontFamily: "monospace" }}>
+            Showing {visible.length} of {total} items
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main Component ─────────────────────────────────────────────────────────────
 
 export function RiskRegisterPage({ initialView = "heatmap" }) {
@@ -373,6 +721,7 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
     { id: "heatmap",  label: "Risk Heatmap" },
     { id: "list",     label: "Risk Register" },
     { id: "appetite", label: "Risk Appetite" },
+    { id: "exposure", label: "Exposure" },
   ];
 
   return (
@@ -766,6 +1115,9 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
           </div>
         </div>
       )}
+
+      {/* ── EXPOSURE ── */}
+      {view === "exposure" && <ExposureTab />}
 
       {msg && (
         <div style={{ marginTop: 12, padding: "8px 14px", borderRadius: 6, fontSize: 11,

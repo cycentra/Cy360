@@ -20,10 +20,7 @@ import { ComplianceFindingsPage }       from '../pages/compliance/ComplianceFind
 import { ComplianceReportsPage }        from '../pages/compliance/ComplianceReportsPage.jsx';
 import { PolicyDocumentsPage }          from '../pages/compliance/PolicyDocumentsPage.jsx';
 import { ComplianceAssessmentPage }     from '../pages/compliance/ComplianceAssessmentPage.jsx';
-import SupplyChainRiskPage              from '../pages/compliance/SupplyChainRiskPage.jsx';
-import ExposureRegisterPage             from '../pages/compliance/ExposureRegisterPage.jsx';
 import RiskPredictionPage               from '../pages/compliance/RiskPredictionPage.jsx';
-import UnifiedRiskDashboardPage         from '../pages/compliance/UnifiedRiskDashboardPage.jsx';
 import IntegrationHealthPage            from '../pages/integrations/index.jsx';
 import EdrFleetPage                     from '../pages/edr/index.jsx';
 import EdrDetectionsPage                from '../pages/edr/EdrDetectionsPage.jsx';
@@ -75,10 +72,7 @@ export function AppRouter({ activeTab, user, assets, data, stats, installedModul
       {activeTab==="comp-appetite"    && <RiskAppetitePage/>}
       {activeTab==="comp-reports"     && <ComplianceReportsPage/>}
       {activeTab==="comp-policy"      && <PolicyDocumentsPage/>}
-      {activeTab==="comp-supplychain" && <SupplyChainRiskPage/>}
-      {activeTab==="comp-exposure"    && <ExposureRegisterPage/>}
       {activeTab==="comp-predict"     && <RiskPredictionPage/>}
-      {activeTab==="comp-unified"     && <UnifiedRiskDashboardPage/>}
       {activeTab==="integration-health" && <IntegrationHealthPage onNavigate={nav}/>}
       {activeTab==="edr-fleet"      && <EdrFleetPage onViewDetail={id => { setSelectedEdrAgent(id); setActiveTab("edr-endpoint-detail"); }}/>}
       {activeTab==="edr-detections" && <EdrDetectionsPage/>}
