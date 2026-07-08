@@ -61,6 +61,15 @@ export function ComplianceReportsPage() {
   const [activeJob, setActiveJob]   = useState(null);
   const pollRef = useRef(null);
 
+  // Board report state
+  const today = new Date().toISOString().split("T")[0];
+  const firstOfMonth = today.slice(0, 8) + "01";
+  const [boardStart, setBoardStart]   = useState(firstOfMonth);
+  const [boardEnd, setBoardEnd]       = useState(today);
+  const [boardGen, setBoardGen]       = useState(false);
+  const [boardJob, setBoardJob]       = useState(null);
+  const boardPollRef = useRef(null);
+
   const loadReports = () => {
     fetch(`${API_BASE}/api/comp/reports`, { credentials: "include" })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
@@ -87,7 +96,27 @@ export function ComplianceReportsPage() {
     }, 2000);
   };
 
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+  const pollBoardJob = (jobId) => {
+    if (boardPollRef.current) clearInterval(boardPollRef.current);
+    boardPollRef.current = setInterval(() => {
+      fetch(`${API_BASE}/api/comp/reports/jobs/${jobId}`, { credentials: "include" })
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(job => {
+          setBoardJob(job);
+          if (job.status === "complete" || job.status === "failed") {
+            clearInterval(boardPollRef.current);
+            setBoardGen(false);
+            if (job.status === "complete") loadReports();
+          }
+        })
+        .catch(() => { clearInterval(boardPollRef.current); setBoardGen(false); });
+    }, 2000);
+  };
+
+  useEffect(() => () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (boardPollRef.current) clearInterval(boardPollRef.current);
+  }, []);
 
   const handleGenerate = () => {
     setGenerating(true); setActiveJob(null);
@@ -99,6 +128,19 @@ export function ComplianceReportsPage() {
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(d => { setActiveJob({ job_id: d.job_id, status: "pending", progress: 0 }); pollJob(d.job_id); })
       .catch(e => { setGenerating(false); alert(`Generate failed: ${e}`); });
+  };
+
+  const handleBoardGenerate = () => {
+    if (!boardStart || !boardEnd) { alert("Select both period start and end dates."); return; }
+    setBoardGen(true); setBoardJob(null);
+    fetch(`${API_BASE}/api/comp/reports/generate-board`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ period_start: boardStart, period_end: boardEnd }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { setBoardJob({ job_id: d.job_id, status: "pending", progress: 0 }); pollBoardJob(d.job_id); })
+      .catch(e => { setBoardGen(false); alert(`Board report failed: ${e}`); });
   };
 
   const inp = {
@@ -129,6 +171,48 @@ export function ComplianceReportsPage() {
             {generating ? "Generating..." : "Generate Report"}
           </button>
         </div>
+      </div>
+
+      {/* Board Report generator */}
+      <div style={{ background: "#0d1117", border: `1px solid rgba(176,110,255,0.25)`,
+        borderRadius: 8, padding: "18px 20px", marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+          flexWrap: "wrap", gap: 12 }}>
+          <div>
+            <div style={{ color: C.purple, fontSize: 9, fontFamily: "monospace",
+              letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 2 }}>
+              BOARD / EXECUTIVE REPORT
+            </div>
+            <div style={{ color: C.text, fontSize: 12, fontFamily: "monospace" }}>
+              Unified multi-framework executive summary PDF for board or CISO presentation
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input type="date" value={boardStart} onChange={e => setBoardStart(e.target.value)}
+              style={{ ...inp, padding: "7px 10px" }} />
+            <span style={{ color: C.muted, fontSize: 10, fontFamily: "monospace" }}>to</span>
+            <input type="date" value={boardEnd} onChange={e => setBoardEnd(e.target.value)}
+              style={{ ...inp, padding: "7px 10px" }} />
+            <button onClick={handleBoardGenerate} disabled={boardGen}
+              style={{ background: `rgba(176,110,255,0.10)`, border: `1px solid rgba(176,110,255,0.40)`,
+                color: C.purple, padding: "8px 18px", borderRadius: 4, fontFamily: "monospace",
+                fontSize: 11, fontWeight: 700, cursor: "pointer", opacity: boardGen ? 0.6 : 1 }}>
+              {boardGen ? "Generating..." : "Generate Board Report"}
+            </button>
+          </div>
+        </div>
+        {boardJob && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+              letterSpacing: "1.5px", marginBottom: 8 }}>Job: {boardJob.job_id}</div>
+            <ProgressBar progress={boardJob.progress || 0} status={boardJob.status} />
+            {boardJob.error && (
+              <div style={{ color: C.red, fontSize: 10, fontFamily: "monospace", marginTop: 8 }}>
+                Error: {boardJob.error}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Active job progress */}

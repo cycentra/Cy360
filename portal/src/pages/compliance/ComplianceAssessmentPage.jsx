@@ -1229,6 +1229,164 @@ function SoAView() {
 
 const ALL_FW_ORDERED = Object.keys(FW_META);
 
+// ── What-If Simulation Panel ──────────────────────────────────────────────────
+
+function SimulateView({ framework, color }) {
+  const [data, setData]         = useState(null);
+  const [loading, setLoading]   = useState(true);
+  const [overrides, setOverrides] = useState({});   // question_id → score (0|1|2)
+  const [result, setResult]     = useState(null);
+  const [simming, setSimming]   = useState(false);
+
+  useEffect(() => {
+    setLoading(true); setOverrides({}); setResult(null);
+    fetch(`${API_BASE}/api/comp/questionnaire/${framework}`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { setData(d); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [framework]);
+
+  const toggle = (qid, currentScore) => {
+    setResult(null);
+    setOverrides(prev => {
+      const next = { ...prev };
+      if (next[qid] !== undefined) {
+        delete next[qid]; // revert to actual
+      } else {
+        // If currently failing/partial → simulate as passing (2); if passing → simulate as failing (0)
+        next[qid] = currentScore >= 2 ? 0 : 2;
+      }
+      return next;
+    });
+  };
+
+  const runSim = () => {
+    if (!Object.keys(overrides).length) return;
+    setSimming(true); setResult(null);
+    const ovList = Object.entries(overrides).map(([question_id, score]) => ({ question_id, score }));
+    fetch(`${API_BASE}/api/comp/simulate`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ framework, overrides: ovList }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { setResult(d); setSimming(false); })
+      .catch(e => { setResult({ error: String(e) }); setSimming(false); });
+  };
+
+  if (loading) return (
+    <div style={{ color: C.muted, fontFamily: "monospace", fontSize: 11, padding: 24 }}>Loading questions…</div>
+  );
+  if (!data) return (
+    <div style={{ color: C.red, fontFamily: "monospace", fontSize: 11, padding: 24 }}>Failed to load questionnaire.</div>
+  );
+
+  const templates  = data.templates || [];
+  const responses  = data.responses || [];
+  const respMap    = {};
+  responses.forEach(r => { respMap[r.question_id] = r; });
+  const changed    = Object.keys(overrides).length;
+
+  return (
+    <div style={{ padding: "20px 0" }}>
+      {/* Result banner */}
+      {result && !result.error && (
+        <div style={{ background: "rgba(0,229,160,0.06)", border: `1px solid rgba(0,229,160,0.25)`,
+          borderRadius: 8, padding: "14px 18px", marginBottom: 20,
+          display: "flex", gap: 32, alignItems: "center", flexWrap: "wrap" }}>
+          <div>
+            <div style={{ color: C.muted, fontSize: 8, fontFamily: "monospace",
+              textTransform: "uppercase", letterSpacing: "1.5px" }}>Current Score</div>
+            <div style={{ color: C.orange, fontSize: 26, fontFamily: "monospace",
+              fontWeight: 800 }}>{(result.actual_score ?? 0).toFixed(1)}%</div>
+          </div>
+          <div style={{ fontSize: 22, color: C.muted }}>→</div>
+          <div>
+            <div style={{ color: C.muted, fontSize: 8, fontFamily: "monospace",
+              textTransform: "uppercase", letterSpacing: "1.5px" }}>Simulated Score</div>
+            <div style={{ color: result.delta > 0 ? C.accent : C.red, fontSize: 26,
+              fontFamily: "monospace", fontWeight: 800 }}>
+              {(result.simulated_score ?? 0).toFixed(1)}%
+            </div>
+          </div>
+          <div>
+            <div style={{ color: C.muted, fontSize: 8, fontFamily: "monospace",
+              textTransform: "uppercase", letterSpacing: "1.5px" }}>Delta</div>
+            <div style={{ color: result.delta > 0 ? C.accent : C.red, fontSize: 26,
+              fontFamily: "monospace", fontWeight: 800 }}>
+              {result.delta > 0 ? "+" : ""}{(result.delta ?? 0).toFixed(1)}%
+            </div>
+          </div>
+          <div style={{ fontSize: 10, color: C.muted, fontFamily: "monospace" }}>
+            {result.changed_questions ?? changed} question{changed !== 1 ? "s" : ""} modified
+          </div>
+        </div>
+      )}
+      {result?.error && (
+        <div style={{ color: C.red, fontFamily: "monospace", fontSize: 10, marginBottom: 16 }}>
+          {result.error}
+        </div>
+      )}
+
+      {/* Controls bar */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16,
+        flexWrap: "wrap" }}>
+        <div style={{ color: C.muted, fontSize: 10, fontFamily: "monospace" }}>
+          Toggle questions to change their simulated score.
+          {changed > 0 && <span style={{ color }}> {changed} override{changed !== 1 ? "s" : ""} pending.</span>}
+        </div>
+        <button onClick={() => { setOverrides({}); setResult(null); }}
+          disabled={!changed}
+          style={{ background: "rgba(255,255,255,0.04)", border: `1px solid rgba(255,255,255,0.10)`,
+            color: C.muted, padding: "5px 12px", borderRadius: 4, fontFamily: "monospace",
+            fontSize: 10, cursor: changed ? "pointer" : "default", opacity: changed ? 1 : 0.4 }}>
+          Clear
+        </button>
+        <button onClick={runSim} disabled={!changed || simming}
+          style={{ background: `${color}12`, border: `1px solid ${color}40`,
+            color, padding: "5px 16px", borderRadius: 4, fontFamily: "monospace",
+            fontSize: 10, fontWeight: 700, cursor: (changed && !simming) ? "pointer" : "default",
+            opacity: (!changed || simming) ? 0.5 : 1 }}>
+          {simming ? "Simulating…" : "Run Simulation"}
+        </button>
+      </div>
+
+      {/* Question list */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {templates.map(q => {
+          const resp      = respMap[q.question_id];
+          const currScore = resp?.response === "yes" ? 2 : resp?.response === "partial" ? 1 : 0;
+          const ovScore   = overrides[q.question_id];
+          const isChanged = ovScore !== undefined;
+          const dispScore = isChanged ? ovScore : currScore;
+          const scoreColor = dispScore >= 2 ? C.accent : dispScore === 1 ? C.orange : C.red;
+          const scoreLabel = dispScore >= 2 ? "Pass" : dispScore === 1 ? "Partial" : "Fail";
+          return (
+            <div key={q.question_id}
+              onClick={() => toggle(q.question_id, currScore)}
+              style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 12px",
+                borderRadius: 6, cursor: "pointer",
+                background: isChanged ? `${color}08` : "rgba(255,255,255,0.01)",
+                border: `1px solid ${isChanged ? `${color}30` : "rgba(255,255,255,0.06)"}`,
+                transition: "all 0.1s" }}>
+              <div style={{ width: 48, textAlign: "center", flexShrink: 0,
+                color: scoreColor, fontSize: 9, fontFamily: "monospace", fontWeight: 700,
+                textTransform: "uppercase" }}>
+                {scoreLabel}{isChanged ? "*" : ""}
+              </div>
+              <div style={{ flex: 1, fontSize: 11, color: C.text, lineHeight: 1.4 }}>
+                {q.question_text || q.control_id}
+              </div>
+              <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+                flexShrink: 0 }}>w:{q.weight ?? 1}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function ComplianceAssessmentPage() {
   // Only show tabs for globally-enabled frameworks; default to first enabled
   const [activeFw, setActiveFw]   = useState(() => {
@@ -1420,10 +1578,11 @@ export function ComplianceAssessmentPage() {
             </h2>
           </div>
           {/* Sub-tabs */}
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {[
               { key: "questionnaire", label: "Questionnaire" },
               { key: "controls",      label: "Controls List" },
+              { key: "simulate",      label: "What-If Simulation" },
               ...(activeFw === "iso27001"
                 ? [{ key: "soa", label: "Statement of Applicability" }]
                 : []),
@@ -1444,6 +1603,8 @@ export function ComplianceAssessmentPage() {
         {/* Content */}
         {activeTab === "questionnaire" ? (
           <QuestionnaireView key={`${activeFw}-${viewKey}`} framework={activeFw} color={meta.color} />
+        ) : activeTab === "simulate" ? (
+          <SimulateView key={`sim-${activeFw}`} framework={activeFw} color={meta.color} />
         ) : activeTab === "soa" && activeFw === "iso27001" ? (
           <SoAView key="soa" />
         ) : (

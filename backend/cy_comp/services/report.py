@@ -23,10 +23,12 @@ from pathlib import Path
 
 from cy_comp.models import db
 from cy_comp.services.compliance import get_latest_scores
+from cy_comp.services import ai_analysis as _ai
 
 log = logging.getLogger("cycentra.cy_comp.report")
 
 REPORTS_DIR = Path(os.environ.get("COMP_REPORTS_DIR", "/var/log/cycentra/cy-comp/reports"))
+ORG_NAME    = os.environ.get("CYCENTRA_ORG_NAME", "")
 
 FRAMEWORK_LABELS = {
     "nis2":      "NIS2",
@@ -360,30 +362,63 @@ def _build_pdf(pdf_path: str, report_content: dict) -> None:
             f"Page {doc.page}  |  Generated {gen_date_str}")
         canvas.restoreState()
 
+    org_name = report_content.get("company_name", "") or ORG_NAME
+
     def cover_page(canvas, doc):
         canvas.saveState()
         # Navy background
         canvas.setFillColor(C_NAVY)
         canvas.rect(0, 0, W, H, fill=1, stroke=0)
-        # Teal accent bar
+
+        # ── Text zone (upper third) ────────────────────────────────────────
+        # Org / company name (small, accent-blue)
+        if org_name:
+            canvas.setFillColor(colors.HexColor("#90caf9"))
+            canvas.setFont("Helvetica", 10)
+            canvas.drawCentredString(W / 2, H * 0.86, org_name.upper())
+
+        # Brand line
+        canvas.setFillColor(colors.HexColor("#64748b"))
+        canvas.setFont("Helvetica", 11)
+        canvas.drawCentredString(W / 2, H * 0.81, "CyCentra 360")
+
+        # Teal separator line below brand
         canvas.setFillColor(C_TEAL)
-        canvas.rect(0, H * 0.52, W, 4, fill=1, stroke=0)
-        canvas.rect(0, H * 0.48 - 2, W, 2, fill=1, stroke=0)
-        # Score circle
-        cx, cy, r = W / 2, H * 0.72, 48
+        canvas.rect(W * 0.15, H * 0.78 - 1, W * 0.70, 3, fill=1, stroke=0)
+
+        # Main title — "GRC Compliance Report" (bold, white, 28pt)
+        canvas.setFillColor(colors.white)
+        canvas.setFont("Helvetica-Bold", 28)
+        canvas.drawCentredString(W / 2, H * 0.73, "GRC Compliance Report")
+
+        # Framework scope subtitle (teal-tinted, 13pt)
+        canvas.setFillColor(colors.HexColor("#90caf9"))
+        canvas.setFont("Helvetica", 13)
+        canvas.drawCentredString(W / 2, H * 0.68, fw_label)
+
+        # Second teal separator
+        canvas.setFillColor(C_TEAL)
+        canvas.rect(W * 0.25, H * 0.63 - 1, W * 0.50, 2, fill=1, stroke=0)
+
+        # ── Score circle (center zone, well below title) ──────────────────
+        cx, cy, r = W / 2, H * 0.42, 52
         canvas.setFillColor(colors.HexColor("#1e3a5f"))
         canvas.circle(cx, cy, r, fill=1, stroke=0)
         sc = score_color(overall_score)
         canvas.setStrokeColor(sc)
-        canvas.setLineWidth(4)
+        canvas.setLineWidth(5)
         canvas.circle(cx, cy, r, fill=0, stroke=1)
         canvas.setFillColor(sc)
-        canvas.setFont("Helvetica-Bold", 24)
-        canvas.drawCentredString(cx, cy + 6, f"{overall_score:.0f}%")
+        canvas.setFont("Helvetica-Bold", 26)
+        canvas.drawCentredString(cx, cy + 8, f"{overall_score:.0f}%")
         canvas.setFont("Helvetica", 9)
         canvas.setFillColor(colors.HexColor("#90caf9"))
-        canvas.drawCentredString(cx, cy - 14, grade + " — " + label)
-        # Footer strip
+        canvas.drawCentredString(cx, cy - 12, grade + " — " + label)
+        canvas.setFillColor(C_MUTED)
+        canvas.setFont("Helvetica", 8)
+        canvas.drawCentredString(cx, cy - 26, "Overall Compliance Score")
+
+        # ── Footer strip ──────────────────────────────────────────────────
         canvas.setFillColor(colors.HexColor("#0a1628"))
         canvas.rect(0, 0, W, 28*mm, fill=1, stroke=0)
         canvas.setFillColor(colors.HexColor("#64748b"))
@@ -395,15 +430,8 @@ def _build_pdf(pdf_path: str, report_content: dict) -> None:
     story = []
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    # COVER PAGE
+    # COVER PAGE — canvas callback draws everything; story just triggers page 1
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    story.append(Spacer(1, H * 0.12))
-    story.append(Paragraph("CyCentra 360", style_cover_sub))
-    story.append(Spacer(1, 6))
-    story.append(Paragraph("GRC Compliance Report", style_cover_title))
-    story.append(Spacer(1, 8))
-    story.append(Paragraph(fw_label, style_cover_sub))
-    story.append(Spacer(1, H * 0.26))
     story.append(PageBreak())
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -762,6 +790,42 @@ def _build_pdf(pdf_path: str, report_content: dict) -> None:
     story.append(PageBreak())
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # SECTION 7.5 — AI-POWERED REMEDIATION GUIDANCE
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    ai_recs = report_content.get("ai_recommendations", [])
+    if ai_recs:
+        story.append(Paragraph("AI-Powered Remediation Guidance", style_h1))
+        story.append(HRFlowable(width="100%", thickness=2, color=C_TEAL, spaceAfter=10))
+        story.append(Paragraph(
+            "The following guidance was generated by CyMind AI based on the live compliance posture "
+            "data at the time of report generation. It provides prioritised remediation actions "
+            "tailored to the frameworks most in need of uplift.",
+            style_body))
+        story.append(Spacer(1, 8))
+        for rec in ai_recs:
+            txt = rec.get("text", "")
+            if txt:
+                for line in txt.split("\n"):
+                    line = line.strip()
+                    if not line:
+                        story.append(Spacer(1, 4))
+                    elif line.startswith(("#", "**", "##")):
+                        clean = line.lstrip("#* ")
+                        story.append(Paragraph(clean, style_h2))
+                    elif line[0].isdigit() and len(line) > 2 and line[1] in ".):":
+                        story.append(Paragraph(f"• {line[2:].strip()}", style_rec))
+                    elif line.startswith("-"):
+                        story.append(Paragraph(f"• {line[1:].strip()}", style_rec))
+                    else:
+                        story.append(Paragraph(line, style_body))
+        story.append(Spacer(1, 6))
+        story.append(Paragraph(
+            "This guidance is AI-generated and should be reviewed by a qualified compliance "
+            "professional before implementation.",
+            style_small))
+        story.append(PageBreak())
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # SECTION 8 — CONCLUSION
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     story.append(Paragraph("Conclusion & Next Steps", style_h1))
@@ -906,6 +970,7 @@ def generate_report_job(job_id: str) -> None:
             "framework":        framework,
             "generated_at":     datetime.now(timezone.utc).isoformat(),
             "generated_by":     requested_by,
+            "company_name":     ORG_NAME,
             "framework_scores": scores,
             "findings_count":   len(findings),
             "findings":         findings,
@@ -913,6 +978,50 @@ def generate_report_job(job_id: str) -> None:
             "questionnaire":    q_data,
             "alerts_summary":   alerts,
         }
+
+        # Phase 3.5 — AI-generated recommendations (non-blocking)
+        _update_job(job_id, "running", progress=72)
+        ai_recs: list[dict] = []
+        try:
+            overall = round(sum(s.get("score", 0) for s in scores) / len(scores), 1) if scores else 0.0
+            low_scores = [s for s in scores if float(s.get("score", 100)) < 80]
+            if low_scores:
+                ctx_data = {
+                    "framework_scores": scores,
+                    "overall_score": overall,
+                    "risk_summary": {
+                        "total": len(risks),
+                        "critical": sum(1 for r in risks if r.get("severity") == "Critical"),
+                        "high": sum(1 for r in risks if r.get("severity") == "High"),
+                        "open": sum(1 for r in risks if r.get("status") in ("open", "accepted")),
+                    },
+                    "findings_summary": {
+                        "critical": sum(1 for f in findings if (f.get("severity") or "").lower() == "critical"),
+                        "high": sum(1 for f in findings if (f.get("severity") or "").lower() == "high"),
+                    },
+                    "active_alerts": alerts.get("total", 0),
+                    "alert_by_severity": {
+                        "critical": alerts.get("critical", 0),
+                        "high": alerts.get("high", 0),
+                    },
+                }
+                fw_list = ", ".join(
+                    FRAMEWORK_LABELS.get(s["framework"], s["framework"].upper())
+                    for s in low_scores
+                )
+                question = (
+                    f"Provide 3–5 specific, prioritised remediation recommendations for the "
+                    f"following frameworks that are below 80% compliance: {fw_list}. "
+                    f"For each recommendation state the framework, the action, and the expected "
+                    f"compliance improvement. Be concise and actionable."
+                )
+                raw = _ai.ask_copilot(question, ctx_data, created_by=requested_by or "report-job")
+                if raw:
+                    ai_recs = [{"text": raw, "frameworks": [s["framework"] for s in low_scores]}]
+            report_content["ai_recommendations"] = ai_recs
+        except Exception as ai_exc:
+            log.warning("generate_report_job: AI recommendations skipped: %s", ai_exc)
+            report_content["ai_recommendations"] = []
 
         # Phase 4 — write JSON
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)

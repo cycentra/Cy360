@@ -52,6 +52,7 @@ const EMPTY_FORM = {
   title: "", description: "", category: "IT", owner: "",
   likelihood: 3, impact: 3, appetite: "medium",
   status: "open", treatment: "mitigate", frameworks: [],
+  financial_impact: "", financial_impact_eur: "", business_unit: "",
 };
 
 // ── Subcomponents ─────────────────────────────────────────────────────────────
@@ -228,6 +229,29 @@ function RiskForm({ initial, onSave, onCancel }) {
           <div style={{ fontSize: 11, color: C.muted, fontFamily: "monospace" }}>
             Inherent risk score (L{form.likelihood} × I{form.impact} = {score}/25) — updates in real time
           </div>
+        </div>
+
+        {/* Financial impact fields */}
+        <div>
+          <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+            letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 5 }}>Financial Impact</div>
+          <input style={inp} placeholder="e.g. €50k–200k data breach fine"
+            value={form.financial_impact}
+            onChange={e => set("financial_impact", e.target.value)} />
+        </div>
+        <div>
+          <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+            letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 5 }}>Est. Financial Impact (€)</div>
+          <input style={inp} type="number" min={0} placeholder="0"
+            value={form.financial_impact_eur}
+            onChange={e => set("financial_impact_eur", e.target.value === "" ? "" : +e.target.value)} />
+        </div>
+        <div style={{ gridColumn: "1/-1" }}>
+          <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
+            letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 5 }}>Business Unit</div>
+          <input style={inp} placeholder="e.g. Finance, IT Operations, Legal"
+            value={form.business_unit}
+            onChange={e => set("business_unit", e.target.value)} />
         </div>
 
         <div style={{ gridColumn: "1/-1" }}>

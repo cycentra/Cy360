@@ -299,6 +299,25 @@ export function ComplianceDashboardPage({ setActiveTab }) {
   const [predictions, setPred]  = useState(null);
   const [validators, setValid]  = useState([]);
 
+  // Executive Risk Copilot state
+  const [copilotQuery, setCopilotQuery]   = useState("");
+  const [copilotResp, setCopilotResp]     = useState(null);
+  const [copilotLoading, setCopilotLoad]  = useState(false);
+
+  const askCopilot = () => {
+    const q = copilotQuery.trim();
+    if (!q) return;
+    setCopilotLoad(true); setCopilotResp(null);
+    fetch(`${API_BASE}/api/comp/ask`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: q, frameworks: enabled }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { setCopilotResp(d.answer || "No response received."); setCopilotLoad(false); })
+      .catch(e => { setCopilotResp(`Error: ${e}`); setCopilotLoad(false); });
+  };
+
   // Ref keeps the current framework list accessible inside stable callbacks without
   // adding `enabled` as a dependency (which would cause double-fetches on toggle).
   const enabledRef = useRef(enabled);
@@ -930,6 +949,54 @@ export function ComplianceDashboardPage({ setActiveTab }) {
             </div>
           )}
         </div>
+      </div>
+
+      {/* ── Executive Risk Copilot ───────────────────────────────────────── */}
+      <div style={{ ...CARD, marginBottom: 16, border: `1px solid rgba(176,110,255,0.22)` }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+          marginBottom: 12 }}>
+          <div>
+            <div style={{ color: C.purple, fontSize: 9, fontFamily: "monospace",
+              letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 2 }}>
+              AI · EXECUTIVE RISK COPILOT
+            </div>
+            <div style={{ color: C.muted, fontSize: 10 }}>
+              Ask CyMind a question about your live compliance posture
+            </div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            value={copilotQuery}
+            onChange={e => setCopilotQuery(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && askCopilot()}
+            placeholder="e.g. What is our biggest compliance risk right now?"
+            style={{ flex: 1, background: "rgba(255,255,255,0.04)",
+              border: `1px solid rgba(176,110,255,0.30)`, borderRadius: 4,
+              color: C.text, fontFamily: "monospace", fontSize: 12,
+              padding: "9px 12px", outline: "none" }}
+          />
+          <button onClick={askCopilot} disabled={copilotLoading || !copilotQuery.trim()}
+            style={{ background: `rgba(176,110,255,0.12)`, border: `1px solid rgba(176,110,255,0.40)`,
+              color: C.purple, padding: "9px 18px", borderRadius: 4, fontFamily: "monospace",
+              fontSize: 11, fontWeight: 700, cursor: "pointer",
+              opacity: (copilotLoading || !copilotQuery.trim()) ? 0.5 : 1 }}>
+            {copilotLoading ? "Thinking…" : "Ask"}
+          </button>
+        </div>
+        {copilotResp && (
+          <div style={{ marginTop: 14, padding: "12px 16px", borderRadius: 6,
+            background: "rgba(176,110,255,0.06)", border: `1px solid rgba(176,110,255,0.18)` }}>
+            <div style={{ color: C.muted, fontSize: 8, fontFamily: "monospace",
+              letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 8 }}>
+              CyMind Response
+            </div>
+            <div style={{ color: C.text, fontSize: 12, lineHeight: 1.65,
+              whiteSpace: "pre-wrap", fontFamily: "monospace" }}>
+              {copilotResp}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Getting Started Flow ──────────────────────────────────────────── */}
