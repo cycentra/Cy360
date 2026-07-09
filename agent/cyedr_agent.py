@@ -291,14 +291,26 @@ PATTERN_MAP = [
     (r"(?i)(sc\.exe.*(create|config)|PSEXESVC|PsExec.*\\\\)",            "new_service"),
 ]
 
-# Known local/desktop AI processes to detect as Shadow AI
+# Known local/desktop AI processes and AI coding assistant CLIs to detect as Shadow AI
 SHADOW_AI_PROCESSES = [
+    # Local LLM servers / UIs
     "ollama", "lm_studio", "lmstudio", "jan", "gpt4all",
     "koboldcpp", "kobold_cpp", "text-generation-webui", "textgenwebui",
     "llamafile", "llama.cpp", "llama-server", "llama-cpp",
     "comfyui", "stable-diffusion-webui", "invokeai",
     "whisper", "localai", "localai-server",
     "open-webui", "msty", "chatbox",
+    # AI coding assistants / agent CLIs
+    "claude",                   # Claude Code CLI (Anthropic)
+    "cursor",                   # Cursor AI editor
+    "windsurf",                 # Windsurf AI editor (Codeium)
+    "aider",                    # Aider AI pair-programmer
+    "continue",                 # Continue.dev extension server
+    "codeium",                  # Codeium language server
+    "copilot-language-server",  # GitHub Copilot LSP
+    "tabnine-language-server",  # TabNine AI
+    "supermaven",               # Supermaven AI
+    "ghostwriter",              # Replit Ghostwriter
 ]
 
 # Regex to detect shadow AI process names in event text
@@ -358,28 +370,63 @@ def _check_shadow_ai_processes(cfg: "Config", http: "requests.Session") -> None:
 
 def _check_shadow_ai_dns(cfg: "Config", http: "requests.Session") -> None:
     """
-    Monitor DNS query logs for SaaS AI domain access.
-    Linux: parses systemd-resolved journal.
-    macOS: parses mDNSResponder log stream.
-    Windows: handled by Sysmon EventID 22 — skipped here.
-    Sends dns-detection findings to /api/itam/shadow-ai/dns-ingest.
-    """
-    if cfg.os_type == "WINDOWS":
-        return  # Windows coverage comes from Sysmon EventID 22
+    Monitor DNS/network activity for SaaS AI domain access — all platforms.
 
+    Linux:   systemd-resolved / dnsmasq / unbound / named journal; syslog fallback
+    macOS:   dscacheutil DNS cache (primary); mDNSResponder log fallback
+    Windows: Get-DnsClientCache PowerShell (no Sysmon/CySIEM dependency)
+    All OS:  TCP established-connection reverse-DNS as supplementary scan
+    """
     AI_DNS_WATCHLIST = [
-        "openai.com", "api.openai.com", "chatgpt.com", "anthropic.com", "api.anthropic.com",
-        "claude.ai", "gemini.google.com", "generativelanguage.googleapis.com",
+        # OpenAI / ChatGPT
+        "openai.com", "api.openai.com", "chatgpt.com",
+        "oaiusercontent.com", "oai.azure.com", "openai.azure.com",
+        # Anthropic / Claude
+        "anthropic.com", "api.anthropic.com", "claude.ai",
+        # Google
+        "gemini.google.com", "generativelanguage.googleapis.com",
         "aiplatform.googleapis.com", "aistudio.google.com", "vertex.ai",
-        "huggingface.co", "api-inference.huggingface.co", "mistral.ai", "api.mistral.ai",
-        "cohere.com", "api.cohere.ai", "perplexity.ai", "api.perplexity.ai",
-        "together.ai", "api.together.ai", "groq.com", "api.groq.com",
-        "fireworks.ai", "deepinfra.com", "deepseek.com", "api.deepseek.com",
-        "x.ai", "api.x.ai", "stability.ai", "api.stability.ai",
-        "midjourney.com", "runwayml.com", "runway.com", "elevenlabs.io", "api.elevenlabs.io",
-        "character.ai", "poe.com", "you.com", "replicate.com", "api.replicate.com",
-        "openrouter.ai", "coze.com", "ollama.ai", "ollama.com", "lmstudio.ai",
-        "watsonx.ai", "copilot.microsoft.com", "api.githubcopilot.com",
+        "makersuite.google.com",
+        # Meta / HuggingFace
+        "llama-api.com", "llamameta.net",
+        "huggingface.co", "huggingface.com", "api-inference.huggingface.co",
+        # Mistral / Cohere / Perplexity
+        "mistral.ai", "api.mistral.ai", "console.mistral.ai",
+        "cohere.com", "cohere.ai", "api.cohere.ai", "api.cohere.com",
+        "perplexity.ai", "api.perplexity.ai",
+        # Together / Groq / Fireworks / DeepInfra
+        "together.ai", "api.together.ai", "api.together.xyz",
+        "groq.com", "api.groq.com",
+        "fireworks.ai", "api.fireworks.ai",
+        "deepinfra.com", "api.deepinfra.com",
+        # DeepSeek / xAI
+        "deepseek.com", "api.deepseek.com", "chat.deepseek.com",
+        "x.ai", "api.x.ai", "grok.x.ai",
+        # Image / video / voice AI
+        "stability.ai", "api.stability.ai", "platform.stability.ai",
+        "midjourney.com", "cdn.midjourney.com",
+        "runwayml.com", "runway.com", "api.runwayml.com",
+        "elevenlabs.io", "api.elevenlabs.io",
+        # Writing / chat AI
+        "writesonic.com", "api.writesonic.com",
+        "jasper.ai", "api.jasper.ai",
+        "copy.ai", "api.copy.ai",
+        "character.ai", "beta.character.ai", "neo.character.ai",
+        "poe.com", "you.com", "phind.com",
+        # Model hubs / aggregators
+        "replicate.com", "api.replicate.com",
+        "openrouter.ai", "api.openrouter.ai",
+        "coze.com", "api.coze.com",
+        "venice.ai", "api.venice.ai",
+        "ollama.ai", "ollama.com",
+        "lmstudio.ai",
+        # Cloud AI platforms
+        "bedrock.amazonaws.com", "bedrock-runtime.us-east-1.amazonaws.com",
+        "watsonx.ai", "us-south.ml.cloud.ibm.com",
+        # Coding AI / enterprise
+        "copilot.microsoft.com", "api.githubcopilot.com",
+        "grammarly.com",
+        "api.notion.so",
     ]
 
     def _is_ai(domain: str) -> str | None:
@@ -389,40 +436,124 @@ def _check_shadow_ai_dns(cfg: "Config", http: "requests.Session") -> None:
                 return suffix
         return None
 
+    # ── Linux: try each common DNS resolver journal, then syslog fallback ──────
     def _read_linux() -> list[str]:
+        lines: list[str] = []
+        for unit in ("systemd-resolved", "dnsmasq", "unbound", "named", "bind9"):
+            try:
+                r = subprocess.run(
+                    ["journalctl", "-u", unit,
+                     "--since=70 seconds ago", "--no-pager", "--output=cat", "-q"],
+                    capture_output=True, text=True, timeout=8,
+                )
+                if r.stdout.strip():
+                    lines.extend(r.stdout.splitlines())
+            except Exception:
+                pass
+        # Traditional syslog fallback (rsyslog/syslog-ng distros without journald DNS units)
+        if not lines:
+            for log_path in ("/var/log/syslog", "/var/log/messages"):
+                try:
+                    r = subprocess.run(
+                        ["tail", "-n", "2000", log_path],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    if r.stdout.strip():
+                        lines.extend(r.stdout.splitlines())
+                        break
+                except Exception:
+                    pass
+        return lines
+
+    # ── macOS: DNS cache dump (primary) + mDNSResponder log fallback ───────────
+    def _read_macos() -> list[str]:
+        lines: list[str] = []
         try:
-            import subprocess
             r = subprocess.run(
-                ["journalctl", "-u", "systemd-resolved",
-                 "--since=70 seconds ago", "--no-pager", "--output=cat", "-q"],
+                ["dscacheutil", "-cachedump", "-entries", "Host"],
                 capture_output=True, text=True, timeout=8,
             )
-            return r.stdout.splitlines()
+            lines.extend(r.stdout.splitlines())
         except Exception:
-            return []
+            pass
+        if not lines:
+            try:
+                r = subprocess.run(
+                    ["log", "show",
+                     "--predicate", 'process == "mDNSResponder"',
+                     "--last", "70s", "--info", "--style", "syslog"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                lines.extend(r.stdout.splitlines())
+            except Exception:
+                pass
+        return lines
 
-    def _read_macos() -> list[str]:
+    # ── Windows: DNS Client Cache via PowerShell ────────────────────────────────
+    def _read_windows() -> list[str]:
+        # Get-DnsClientCache is available on Windows 8+ / Server 2012+ with no setup.
+        # Returns all recently resolved domain names from the OS cache, covering
+        # browsers, VS Code extensions, CLI tools — anything that used system DNS.
+        lines: list[str] = []
         try:
-            import subprocess
             r = subprocess.run(
-                ["log", "show", "--predicate", 'process == "mDNSResponder"',
-                 "--last", "70s", "--style", "syslog"],
-                capture_output=True, text=True, timeout=10,
+                ["powershell", "-NonInteractive", "-NoProfile", "-Command",
+                 "Get-DnsClientCache | Select-Object -ExpandProperty Entry"],
+                capture_output=True, text=True, timeout=12,
             )
-            return r.stdout.splitlines()
+            lines.extend(r.stdout.splitlines())
         except Exception:
-            return []
+            pass
+        return lines
 
-    lines = _read_linux() if cfg.os_type == "LINUX" else _read_macos()
-    hits: set[str] = set()
+    # ── Supplementary: reverse-DNS on established HTTPS connections (all OS) ───
+    def _scan_tcp_for_ai() -> set[str]:
+        # Covers cases where DNS logs/cache miss a query (e.g. DoH in browser).
+        # Reverse-DNS won't match CDN-proxied domains (Cloudflare, Azure Front Door)
+        # but catches direct-IP providers and is a useful safety net.
+        if not psutil:
+            return set()
+        import socket as _socket
+        found: set[str] = set()
+        try:
+            for conn in psutil.net_connections(kind="inet"):
+                if (conn.status == "ESTABLISHED"
+                        and conn.raddr
+                        and conn.raddr.port in (443, 80, 8080, 8443)):
+                    try:
+                        hostname = _socket.gethostbyaddr(conn.raddr.ip)[0]
+                        matched = _is_ai(hostname)
+                        if matched:
+                            found.add(matched)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        return found
+
+    # ── Route to correct reader ────────────────────────────────────────────────
+    if cfg.os_type == "LINUX":
+        lines, dns_method = _read_linux(), "dns_journal"
+    elif cfg.os_type == "MACOS":
+        lines, dns_method = _read_macos(), "dns_cache"
+    else:  # WINDOWS
+        lines, dns_method = _read_windows(), "dns_cache"
+
+    dns_hits: set[str] = set()
     for line in lines:
         for part in line.split():
             stripped = part.strip("()[],.;:'\"")
             matched = _is_ai(stripped)
             if matched:
-                hits.add(matched)
+                dns_hits.add(matched)
 
-    for domain in hits:
+    # TCP hits only reported for domains not already caught by DNS (avoid duplicates)
+    tcp_hits = _scan_tcp_for_ai() - dns_hits
+
+    for domain, method in (
+        [(d, dns_method) for d in dns_hits]
+        + [(d, "tcp_reverse_dns") for d in tcp_hits]
+    ):
         try:
             http.post(
                 f"{cfg.platform_url}/api/itam/shadow-ai/dns-ingest",
@@ -432,11 +563,11 @@ def _check_shadow_ai_dns(cfg: "Config", http: "requests.Session") -> None:
                     "matched_domain": domain,
                     "hostname": cfg.hostname,
                     "agent_id": cfg.agent_id,
-                    "detection_method": "dns_journal",
+                    "detection_method": method,
                 },
                 timeout=8,
             )
-            logger.info("Shadow AI DNS detected: %s", domain)
+            logger.info("Shadow AI DNS detected: %s [%s]", domain, method)
         except Exception as e:
             logger.debug("shadow_ai_dns ingest error: %s", e)
 

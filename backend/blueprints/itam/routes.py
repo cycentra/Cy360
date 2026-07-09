@@ -1822,11 +1822,21 @@ def ingest_shadow_ai(agent_id: str, hostname: str, ai_tool: str,
             if cur.fetchone():
                 conn.close(); return  # approved tool — skip
 
+            # Deduplicate: skip if an open finding already exists for this agent + tool.
+            # Without a UNIQUE constraint the ON CONFLICT DO NOTHING is a no-op, so we
+            # check explicitly to avoid a finding row every 60s per heartbeat cycle.
+            cur.execute("""
+                SELECT id FROM shadow_ai_findings
+                WHERE agent_id=%s AND ai_tool=%s AND status='open'
+                LIMIT 1
+            """, [agent_id, ai_tool])
+            if cur.fetchone():
+                conn.close(); return  # open finding already recorded
+
             cur.execute("""
                 INSERT INTO shadow_ai_findings
                   (agent_id, hostname, ai_tool, detection_layer, detail, severity, status)
                 VALUES (%s,%s,%s,%s,%s::jsonb,%s,'open')
-                ON CONFLICT DO NOTHING
                 RETURNING id
             """, [agent_id, hostname, ai_tool, detection_method,
                   json.dumps({"process_name": process_name}),
