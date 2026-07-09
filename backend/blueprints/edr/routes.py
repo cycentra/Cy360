@@ -105,6 +105,22 @@ def _resolve_agent_token(agent_id: str) -> str | None:
         return None
 
 
+def _lookup_agent_id_by_token(token: str) -> str:
+    """Reverse-lookup: given a Bearer token, return the agent_id (or '' if not found)."""
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT agent_id FROM edr_agents WHERE enrollment_token=%s AND status='active' LIMIT 1",
+                [token],
+            )
+            row = cur.fetchone()
+        conn.close()
+        return row["agent_id"] if row else ""
+    except Exception:
+        return ""
+
+
 def require_agent_token(f):
     """Validate Bearer <enrollment_token> for agent-facing endpoints."""
     @wraps(f)
@@ -114,9 +130,16 @@ def require_agent_token(f):
         if not auth.startswith("Bearer "):
             return jsonify({"error": "Bearer token required"}), 401
         token = auth[7:]
-        expected = _resolve_agent_token(agent_id)
-        if not expected or not secrets.compare_digest(token, expected):
-            return jsonify({"error": "Invalid or expired enrollment token"}), 401
+        if not agent_id:
+            # Route has no <agent_id> URL variable (e.g. /telemetry) — reverse-lookup by token
+            agent_id = _lookup_agent_id_by_token(token)
+            if not agent_id:
+                return jsonify({"error": "Invalid or expired enrollment token"}), 401
+            kwargs["agent_id"] = agent_id
+        else:
+            expected = _resolve_agent_token(agent_id)
+            if not expected or not secrets.compare_digest(token, expected):
+                return jsonify({"error": "Invalid or expired enrollment token"}), 401
         return f(*args, **kwargs)
     return _w
 

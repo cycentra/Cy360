@@ -361,7 +361,7 @@ def _check_shadow_ai_processes(cfg: "Config", http: "requests.Session") -> None:
             }
             http.post(
                 f"{cfg.platform_url}/api/edr/telemetry",
-                json=envelope, timeout=10,
+                json={"events": [envelope]}, timeout=10,
             )
             logger.info("Shadow AI detected: %s", tool)
         except Exception as e:
