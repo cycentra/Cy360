@@ -14,6 +14,7 @@ RBAC:
 """
 
 import os
+import re
 import json
 import logging
 import time
@@ -1415,6 +1416,7 @@ def _refresh_host_cache_sync():
                     "ALTER TABLE host_posture_cache ADD COLUMN IF NOT EXISTS compliance_score NUMERIC(5,1)",
                     "ALTER TABLE host_posture_cache ADD COLUMN IF NOT EXISTS mitre_techniques TEXT[]",
                     "ALTER TABLE host_posture_cache ADD COLUMN IF NOT EXISTS asset_tier INTEGER DEFAULT 3",
+                    "ALTER TABLE host_posture_cache ADD COLUMN IF NOT EXISTS primary_mac TEXT",
                 ]:
                     cur.execute(_col_sql)
     finally:
@@ -1513,6 +1515,10 @@ def _refresh_host_cache_sync():
     # Deepaks-MacBook-Air.local on a different network). Detect groups that share
     # an IP address and keep only the one with the most recent lastKeepAlive;
     # delete the stale entry from Wazuh so it doesn't re-appear on the next sync.
+    def _ka(aid):
+        raw = all_agents[aid].get("last_keepalive") or ""
+        return raw if raw else ""
+
     _ip_groups: dict[str, list] = {}
     for _aid, _info in all_agents.items():
         _ip = (_info.get("ip") or "").strip()
@@ -1523,10 +1529,6 @@ def _refresh_host_cache_sync():
     for _ip, _aids in _ip_groups.items():
         if len(_aids) < 2:
             continue
-        # Sort by lastKeepAlive descending — most recent first
-        def _ka(aid):
-            raw = all_agents[aid].get("last_keepalive") or ""
-            return raw if raw else ""
         _aids_sorted = sorted(_aids, key=_ka, reverse=True)
         _winner = _aids_sorted[0]
         for _stale in _aids_sorted[1:]:
@@ -1546,6 +1548,99 @@ def _refresh_host_cache_sync():
                     )
                 except Exception as _exc:
                     _logger.warning("[host-refresh] could not delete stale agent %s from Wazuh: %s", _stale, _exc)
+
+    # ── MAC-address dedup: same host re-enrolled with new hostname + new IP ──
+    # Fetch primary NIC MAC from Wazuh syscollector for each live Wazuh agent.
+    # Roaming laptops (e.g. mac.lan → mac.home → Deepaks-MacBook-Air.local) produce
+    # a new agent_id on every network change because the OS hostname changes.
+    # Grouping by MAC collapses them into a single row (most-recent keepalive wins).
+    _VIRTUAL_PREFIXES = ("lo", "veth", "docker", "br-", "virbr", "tun", "tap", "utun", "awdl", "llw")
+    _agent_macs: dict[str, str] = {}  # agent_id → primary MAC
+
+    if token:
+        for _mac_aid in list(all_agents.keys()):
+            if _mac_aid not in wazuh_agents:
+                continue  # DB-only ghost: no live netiface data
+            try:
+                _nif = _wazuh(f"/syscollector/{_mac_aid}/netiface", {"limit": 20})
+                if not _nif:
+                    continue
+                for _ifc in _nif.get("data", {}).get("affected_items", []):
+                    _name = (_ifc.get("name") or "").lower()
+                    _mac  = (_ifc.get("mac")  or "").strip().lower()
+                    if not _mac or _mac in ("00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"):
+                        continue
+                    if any(_name.startswith(p) for p in _VIRTUAL_PREFIXES):
+                        continue
+                    _agent_macs[_mac_aid] = _mac
+                    break
+            except Exception:
+                pass
+
+    _mac_groups: dict[str, list] = {}
+    for _mac_aid, _mac in _agent_macs.items():
+        _mac_groups.setdefault(_mac, []).append(_mac_aid)
+
+    for _grp_mac, _grp_aids in _mac_groups.items():
+        if len(_grp_aids) < 2:
+            continue
+        _grp_sorted = sorted(_grp_aids, key=_ka, reverse=True)
+        _mac_winner = _grp_sorted[0]
+        for _mac_stale in _grp_sorted[1:]:
+            if _mac_stale not in all_agents:
+                continue
+            _logger.info(
+                "[host-refresh] MAC dedup: removing stale agent %s (%s) superseded by %s (%s) on MAC %s",
+                _mac_stale, all_agents[_mac_stale].get("name"),
+                _mac_winner, all_agents[_mac_winner].get("name"), _grp_mac,
+            )
+            del all_agents[_mac_stale]
+            if token and _mac_stale in wazuh_agents and _mac_stale != "000":
+                try:
+                    _req.delete(
+                        f"{WAZUH_API_URL}/agents",
+                        headers={"Authorization": f"Bearer {token}"},
+                        params={"agents_list": _mac_stale, "status": "all", "older_than": "0s"},
+                        timeout=10, verify=False,
+                    )
+                except Exception as _exc:
+                    _logger.warning("[host-refresh] could not delete stale MAC agent %s: %s", _mac_stale, _exc)
+
+    # ── Hostname-stem dedup: fallback for agents where netiface was unavailable ──
+    # Strip common mDNS/DHCP domain suffixes, then group by (stem, os_platform).
+    # Catches roaming devices whose netiface data could not be fetched from Wazuh.
+    _STEM_RE = re.compile(
+        r"\.(lan|local|home|internal|localdomain|corp|office|intranet|priv)$", re.I
+    )
+
+    def _hostname_stem(name: str) -> str:
+        return _STEM_RE.sub("", name.lower()).strip()
+
+    _stem_seen: dict[str, str] = {}  # (stem|platform) → winning agent_id
+    _stem_deduped: dict = {}
+    for _aid, _info in all_agents.items():
+        _plat = (_info.get("os_platform") or "").lower()
+        _stem = _hostname_stem(_info.get("name") or _aid)
+        _sk   = f"{_stem}|{_plat}"
+        if not _plat:
+            # Cannot safely stem-dedup without OS platform — keep as-is
+            _stem_deduped[_aid] = _info
+            continue
+        if _sk not in _stem_seen:
+            _stem_seen[_sk] = _aid
+            _stem_deduped[_aid] = _info
+        else:
+            _prev_aid = _stem_seen[_sk]
+            if _ka(_aid) > _ka(_prev_aid):
+                _logger.info(
+                    "[host-refresh] stem dedup: %s (%s) supersedes %s (%s) — stem '%s'",
+                    _aid, _info.get("name"), _prev_aid, all_agents[_prev_aid].get("name"), _stem,
+                )
+                del _stem_deduped[_prev_aid]
+                _stem_seen[_sk] = _aid
+                _stem_deduped[_aid] = _info
+            # else: existing entry is newer; discard this one silently
+    all_agents = _stem_deduped
 
     if not all_agents:
         _logger.warning("[host-refresh] no agents found (wazuh=%d, db=%d)",
@@ -1684,6 +1779,7 @@ def _refresh_host_cache_sync():
                             pass
 
                     # Upsert
+                    _primary_mac = _agent_macs.get(agent_id)
                     cur.execute("""
                         INSERT INTO host_posture_cache (
                             agent_id, agent_name, agent_ip, os_platform, os_version,
@@ -1692,7 +1788,8 @@ def _refresh_host_cache_sync():
                             sca_score, sca_passed, sca_failed, sca_total,
                             vuln_score, vuln_critical, vuln_high, vuln_medium, vuln_low,
                             siem_risk, fim_event_count, malware_count, incident_count,
-                            compliance_score, mitre_techniques, score_breakdown, computed_at
+                            compliance_score, mitre_techniques, score_breakdown,
+                            primary_mac, computed_at
                         ) VALUES (
                             %s,%s,%s,%s,%s,
                             %s,%s,
@@ -1700,7 +1797,8 @@ def _refresh_host_cache_sync():
                             %s,%s,%s,%s,
                             %s,%s,%s,%s,%s,
                             %s,%s,%s,%s,
-                            %s,%s,%s::jsonb,NOW()
+                            %s,%s,%s::jsonb,
+                            %s,NOW()
                         )
                         ON CONFLICT (agent_id) DO UPDATE SET
                             agent_name       = EXCLUDED.agent_name,
@@ -1727,6 +1825,7 @@ def _refresh_host_cache_sync():
                             compliance_score = EXCLUDED.compliance_score,
                             mitre_techniques = EXCLUDED.mitre_techniques,
                             score_breakdown  = EXCLUDED.score_breakdown,
+                            primary_mac      = COALESCE(EXCLUDED.primary_mac, host_posture_cache.primary_mac),
                             computed_at      = NOW()
                     """, [
                         agent_id, info["name"], info["ip"],
@@ -1737,6 +1836,7 @@ def _refresh_host_cache_sync():
                         vuln_score, vuln_critical, vuln_high, vuln_medium, vuln_low,
                         siem_risk_raw, fim_count, malware_count, incident_count,
                         compliance_score, mitre_techniques, json.dumps(components),
+                        _primary_mac,
                     ])
                 conn.commit()
             finally:
@@ -2150,6 +2250,110 @@ def siem_host_vulnerabilities(agent_id):
         return jsonify({"error": str(exc)}), 500
 
 
+def _sca_from_alerts_db(agent_id, result_filter, page, per_page, offset):
+    """Return SCA check data sourced from the alerts table.
+
+    Called when the Wazuh API returns no SCA policies for an agent_id — typically
+    because the agent re-enrolled under a new ID and the old one is disconnected.
+    Constructs a compatible response so the SCA tab renders historical data.
+    """
+    import psycopg2.extras
+    try:
+        conn = _corr_conn()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                result_clause = "AND full_alert->'data'->'sca'->'check'->>'result' = %s" if result_filter else ""
+                base_params   = [agent_id] + ([result_filter] if result_filter else [])
+
+                cur.execute(f"""
+                    SELECT COUNT(*) AS n FROM alerts
+                    WHERE agent_id = %s AND category = 'sca'
+                      AND full_alert->'data'->'sca'->'check'->>'result' IS NOT NULL
+                      AND timestamp > NOW() - INTERVAL '30 days'
+                      {result_clause}
+                """, base_params)
+                total = cur.fetchone()["n"]
+
+                cur.execute(f"""
+                    SELECT DISTINCT ON (
+                        full_alert->'data'->'sca'->'check'->>'id',
+                        full_alert->'data'->'sca'->>'policy_id'
+                    )
+                        (full_alert->'data'->'sca'->'check'->>'id')::INTEGER  AS id,
+                        full_alert->'data'->'sca'->'check'->>'title'          AS title,
+                        full_alert->'data'->'sca'->'check'->>'result'         AS result,
+                        full_alert->'data'->'sca'->'check'->>'rationale'      AS rationale,
+                        full_alert->'data'->'sca'->'check'->>'remediation'    AS remediation,
+                        full_alert->'data'->'sca'->'check'->>'description'    AS description,
+                        full_alert->'data'->'sca'->>'policy_id'               AS policy_id,
+                        full_alert->'data'->'sca'->>'policy'                  AS policy_name,
+                        timestamp
+                    FROM alerts
+                    WHERE agent_id = %s AND category = 'sca'
+                      AND full_alert->'data'->'sca'->'check'->>'result' IS NOT NULL
+                      AND timestamp > NOW() - INTERVAL '30 days'
+                      {result_clause}
+                    ORDER BY
+                        full_alert->'data'->'sca'->'check'->>'id',
+                        full_alert->'data'->'sca'->>'policy_id',
+                        timestamp DESC
+                    LIMIT %s OFFSET %s
+                """, base_params + [per_page, offset])
+                rows = cur.fetchall()
+
+                # Synthesise a policy summary from the same window
+                cur.execute("""
+                    SELECT
+                        full_alert->'data'->'sca'->>'policy_id' AS policy_id,
+                        full_alert->'data'->'sca'->>'policy'    AS policy_name,
+                        COUNT(*) FILTER (WHERE full_alert->'data'->'sca'->'check'->>'result' = 'passed') AS passed,
+                        COUNT(*) FILTER (WHERE full_alert->'data'->'sca'->'check'->>'result' = 'failed') AS failed
+                    FROM alerts
+                    WHERE agent_id = %s AND category = 'sca'
+                      AND timestamp > NOW() - INTERVAL '30 days'
+                    GROUP BY 1, 2
+                """, [agent_id])
+                policy_rows = cur.fetchall()
+        finally:
+            conn.close()
+
+        policies = []
+        for p in policy_rows:
+            if not p["policy_id"]:
+                continue
+            _pass = int(p["passed"] or 0)
+            _fail = int(p["failed"] or 0)
+            _tot  = _pass + _fail
+            policies.append({
+                "policy_id": p["policy_id"],
+                "name":      p["policy_name"] or p["policy_id"],
+                "pass":      _pass, "fail": _fail, "error": 0,
+                "score":     round(_pass / _tot * 100) if _tot else 0,
+            })
+
+        checks = [{
+            "id":          r["id"],
+            "title":       r["title"],
+            "result":      r["result"],
+            "rationale":   r["rationale"],
+            "remediation": r["remediation"],
+            "description": r["description"],
+            "policy_id":   r["policy_id"],
+        } for r in rows if r["id"] is not None]
+
+        return jsonify({
+            "policies":  policies,
+            "policy_id": policies[0]["policy_id"] if policies else None,
+            "checks":    checks,
+            "total":     total,
+            "page": page, "per_page": per_page,
+            "source": "alerts_db",
+        })
+    except Exception as exc:
+        return jsonify({"checks": [], "policies": [], "total": 0,
+                        "source": "alerts_db", "error": str(exc)})
+
+
 @siem_bp.route("/hosts/<agent_id>/sca", methods=["GET"])
 @require_siem_auth
 def siem_host_sca(agent_id):
@@ -2183,7 +2387,10 @@ def siem_host_sca(agent_id):
         policies = policies_resp.json().get("data", {}).get("affected_items", [])
         target_policy = policy_id or (policies[0]["policy_id"] if policies else None)
         if not target_policy:
-            return jsonify({"checks": [], "policies": policies, "total": 0})
+            # Wazuh has no SCA policies for this agent_id — fall back to alerts DB.
+            # This happens for stale/re-enrolled agents whose active scans run under
+            # a newer agent_id. The alerts table retains 90 days of SCA events.
+            return _sca_from_alerts_db(agent_id, result_filter, page, per_page, offset)
         check_params = {"limit": per_page, "offset": offset}
         if result_filter:
             check_params["result"] = result_filter
@@ -2199,6 +2406,7 @@ def siem_host_sca(agent_id):
             "checks":   checks_data.get("affected_items", []),
             "total":    checks_data.get("total_affected_items", 0),
             "page": page, "per_page": per_page,
+            "source": "wazuh",
         })
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500

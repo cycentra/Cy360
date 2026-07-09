@@ -446,6 +446,16 @@ function SCATab({ agentId, hostName }) {
 
   return (
     <div>
+      {data.source === "alerts_db" && (
+        <div style={{
+          background: "rgba(255,140,0,0.08)", border: "1px solid rgba(255,140,0,0.3)",
+          borderRadius: 5, padding: "7px 12px", marginBottom: 12,
+          fontSize: 11, color: "#ff8c00",
+        }}>
+          Showing historical SCA data from the alerts database — this agent may have re-enrolled under a new ID.
+          Trigger a host refresh to consolidate duplicates.
+        </div>
+      )}
       {policies.length > 0 && (
         <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
           {policies.map(p => (
