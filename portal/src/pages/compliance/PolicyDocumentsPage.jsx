@@ -717,7 +717,7 @@ export function PolicyDocumentsPage() {
               </div>
             ) : (
               <>
-                {draftResult.policy_clause && (
+                {draftResult.draft_clause && (
                   <div style={{ marginBottom: 14 }}>
                     <div style={{ color: C.purple, fontSize: 9, fontFamily: "monospace",
                       letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 8 }}>
@@ -725,23 +725,27 @@ export function PolicyDocumentsPage() {
                     </div>
                     <div style={{ color: C.text, fontSize: 12, fontFamily: "monospace",
                       lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
-                      {draftResult.policy_clause}
+                      {draftResult.draft_clause}
                     </div>
                   </div>
                 )}
-                {draftResult.implementation_guidance && (
+                {Array.isArray(draftResult.implementation_guidance) && draftResult.implementation_guidance.length > 0 && (
                   <div>
                     <div style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
                       letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 8 }}>
                       Implementation Guidance
                     </div>
-                    <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 11,
-                      fontFamily: "monospace", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
-                      {draftResult.implementation_guidance}
-                    </div>
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      {draftResult.implementation_guidance.map((step, i) => (
+                        <li key={i} style={{ color: "rgba(255,255,255,0.65)", fontSize: 11,
+                          fontFamily: "monospace", lineHeight: 1.8, marginBottom: 4 }}>
+                          {step}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 )}
-                {!draftResult.policy_clause && !draftResult.implementation_guidance && (
+                {!draftResult.draft_clause && (!Array.isArray(draftResult.implementation_guidance) || draftResult.implementation_guidance.length === 0) && (
                   <div style={{ color: C.text, fontSize: 11, fontFamily: "monospace",
                     lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
                     {JSON.stringify(draftResult, null, 2)}
