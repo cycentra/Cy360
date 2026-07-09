@@ -2232,8 +2232,8 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
   const [closing, setClosing]       = useState(false);
   const [purgeConfirm, setPurgeConfirm] = useState(false); // purge closed from DB
   const [purging, setPurging]       = useState(false);
-  const [sortField, setSortField]   = useState("severity");
-  const [sortDir, setSortDir]       = useState("asc");
+  const [sortField, setSortField]   = useState("last_seen");
+  const [sortDir, setSortDir]       = useState("desc");
   const [pageSize, setPageSize]     = useState(50);
   const [currentPage, setCurrentPage] = useState(1);
   const [showFpPatterns, setShowFpPatterns] = useState(false);
@@ -2242,8 +2242,8 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
   const wsRef       = useRef(null);
   const wsDebounce  = useRef(null); // timer ref for WS-triggered refetch debounce
 
-  const fetchIncidents = useCallback(async () => {
-    setLoading(true);
+  const fetchIncidents = useCallback(async (opts = {}) => {
+    if (!opts.silent) setLoading(true);
     // Map frontend sort fields to backend sort_by values. Fields not in this map
     // fall back to last_seen on the server; the client then re-sorts the current page.
     const SERVER_SORTABLE = { severity: "severity", last_seen: "last_seen", alerts: "alert_count", risk_score: "risk_score", status: "status" };
@@ -2259,10 +2259,10 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
     if (filters.severity) apiParams.severity = filters.severity;
 
     const d = await siemFetch(siemApi.getIncidents(apiParams));
-    if (d._offline || d._error) { setLoading(false); return; }
+    if (d._offline || d._error) { if (!opts.silent) setLoading(false); return; }
     setIncidents(d.incidents || []);
     setTotal(d.total || 0);
-    setLoading(false);
+    if (!opts.silent) setLoading(false);
   }, [filters, currentPage, pageSize, sortField, sortDir]);
 
   const loadFpPatterns = async () => {
@@ -2284,9 +2284,8 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
 
   // Initial load + polling fallback (30s)
   useEffect(() => {
-    setLoading(true);
     fetchIncidents();
-    const timer = setInterval(fetchIncidents, 30_000);
+    const timer = setInterval(() => fetchIncidents({ silent: true }), 30_000);
     return () => clearInterval(timer);
   }, [fetchIncidents]);
 
@@ -2304,7 +2303,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
           // Debounce: coalesce rapid bursts of alerts into a single refetch
           // so a flood of incoming alerts doesn't hammer the API on every message.
           clearTimeout(wsDebounce.current);
-          wsDebounce.current = setTimeout(fetchIncidents, 4000);
+          wsDebounce.current = setTimeout(() => fetchIncidents({ silent: true }), 4000);
         }
       } catch {}
     };
@@ -2317,7 +2316,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
   // Listen for agentic-action updates from the CyMind chat overlay so the
   // Incidents table refreshes immediately after close/FP actions are confirmed
   useEffect(() => {
-    const handler = () => fetchIncidents();
+    const handler = () => fetchIncidents({ silent: true });
     window.addEventListener("cycentra:incident-updated", handler);
     return () => window.removeEventListener("cycentra:incident-updated", handler);
   }, [fetchIncidents]);

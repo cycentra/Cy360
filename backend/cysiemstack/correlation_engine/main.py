@@ -109,6 +109,7 @@ FP_AUTO_CLOSE_DAYS = 7
 
 async def _fp_auto_close_scheduler():
     from models import AsyncSessionLocal
+    from datetime import timedelta
     await asyncio.sleep(120)  # let engine fully boot before first check
     while True:
         try:

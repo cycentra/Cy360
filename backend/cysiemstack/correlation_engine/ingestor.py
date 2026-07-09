@@ -23,7 +23,7 @@ from correlator import run_correlation
 from ueba import analyse_alert
 from risk_scorer import calculate_entity_risk, compute_fp_score, CLOUD_ENTITY_NAMES
 from cytim_enricher import enrich_incident as cytim_enrich_incident
-from llm_enricher import enrich_incident as llm_enrich_incident
+from llm_enricher import enrich_incident as llm_enrich_incident, _store_incident_pattern
 from models import write_audit
 from ueba_ml import ml_analyse_alert
 from cysoar_connector import cysoar_trigger
@@ -303,6 +303,7 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                         comment=incident.false_positive_reason,
                         extra={"fp_score": fp_score, "threshold": fp_threshold},
                     )
+                    await _store_incident_pattern(db, incident)
             elif fp_score >= 40.0:
                 # Band 2: moderate FP → keep investigating
                 if incident.status not in ("closed", "false_positive", "in_review", "resolved"):
@@ -475,6 +476,8 @@ async def _reenrich_held_incident(incident_id: str) -> None:
                 incident.false_positive_reason = (
                     f"Auto-closed: FP probability {fp_score:.1f} ≥ threshold {fp_threshold:.1f}"
                 )
+                await db.flush()
+                await _store_incident_pattern(db, incident)
             elif fp_score < 40.0:
                 incident.status     = "in_review"
                 incident.updated_at = datetime.now(timezone.utc)
