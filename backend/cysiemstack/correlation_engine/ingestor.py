@@ -337,8 +337,7 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                     )
 
                 if (incident.case_opened_at is None
-                        and incident.severity in ("high", "critical")
-                        and incident.alert_count >= 3):
+                        and incident.severity in ("high", "critical")):
                     now_ts = datetime.now(timezone.utc)
                     incident.case_opened_at = now_ts
                     incident.case_type = _infer_case_type(
@@ -480,8 +479,7 @@ async def _reenrich_held_incident(incident_id: str) -> None:
                 incident.status     = "in_review"
                 incident.updated_at = datetime.now(timezone.utc)
                 if (incident.case_opened_at is None
-                        and incident.severity in ("high", "critical")
-                        and incident.alert_count >= 3):
+                        and incident.severity in ("high", "critical")):
                     incident.case_opened_at = datetime.now(timezone.utc)
                     incident.case_type = _infer_case_type(
                         incident.categories or [], incident.mitre_tactics or []

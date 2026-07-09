@@ -76,20 +76,11 @@ def _merge_categories(existing: list, new_cat) -> list:
 
 async def _get_next_id(db: AsyncSession) -> str:
     """
-    Generate the next incident ID by finding the highest existing numeric
-    suffix and incrementing it.  Using COUNT(*) is incorrect when IDs have
-    gaps (e.g. after engine restarts that replay alerts) — the count falls
-    below the real max, causing duplicate-PK IntegrityErrors on every INSERT.
-
-    The advisory lock serializes concurrent callers: with Semaphore(6) allowing
-    six alert tasks to run at once, without the lock all six can read the same
-    MAX and then attempt to INSERT the same next ID → UniqueViolationError.
-    pg_advisory_xact_lock blocks until the holder's transaction commits/rolls
-    back, at which point the next waiter reads the updated MAX safely.
+    Generate the next incident ID by finding the highest existing numeric suffix.
+    The advisory lock (acquired in group_alert before this call) already serializes
+    concurrent callers — this function just reads MAX and increments.
     """
     prefix = settings.incident_id_prefix
-    # Transaction-level advisory lock — released automatically on commit/rollback.
-    await db.execute(text("SELECT pg_advisory_xact_lock(20260617)"))
     result = await db.execute(
         text(
             "SELECT COALESCE(MAX(CAST(SPLIT_PART(id, '-', 2) AS INTEGER)), 0) "
@@ -108,20 +99,19 @@ async def find_matching_incident(
     alert: dict,
 ) -> Optional[Incident]:
     """
-    Find an open incident that this alert belongs to.
+    Find an active incident that this alert belongs to.
 
-    Two independent guards must BOTH pass:
+    Eligible statuses: open, investigating, in_review, held.
+    in_review and held are included because ingestor.py advances status within
+    the same transaction that created the incident — without them, a second alert
+    from the same agent (even seconds later) finds no eligible incident and
+    creates a new one, resulting in single-alert incidents for every event.
 
-    1. Idle-gap  (last_seen >= activity_cutoff):
-       The incident had activity within CORRELATION_WINDOW_MINUTES.
-       Prevents linking alerts from separate sessions with a quiet gap.
-
-    2. Hard ceiling (first_seen >= age_cutoff):
-       The incident was opened within INCIDENT_MAX_AGE_MINUTES.
-       Without this guard a continuous stream (e.g. brute-force) advances
-       last_seen on every merge, so the incident grows without bound.
-
-    Tune both via /opt/cycentra/cysiemstack.env.
+    Two independent time guards must BOTH pass:
+    1. Idle-gap  (last_seen >= activity_cutoff) — incident had activity within
+       CORRELATION_WINDOW_MINUTES. Prevents linking alerts across quiet gaps.
+    2. Hard ceiling (first_seen >= age_cutoff) — incident was opened within
+       INCIDENT_MAX_AGE_MINUTES. Prevents continuous streams from growing unbounded.
     """
     window  = timedelta(minutes=settings.correlation_window_minutes)
     max_age = timedelta(minutes=settings.incident_max_age_minutes)
@@ -132,25 +122,31 @@ async def find_matching_incident(
 
     result = await db.execute(
         select(Incident).where(
-            Incident.status.in_(['open', 'investigating']),
-            Incident.last_seen  >= activity_cutoff,   # guard 1
-            Incident.first_seen >= age_cutoff,        # guard 2 — THE FIX
+            Incident.status.in_(['open', 'investigating', 'in_review', 'held']),
+            Incident.last_seen  >= activity_cutoff,
+            Incident.first_seen >= age_cutoff,
         ).order_by(Incident.last_seen.desc()).limit(20)
     )
     candidates = result.scalars().all()
 
     for inc in candidates:
-        # Same agent check
+        # Same agent — most specific: alerts from the same host always group
         if alert.get('agent_id') in (inc.affected_agents or []):
             return inc
         # Same src_ip — different agents, same attacker
         if alert.get('src_ip') and alert['src_ip'] in (inc.src_ips or []):
             return inc
-        # Cloud-event correlation: same username + same cloud source category
-        # M365, Azure, AWS, GCP, GitHub events should be grouped per-user.
-        # This runs AFTER the agent_id check to ensure specificity — only group
-        # cloud events together when the identity (username) matches, preventing
-        # cross-user correlation that would mix different users' activities.
+        # Same category on same agent — catches FIM/process/auth bursts where
+        # src_ip and username are absent (e.g. rootcheck, syscheck, FIM events)
+        if (
+            alert.get('category')
+            and alert.get('category') not in _SPECIFIC_CLOUD_SOURCES
+            and alert.get('category') in (inc.categories or [])
+            and alert.get('agent_id') in (inc.affected_agents or [])
+        ):
+            return inc
+        # Cloud-event correlation: same username + same cloud source category.
+        # Runs AFTER agent/src_ip checks — only group cloud events per identity.
         if (
             alert.get('username')
             and alert.get('category') in _SPECIFIC_CLOUD_SOURCES
@@ -226,7 +222,17 @@ async def group_alert(db: AsyncSession, alert: dict) -> Tuple[Incident, bool]:
     Main entry point. Takes a normalised alert dict.
     Returns (incident, created) where created=True means a new incident was opened.
     Persists the alert to DB and links it to the incident.
+
+    Advisory lock 20260617 covers the entire find→create path. Without it,
+    concurrent tasks processing a batch of alerts all call find_matching_incident
+    before any commits, all find nothing, and all create separate single-alert
+    incidents for the same host. The lock ensures each task sees committed results
+    from the previous task before deciding to create or merge.
     """
+    # Serialize find+create across all concurrent alert tasks for this engine.
+    # Transaction-level: released automatically on commit/rollback.
+    await db.execute(text("SELECT pg_advisory_xact_lock(20260617)"))
+
     # Persist the alert row
     db_alert = Alert(
         wazuh_id      = alert.get('wazuh_id'),
