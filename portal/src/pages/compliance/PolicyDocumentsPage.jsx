@@ -365,16 +365,26 @@ export function PolicyDocumentsPage() {
     fetch(`${API_BASE}/api/comp/policy-docs/save-draft`, {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text:      draftResult.draft_clause,
-        framework: draftFw,
-        tag:       "security",
-      }),
+      body: JSON.stringify({ text: draftResult.draft_clause, framework: draftFw, tag: "security" }),
     })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(doc => {
-        setSaveMsg({ ok: true, text: `Saved as "${doc.name}" and indexed in Policy Library` });
+        setSaveMsg({ ok: true, text: `Saved as "${doc.name}" — running Policy Analysis for ${draftFw.toUpperCase()}…` });
         load();
+        // Auto-trigger Policy Analysis — reuse the existing analysis polling state
+        setAnalysisFramework(draftFw);
+        setAnalysisRunning(true);
+        setAnalysisJob(null);
+        setAnalysisJobId(null);
+        clearInterval(pollRef.current);
+        fetch(`${API_BASE}/api/comp/policy-docs/analyze-framework`, {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ framework: draftFw, overwrite: false }),
+        })
+          .then(r => r.ok ? r.json() : null)
+          .then(d => { if (d?.job_id) setAnalysisJobId(d.job_id); })
+          .catch(() => setAnalysisRunning(false));
       })
       .catch(e => setSaveMsg({ ok: false, text: `Save failed (${e})` }))
       .finally(() => setSaveLoading(false));
@@ -457,6 +467,14 @@ export function PolicyDocumentsPage() {
     pollRef.current = setInterval(poll, 2000);
     return () => clearInterval(pollRef.current);
   }, [analysisJobId]);
+
+  // When analysis completes, refresh compliance scores so dashboard reflects new questionnaire answers
+  useEffect(() => {
+    if (analysisJob?.status !== "complete") return;
+    fetch(`${API_BASE}/api/comp/dashboard/refresh`, {
+      method: "POST", credentials: "include",
+    }).catch(() => {});
+  }, [analysisJob?.status]);
 
   const handleRunAnalysis = () => {
     setAnalysisRunning(true);
