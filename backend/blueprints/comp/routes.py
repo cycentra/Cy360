@@ -1652,6 +1652,37 @@ def draft_policy_clause():
         return jsonify({"error": str(exc)}), 500
 
 
+@comp_bp.route("/policy-docs/save-draft", methods=["POST"])
+@require_analyst
+def save_policy_draft():
+    """
+    POST /api/comp/policy-docs/save-draft
+    Body: {text, filename?, framework?, tag?}
+    Saves AI-generated policy clause text to the org-policies RAG collection.
+    """
+    body = request.get_json(silent=True) or {}
+    text = (body.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "text is required"}), 400
+    framework = body.get("framework", "")
+    filename  = (body.get("filename") or "").strip() or \
+                f"policy_clause_{framework}_{str(uuid.uuid4())[:8]}.txt"
+    tag       = body.get("tag") or "security"
+    try:
+        from cy_comp.services.policy_rag import save_text_as_document
+        doc = save_text_as_document(
+            collection_id="org-policies",
+            text=text,
+            filename=filename,
+            metadata={"framework": framework, "tag": tag},
+            uploaded_by=_email(),
+        )
+        return jsonify(doc), 201
+    except Exception as exc:
+        log.error("save_policy_draft: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
 # ── 3. Executive Risk Copilot ─────────────────────────────────────────────────
 
 @comp_bp.route("/ask", methods=["POST"])

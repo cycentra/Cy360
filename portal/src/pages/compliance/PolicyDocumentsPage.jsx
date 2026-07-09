@@ -347,9 +347,42 @@ export function PolicyDocumentsPage() {
   const [draftGap, setDraftGap]         = useState("");
   const [draftLoading, setDraftLoading] = useState(false);
   const [draftResult, setDraftResult]   = useState(null);
+  const [saveLoading, setSaveLoading]   = useState(false);
+  const [saveMsg, setSaveMsg]           = useState(null);
+  const [copied, setCopied]             = useState(false);
+
+  const handleCopy = () => {
+    if (!draftResult?.draft_clause) return;
+    navigator.clipboard.writeText(draftResult.draft_clause).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const handleSave = () => {
+    if (!draftResult?.draft_clause) return;
+    setSaveLoading(true); setSaveMsg(null);
+    fetch(`${API_BASE}/api/comp/policy-docs/save-draft`, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text:      draftResult.draft_clause,
+        framework: draftFw,
+        tag:       "security",
+      }),
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(doc => {
+        setSaveMsg({ ok: true, text: `Saved as "${doc.name}" and indexed in Policy Library` });
+        load();
+      })
+      .catch(e => setSaveMsg({ ok: false, text: `Save failed (${e})` }))
+      .finally(() => setSaveLoading(false));
+  };
 
   const handleDraft = () => {
     if (!draftGap.trim()) return;
+    setSaveMsg(null);
     setDraftLoading(true); setDraftResult(null);
     fetch(`${API_BASE}/api/comp/policy-docs/draft`, {
       method: "POST", credentials: "include",
@@ -690,7 +723,7 @@ export function PolicyDocumentsPage() {
               fontSize: 11, width: "100%", outline: "none", resize: "vertical",
               height: 72, boxSizing: "border-box" }} />
         </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <button onClick={handleDraft} disabled={draftLoading || !draftGap.trim()}
             style={{ background: `rgba(176,110,255,0.12)`, border: `1px solid rgba(176,110,255,0.40)`,
               color: C.purple, padding: "8px 20px", borderRadius: 4, fontFamily: "monospace",
@@ -699,14 +732,36 @@ export function PolicyDocumentsPage() {
               opacity: (draftLoading || !draftGap.trim()) ? 0.5 : 1 }}>
             {draftLoading ? "Drafting…" : "Draft Policy Clause"}
           </button>
-          {draftResult && !draftResult.error && (
-            <button onClick={() => setDraftResult(null)}
-              style={{ background: "none", border: "none", color: C.muted,
-                fontFamily: "monospace", fontSize: 10, cursor: "pointer" }}>
-              Clear
-            </button>
+          {draftResult && !draftResult.error && draftResult.draft_clause && (
+            <>
+              <button onClick={handleCopy}
+                style={{ background: "rgba(77,158,255,0.1)", border: `1px solid rgba(77,158,255,0.35)`,
+                  color: copied ? C.accent : C.blue, padding: "8px 16px", borderRadius: 4,
+                  fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                {copied ? "Copied ✓" : "Copy Clause"}
+              </button>
+              <button onClick={handleSave} disabled={saveLoading}
+                style={{ background: "rgba(0,229,160,0.1)", border: `1px solid rgba(0,229,160,0.35)`,
+                  color: C.accent, padding: "8px 16px", borderRadius: 4, fontFamily: "monospace",
+                  fontSize: 11, fontWeight: 700,
+                  cursor: saveLoading ? "not-allowed" : "pointer",
+                  opacity: saveLoading ? 0.5 : 1 }}>
+                {saveLoading ? "Saving…" : "Save to Policy Library"}
+              </button>
+              <button onClick={() => { setDraftResult(null); setSaveMsg(null); }}
+                style={{ background: "none", border: "none", color: C.muted,
+                  fontFamily: "monospace", fontSize: 10, cursor: "pointer" }}>
+                Clear
+              </button>
+            </>
           )}
         </div>
+        {saveMsg && (
+          <div style={{ marginTop: 10, color: saveMsg.ok ? C.accent : C.red,
+            fontSize: 10, fontFamily: "monospace" }}>
+            {saveMsg.ok ? "✓ " : "✗ "}{saveMsg.text}
+          </div>
+        )}
         {draftResult && (
           <div style={{ marginTop: 14, padding: "14px 18px", borderRadius: 6,
             background: draftResult.error ? `${C.red}08` : "rgba(176,110,255,0.06)",

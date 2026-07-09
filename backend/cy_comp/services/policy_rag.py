@@ -255,6 +255,69 @@ def upload_document(collection_id: str, file_storage, metadata: dict, uploaded_b
     }
 
 
+def save_text_as_document(collection_id: str, text: str, filename: str,
+                          metadata: dict, uploaded_by: str) -> dict:
+    """
+    Save a raw text string as a policy document in a RAG collection.
+    Used by the AI Policy Creation → Save to Library flow.
+    """
+    doc_id     = str(uuid.uuid4())
+    fw         = metadata.get("framework") or collection_id.replace("policy-", "")
+    tag        = metadata.get("tag") or "security"
+    file_bytes = text.encode("utf-8")
+    file_size  = len(file_bytes)
+    cymind_id  = _cymind_collection_id(collection_id)
+    cymind_doc_id = None
+
+    try:
+        resp = requests.post(
+            _rag_url(f"collections/{cymind_id}/upload"),
+            headers=_auth_header(),
+            files={"file": (filename, file_bytes, "text/plain")},
+            params={"chunk_size": 512, "overlap": 64},
+            timeout=60,
+        )
+        if resp.ok:
+            rd = resp.json()
+            cymind_doc_id = rd.get("doc_id") or rd.get("id")
+            log.info("save_text_as_document: CyMind accepted %s → doc_id=%s", filename, cymind_doc_id)
+        else:
+            log.warning("save_text_as_document: CyMind %s %s", resp.status_code, resp.text[:300])
+    except Exception as exc:
+        log.error("save_text_as_document: CyMind upload failed: %s", exc)
+
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO cy_comp_policy_docs
+                    (id, name, file_type, collection_id, cymind_doc_id,
+                     framework, indexed, uploaded_by, doc_type, tag, file_size, created_at, updated_at)
+                VALUES (%s,%s,'txt',%s,%s,%s,%s,%s,'policy',%s,%s,NOW(),NOW());
+                """,
+                (
+                    doc_id, filename, collection_id, cymind_doc_id, fw,
+                    bool(cymind_doc_id), uploaded_by, tag, file_size,
+                )
+            )
+    except Exception as exc:
+        log.error("save_text_as_document DB persist: %s", exc)
+
+    return {
+        "id":            doc_id,
+        "name":          filename,
+        "collection_id": collection_id,
+        "cymind_doc_id": cymind_doc_id,
+        "framework":     fw,
+        "tag":           tag,
+        "file_size":     file_size,
+        "indexed":       bool(cymind_doc_id),
+        "uploaded_by":   uploaded_by,
+        "doc_type":      "policy",
+    }
+
+
 def list_documents(collection_id: str) -> list[dict]:
     """Return policy documents (doc_type='policy') for a collection from local metadata."""
     rows = []
