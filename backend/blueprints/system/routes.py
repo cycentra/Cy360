@@ -5355,7 +5355,7 @@ def system_ai_stats():
 
         patterns_total   = int(row.get("patterns_total") or 0)
         avg_conf_raw     = row.get("avg_confidence")
-        avg_confidence   = round(float(avg_conf_raw) * 100, 1) if avg_conf_raw else None
+        avg_confidence   = round(float(avg_conf_raw), 4) if avg_conf_raw else None
         last_pattern_at  = row.get("last_pattern_at")
 
     except Exception as exc:
@@ -5395,3 +5395,174 @@ def system_ai_stats():
         "phases_active":           sorted(set(phases_active)),
         "last_pattern_at":         last_pattern_at.isoformat() if last_pattern_at else None,
     }))
+
+
+# ── AI Pattern Detail List ───────────────────────────────────────────────────
+
+_MITRE_NAMES = {
+    "T1059": "Command & Scripting Interpreter", "T1059.001": "PowerShell",
+    "T1059.003": "Windows Command Shell",        "T1059.004": "Unix Shell",
+    "T1078": "Valid Accounts",                   "T1078.001": "Default Accounts",
+    "T1078.003": "Local Accounts",               "T1078.004": "Cloud Accounts",
+    "T1548": "Abuse Elevation Control Mechanism","T1548.003": "Sudo / Sudo Caching",
+    "T1562": "Impair Defenses",                  "T1562.001": "Disable or Modify Tools",
+    "T1562.004": "Disable or Modify Firewall",   "T1021": "Remote Services",
+    "T1021.001": "Remote Desktop Protocol",      "T1021.004": "SSH",
+    "T1053": "Scheduled Task / Job",             "T1053.003": "Cron",
+    "T1055": "Process Injection",                "T1105": "Ingress Tool Transfer",
+    "T1110": "Brute Force",                      "T1110.001": "Password Guessing",
+    "T1190": "Exploit Public-Facing Application","T1204": "User Execution",
+    "T1218": "System Binary Proxy Execution",    "T1566": "Phishing",
+    "T1566.001": "Spearphishing Attachment",     "T1569": "System Services",
+    "T1569.002": "Service Execution",            "T1003": "OS Credential Dumping",
+    "T1040": "Network Sniffing",                 "T1046": "Network Service Discovery",
+    "T1071": "Application Layer Protocol",       "T1082": "System Information Discovery",
+    "T1083": "File & Directory Discovery",       "T1518": "Software Discovery",
+}
+
+
+def _pattern_prediction(outcome: str, technique: str | None, agents: list, users: list) -> dict:
+    """Compute a human-readable prediction for what a stored pattern means for future incidents."""
+    tech_label = _MITRE_NAMES.get(technique or "", technique or "unknown technique")
+    agent_str  = agents[0] if agents else "unknown host"
+    user_str   = users[0]  if users  else None
+
+    if outcome in ("closed", "false_positive"):
+        subject = f"{tech_label} ({technique})" if technique else "this behavior"
+        actor   = f" from {user_str} on {agent_str}" if user_str else f" on {agent_str}"
+        return {
+            "type":  "fp_dampener",
+            "label": "FP Suppressor",
+            "color": "#ff9f43",
+            "text": (
+                f"Future incidents matching {subject}{actor} will have their "
+                f"Historical Similarity confidence slot (-20%) dampened, reducing "
+                f"triage priority. The engine learned this is likely benign noise."
+            ),
+        }
+    elif outcome == "resolved":
+        subject = f"{tech_label} ({technique})" if technique else "this behavior"
+        return {
+            "type":  "tp_booster",
+            "label": "TP Booster",
+            "color": "#00e5a0",
+            "text": (
+                f"Future incidents matching {subject} gain up to +20% confidence "
+                f"from the Historical Similarity slot. This makes Phase 5 structured "
+                f"recommendations and CySOAR dispatch more likely to trigger."
+            ),
+        }
+    else:
+        return {
+            "type":  "neutral",
+            "label": "Reference",
+            "color": "#a0aabb",
+            "text":  "Stored as a reference pattern for future similarity scoring.",
+        }
+
+
+@system_bp.route("/api/system/ai-patterns", methods=["GET"])
+def system_ai_patterns():
+    """Return paginated incident patterns for the Settings > AI Investigation Engine panel.
+
+    Query params:
+      page  (int, default 1)
+      limit (int, default 20, max 100)
+
+    Returns:
+      { patterns: [...], total: N, page: N, pages: N }
+
+    GET → viewer+
+    """
+    if not session.get("user_email"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    try:
+        import os as _os, psycopg2, psycopg2.extras, math
+
+        page  = max(1, int(request.args.get("page",  1)))
+        limit = min(100, max(1, int(request.args.get("limit", 20))))
+        offset = (page - 1) * limit
+
+        db_url = (
+            _os.environ.get("CYCENTRA_DB_URL")
+            or _os.environ.get("CORRELATION_DB_URL")
+            or _os.environ.get("DATABASE_URL",
+               "postgresql://corruser:changeme@127.0.0.1:5433/correlation")
+        ).replace("+asyncpg", "")
+
+        conn = psycopg2.connect(db_url)
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT COUNT(*) AS total FROM incident_patterns")
+            total = int((cur.fetchone() or {}).get("total", 0))
+
+            cur.execute("""
+                SELECT
+                    ip.id,
+                    ip.source_incident_id,
+                    ip.technique,
+                    ip.kill_chain_stage,
+                    ip.outcome,
+                    ip.confidence_at_resolution,
+                    ip.process_chain,
+                    ip.payload_indicators,
+                    ip.response_actions,
+                    ip.similarity_vector,
+                    ip.created_at,
+                    i.false_positive_reason,
+                    i.severity,
+                    i.fp_probability
+                FROM incident_patterns ip
+                LEFT JOIN incidents i ON i.id = ip.source_incident_id
+                ORDER BY ip.created_at DESC
+                LIMIT %s OFFSET %s
+            """, (limit, offset))
+            rows = cur.fetchall() or []
+        conn.close()
+
+        patterns = []
+        for r in rows:
+            sv        = r.get("similarity_vector") or {}
+            pi        = r.get("payload_indicators") or {}
+            technique = r.get("technique")
+            outcome   = r.get("outcome") or "closed"
+            agents    = pi.get("agents", [])
+            users     = pi.get("users", [])
+            tactics   = sv.get("tactics", [])
+            conf_raw  = r.get("confidence_at_resolution")
+
+            patterns.append({
+                "id":                       r["id"],
+                "source_incident_id":       r["source_incident_id"],
+                "technique":                technique,
+                "technique_name":           _MITRE_NAMES.get(technique or "", None),
+                "tactic":                   tactics[0] if tactics else None,
+                "kill_chain_stage":         r.get("kill_chain_stage"),
+                "outcome":                  outcome,
+                "confidence_at_resolution": round(float(conf_raw), 4) if conf_raw else None,
+                "severity":                 r.get("severity") or sv.get("severity"),
+                "alert_count_bucket":       sv.get("alert_count_bucket"),
+                "agents":                   agents,
+                "users":                    users,
+                "src_ips":                  pi.get("src_ips", []),
+                "rule_ids":                 pi.get("rule_ids", []),
+                "false_positive_reason":    r.get("false_positive_reason"),
+                "fp_probability":           float(r["fp_probability"]) if r.get("fp_probability") else None,
+                "created_at":               r["created_at"].isoformat() if r.get("created_at") else None,
+                "prediction":               _pattern_prediction(outcome, technique, agents, users),
+            })
+
+        return add_cors_headers(jsonify({
+            "patterns": patterns,
+            "total":    total,
+            "page":     page,
+            "pages":    max(1, math.ceil(total / limit)),
+        }))
+
+    except Exception as exc:
+        return add_cors_headers(jsonify({"patterns": [], "total": 0, "page": 1, "pages": 1}))
+
+
+@system_bp.route("/api/system/ai-patterns", methods=["OPTIONS"])
+def system_ai_patterns_options():
+    return add_cors_headers(make_response('', 204))

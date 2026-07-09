@@ -16,6 +16,155 @@ import { SSOTab } from "./SSOTab.jsx";
 // ── Shared style constants ────────────────────────────────────────────────────
 const CARD  = { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "20px 24px", marginBottom: 20 };
 
+// ── Digital brain icon (circuit-board style) ─────────────────────────────────
+function DigitalBrainIcon({ size = 18, color = "#00e5a0" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 3.5C9.5 3.5 7 5.5 6 7.5C4.5 8 3 9.5 3 11.5C3 13.5 4 15 5.5 16C6 18 7.5 19.5 9.5 20C10.3 20.3 11.2 20.5 12 20.5" stroke={color} strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M12 3.5C14.5 3.5 17 5.5 18 7.5C19.5 8 21 9.5 21 11.5C21 13.5 20 15 18.5 16C18 18 16.5 19.5 14.5 20C13.7 20.3 12.8 20.5 12 20.5" stroke={color} strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+      <line x1="12" y1="3.5" x2="12" y2="20.5" stroke={color} strokeWidth="0.8" strokeDasharray="2 1.5" opacity="0.5"/>
+      <line x1="6.5" y1="9" x2="10.5" y2="9" stroke={color} strokeWidth="0.9"/>
+      <line x1="5.5" y1="13" x2="10.5" y2="13" stroke={color} strokeWidth="0.9"/>
+      <line x1="7.5" y1="9" x2="7.5" y2="13" stroke={color} strokeWidth="0.9"/>
+      <line x1="9.5" y1="9" x2="9.5" y2="17" stroke={color} strokeWidth="0.9"/>
+      <line x1="6.5" y1="16" x2="9.5" y2="16" stroke={color} strokeWidth="0.9"/>
+      <circle cx="6.5" cy="9" r="1" fill={color}/>
+      <circle cx="9.5" cy="9" r="1" fill={color}/>
+      <circle cx="7.5" cy="13" r="1" fill={color}/>
+      <circle cx="5.5" cy="13" r="1" fill={color}/>
+      <circle cx="9.5" cy="17" r="1" fill={color}/>
+      <line x1="13.5" y1="9" x2="17.5" y2="9" stroke={color} strokeWidth="0.9"/>
+      <line x1="13.5" y1="13" x2="18.5" y2="13" stroke={color} strokeWidth="0.9"/>
+      <line x1="16.5" y1="9" x2="16.5" y2="13" stroke={color} strokeWidth="0.9"/>
+      <line x1="14.5" y1="9" x2="14.5" y2="17" stroke={color} strokeWidth="0.9"/>
+      <line x1="14.5" y1="16" x2="17.5" y2="16" stroke={color} strokeWidth="0.9"/>
+      <circle cx="17.5" cy="9" r="1" fill={color}/>
+      <circle cx="14.5" cy="9" r="1" fill={color}/>
+      <circle cx="16.5" cy="13" r="1" fill={color}/>
+      <circle cx="18.5" cy="13" r="1" fill={color}/>
+      <circle cx="14.5" cy="17" r="1" fill={color}/>
+    </svg>
+  );
+}
+
+// ── Phase descriptions ────────────────────────────────────────────────────────
+const PHASE_INFO = {
+  phase1: { short: "P1", desc: "Normalise · Group · Correlate · UEBA" },
+  phase2: { short: "P2", desc: "LLM Narrative + Hypotheses" },
+  phase3: { short: "P3", desc: "Gap Analysis · Evidence Collection" },
+  phase4: { short: "P4", desc: "Re-evaluate + Confidence Score (0–1)" },
+  phase5: { short: "P5", desc: "C/E/R Recommendations + CySOAR" },
+  phase6: { short: "P6", desc: "Pattern Memory · Historical Similarity" },
+};
+
+// ── AI Pattern detail table (lazy-loaded) ────────────────────────────────────
+const _OUTCOME_STYLE = {
+  closed:         { bg: "rgba(255,159,67,0.12)",  color: "#ff9f43", border: "rgba(255,159,67,0.3)"  },
+  false_positive: { bg: "rgba(255,107,107,0.12)", color: "#ff6b6b", border: "rgba(255,107,107,0.3)" },
+  resolved:       { bg: "rgba(0,229,160,0.12)",   color: "#00e5a0", border: "rgba(0,229,160,0.3)"   },
+};
+const _TH = { color: "rgba(255,255,255,0.28)", fontSize: 9, fontFamily: "monospace", letterSpacing: "0.8px" };
+
+function AiPatternTable() {
+  const [data,     setData]     = useState(null);
+  const [loading,  setLoading]  = useState(true);
+  const [page,     setPage]     = useState(1);
+  const [expanded, setExpanded] = useState(null);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${API_BASE}/api/system/ai-patterns?page=${page}&limit=10`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => d && setData(d))
+      .finally(() => setLoading(false));
+  }, [page]);
+
+  if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 11, padding: "14px 0", textAlign: "center" }}>Loading patterns…</div>;
+  if (!data?.patterns?.length) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 11, padding: "14px 0", textAlign: "center" }}>No patterns stored yet — they appear after incidents are closed or resolved.</div>;
+
+  const COLS = "36px 108px 140px 115px 88px 58px 1fr 90px";
+
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "5px 8px", borderBottom: "1px solid rgba(255,255,255,0.07)", marginBottom: 2 }}>
+        {["#","INCIDENT","TECHNIQUE","TACTIC","OUTCOME","CONF","AGENTS / USERS","STORED"].map(h => <span key={h} style={_TH}>{h}</span>)}
+      </div>
+      {data.patterns.map(p => {
+        const os     = _OUTCOME_STYLE[p.outcome] || _OUTCOME_STYLE.closed;
+        const isExp  = expanded === p.id;
+        const pred   = p.prediction || {};
+        const conf   = p.confidence_at_resolution != null ? `${(p.confidence_at_resolution * 100).toFixed(0)}%` : "—";
+        const tech   = p.technique || "—";
+        const tactic = p.tactic    || "—";
+        const agent  = p.agents?.[0] || p.src_ips?.[0] || "—";
+        const user   = p.users?.[0]  || null;
+        const date   = p.created_at  ? new Date(p.created_at).toLocaleDateString() : "—";
+
+        return (
+          <div key={p.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.035)" }}>
+            <div
+              onClick={() => setExpanded(isExp ? null : p.id)}
+              style={{ display: "grid", gridTemplateColumns: COLS, gap: 8, padding: "7px 8px", cursor: "pointer", borderRadius: 3, background: isExp ? "rgba(255,255,255,0.025)" : "transparent" }}
+              onMouseEnter={e => { if (!isExp) e.currentTarget.style.background = "rgba(255,255,255,0.02)"; }}
+              onMouseLeave={e => { if (!isExp) e.currentTarget.style.background = "transparent"; }}
+            >
+              <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>{p.id}</span>
+              <span style={{ color: "#4d9eff", fontSize: 10, fontFamily: "monospace" }}>{p.source_incident_id}</span>
+              <div>
+                <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 10, fontFamily: "monospace" }}>{tech}</div>
+                {p.technique_name && <div style={{ color: "rgba(255,255,255,0.32)", fontSize: 9, fontFamily: "monospace", marginTop: 1 }}>{p.technique_name}</div>}
+              </div>
+              <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>{tactic}</span>
+              <span style={{ display: "inline-block", background: os.bg, color: os.color, border: `1px solid ${os.border}`, borderRadius: 3, padding: "1px 5px", fontSize: 9, fontFamily: "monospace", width: "fit-content" }}>{p.outcome}</span>
+              <span style={{ color: "#4d9eff", fontSize: 10, fontFamily: "monospace" }}>{conf}</span>
+              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 10, fontFamily: "monospace" }}>{agent}</span>
+                {user && <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 9, fontFamily: "monospace", marginLeft: 6 }}>{user}</span>}
+              </div>
+              <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 9, fontFamily: "monospace" }}>{date}</span>
+            </div>
+
+            {isExp && (
+              <div style={{ background: "rgba(0,0,0,0.18)", borderLeft: `3px solid ${pred.color || "#a0aabb"}`, margin: "0 0 2px 36px", padding: "10px 14px", borderRadius: "0 3px 3px 0" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7, flexWrap: "wrap" }}>
+                  <span style={{ background: `${pred.color}22`, color: pred.color, border: `1px solid ${pred.color}44`, borderRadius: 3, padding: "2px 8px", fontSize: 9, fontFamily: "monospace", letterSpacing: "0.5px", textTransform: "uppercase" }}>{pred.label}</span>
+                  {p.fp_probability != null && <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 9, fontFamily: "monospace" }}>FP score: {p.fp_probability.toFixed(1)}</span>}
+                  {p.false_positive_reason && <span style={{ color: "rgba(255,255,255,0.22)", fontSize: 9, fontFamily: "monospace", fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 340 }}>{p.false_positive_reason}</span>}
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.68)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.65, marginBottom: 6 }}>{pred.text}</div>
+                {(p.rule_ids || []).length > 0 && (
+                  <div style={{ marginTop: 5 }}>
+                    <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 9, fontFamily: "monospace" }}>RULES FIRED: </span>
+                    {p.rule_ids.slice(0, 6).map(r => <span key={r} style={{ color: "rgba(255,255,255,0.5)", fontSize: 9, fontFamily: "monospace", marginRight: 6 }}>{r}</span>)}
+                  </div>
+                )}
+                {(p.src_ips || []).length > 0 && (
+                  <div style={{ marginTop: 3 }}>
+                    <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 9, fontFamily: "monospace" }}>SRC IPs: </span>
+                    {p.src_ips.slice(0, 3).map(ip => <span key={ip} style={{ color: "rgba(255,159,67,0.8)", fontSize: 9, fontFamily: "monospace", marginRight: 6 }}>{ip}</span>)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {data.pages > 1 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10, padding: "6px 0" }}>
+          <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 10, fontFamily: "monospace" }}>{data.total} patterns · page {data.page} / {data.pages}</span>
+          <div style={{ display: "flex", gap: 5 }}>
+            {[["‹ prev", () => setPage(p => Math.max(1, p - 1)), page === 1],
+              ["next ›", () => setPage(p => Math.min(data.pages, p + 1)), page === data.pages]].map(([lbl, fn, dis]) => (
+              <button key={lbl} onClick={fn} disabled={dis} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", color: dis ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.55)", borderRadius: 3, padding: "3px 10px", fontSize: 10, fontFamily: "monospace", cursor: dis ? "default" : "pointer" }}>{lbl}</button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Collapsible section wrapper (collapsed by default) ───────────────────────
 function CollapsibleSection({ icon, title, badge, children, initialOpen = false }) {
   const [open, setOpen] = useState(initialOpen);
@@ -175,6 +324,7 @@ function UpdatesTab() {
   const [latestInfo,   setLatestInfo]   = useState(null);   // {current, latest, up_to_date, error?}
   const [checkingVer,  setCheckingVer]  = useState(false);
   const [aiStats,      setAiStats]      = useState(null);
+  const [showPatterns, setShowPatterns] = useState(false);
   const logRef  = useRef(null);
   const pollRef = useRef(null);
 
@@ -419,12 +569,11 @@ function UpdatesTab() {
       </CollapsibleSection>
 
       {aiStats?.phases_active?.length > 0 && (
-        <CollapsibleSection icon="🧠" title="AI Investigation Engine">
+        <CollapsibleSection icon={<DigitalBrainIcon size={18} color="#00e5a0" />} title="AI Investigation Engine">
+          {/* ── KPI row ── */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 16 }}>
             <div style={{ background: "rgba(0,229,160,0.04)", border: "1px solid rgba(0,229,160,0.15)", borderRadius: 5, padding: "14px 16px", textAlign: "center" }}>
-              <div style={{ color: "#00e5a0", fontSize: 22, fontFamily: "monospace", fontWeight: 700 }}>
-                {aiStats.patterns_total ?? 0}
-              </div>
+              <div style={{ color: "#00e5a0", fontSize: 22, fontFamily: "monospace", fontWeight: 700 }}>{aiStats.patterns_total ?? 0}</div>
               <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", marginTop: 4, letterSpacing: "0.8px" }}>PATTERNS STORED</div>
             </div>
             <div style={{ background: "rgba(77,158,255,0.04)", border: "1px solid rgba(77,158,255,0.15)", borderRadius: 5, padding: "14px 16px", textAlign: "center" }}>
@@ -440,19 +589,49 @@ function UpdatesTab() {
               <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", marginTop: 4, letterSpacing: "0.8px" }}>LAST PATTERN</div>
             </div>
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-            <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace", marginRight: 4 }}>ACTIVE PHASES</span>
-            {["phase1","phase2","phase3","phase4","phase5","phase6"].map(ph => {
-              const active = aiStats.phases_active?.includes(ph);
-              return (
-                <span key={ph} style={{
-                  background: active ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.03)",
-                  color: active ? "#00e5a0" : "rgba(255,255,255,0.2)",
-                  border: `1px solid ${active ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.07)"}`,
-                  borderRadius: 3, padding: "2px 7px", fontSize: 9, fontFamily: "monospace", letterSpacing: "0.5px"
-                }}>{ph.toUpperCase()}</span>
-              );
-            })}
+
+          {/* ── Active phases with descriptions ── */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginBottom: 10 }}>
+              <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace", marginRight: 4 }}>ACTIVE PHASES</span>
+              {["phase1","phase2","phase3","phase4","phase5","phase6"].map(ph => {
+                const active = aiStats.phases_active?.includes(ph);
+                return (
+                  <span key={ph} title={PHASE_INFO[ph]?.desc} style={{
+                    background: active ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.03)",
+                    color: active ? "#00e5a0" : "rgba(255,255,255,0.2)",
+                    border: `1px solid ${active ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.07)"}`,
+                    borderRadius: 3, padding: "2px 8px", fontSize: 9, fontFamily: "monospace", letterSpacing: "0.5px", cursor: "default",
+                  }}>{PHASE_INFO[ph]?.short ?? ph.toUpperCase()}</span>
+                );
+              })}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 5 }}>
+              {["phase1","phase2","phase3","phase4","phase5","phase6"].map(ph => {
+                const active = aiStats.phases_active?.includes(ph);
+                const info   = PHASE_INFO[ph];
+                return (
+                  <div key={ph} style={{ display: "flex", alignItems: "flex-start", gap: 6, padding: "5px 8px", background: "rgba(255,255,255,0.015)", borderRadius: 3, border: `1px solid ${active ? "rgba(0,229,160,0.1)" : "rgba(255,255,255,0.04)"}` }}>
+                    <span style={{ color: active ? "#00e5a0" : "rgba(255,255,255,0.18)", fontSize: 9, fontFamily: "monospace", fontWeight: 700, flexShrink: 0, paddingTop: 1 }}>{info?.short}</span>
+                    <span style={{ color: active ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", lineHeight: 1.4 }}>{info?.desc}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ── Pattern detail toggle ── */}
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: showPatterns ? 4 : 0 }}>
+              <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", letterSpacing: "0.8px" }}>
+                PATTERN MEMORY  <span style={{ color: "rgba(255,255,255,0.22)" }}>· click a row to see prediction</span>
+              </span>
+              <button
+                onClick={() => setShowPatterns(v => !v)}
+                style={{ background: showPatterns ? "rgba(0,229,160,0.1)" : "rgba(255,255,255,0.04)", border: `1px solid ${showPatterns ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.1)"}`, color: showPatterns ? "#00e5a0" : "rgba(255,255,255,0.5)", borderRadius: 3, padding: "4px 12px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", letterSpacing: "0.5px" }}
+              >{showPatterns ? "HIDE PATTERNS ▲" : "VIEW PATTERNS ▼"}</button>
+            </div>
+            {showPatterns && <AiPatternTable />}
           </div>
         </CollapsibleSection>
       )}

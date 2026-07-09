@@ -316,6 +316,12 @@ async def _store_incident_pattern(db: AsyncSession, incident: Incident) -> None:
             ),
         }
 
+        # confidence_at_resolution: Phase-4 score for analyst-closed incidents;
+        # fp_probability/100 for auto-closed FP incidents (Phase 4 never runs for them).
+        _conf = incident.confidence_score
+        if _conf is None and getattr(incident, "fp_probability", None) is not None:
+            _conf = round(float(incident.fp_probability) / 100.0, 4)
+
         pattern = IncidentPattern(
             source_incident_id       = incident.id,
             technique                = technique,
@@ -324,7 +330,7 @@ async def _store_incident_pattern(db: AsyncSession, incident: Incident) -> None:
             payload_indicators       = payload_indicators,
             response_actions         = incident.recommendation or {},
             outcome                  = incident.status,
-            confidence_at_resolution = incident.confidence_score,
+            confidence_at_resolution = _conf,
             similarity_vector        = similarity_vector,
         )
         db.add(pattern)
