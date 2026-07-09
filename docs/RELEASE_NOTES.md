@@ -1,3 +1,12 @@
+## v1.0.200 -- 2026-07-09
+
+### Bug Fixes
+
+  - edr-installer): full Linux distro compatibility (Alpine, RHEL ARM, CentOS, dnf/yum ordering
+  - edr-installer): resolve Linux Python dep install failure on Ubuntu 22.04+
+
+---
+
 ## v1.0.199 -- 2026-07-09
 
 ### Improvements
