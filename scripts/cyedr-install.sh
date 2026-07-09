@@ -116,13 +116,19 @@ install_packages_linux() {
     info "Installing system dependencies..."
     if command -v apt-get &>/dev/null; then
         apt-get update -qq
-        apt-get install -y -qq auditd audispd-plugins yara curl python3 \
+        apt-get install -y -qq auditd audispd-plugins yara curl \
+            python3 python3-pip python3-venv \
+            python3-requests python3-psutil python3-yaml \
             iptables iproute2 nmap snmp 2>/dev/null || true
     elif command -v yum &>/dev/null; then
-        yum install -y -q audit audit-libs yara curl python3 \
+        yum install -y -q audit audit-libs yara curl \
+            python3 python3-pip \
+            python3-requests python3-psutil python3-pyyaml \
             iptables iproute nmap net-snmp-utils 2>/dev/null || true
     elif command -v dnf &>/dev/null; then
-        dnf install -y -q audit yara curl python3 \
+        dnf install -y -q audit yara curl \
+            python3 python3-pip \
+            python3-requests python3-psutil python3-pyyaml \
             iptables iproute nmap net-snmp-utils 2>/dev/null || true
     else
         warn "Unknown package manager — skipping auto-install; ensure auditd, yara, nmap, and snmpwalk are present"
@@ -239,18 +245,48 @@ deploy_agent() {
                     _root_home="$(eval echo ~root 2>/dev/null)" || _root_home="/root"
                     [[ -z "$_root_home" || "$_root_home" == "~root" ]] && _root_home="/root"
                     info "Installing Python dependencies for CyEDR agent..."
-                    local _pip_base="env HOME=$_root_home $PYTHON_BIN -m pip install --quiet"
-                    if "$PYTHON_BIN" -m pip install --help 2>&1 | grep -q 'break-system-packages'; then
-                        $_pip_base --break-system-packages psutil requests pyyaml 2>/dev/null \
-                            || $_pip_base psutil requests pyyaml 2>/dev/null || true
-                    else
-                        $_pip_base psutil requests pyyaml 2>/dev/null || true
-                    fi
-                    # Verify importable in the same environment the daemon will use
+
+                    # Fast-path: system packages already installed by install_packages_linux()
+                    # (python3-requests / python3-psutil / python3-yaml on apt distros,
+                    #  python3-requests / python3-psutil / python3-pyyaml on dnf/yum distros)
                     if env HOME="$_root_home" "$PYTHON_BIN" -c "import requests, psutil, yaml" 2>/dev/null; then
-                        ok "Python dependencies installed"
+                        ok "Python dependencies already available (system packages)"
                     else
-                        die "Python dependencies could not be installed for $PYTHON_BIN. Try: sudo -H $PYTHON_BIN -m pip install requests psutil pyyaml"
+                        # 1. Retry with system package manager (handles partial installs)
+                        if command -v apt-get &>/dev/null; then
+                            apt-get install -y -qq python3-requests python3-psutil python3-yaml 2>/dev/null || true
+                        elif command -v dnf &>/dev/null; then
+                            dnf install -y -q python3-requests python3-psutil python3-pyyaml 2>/dev/null || true
+                        elif command -v yum &>/dev/null; then
+                            yum install -y -q python3-requests python3-psutil python3-pyyaml 2>/dev/null || true
+                        fi
+
+                        # 2. pip with --break-system-packages (works on Debian/Ubuntu with pip>=23)
+                        if ! env HOME="$_root_home" "$PYTHON_BIN" -c "import requests, psutil, yaml" 2>/dev/null; then
+                            if "$PYTHON_BIN" -m pip install --help 2>&1 | grep -q 'break-system-packages'; then
+                                env HOME="$_root_home" "$PYTHON_BIN" -m pip install --quiet \
+                                    --break-system-packages psutil requests pyyaml 2>/dev/null || true
+                            else
+                                env HOME="$_root_home" "$PYTHON_BIN" -m pip install --quiet \
+                                    psutil requests pyyaml 2>/dev/null || true
+                            fi
+                        fi
+
+                        # 3. venv fallback — always works even when system pip is locked down
+                        if ! env HOME="$_root_home" "$PYTHON_BIN" -c "import requests, psutil, yaml" 2>/dev/null; then
+                            info "Trying venv fallback for Python dependencies..."
+                            if "$PYTHON_BIN" -m venv "$EDR_HOME/venv" 2>/dev/null; then
+                                "$EDR_HOME/venv/bin/pip" install --quiet psutil requests pyyaml 2>/dev/null || true
+                                # Point PYTHON_BIN at the venv interpreter for the rest of setup
+                                PYTHON_BIN="$EDR_HOME/venv/bin/python3"
+                            fi
+                        fi
+
+                        # Final check
+                        if ! env HOME="$_root_home" "$PYTHON_BIN" -c "import requests, psutil, yaml" 2>/dev/null; then
+                            die "Python dependencies could not be installed. Try: sudo apt-get install python3-requests python3-psutil python3-yaml"
+                        fi
+                        ok "Python dependencies installed"
                     fi
                     PYTHON_MODE=true
                     ok "Agent script installed (Python mode: $PYTHON_BIN)"
