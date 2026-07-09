@@ -115,21 +115,31 @@ detect_arch() {
 install_packages_linux() {
     info "Installing system dependencies..."
     if command -v apt-get &>/dev/null; then
+        # Debian / Ubuntu / Raspberry Pi OS / Kali (all arches)
         apt-get update -qq
         apt-get install -y -qq auditd audispd-plugins yara curl \
             python3 python3-pip python3-venv \
             python3-requests python3-psutil python3-yaml \
             iptables iproute2 nmap snmp 2>/dev/null || true
-    elif command -v yum &>/dev/null; then
-        yum install -y -q audit audit-libs yara curl \
-            python3 python3-pip \
-            python3-requests python3-psutil python3-pyyaml \
-            iptables iproute nmap net-snmp-utils 2>/dev/null || true
     elif command -v dnf &>/dev/null; then
+        # RHEL 8/9, CentOS Stream 8/9, Fedora, Rocky Linux, AlmaLinux, Amazon Linux 2023
+        # python3-venv is NOT a separate package on RPM distros — venv is built into python3
         dnf install -y -q audit yara curl \
             python3 python3-pip \
             python3-requests python3-psutil python3-pyyaml \
             iptables iproute nmap net-snmp-utils 2>/dev/null || true
+    elif command -v yum &>/dev/null; then
+        # RHEL 7, CentOS 7, Amazon Linux 2 (legacy)
+        yum install -y -q audit audit-libs yara curl \
+            python3 python3-pip \
+            python3-requests python3-psutil python3-pyyaml \
+            iptables iproute nmap net-snmp-utils 2>/dev/null || true
+    elif command -v apk &>/dev/null; then
+        # Alpine Linux (all arches) — package names differ from Debian/RPM
+        apk add --quiet python3 py3-pip \
+            py3-requests py3-psutil py3-yaml \
+            nmap net-snmp-tools 2>/dev/null || true
+        # Note: auditd and yara are not in Alpine standard repos
     else
         warn "Unknown package manager — skipping auto-install; ensure auditd, yara, nmap, and snmpwalk are present"
     fi
@@ -259,6 +269,8 @@ deploy_agent() {
                             dnf install -y -q python3-requests python3-psutil python3-pyyaml 2>/dev/null || true
                         elif command -v yum &>/dev/null; then
                             yum install -y -q python3-requests python3-psutil python3-pyyaml 2>/dev/null || true
+                        elif command -v apk &>/dev/null; then
+                            apk add --quiet py3-requests py3-psutil py3-yaml 2>/dev/null || true
                         fi
 
                         # 2. pip with --break-system-packages (works on Debian/Ubuntu with pip>=23)
@@ -284,7 +296,17 @@ deploy_agent() {
 
                         # Final check
                         if ! env HOME="$_root_home" "$PYTHON_BIN" -c "import requests, psutil, yaml" 2>/dev/null; then
-                            die "Python dependencies could not be installed. Try: sudo apt-get install python3-requests python3-psutil python3-yaml"
+                            if command -v apt-get &>/dev/null; then
+                                die "Python dependencies could not be installed. Try: apt-get install python3-requests python3-psutil python3-yaml"
+                            elif command -v dnf &>/dev/null; then
+                                die "Python dependencies could not be installed. Try: dnf install python3-requests python3-psutil python3-pyyaml"
+                            elif command -v yum &>/dev/null; then
+                                die "Python dependencies could not be installed. Try: yum install python3-requests python3-psutil python3-pyyaml"
+                            elif command -v apk &>/dev/null; then
+                                die "Python dependencies could not be installed. Try: apk add py3-requests py3-psutil py3-yaml"
+                            else
+                                die "Python dependencies could not be installed. Run: $PYTHON_BIN -m pip install requests psutil pyyaml"
+                            fi
                         fi
                         ok "Python dependencies installed"
                     fi
