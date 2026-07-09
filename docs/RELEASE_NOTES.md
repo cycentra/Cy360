@@ -1,3 +1,11 @@
+## v1.0.201 -- 2026-07-09
+
+### Bug Fixes
+
+  - shadow-ai): resolve telemetry 401 and bare-envelope format bugs
+
+---
+
 ## v1.0.200 -- 2026-07-09
 
 ### Bug Fixes
