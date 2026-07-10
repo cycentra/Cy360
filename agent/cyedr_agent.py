@@ -48,7 +48,7 @@ except ImportError:
 
 # ── Globals ────────────────────────────────────────────────────────────────────
 VERSION       = "1.0.0"
-AGENT_VERSION = "1.0.203"           # bumped with every platform release; drives self-update
+AGENT_VERSION = "1.0.205"           # bumped with every platform release; drives self-update
 OS_TYPE       = platform.system().upper()   # LINUX, DARWIN, WINDOWS
 _RUNNING      = True
 _STOP_EVENT   = threading.Event()
@@ -323,47 +323,84 @@ SHADOW_AI_PROC_EXCLUSIONS: set[str] = {
 
 def _self_update(cfg: "Config", http: "requests.Session", server_version: str) -> None:
     """
-    Hot-swap the running agent script when the server reports a newer version.
+    Hot-swap the agent when the server reports a newer version.
 
-    Flow:
-      1. Download /api/edr/installer/agent-script (Bearer token) to a .update temp file.
-      2. Atomically rename it over the live script (same filesystem → atomic on POSIX).
-      3. Call sys.exit(0) — the OS service manager (launchd KeepAlive / systemd
-         Restart=always) automatically restarts the process with the new script.
-
-    Only runs in script mode (sys.argv[0] ends with .py).
-    Compiled/PyInstaller deployments skip silently — use the installer --upgrade flag.
+    Script mode (*.py): downloads new script, atomic rename, sys.exit(0).
+    Binary mode (Linux/macOS): downloads new binary from /installer/agent-binary,
+      atomic POSIX rename over running binary (safe — kernel holds old inode open),
+      sys.exit(0) → launchd/systemd restarts with new binary at same path.
+    Binary mode (Windows): not supported via self-update; re-run cyedr-install.ps1.
     """
+    import platform as _plat
     from pathlib import Path as _Path
 
     script_path = _Path(sys.argv[0]).resolve()
-    if not str(script_path).endswith(".py"):
+    tmp_path    = _Path(str(script_path) + ".update")
+
+    # -------- Script mode (Python fallback install, any platform) --------
+    if str(script_path).endswith(".py"):
+        logger.info("Self-update: server=%s local=%s — downloading script update...",
+                    server_version, AGENT_VERSION)
+        try:
+            resp = http.get(
+                f"{cfg.platform_url}/api/edr/installer/agent-script",
+                timeout=60, stream=True,
+            )
+            if not resp.ok:
+                logger.warning("Self-update download failed: HTTP %s", resp.status_code)
+                return
+            with tmp_path.open("wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            tmp_path.chmod(script_path.stat().st_mode)
+            tmp_path.replace(script_path)
+            logger.info("Self-update: script applied %s — restarting", server_version)
+            sys.exit(0)
+        except Exception as exc:
+            logger.error("Self-update (script) failed: %s", exc)
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+        return
+
+    # -------- Binary mode — Windows: not supported --------
+    if cfg.os_type == "WINDOWS":
         logger.info(
-            "Self-update: binary mode on this endpoint — "
-            "re-run installer with --upgrade to update to %s", server_version
+            "Self-update: Windows binary — re-run cyedr-install.ps1 to upgrade to %s",
+            server_version,
         )
         return
 
-    logger.info("Self-update: server=%s local=%s — downloading update...",
-                server_version, AGENT_VERSION)
-    tmp_path = _Path(str(script_path) + ".update")
+    # -------- Binary mode — Linux / macOS --------
+    _machine = _plat.machine().lower()
+    _arch = "x86_64" if _machine in ("x86_64", "amd64") else "aarch64"
+    _os   = "macos" if cfg.os_type == "DARWIN" else "linux"
+    bundle_url = (
+        f"{cfg.platform_url}/api/edr/installer/agent-binary"
+        f"?os={_os}&arch={_arch}"
+    )
+    logger.info(
+        "Self-update: binary mode (%s/%s) — server=%s local=%s — downloading...",
+        _os, _arch, server_version, AGENT_VERSION,
+    )
     try:
-        resp = http.get(
-            f"{cfg.platform_url}/api/edr/installer/agent-script",
-            timeout=60, stream=True,
-        )
+        resp = http.get(bundle_url, timeout=120, stream=True)
         if not resp.ok:
-            logger.warning("Self-update download failed: HTTP %s", resp.status_code)
+            logger.warning(
+                "Self-update binary download failed: HTTP %s — no bundle staged for %s/%s",
+                resp.status_code, _os, _arch,
+            )
             return
         with tmp_path.open("wb") as f:
-            for chunk in resp.iter_content(chunk_size=8192):
+            for chunk in resp.iter_content(chunk_size=65536):
                 f.write(chunk)
-        tmp_path.chmod(script_path.stat().st_mode)   # preserve executable bit
-        tmp_path.replace(script_path)                # atomic rename
-        logger.info("Self-update: applied %s — restarting via service manager", server_version)
-        sys.exit(0)   # launchd/systemd restarts with new script automatically
+        tmp_path.chmod(script_path.stat().st_mode | 0o111)  # ensure executable
+        tmp_path.replace(script_path)   # atomic POSIX rename — safe while binary is running
+        logger.info("Self-update: binary %s applied — restarting via service manager", server_version)
+        sys.exit(0)
     except Exception as exc:
-        logger.error("Self-update failed: %s", exc)
+        logger.error("Self-update (binary) failed: %s", exc)
         try:
             tmp_path.unlink()
         except Exception:

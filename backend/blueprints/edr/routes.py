@@ -1419,7 +1419,8 @@ for _ap in ("/installer/agent-bundle", "/installer/sysmon-config",
             "/installer/sysmon-exe", "/installer/yara-rules",
             "/installer/yara-exe", "/installer/cysiem-script",
             "/installer/cysiem-msi", "/installer/unix", "/installer/win",
-            "/installer/agent-py", "/installer/agent-script"):
+            "/installer/agent-py", "/installer/agent-script",
+            "/installer/agent-binary"):
     edr_bp.add_url_rule(
         _ap,
         endpoint=f"opts_asset_{_ap.replace('/','_').replace('-','_')}",
@@ -1601,6 +1602,37 @@ def installer_agent_script(agent_id):
                              as_attachment=False,
                              download_name="cyedr_agent.py")
     return jsonify({"error": "agent script not staged on platform"}), 404
+
+
+@edr_bp.route("/installer/agent-binary", methods=["GET"])
+@require_agent_token
+def installer_agent_binary(agent_id):
+    """
+    Agent-facing binary self-update endpoint (Bearer enrollment token).
+    Running agents call this when heartbeat reports a newer version and the
+    agent is installed in binary (PyInstaller) mode on Linux or macOS.
+    Query params: os=linux|macos, arch=x86_64|aarch64|arm64|intel64
+    """
+    os_key = request.args.get("os", "linux").upper()
+    arch   = request.args.get("arch", "x86_64").lower()
+    _map = {
+        ("LINUX", "x86_64"):  "cyedr-agent-linux-x86_64",
+        ("LINUX", "aarch64"): "cyedr-agent-linux-aarch64",
+        ("LINUX", "amd64"):   "cyedr-agent-linux-x86_64",
+        ("LINUX", "arm64"):   "cyedr-agent-linux-aarch64",
+        ("MACOS", "intel64"): "cyedr-agent-macos-intel64",
+        ("MACOS", "arm64"):   "cyedr-agent-macos-arm64",
+        ("MACOS", "x86_64"):  "cyedr-agent-macos-intel64",
+        ("MACOS", "aarch64"): "cyedr-agent-macos-arm64",
+    }
+    fname = _map.get((os_key, arch))
+    if not fname:
+        return jsonify({"error": f"No binary available for {os_key}/{arch}"}), 404
+    fpath = os.path.join(_EDR_PKG_DIR, fname)
+    if not os.path.exists(fpath):
+        return jsonify({"error": f"Binary not staged for {os_key}/{arch} — run build-edr-packages.sh"}), 404
+    return send_file(fpath, as_attachment=True, download_name=fname,
+                     mimetype="application/octet-stream")
 
 
 # ── Self-enrollment (agent calls this with deployment token) ──────────────────
