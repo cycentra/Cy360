@@ -63,6 +63,8 @@ export default function ShadowAiPage() {
   const [newTool,     setNewTool]     = useState({ ai_tool: "", vendor: "", rationale: "" });
   const [adding,      setAdding]      = useState(false);
   const [addMsg,      setAddMsg]      = useState("");
+  const [refreshing,  setRefreshing]  = useState(false);
+  const [clearing,    setClearing]    = useState(false);
 
   const PER_PAGE = 50;
 
@@ -123,6 +125,26 @@ export default function ShadowAiPage() {
     } catch {}
   };
 
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await Promise.all([loadFindings(), loadSummary()]);
+    setRefreshing(false);
+  };
+
+  const handleClearAll = async () => {
+    if (!window.confirm("Delete ALL Shadow AI findings? This cannot be undone.")) return;
+    setClearing(true);
+    try {
+      const r = await fetch("/api/itam/shadow-ai", { method: "DELETE" });
+      if (r.ok) {
+        setFindings([]);
+        setTotal(0);
+        await loadSummary();
+      }
+    } catch {}
+    setClearing(false);
+  };
+
   return (
     <div style={{ color: "#e8eaf0" }}>
       {/* Header */}
@@ -132,6 +154,21 @@ export default function ShadowAiPage() {
           <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Shadow AI Monitor</h2>
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1.5, color: "#ff8c00",
             border: "1px solid #ff8c0044", padding: "2px 8px", borderRadius: 4 }}>GOVERNANCE</span>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <button onClick={handleRefresh} disabled={refreshing} style={{
+              border: `1px solid ${ACCENT}55`, borderRadius: 6, padding: "5px 14px",
+              fontSize: 11, fontWeight: 600, color: refreshing ? "#444" : ACCENT,
+              background: refreshing ? "transparent" : "rgba(0,229,160,0.06)",
+              cursor: refreshing ? "not-allowed" : "pointer" }}>
+              {refreshing ? "Refreshing…" : "↻ Refresh"}
+            </button>
+            <button onClick={handleClearAll} disabled={clearing} style={{
+              border: "1px solid rgba(255,59,59,0.35)", borderRadius: 6, padding: "5px 14px",
+              fontSize: 11, fontWeight: 600, color: clearing ? "#444" : "#ff3b3b",
+              background: "transparent", cursor: clearing ? "not-allowed" : "pointer" }}>
+              {clearing ? "Clearing…" : "Clear All"}
+            </button>
+          </div>
         </div>
         <div style={{ fontSize: 12, color: "#555", marginTop: 4 }}>
           Unauthorized AI tools detected via CyEDR process scan, Sysmon DNS, and network telemetry

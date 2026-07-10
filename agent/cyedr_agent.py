@@ -313,6 +313,12 @@ SHADOW_AI_PROCESSES = [
     "ghostwriter",              # Replit Ghostwriter
 ]
 
+# OS system process names whose pname contains an AI tool substring but are NOT AI tools.
+# Matching by process name (pname) first prevents false exe/cmd matches on the same process.
+SHADOW_AI_PROC_EXCLUSIONS: set[str] = {
+    "cursoruiviewservice",   # macOS AppKit accessibility daemon — not the Cursor IDE
+}
+
 # Regex to detect shadow AI process names in event text
 _SHADOW_AI_RE = r"(?i)(" + "|".join(SHADOW_AI_PROCESSES) + r")[\s\"'\\\/]"
 
@@ -333,6 +339,8 @@ def _check_shadow_ai_processes(cfg: "Config", http: "requests.Session") -> None:
         for proc in psutil.process_iter(["name", "exe", "cmdline"]):
             try:
                 pname = (proc.info.get("name") or "").lower()
+                if pname in SHADOW_AI_PROC_EXCLUSIONS:
+                    continue  # known system process — skip before exe/cmd substring scan
                 exe   = (proc.info.get("exe") or "").lower()
                 cmd   = " ".join(proc.info.get("cmdline") or []).lower()
                 for ai_proc in SHADOW_AI_PROCESSES:
@@ -476,19 +484,49 @@ def _check_shadow_ai_dns(cfg: "Config", http: "requests.Session") -> None:
         cache_ts[0] = _time.monotonic()
         return cache
 
-    # ── TCP connection scan using forward-DNS map (Linux / macOS primary) ───────
+    # ── TCP/UDP connection scan using forward-DNS map (Linux / macOS primary) ────
     def _scan_tcp_forward_dns(ip_to_domain: dict[str, str]) -> dict[str, str]:
         found: dict[str, str] = {}
         if not psutil:
             return found
         try:
             for conn in psutil.net_connections(kind="inet"):
-                if (conn.status == "ESTABLISHED"
-                        and conn.raddr
-                        and conn.raddr.port in (443, 80, 8080, 8443)):
+                # status=="ESTABLISHED" → TCP; status=="" → UDP/QUIC (HTTP3)
+                if (conn.raddr
+                        and conn.raddr.port in (443, 80, 8080, 8443)
+                        and conn.status in ("ESTABLISHED", "")):
                     matched = ip_to_domain.get(conn.raddr.ip)
                     if matched and matched not in found:
                         found[matched] = "tcp_forward_dns"
+        except Exception:
+            pass
+        return found
+
+    # ── macOS: lsof scan (catches QUIC/UDP:443 that psutil misses) ───────────
+    def _scan_lsof_macos(ip_to_domain: dict[str, str]) -> dict[str, str]:
+        """
+        lsof -i :443 lists every process socket bound to port 443, including
+        QUIC/HTTP3 UDP sockets that psutil.net_connections() drops because they
+        have no 'ESTABLISHED' status.  Works for Chrome, Safari, Firefox on macOS.
+        """
+        found: dict[str, str] = {}
+        try:
+            r = subprocess.run(
+                ["lsof", "-i", ":443", "-n", "-P"],
+                capture_output=True, text=True, timeout=10,
+            )
+            for line in r.stdout.splitlines()[1:]:   # skip header row
+                parts = line.split()
+                # NAME field contains "->"; TCP lines append "(ESTABLISHED)" after it
+                # so we search for the part containing "->" rather than using parts[-1]
+                name = next((p for p in parts if "->" in p), None)
+                if not name:
+                    continue
+                remote = name.split("->")[-1]        # "104.18.32.47:443" or "[2a06::1]:443"
+                ip = remote.rsplit(":", 1)[0].strip("[]")
+                matched = ip_to_domain.get(ip)
+                if matched and matched not in found:
+                    found[matched] = "lsof_macos"
         except Exception:
             pass
         return found
@@ -522,8 +560,13 @@ def _check_shadow_ai_dns(cfg: "Config", http: "requests.Session") -> None:
             if domain not in all_hits:
                 all_hits[domain] = method
     else:
-        # Linux / macOS: forward-DNS TCP matching is the only reliable approach
-        all_hits.update(_scan_tcp_forward_dns(_get_ip_to_domain()))
+        ip_map = _get_ip_to_domain()
+        all_hits.update(_scan_tcp_forward_dns(ip_map))
+        # macOS: supplement psutil with lsof to catch QUIC/HTTP3 (UDP:443) browser traffic
+        if cfg.os_type == "DARWIN":
+            for domain, method in _scan_lsof_macos(ip_map).items():
+                if domain not in all_hits:
+                    all_hits[domain] = method
 
     for domain, method in all_hits.items():
         try:

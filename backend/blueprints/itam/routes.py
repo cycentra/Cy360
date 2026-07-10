@@ -1475,6 +1475,27 @@ def shadow_ai_status(finding_id):
         return jsonify({"error": "Database error"}), 500
 
 
+@itam_bp.route("/shadow-ai", methods=["DELETE", "OPTIONS"])
+def shadow_ai_delete_all():
+    if request.method == "OPTIONS":
+        return add_cors_headers(make_response("", 204))
+    if not session.get("user_email"):
+        return jsonify({"error": "Authentication required"}), 401
+    if _role() != "admin":
+        return jsonify({"error": "Admin role required"}), 403
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM shadow_ai_findings RETURNING id")
+            deleted = cur.rowcount
+        conn.commit(); conn.close()
+        auth_event(session.get("user_email"), "shadow_ai_clear_all", f"Deleted {deleted} findings")
+        return jsonify({"ok": True, "deleted": deleted})
+    except psycopg2.Error as exc:
+        _log.error("shadow_ai_delete_all error: %s", exc)
+        return jsonify({"error": "Database error"}), 500
+
+
 # ── AI Whitelist ──────────────────────────────────────────────────────────────
 
 @itam_bp.route("/ai-whitelist", methods=["GET", "POST", "OPTIONS"])
@@ -1822,16 +1843,17 @@ def ingest_shadow_ai(agent_id: str, hostname: str, ai_tool: str,
             if cur.fetchone():
                 conn.close(); return  # approved tool — skip
 
-            # Deduplicate: skip if an open finding already exists for this agent + tool.
-            # Without a UNIQUE constraint the ON CONFLICT DO NOTHING is a no-op, so we
-            # check explicitly to avoid a finding row every 60s per heartbeat cycle.
+            # Deduplicate: any existing finding for this agent+tool blocks re-creation.
+            # All statuses (open/approved/suppressed/escalated) suppress new rows —
+            # the agent continuously reports running tools, so we only want one record
+            # per (agent, tool) at any time. Delete the finding to allow re-detection.
             cur.execute("""
                 SELECT id FROM shadow_ai_findings
-                WHERE agent_id=%s AND ai_tool=%s AND status='open'
+                WHERE agent_id=%s AND ai_tool=%s
                 LIMIT 1
             """, [agent_id, ai_tool])
             if cur.fetchone():
-                conn.close(); return  # open finding already recorded
+                conn.close(); return  # finding already exists for this agent/tool pair
 
             cur.execute("""
                 INSERT INTO shadow_ai_findings
