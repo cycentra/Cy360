@@ -370,13 +370,30 @@ def _check_shadow_ai_processes(cfg: "Config", http: "requests.Session") -> None:
 
 def _check_shadow_ai_dns(cfg: "Config", http: "requests.Session") -> None:
     """
-    Monitor DNS/network activity for SaaS AI domain access — all platforms.
+    Monitor network connections for SaaS AI domain access — all platforms.
 
-    Linux:   systemd-resolved / dnsmasq / unbound / named journal; syslog fallback
-    macOS:   dscacheutil DNS cache (primary); mDNSResponder log fallback
-    Windows: Get-DnsClientCache PowerShell (no Sysmon/CySIEM dependency)
-    All OS:  TCP established-connection reverse-DNS as supplementary scan
+    Primary strategy (Linux / macOS):
+      Forward-resolve all AI watchlist domains to build an IP→domain map, then
+      match against established TCP:443 connections via psutil.  Works despite
+      browser DoH (DNS-over-HTTPS) and CDN masking because we resolve from the
+      same host that holds the connections — Cloudflare/Akamai IPs resolve to the
+      same CDN IPs that the active connections use.
+
+    Windows:
+      Get-DnsClientCache (PowerShell) returns actual domain names directly, so no
+      CDN masking issue.  Forward-DNS TCP scan supplements for DoH browsers.
+
+    Why the old approach (DNS journals / dscacheutil) was replaced:
+      - systemd-resolved only emits DNS query logs at DEBUG level; INFO (default)
+        produces zero journal output → Linux journal scan always returned empty.
+      - dscacheutil -cachedump is unreliable on macOS 13+ (Ventura/Sonoma) and
+        returns nothing for cache entries in modern kernels.
+      - Reverse-DNS on CDN IPs (Cloudflare 172.64.x.x / 104.18.x.x) returns
+        NXDOMAIN — PTR records are absent — so the old TCP fallback was also blind.
     """
+    import socket as _socket
+    import time as _time
+
     AI_DNS_WATCHLIST = [
         # OpenAI / ChatGPT
         "openai.com", "api.openai.com", "chatgpt.com",
@@ -436,64 +453,48 @@ def _check_shadow_ai_dns(cfg: "Config", http: "requests.Session") -> None:
                 return suffix
         return None
 
-    # ── Linux: try each common DNS resolver journal, then syslog fallback ──────
-    def _read_linux() -> list[str]:
-        lines: list[str] = []
-        for unit in ("systemd-resolved", "dnsmasq", "unbound", "named", "bind9"):
+    # ── Forward-DNS cache: resolve AI domains → set of IPs (TTL = 10 min) ──────
+    # Module-level cache so we don't resolve 60+ domains every heartbeat cycle.
+    cache: dict[str, str]  = _check_shadow_ai_dns._ip_cache       # type: ignore[attr-defined]
+    cache_ts: list[float]  = _check_shadow_ai_dns._ip_cache_ts    # type: ignore[attr-defined]
+    cache_ttl = 600.0
+
+    def _get_ip_to_domain() -> dict[str, str]:
+        if _time.monotonic() - cache_ts[0] < cache_ttl and cache:
+            return cache
+        new_cache: dict[str, str] = {}
+        for domain in AI_DNS_WATCHLIST:
             try:
-                r = subprocess.run(
-                    ["journalctl", "-u", unit,
-                     "--since=70 seconds ago", "--no-pager", "--output=cat", "-q"],
-                    capture_output=True, text=True, timeout=8,
-                )
-                if r.stdout.strip():
-                    lines.extend(r.stdout.splitlines())
+                for info in _socket.getaddrinfo(domain, 443, type=_socket.SOCK_STREAM):
+                    ip = info[4][0]
+                    if ip not in new_cache:
+                        new_cache[ip] = domain
             except Exception:
                 pass
-        # Traditional syslog fallback (rsyslog/syslog-ng distros without journald DNS units)
-        if not lines:
-            for log_path in ("/var/log/syslog", "/var/log/messages"):
-                try:
-                    r = subprocess.run(
-                        ["tail", "-n", "2000", log_path],
-                        capture_output=True, text=True, timeout=5,
-                    )
-                    if r.stdout.strip():
-                        lines.extend(r.stdout.splitlines())
-                        break
-                except Exception:
-                    pass
-        return lines
+        cache.clear()
+        cache.update(new_cache)
+        cache_ts[0] = _time.monotonic()
+        return cache
 
-    # ── macOS: DNS cache dump (primary) + mDNSResponder log fallback ───────────
-    def _read_macos() -> list[str]:
-        lines: list[str] = []
+    # ── TCP connection scan using forward-DNS map (Linux / macOS primary) ───────
+    def _scan_tcp_forward_dns(ip_to_domain: dict[str, str]) -> dict[str, str]:
+        found: dict[str, str] = {}
+        if not psutil:
+            return found
         try:
-            r = subprocess.run(
-                ["dscacheutil", "-cachedump", "-entries", "Host"],
-                capture_output=True, text=True, timeout=8,
-            )
-            lines.extend(r.stdout.splitlines())
+            for conn in psutil.net_connections(kind="inet"):
+                if (conn.status == "ESTABLISHED"
+                        and conn.raddr
+                        and conn.raddr.port in (443, 80, 8080, 8443)):
+                    matched = ip_to_domain.get(conn.raddr.ip)
+                    if matched and matched not in found:
+                        found[matched] = "tcp_forward_dns"
         except Exception:
             pass
-        if not lines:
-            try:
-                r = subprocess.run(
-                    ["log", "show",
-                     "--predicate", 'process == "mDNSResponder"',
-                     "--last", "70s", "--info", "--style", "syslog"],
-                    capture_output=True, text=True, timeout=10,
-                )
-                lines.extend(r.stdout.splitlines())
-            except Exception:
-                pass
-        return lines
+        return found
 
-    # ── Windows: DNS Client Cache via PowerShell ────────────────────────────────
+    # ── Windows: DNS Client Cache via PowerShell ──────────────────────────────
     def _read_windows() -> list[str]:
-        # Get-DnsClientCache is available on Windows 8+ / Server 2012+ with no setup.
-        # Returns all recently resolved domain names from the OS cache, covering
-        # browsers, VS Code extensions, CLI tools — anything that used system DNS.
         lines: list[str] = []
         try:
             r = subprocess.run(
@@ -506,54 +507,25 @@ def _check_shadow_ai_dns(cfg: "Config", http: "requests.Session") -> None:
             pass
         return lines
 
-    # ── Supplementary: reverse-DNS on established HTTPS connections (all OS) ───
-    def _scan_tcp_for_ai() -> set[str]:
-        # Covers cases where DNS logs/cache miss a query (e.g. DoH in browser).
-        # Reverse-DNS won't match CDN-proxied domains (Cloudflare, Azure Front Door)
-        # but catches direct-IP providers and is a useful safety net.
-        if not psutil:
-            return set()
-        import socket as _socket
-        found: set[str] = set()
-        try:
-            for conn in psutil.net_connections(kind="inet"):
-                if (conn.status == "ESTABLISHED"
-                        and conn.raddr
-                        and conn.raddr.port in (443, 80, 8080, 8443)):
-                    try:
-                        hostname = _socket.gethostbyaddr(conn.raddr.ip)[0]
-                        matched = _is_ai(hostname)
-                        if matched:
-                            found.add(matched)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-        return found
+    # ── Collect hits by platform ──────────────────────────────────────────────
+    all_hits: dict[str, str] = {}  # domain → detection_method
 
-    # ── Route to correct reader ────────────────────────────────────────────────
-    if cfg.os_type == "LINUX":
-        lines, dns_method = _read_linux(), "dns_journal"
-    elif cfg.os_type == "MACOS":
-        lines, dns_method = _read_macos(), "dns_cache"
-    else:  # WINDOWS
-        lines, dns_method = _read_windows(), "dns_cache"
+    if cfg.os_type == "WINDOWS":
+        # PowerShell DNS cache gives exact domain names — no CDN issue
+        for line in _read_windows():
+            for part in line.split():
+                matched = _is_ai(part.strip("()[],.;:'\""))
+                if matched and matched not in all_hits:
+                    all_hits[matched] = "dns_cache"
+        # Supplement with forward-DNS TCP scan to catch DoH browsers
+        for domain, method in _scan_tcp_forward_dns(_get_ip_to_domain()).items():
+            if domain not in all_hits:
+                all_hits[domain] = method
+    else:
+        # Linux / macOS: forward-DNS TCP matching is the only reliable approach
+        all_hits.update(_scan_tcp_forward_dns(_get_ip_to_domain()))
 
-    dns_hits: set[str] = set()
-    for line in lines:
-        for part in line.split():
-            stripped = part.strip("()[],.;:'\"")
-            matched = _is_ai(stripped)
-            if matched:
-                dns_hits.add(matched)
-
-    # TCP hits only reported for domains not already caught by DNS (avoid duplicates)
-    tcp_hits = _scan_tcp_for_ai() - dns_hits
-
-    for domain, method in (
-        [(d, dns_method) for d in dns_hits]
-        + [(d, "tcp_reverse_dns") for d in tcp_hits]
-    ):
+    for domain, method in all_hits.items():
         try:
             http.post(
                 f"{cfg.platform_url}/api/itam/shadow-ai/dns-ingest",
@@ -570,6 +542,11 @@ def _check_shadow_ai_dns(cfg: "Config", http: "requests.Session") -> None:
             logger.info("Shadow AI DNS detected: %s [%s]", domain, method)
         except Exception as e:
             logger.debug("shadow_ai_dns ingest error: %s", e)
+
+
+# Module-level cache storage for _check_shadow_ai_dns (avoids re-resolving every 60s)
+_check_shadow_ai_dns._ip_cache    = {}     # type: ignore[attr-defined]
+_check_shadow_ai_dns._ip_cache_ts = [0.0]  # type: ignore[attr-defined]
 
 
 def _get_gateway_macs() -> list[dict]:
