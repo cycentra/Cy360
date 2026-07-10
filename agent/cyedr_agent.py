@@ -48,6 +48,7 @@ except ImportError:
 
 # ── Globals ────────────────────────────────────────────────────────────────────
 VERSION       = "1.0.0"
+AGENT_VERSION = "1.0.203"           # bumped with every platform release; drives self-update
 OS_TYPE       = platform.system().upper()   # LINUX, DARWIN, WINDOWS
 _RUNNING      = True
 _STOP_EVENT   = threading.Event()
@@ -318,6 +319,55 @@ SHADOW_AI_PROCESSES = [
 SHADOW_AI_PROC_EXCLUSIONS: set[str] = {
     "cursoruiviewservice",   # macOS AppKit accessibility daemon — not the Cursor IDE
 }
+
+
+def _self_update(cfg: "Config", http: "requests.Session", server_version: str) -> None:
+    """
+    Hot-swap the running agent script when the server reports a newer version.
+
+    Flow:
+      1. Download /api/edr/installer/agent-script (Bearer token) to a .update temp file.
+      2. Atomically rename it over the live script (same filesystem → atomic on POSIX).
+      3. Call sys.exit(0) — the OS service manager (launchd KeepAlive / systemd
+         Restart=always) automatically restarts the process with the new script.
+
+    Only runs in script mode (sys.argv[0] ends with .py).
+    Compiled/PyInstaller deployments skip silently — use the installer --upgrade flag.
+    """
+    from pathlib import Path as _Path
+
+    script_path = _Path(sys.argv[0]).resolve()
+    if not str(script_path).endswith(".py"):
+        logger.info(
+            "Self-update: binary mode on this endpoint — "
+            "re-run installer with --upgrade to update to %s", server_version
+        )
+        return
+
+    logger.info("Self-update: server=%s local=%s — downloading update...",
+                server_version, AGENT_VERSION)
+    tmp_path = _Path(str(script_path) + ".update")
+    try:
+        resp = http.get(
+            f"{cfg.platform_url}/api/edr/installer/agent-script",
+            timeout=60, stream=True,
+        )
+        if not resp.ok:
+            logger.warning("Self-update download failed: HTTP %s", resp.status_code)
+            return
+        with tmp_path.open("wb") as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                f.write(chunk)
+        tmp_path.chmod(script_path.stat().st_mode)   # preserve executable bit
+        tmp_path.replace(script_path)                # atomic rename
+        logger.info("Self-update: applied %s — restarting via service manager", server_version)
+        sys.exit(0)   # launchd/systemd restarts with new script automatically
+    except Exception as exc:
+        logger.error("Self-update failed: %s", exc)
+        try:
+            tmp_path.unlink()
+        except Exception:
+            pass
 
 # Regex to detect shadow AI process names in event text
 _SHADOW_AI_RE = r"(?i)(" + "|".join(SHADOW_AI_PROCESSES) + r")[\s\"'\\\/]"
@@ -2274,10 +2324,11 @@ class Heartbeat(threading.Thread):
             return
         probe_cfg = self._cfg.policy_state.get("network_probe", {})
         payload = {
-            "version":      VERSION,
-            "os_type":      self._cfg.os_type,
-            "probe_active": bool(probe_cfg.get("enabled")),
-            "probe_subnet": probe_cfg.get("subnet", "") if probe_cfg.get("enabled") else "",
+            "version":       VERSION,
+            "agent_version": AGENT_VERSION,
+            "os_type":       self._cfg.os_type,
+            "probe_active":  bool(probe_cfg.get("enabled")),
+            "probe_subnet":  probe_cfg.get("subnet", "") if probe_cfg.get("enabled") else "",
         }
         if psutil:
             payload["cpu_percent"]  = psutil.cpu_percent(interval=1)
@@ -2322,6 +2373,10 @@ class Heartbeat(threading.Thread):
                     self._cfg.save_arp_state(new_enabled, new_until)
                     logger.info("ARP state updated: enabled=%s zone=%s",
                                 new_enabled, data.get("network_zone", "unknown"))
+                # Self-update: if server reports a newer agent version, hot-swap and restart
+                server_ver = data.get("agent_version", "")
+                if server_ver and server_ver != AGENT_VERSION:
+                    _self_update(self._cfg, self._http, server_ver)
         except Exception as exc:
             logger.debug("Heartbeat error: %s", exc)
 

@@ -446,12 +446,21 @@ def agent_heartbeat(agent_id):
         except Exception as exc:
             _log.debug("ITAM ARP ingest skipped: %s", exc)
 
+    # Read current platform version — agents self-update if their version differs
+    _agent_ver = ""
+    try:
+        from pathlib import Path as _Path
+        _agent_ver = _Path("/opt/cycentra/version").read_text().strip().lstrip("v")
+    except Exception:
+        pass
+
     return jsonify({
         "status":            "ok",
         "arp_enabled":       arp_enabled,
         "arp_enabled_until": arp_enabled_until,
         "network_zone":      network_zone,
         "zone_confidence":   zone_conf,
+        "agent_version":     _agent_ver,
     })
 
 
@@ -1410,7 +1419,7 @@ for _ap in ("/installer/agent-bundle", "/installer/sysmon-config",
             "/installer/sysmon-exe", "/installer/yara-rules",
             "/installer/yara-exe", "/installer/cysiem-script",
             "/installer/cysiem-msi", "/installer/unix", "/installer/win",
-            "/installer/agent-py"):
+            "/installer/agent-py", "/installer/agent-script"):
     edr_bp.add_url_rule(
         _ap,
         endpoint=f"opts_asset_{_ap.replace('/','_').replace('-','_')}",
@@ -1570,6 +1579,28 @@ def installer_agent_py():
         if os.path.exists(fpath):
             return send_file(fpath, mimetype="text/x-python")
     return jsonify({"error": "cyedr_agent.py not staged on platform"}), 404
+
+
+@edr_bp.route("/installer/agent-script", methods=["GET"])
+@require_agent_token
+def installer_agent_script(agent_id):
+    """
+    Agent-facing self-update endpoint (Bearer enrollment token).
+    Called automatically by running agents when the heartbeat response
+    contains a newer agent_version than the agent's own AGENT_VERSION.
+    Serves cyedr_agent.py from the EDR package directory.
+    """
+    candidates = [
+        os.path.join(_EDR_PKG_DIR, "cyedr_agent.py"),
+        os.path.join(os.path.dirname(__file__), "../../..", "agent", "cyedr_agent.py"),
+    ]
+    for fpath in candidates:
+        fpath = os.path.realpath(fpath)
+        if os.path.exists(fpath):
+            return send_file(fpath, mimetype="text/x-python",
+                             as_attachment=False,
+                             download_name="cyedr_agent.py")
+    return jsonify({"error": "agent script not staged on platform"}), 404
 
 
 # ── Self-enrollment (agent calls this with deployment token) ──────────────────
