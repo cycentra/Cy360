@@ -48,7 +48,7 @@ except ImportError:
 
 # ── Globals ────────────────────────────────────────────────────────────────────
 VERSION       = "1.0.0"
-AGENT_VERSION = "1.0.205"           # bumped with every platform release; drives self-update
+AGENT_VERSION = "1.0.206"           # bumped with every platform release; drives self-update
 OS_TYPE       = platform.system().upper()   # LINUX, DARWIN, WINDOWS
 _RUNNING      = True
 _STOP_EVENT   = threading.Event()
@@ -618,6 +618,150 @@ def _check_shadow_ai_dns(cfg: "Config", http: "requests.Session") -> None:
             pass
         return found
 
+    # ── macOS: AppleScript browser tab scanner ────────────────────────────────
+    def _scan_browser_tabs_macos() -> dict[str, str]:
+        """
+        Enumerate all open tabs in Chrome-family browsers and Safari via
+        Apple Events (osascript).  Timing-independent: catches chatgpt.com
+        even when there is no active TCP/QUIC connection to port 443.
+        Requires the agent's process to have Automation access (granted on
+        first run via macOS Privacy dialog, or pre-approved via MDM profile).
+        """
+        found: dict[str, str] = {}
+
+        def _extract_host(url: str) -> str:
+            try:
+                return url.split("//", 1)[1].split("/")[0].split("?")[0].lower()
+            except Exception:
+                return ""
+
+        for browser, method in (
+            ("Google Chrome", "browser_tabs_chrome"),
+            ("Chromium",      "browser_tabs_chrome"),
+            ("Arc",           "browser_tabs_chrome"),
+            ("Brave Browser", "browser_tabs_chrome"),
+        ):
+            script = (
+                f'tell application "{browser}"\n'
+                f'  if it is running then\n'
+                f'    set u to ""\n'
+                f'    repeat with w in windows\n'
+                f'      repeat with t in tabs of w\n'
+                f'        set u to u & (URL of t) & linefeed\n'
+                f'      end repeat\n'
+                f'    end repeat\n'
+                f'    return u\n'
+                f'  end if\n'
+                f'end tell'
+            )
+            try:
+                r = subprocess.run(
+                    ["osascript", "-e", script],
+                    capture_output=True, text=True, timeout=5,
+                )
+                for line in r.stdout.splitlines():
+                    host = _extract_host(line.strip())
+                    if not host:
+                        continue
+                    matched = _is_ai(host)
+                    if matched and matched not in found:
+                        found[matched] = method
+            except Exception:
+                pass
+
+        # Safari
+        safari_script = (
+            'tell application "Safari"\n'
+            '  if it is running then\n'
+            '    set u to ""\n'
+            '    repeat with w in windows\n'
+            '      repeat with t in tabs of w\n'
+            '        try\n'
+            '          set u to u & (URL of t) & linefeed\n'
+            '        end try\n'
+            '      end repeat\n'
+            '    end repeat\n'
+            '    return u\n'
+            '  end if\n'
+            'end tell'
+        )
+        try:
+            r = subprocess.run(
+                ["osascript", "-e", safari_script],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in r.stdout.splitlines():
+                host = _extract_host(line.strip())
+                if not host:
+                    continue
+                matched = _is_ai(host)
+                if matched and matched not in found:
+                    found[matched] = "browser_tabs_safari"
+        except Exception:
+            pass
+
+        return found
+
+    # ── macOS: Chrome history reader (last 24 h) ──────────────────────────────
+    def _scan_chrome_history_macos() -> dict[str, str]:
+        """
+        Copy Chrome's History SQLite to a temp file (bypasses the write lock)
+        and query visits in the past 24 hours.  Catches AI domains even after
+        the browser tab is closed or the QUIC session has ended.
+        Handles root-service case by scanning all /Users/* home directories.
+        """
+        import sqlite3 as _sq3
+        import shutil  as _sh
+        import tempfile as _tf
+
+        found: dict[str, str] = {}
+        chrome_rel = os.path.join(
+            "Library", "Application Support", "Google", "Chrome", "Default", "History"
+        )
+
+        homes: list[str] = []
+        cur_home = os.path.expanduser("~")
+        if cur_home not in ("/root", "/var/root"):
+            homes.append(cur_home)
+        for entry in (os.listdir("/Users") if os.path.isdir("/Users") else []):
+            full = os.path.join("/Users", entry)
+            if os.path.isdir(full) and full not in homes:
+                homes.append(full)
+
+        for home in homes:
+            hist = os.path.join(home, chrome_rel)
+            if not os.path.exists(hist):
+                continue
+            tmp = ""
+            try:
+                with _tf.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+                    tmp = tf.name
+                _sh.copy2(hist, tmp)
+                # Chrome stores times as µs since 1601-01-01; convert Unix epoch
+                cutoff = (_time.time() - 86400) * 1_000_000 + 11_644_473_600 * 1_000_000
+                con = _sq3.connect(tmp)
+                for (url,) in con.execute(
+                    "SELECT url FROM urls WHERE last_visit_time > ? LIMIT 500",
+                    (cutoff,),
+                ):
+                    try:
+                        host = url.split("//", 1)[1].split("/")[0].split("?")[0].lower()
+                    except Exception:
+                        continue
+                    matched = _is_ai(host)
+                    if matched and matched not in found:
+                        found[matched] = "browser_history"
+                con.close()
+            except Exception:
+                pass
+            finally:
+                if tmp:
+                    try:
+                        os.unlink(tmp)
+                    except Exception:
+                        pass
+        return found
+
     # ── Windows: DNS Client Cache via PowerShell ──────────────────────────────
     def _read_windows() -> list[str]:
         lines: list[str] = []
@@ -649,8 +793,16 @@ def _check_shadow_ai_dns(cfg: "Config", http: "requests.Session") -> None:
     else:
         ip_map = _get_ip_to_domain()
         all_hits.update(_scan_tcp_forward_dns(ip_map))
-        # macOS: supplement psutil with lsof to catch QUIC/HTTP3 (UDP:443) browser traffic
         if cfg.os_type == "DARWIN":
+            # 1. Browser tabs (AppleScript) — timing-independent, most reliable for SaaS AI
+            for domain, method in _scan_browser_tabs_macos().items():
+                if domain not in all_hits:
+                    all_hits[domain] = method
+            # 2. Chrome history — catches recent visits even after tabs close
+            for domain, method in _scan_chrome_history_macos().items():
+                if domain not in all_hits:
+                    all_hits[domain] = method
+            # 3. lsof — catches QUIC/HTTP3 and any TCP that psutil missed
             for domain, method in _scan_lsof_macos(ip_map).items():
                 if domain not in all_hits:
                     all_hits[domain] = method
