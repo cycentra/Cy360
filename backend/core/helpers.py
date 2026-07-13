@@ -16,6 +16,7 @@ from typing import Optional
 
 import requests as http_requests
 from flask import request
+from flask.sessions import SecureCookieSessionInterface
 
 from core.config import AUTH_LOG_FILE, BASE_DOMAIN, CORS_ALLOWED_ORIGINS
 
@@ -89,8 +90,8 @@ def add_cors_headers(response):
     return response
 
 
-def fix_session_cookie_domain(response):
-    """Strip Domain= from Set-Cookie when the request host isn't under BASE_DOMAIN.
+class HostAwareSessionInterface(SecureCookieSessionInterface):
+    """Session interface that drops the Domain attribute for hosts outside BASE_DOMAIN.
 
     Flask's SESSION_COOKIE_DOMAIN is a static app.config value (f".{BASE_DOMAIN}"),
     needed so the session cookie is shared across cy360./cyasm./cysiem. subdomains
@@ -100,25 +101,17 @@ def fix_session_cookie_domain(response):
     configured for. Falling back to a host-only cookie (no Domain attribute) lets
     login work on those hosts too, at the cost of not sharing that cookie across
     subdomains for that particular access path.
+
+    NOTE: this must override get_cookie_domain(), not an @app.after_request hook —
+    Flask.process_response() calls session_interface.save_session() (which is what
+    actually writes the Set-Cookie header) *after* all after_request functions run,
+    so a hook-based approach never sees the cookie in time to fix it.
     """
-    host = request.host.split(':')[0]
-    if host == BASE_DOMAIN or host.endswith('.' + BASE_DOMAIN):
-        return response
-
-    cookies = response.headers.getlist('Set-Cookie')
-    if not cookies:
-        return response
-    # Werkzeug drops the RFC-2965-style leading dot when it writes the header
-    # (Domain=cycentra.com, not Domain=.cycentra.com), so match loosely on the
-    # bare domain rather than the dotted app.config value.
-    domain_re = re.compile(r';\s*Domain=\.?' + re.escape(BASE_DOMAIN), re.IGNORECASE)
-    if not any(domain_re.search(c) for c in cookies):
-        return response
-
-    del response.headers['Set-Cookie']
-    for cookie in cookies:
-        response.headers.add('Set-Cookie', domain_re.sub('', cookie))
-    return response
+    def get_cookie_domain(self, app):
+        host = request.host.split(':')[0]
+        if host == BASE_DOMAIN or host.endswith('.' + BASE_DOMAIN):
+            return super().get_cookie_domain(app)
+        return None
 
 
 # ── Tenant ID generator ────────────────────────────────────────────────────────

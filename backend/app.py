@@ -1,7 +1,7 @@
 from flask import Flask
 
 from core.config  import SECRET_KEY, COOKIE_SETTINGS, CYCENTRA_DB_URL
-from core.helpers import add_cors_headers, fix_session_cookie_domain
+from core.helpers import add_cors_headers, HostAwareSessionInterface
 
 from blueprints.auth.oauth          import auth_bp
 from blueprints.oidc.provider       import oidc_bp
@@ -32,6 +32,7 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.secret_key = SECRET_KEY
     app.config.update(COOKIE_SETTINGS)
+    app.session_interface = HostAwareSessionInterface()
 
     for bp in (auth_bp, oidc_bp, rbac_bp, platform_bp, asm_bp, siem_bp, system_bp,
                backup_bp, scheduler_bp, marketplace_bp, audit_bp, sso_bp, benchmark_bp,
@@ -59,8 +60,7 @@ def create_app() -> Flask:
 
     @app.after_request
     def _cors(response):
-        response = add_cors_headers(response)
-        return fix_session_cookie_domain(response)
+        return add_cors_headers(response)
 
     @app.route('/api/<path:p>',  methods=['OPTIONS'])
     @app.route('/auth/<path:p>', methods=['OPTIONS'])
