@@ -766,13 +766,37 @@ if [[ "$MODE" == "update" ]]; then
     fi
 fi
 
-# ── Step 4: CySIEM install (full install only) ───────────────────────────────
+# ── Step 4: CySIEM install — NOW OPTIONAL ────────────────────────────────────
+# CySIEM (Wazuh) was previously mandatory in full-install mode. It is now an
+# opt-out choice: a client can rely entirely on CyEDR + CyCollector (Sigma
+# rules) + CyDataLake connectors instead. See docs/CYDATALAKE_MIGRATION_PLAN.md
+# for what each path does and does not cover today before recommending "no" to
+# a client — CySIEM/Wazuh is still the deepest detection coverage available.
 _CYSIEM_FRESH=false
 _CYSIEM_ADMIN_PASS=""
 _CYSIEM_WUI_PASS=""
 _CYSIEM_KS_PASS=""
 
-if [[ "$MODE" == "full" ]]; then
+# _INSTALL_CYSIEM drives this step plus the CySIEM→Redis bridge, the cysiem
+# nginx vhost, and the cysiem SSL cert further down — computed here so it has
+# a sane value in every MODE (full/update/infra), not just full-install.
+if dpkg -l 2>/dev/null | grep -q wazuh-manager; then
+    _INSTALL_CYSIEM=true   # already installed — nothing to ask, keep managing it
+elif [[ "$MODE" == "full" ]]; then
+    step_header "CySIEM / WAZUH"
+    if ask_yn "Install CySIEM (Wazuh-based SIEM engine)? Recommended unless this deployment will rely entirely on CyEDR + CyCollector + CyDataLake connectors for detection" "y"; then
+        _INSTALL_CYSIEM=true
+    else
+        _INSTALL_CYSIEM=false
+        warn "Skipping CySIEM/Wazuh — detection coverage relies on CyEDR + CyCollector's Sigma rules + CyDataLake connectors only"
+        warn "This deployment will have no FIM, no rootcheck, no SCA/CIS benchmarking, and no built-in OSSEC ruleset — see docs/CYDATALAKE_MIGRATION_PLAN.md before committing to this for a production client"
+    fi
+else
+    # update/infra mode on a box that never had Wazuh and isn't doing a fresh full install
+    _INSTALL_CYSIEM=false
+fi
+
+if [[ "$MODE" == "full" && "$_INSTALL_CYSIEM" == "true" ]]; then
 
     step_header "CySIEM INSTALLATION"
 
@@ -929,9 +953,12 @@ fi
 
 # ── CySIEM → Redis bridge ─────────────────────────────────────────────────────
 # Deployed AFTER CySIEM is installed so alerts.json exists when the service starts.
-# Runs in all modes (full/infra/update): rewrites the watcher script and restarts.
+# Runs in all modes (full/infra/update) IF CySIEM/Wazuh is actually installed —
+# skipped entirely when _INSTALL_CYSIEM=false (Step 4), since there would be no
+# alerts.json to ever tail and this would just be a permanently-idle service.
 # NOTE: Filebeat 7.x (Wazuh-distributed) crashes on kernel 6.x (seccomp SIGABRT);
 #       this pure-Python watcher replaces it with no kernel-compatibility issues.
+if [[ "$_INSTALL_CYSIEM" == "true" ]]; then
 step_header "CySIEM → REDIS BRIDGE (Python watcher)"
 
 # Install redis-py if not already present
@@ -1065,6 +1092,10 @@ systemctl is-active cysiem-to-redis >/dev/null 2>&1 \
     && success "cysiem-to-redis running — tailing CySIEM alerts → Redis :6379" \
     || { warn "cysiem-to-redis failed — check: journalctl -u cysiem-to-redis -n 20"; \
          ERRORS+=("cysiem-to-redis failed"); }
+else
+    info "CySIEM not installed — skipping cysiem-to-redis bridge (CyEDR/CyCollector/connectors feed the pipeline instead)"
+    systemctl disable --now cysiem-to-redis 2>/dev/null || true
+fi
 
 # ── Download release bundle ───────────────────────────────────────────────────
 step_header "DOWNLOAD RELEASE BUNDLE"
@@ -2864,6 +2895,174 @@ done
       warn "To investigate: journalctl -u cysiemstack-engine -n 30"
       ERRORS+=("Engine not responding"); }
 
+# ── Step 14.5: CyDataLake (Kafka + ClickHouse) — OPTIONAL ────────────────────
+# Multi-vendor SIEM aggregation backbone (CyCollector/connectors → Kafka →
+# ClickHouse). Disabled by default (KAFKA_ENABLED/CLICKHOUSE_ENABLED default
+# to false in core/config.py) — installing here is opt-in and never required
+# for the base product. See docs/CYDATALAKE_MIGRATION_PLAN.md and
+# docs/CYDATALAKE_OPS_RUNBOOK.md for the full architecture/manual-step context.
+step_header "CYDATALAKE (KAFKA + CLICKHOUSE) — OPTIONAL"
+
+_CYDATALAKE_ALREADY=false
+[[ -f /etc/systemd/system/kafka.service && -f /etc/systemd/system/clickhouse-server.service ]] \
+    && _CYDATALAKE_ALREADY=true
+
+_INSTALL_CYDATALAKE=false
+if [[ "$_CYDATALAKE_ALREADY" == "true" ]]; then
+    success "CyDataLake (Kafka + ClickHouse) already installed — refreshing ingest worker only"
+    _INSTALL_CYDATALAKE=true
+elif [[ "$MODE" == "full" || "$MODE" == "update" ]]; then
+    if ask_yn "Install CyDataLake (Kafka + ClickHouse) for multi-vendor SIEM aggregation? Optional — can be added later by re-running this script" "n"; then
+        _INSTALL_CYDATALAKE=true
+    else
+        info "Skipping CyDataLake — KAFKA_ENABLED/CLICKHOUSE_ENABLED remain false, zero impact on the base product"
+    fi
+fi
+
+if [[ "$_INSTALL_CYDATALAKE" == "true" ]]; then
+
+    # ── Kafka (single-broker KRaft mode — no ZooKeeper) ──────────────────────
+    if [[ ! -f /etc/systemd/system/kafka.service ]]; then
+        info "Installing Kafka (KRaft mode)..."
+        command -v java >/dev/null 2>&1 || apt-get install -y -qq openjdk-17-jre-headless
+
+        if [[ ! -d /opt/kafka ]]; then
+            curl -fsSL -o /tmp/kafka.tgz \
+                https://downloads.apache.org/kafka/3.7.0/kafka_2.13-3.7.0.tgz \
+                && tar -xzf /tmp/kafka.tgz -C /opt \
+                && mv /opt/kafka_2.13-3.7.0 /opt/kafka \
+                && rm -f /tmp/kafka.tgz \
+                || { error "Kafka download/extract failed"; ERRORS+=("Kafka download failed"); }
+        fi
+
+        mkdir -p /var/lib/kafka-logs
+        if [[ -d /opt/kafka && ! -f /var/lib/kafka-logs/meta.properties ]]; then
+            sed -i \
+                -e 's|^listeners=.*|listeners=PLAINTEXT://127.0.0.1:9092,CONTROLLER://127.0.0.1:9093|' \
+                -e 's|^advertised.listeners=.*|advertised.listeners=PLAINTEXT://127.0.0.1:9092|' \
+                -e 's|^log.dirs=.*|log.dirs=/var/lib/kafka-logs|' \
+                /opt/kafka/config/kraft/server.properties
+            _KAFKA_CLUSTER_ID=$(/opt/kafka/bin/kafka-storage.sh random-uuid)
+            /opt/kafka/bin/kafka-storage.sh format -t "$_KAFKA_CLUSTER_ID" \
+                -c /opt/kafka/config/kraft/server.properties \
+                && success "Kafka KRaft storage formatted" \
+                || { error "Kafka storage format failed"; ERRORS+=("Kafka format failed"); }
+        fi
+
+        cat > /etc/systemd/system/kafka.service << 'KAFKAUNITEOF'
+[Unit]
+Description=Apache Kafka (KRaft, single broker)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/kraft/server.properties
+ExecStop=/opt/kafka/bin/kafka-server-stop.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+KAFKAUNITEOF
+        systemctl daemon-reload
+        systemctl enable --now kafka \
+            && success "Kafka started :9092" \
+            || { warn "Kafka failed to start — check: journalctl -u kafka -n 30"; ERRORS+=("Kafka start failed"); }
+        sleep 5
+
+        for _t in raw.syslog raw.edr raw.network raw.audit raw.splunk raw.qradar raw.sentinelone raw.paloalto \
+                  raw.office365 raw.azure raw.aws raw.gcp; do
+            /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic "$_t" \
+                --bootstrap-server 127.0.0.1:9092 --partitions 3 --replication-factor 1 >/dev/null 2>&1
+        done
+        success "CyDataLake Kafka topics ensured (12 topics: syslog, edr, network, audit, splunk, qradar, sentinelone, paloalto, office365, azure, aws, gcp)"
+    else
+        systemctl is-active --quiet kafka && success "Kafka already running :9092" \
+            || { systemctl restart kafka; warn "Kafka was not running — restarted"; }
+    fi
+
+    # ── ClickHouse ────────────────────────────────────────────────────────────
+    _CLICKHOUSE_NEW_INSTALL=false
+    if [[ ! -f /etc/systemd/system/clickhouse-server.service ]]; then
+        info "Installing ClickHouse..."
+        (cd /tmp && curl -fsSL https://clickhouse.com/ | sh)
+        if [[ -f /tmp/clickhouse ]]; then
+            mv /tmp/clickhouse /usr/local/bin/clickhouse
+            /usr/local/bin/clickhouse install --noninteractive \
+                && success "ClickHouse installed" \
+                || { error "ClickHouse install step failed"; ERRORS+=("ClickHouse install failed"); }
+            _CLICKHOUSE_NEW_INSTALL=true
+        else
+            error "ClickHouse binary not found after download — check network/curl output"
+            ERRORS+=("ClickHouse download failed")
+        fi
+    fi
+
+    if [[ -f /etc/systemd/system/clickhouse-server.service ]]; then
+        systemctl enable --now clickhouse-server \
+            && success "ClickHouse started :8123" \
+            || { warn "ClickHouse failed to start — check: journalctl -u clickhouse-server -n 30"; ERRORS+=("ClickHouse start failed"); }
+        sleep 3
+
+        _CH_ENV="/opt/cycentra/.env"
+        if [[ "$_CLICKHOUSE_NEW_INSTALL" == "true" ]]; then
+            _CLICKHOUSE_PASS=$(gen_pass)
+            clickhouse-client --query "ALTER USER default IDENTIFIED BY '${_CLICKHOUSE_PASS}'" 2>/dev/null \
+                && success "ClickHouse default-user password set" \
+                || warn "Could not set ClickHouse password automatically — set CLICKHOUSE_PASSWORD manually in ${_CH_ENV}"
+        else
+            _CLICKHOUSE_PASS=$(grep "^CLICKHOUSE_PASSWORD=" "$_CH_ENV" 2>/dev/null | cut -d= -f2-)
+        fi
+
+        for _kv in "KAFKA_ENABLED=true" "KAFKA_BROKERS=127.0.0.1:9092" "CLICKHOUSE_ENABLED=true" \
+                   "CLICKHOUSE_HOST=127.0.0.1" "CLICKHOUSE_PORT=8123" "CLICKHOUSE_USER=default" \
+                   "CLICKHOUSE_PASSWORD=${_CLICKHOUSE_PASS}"; do
+            _k="${_kv%%=*}"; _v="${_kv#*=}"
+            if grep -q "^${_k}=" "$_CH_ENV" 2>/dev/null; then
+                sed -i "s|^${_k}=.*|${_k}=$(_escape_sed_repl "${_v}")|" "$_CH_ENV"
+            else
+                echo "${_k}=${_v}" >> "$_CH_ENV"
+            fi
+        done
+        success "KAFKA_ENABLED/CLICKHOUSE_ENABLED written to ${_CH_ENV}"
+    fi
+
+    # ── CyDataLake ingest worker (standalone — not part of Flask/gunicorn) ────
+    mkdir -p /var/lib/cycentra/cydatalake-archive
+    cat > /etc/systemd/system/cydatalake-ingest-worker.service << UNITEOF
+[Unit]
+Description=CyDataLake Kafka-to-ClickHouse ingest worker
+After=network.target kafka.service clickhouse-server.service
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/opt/cycentra/.env
+WorkingDirectory=${SITE_PKG}
+ExecStart=${PYTHON_BIN} -m cysiemstack.ingest_worker
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/opt/cycentra/cydatalake-ingest-worker.log
+StandardError=append:/opt/cycentra/cydatalake-ingest-worker.log
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+    systemctl daemon-reload
+    systemctl enable --now cydatalake-ingest-worker \
+        && success "CyDataLake ingest worker running" \
+        || { warn "Ingest worker failed to start — check: journalctl -u cydatalake-ingest-worker -n 30"; \
+             ERRORS+=("CyDataLake ingest worker start failed"); }
+
+    # Env vars only take effect on the Flask process after a restart
+    systemctl restart cycentra-backend \
+        && success "Flask backend restarted to pick up KAFKA_ENABLED/CLICKHOUSE_ENABLED" \
+        || warn "Flask backend restart failed after CyDataLake env changes — restart manually"
+
+    info "Next: configure at least one SIEM connector via the portal (CyDataLake → SIEM Connectors)"
+    info "      — see docs/CYDATALAKE_OPS_RUNBOOK.md §4 for per-vendor credential steps"
+fi
+
 # ── Step 15: nginx vhosts (full install only) ─────────────────────────────────
 # ── Step 15: nginx vhosts (full install only) ─────────────────────────────────
 # NOTE v7.2: CySOAR nginx config is managed dynamically by routes.py on module install/uninstall:
@@ -3012,6 +3211,8 @@ server {
     }
 }
 
+$(if [[ "$_INSTALL_CYSIEM" == "true" ]]; then
+cat << CYSIEMVHOSTEOF
 # ── CySIEM / Wazuh Dashboard (cysiem) ────────────────────────────────────────
 server { listen 80; server_name cysiem.${BASE_DOMAIN}; return 301 https://\$host\$request_uri; }
 server {
@@ -3046,6 +3247,10 @@ server {
         proxy_cookie_flags ~ samesite=none secure;
     }
 }
+CYSIEMVHOSTEOF
+fi)
+# When _INSTALL_CYSIEM=false, no cysiem.${BASE_DOMAIN} vhost is written above —
+# agent/EDR package downloads still work via cy360.${BASE_DOMAIN}/agent-packages/.
 # Module server blocks are added by routes.py when modules are installed via portal
 # cymisp.DOMAIN server block is added by routes.py when CyMISP is installed via portal
 # cymind.DOMAIN server block is added by cymind/install.sh when CyMind is installed
@@ -3232,12 +3437,14 @@ SSLOPTEOF
         && success "SSL cert ready (cy360, cyasm)" \
         || true   # self-signed fallback below handles missing cert
 
-    # ── certbot: cysiem ───────────────────────────────────────────────────────
-    _CB_LOG_SIEM="/tmp/certbot-cysiem-$$.log"
-    _certbot_if_needed "cysiem.${BASE_DOMAIN}" "$_CB_LOG_SIEM" \
-        -m "$CLIENT_EMAIL" -d cysiem.${BASE_DOMAIN} \
-        && success "SSL cert ready (cysiem)" \
-        || true
+    # ── certbot: cysiem (only if CySIEM/Wazuh is actually installed — Step 4) ──
+    if [[ "$_INSTALL_CYSIEM" == "true" ]]; then
+        _CB_LOG_SIEM="/tmp/certbot-cysiem-$$.log"
+        _certbot_if_needed "cysiem.${BASE_DOMAIN}" "$_CB_LOG_SIEM" \
+            -m "$CLIENT_EMAIL" -d cysiem.${BASE_DOMAIN} \
+            && success "SSL cert ready (cysiem)" \
+            || true
+    fi
     # NOTE: cymisp certs are obtained by routes.py (certbot --nginx -d cymisp.DOMAIN)
     # when those modules are installed via the portal. No cert is needed here
     # because no cymisp nginx block exists until the module is installed.
