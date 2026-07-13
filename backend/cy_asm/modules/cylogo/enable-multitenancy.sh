@@ -3,6 +3,11 @@ set -e
 
 CONF_FILE="/etc/wazuh-dashboard/opensearch_dashboards.yml"
 
+if [ ! -f "$CONF_FILE" ]; then
+  echo "[i] No local Wazuh Dashboard install found — skipping multi-tenancy config"
+  exit 0
+fi
+
 echo "[+] Enabling Multi-tenancy in Wazuh Dashboard..."
 
 # Check if the setting already exists

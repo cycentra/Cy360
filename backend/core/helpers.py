@@ -17,7 +17,7 @@ from typing import Optional
 import requests as http_requests
 from flask import request
 
-from core.config import AUTH_LOG_FILE, CORS_ALLOWED_ORIGINS
+from core.config import AUTH_LOG_FILE, BASE_DOMAIN, CORS_ALLOWED_ORIGINS
 
 _log = logging.getLogger(__name__)
 
@@ -86,6 +86,35 @@ def add_cors_headers(response):
         'Content-Type, Authorization, X-CyCentra-AdminKey'
     response.headers['Access-Control-Allow-Methods'] = \
         'GET, POST, PATCH, DELETE, OPTIONS'
+    return response
+
+
+def fix_session_cookie_domain(response):
+    """Strip Domain= from Set-Cookie when the request host isn't under BASE_DOMAIN.
+
+    Flask's SESSION_COOKIE_DOMAIN is a static app.config value (f".{BASE_DOMAIN}"),
+    needed so the session cookie is shared across cy360./cyasm./cysiem. subdomains
+    for OIDC SSO. But a Domain attribute that isn't a suffix of the actual request
+    host is invalid per RFC 6265 and browsers silently drop the whole Set-Cookie —
+    always true for raw-IP access, and for any other hostname BASE_DOMAIN wasn't
+    configured for. Falling back to a host-only cookie (no Domain attribute) lets
+    login work on those hosts too, at the cost of not sharing that cookie across
+    subdomains for that particular access path.
+    """
+    host = request.host.split(':')[0]
+    if host == BASE_DOMAIN or host.endswith('.' + BASE_DOMAIN):
+        return response
+
+    cookies = response.headers.getlist('Set-Cookie')
+    if not cookies:
+        return response
+    domain_suffix = f'; Domain=.{BASE_DOMAIN}'
+    if not any(domain_suffix in c for c in cookies):
+        return response
+
+    del response.headers['Set-Cookie']
+    for cookie in cookies:
+        response.headers.add('Set-Cookie', cookie.replace(domain_suffix, ''))
     return response
 
 

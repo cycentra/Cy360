@@ -1,7 +1,7 @@
 from flask import Flask
 
 from core.config  import SECRET_KEY, COOKIE_SETTINGS, CYCENTRA_DB_URL
-from core.helpers import add_cors_headers
+from core.helpers import add_cors_headers, fix_session_cookie_domain
 
 from blueprints.auth.oauth          import auth_bp
 from blueprints.oidc.provider       import oidc_bp
@@ -59,7 +59,8 @@ def create_app() -> Flask:
 
     @app.after_request
     def _cors(response):
-        return add_cors_headers(response)
+        response = add_cors_headers(response)
+        return fix_session_cookie_domain(response)
 
     @app.route('/api/<path:p>',  methods=['OPTIONS'])
     @app.route('/auth/<path:p>', methods=['OPTIONS'])

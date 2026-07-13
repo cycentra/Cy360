@@ -5,6 +5,11 @@ WAZUH_CONF="/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml"
 SRC_DIR="/usr/local/lib/python3.12/dist-packages/cy_asm/modules/cylogo/logos/app-logos"
 IMG_DIR="/usr/share/wazuh-dashboard/plugins/wazuh/public/assets/custom/images"
 
+if [ ! -d "/usr/share/wazuh-dashboard" ]; then
+  echo "[i] No local Wazuh Dashboard install found — skipping plugin branding"
+  exit 0
+fi
+
 echo "[+] Applying Wazuh Plugin internal branding..."
 
 # 1. Ensure the image directory exists and move the logos

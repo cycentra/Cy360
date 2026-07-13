@@ -3,6 +3,12 @@ set -e
 
 SRC="/usr/local/lib/python3.12/dist-packages/cy_asm/modules/cylogo/favicons"
 DEST="/usr/share/wazuh-dashboard/src/core/server/core_app/assets/favicons"
+
+if [ ! -d "/usr/share/wazuh-dashboard" ]; then
+  echo "[i] No local Wazuh Dashboard install found — skipping favicon branding"
+  exit 0
+fi
+
 FILES=(
   android-chrome-192x192.png
   android-chrome-512x512.png

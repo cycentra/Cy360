@@ -3,6 +3,11 @@ set -e
 
 CONF_FILE="/etc/wazuh-dashboard/opensearch_dashboards.yml"
 
+if [ ! -f "$CONF_FILE" ]; then
+  echo "[i] No local Wazuh Dashboard install found — skipping UI text branding"
+  exit 0
+fi
+
 echo "[+] Applying UI Text Branding to $CONF_FILE..."
 
 # 1. Remove any existing custom branding blocks to prevent duplicates
