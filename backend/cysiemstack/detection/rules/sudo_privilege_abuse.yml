@@ -1,0 +1,19 @@
+title: Sudo Privilege Escalation Indicator
+id: cy-sigma-0002
+status: stable
+description: Interactive root shell obtained via sudo, or a NOPASSWD sudo invocation.
+level: high
+logsource:
+  product: linux
+  service: sudo
+detection:
+  selection_sudo:
+    message|contains: "sudo:"
+  selection_shell_cmd:
+    message|contains:
+      - "COMMAND=/bin/bash"
+      - "COMMAND=/bin/sh"
+      - "COMMAND=/bin/zsh"
+  selection_nopasswd:
+    message|contains: "NOPASSWD"
+  condition: (selection_sudo and selection_shell_cmd) or selection_nopasswd

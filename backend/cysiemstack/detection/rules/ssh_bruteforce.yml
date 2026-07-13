@@ -1,0 +1,17 @@
+title: SSH Failed Password Attempt
+id: cy-sigma-0001
+status: stable
+description: >
+  Single failed SSH authentication attempt. Per-event only — repeated hits
+  from the same host/user cluster into one incident via the existing
+  correlation engine's time-window grouping (grouper.py), so brute-force
+  detection emerges from the pipeline downstream rather than needing
+  aggregation logic in this rule.
+level: medium
+logsource:
+  product: linux
+  service: sshd
+detection:
+  selection:
+    message|contains: "Failed password"
+  condition: selection

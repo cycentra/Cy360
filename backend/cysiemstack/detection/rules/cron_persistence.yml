@@ -1,0 +1,22 @@
+title: Suspicious Cron Persistence
+id: cy-sigma-0003
+status: stable
+description: A cron entry was created that pipes a network download directly into a shell.
+level: critical
+logsource:
+  product: linux
+  service: cron
+detection:
+  selection_cron:
+    message|contains: "CRON"
+  selection_download:
+    message|contains:
+      - "curl"
+      - "wget"
+  selection_pipe_shell:
+    message|contains:
+      - "| bash"
+      - "| sh"
+      - "|bash"
+      - "|sh"
+  condition: selection_cron and selection_download and selection_pipe_shell
