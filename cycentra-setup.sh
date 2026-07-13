@@ -17,7 +17,9 @@
 #
 # What this script pulls from where:
 #   apt repos          → PostgreSQL 16, Redis, nginx, certbot, python3
-#   packages.wazuh.com → Wazuh manager + indexer + dashboard
+#   packages.wazuh.com → Wazuh agent packages only (for endpoints enrolling into a
+#                         customer's own externally-managed Wazuh Manager — this
+#                         script does not install a Wazuh server)
 #   GitHub Releases    → cycentra-release.tar.gz (portal, SQL, config, manifest)
 #   GitHub Packages    → cycentra-backend wheel (Flask + engine combined)
 #   Let's Encrypt      → SSL certificates via certbot
@@ -292,7 +294,7 @@ fi
 divider; echo ""
 
 # ── Step 1: Interactive configuration — every prompt lives here, up front ────
-# All operator questions (domain, environment type, CySIEM, CyDataLake) are
+# All operator questions (domain, environment type, CyDataLake) are
 # asked in this single block before any work starts. This matters because the
 # "DOWNLOAD RELEASE BUNDLE" step further down re-execs this script from a
 # freshly downloaded copy (`exec bash "$_BUNDLE_SETUP" "$@"`) once the bundle
@@ -303,8 +305,7 @@ divider; echo ""
 # Exporting the answers is not enough by itself: the detection checks below
 # (dpkg/.env/systemd-unit existence) reflect *system* state, not "was this
 # already decided this run" — on the re-exec'd process those checks land on
-# the same answer as before (e.g. Wazuh still isn't installed because you
-# said no), so without an explicit run-once guard this block would ask every
+# the same answer as before, so without an explicit run-once guard this block would ask every
 # question a second time regardless of the export. _CYCENTRA_PROMPTS_DONE is
 # that guard: it's what actually makes the re-exec'd process trust the
 # inherited answers instead of re-deriving them.
@@ -330,28 +331,6 @@ if [[ -z "${_CYCENTRA_PROMPTS_DONE:-}" ]]; then
             CERTBOT_ENV="--staging"
             info "STAGING selected — using Let's Encrypt staging environment for certbot."
         fi
-    fi
-
-    # CySIEM (Wazuh) is opt-out in full-install mode — a client can instead rely
-    # entirely on CyEDR + CyCollector (Sigma rules) + CyDataLake connectors. See
-    # docs/CYDATALAKE_MIGRATION_PLAN.md for what each path does/doesn't cover
-    # before recommending "no" to a client.
-    # _INSTALL_CYSIEM also drives the CySIEM→Redis bridge, the cysiem nginx
-    # vhost, and the cysiem SSL cert further down in the script.
-    if dpkg -l 2>/dev/null | grep -q wazuh-manager; then
-        _INSTALL_CYSIEM=true   # already installed — nothing to ask, keep managing it
-    elif [[ "$MODE" == "full" ]]; then
-        step_header "CySIEM / WAZUH"
-        if ask_yn "Install CySIEM (Wazuh-based SIEM engine)? Recommended unless this deployment will rely entirely on CyEDR + CyCollector + CyDataLake connectors for detection" "y"; then
-            _INSTALL_CYSIEM=true
-        else
-            _INSTALL_CYSIEM=false
-            warn "Skipping CySIEM/Wazuh — detection coverage relies on CyEDR + CyCollector's Sigma rules + CyDataLake connectors only"
-            warn "This deployment will have no FIM, no rootcheck, no SCA/CIS benchmarking, and no built-in OSSEC ruleset — see docs/CYDATALAKE_MIGRATION_PLAN.md before committing to this for a production client"
-        fi
-    else
-        # update/infra mode on a box that never had Wazuh and isn't doing a fresh full install
-        _INSTALL_CYSIEM=false
     fi
 
     # CyDataLake (Kafka + ClickHouse) — optional multi-vendor SIEM aggregation
@@ -381,7 +360,7 @@ if [[ -z "${_CYCENTRA_PROMPTS_DONE:-}" ]]; then
     # exported too — Step 14.5 (much later in the script, after the re-exec)
     # reads it purely to decide its status message; without exporting it,
     # that read hits an unset variable under `set -u` in the re-exec'd process.
-    export BASE_DOMAIN CERTBOT_ENV _INSTALL_CYSIEM _INSTALL_CYDATALAKE _CYDATALAKE_ALREADY
+    export BASE_DOMAIN CERTBOT_ENV _INSTALL_CYDATALAKE _CYDATALAKE_ALREADY
     export _CYCENTRA_PROMPTS_DONE=1
 
 fi
@@ -471,43 +450,23 @@ else
     info "  To enable: export ARC_SP_ID=... ARC_SP_SECRET=... then re-run setup"
 fi
 
-# ── Step 0.5: Infisical CLI + secret refresh timer ────────────────────────────
-# Installs the Infisical CLI for developer tooling and provisions a daily
-# systemd timer that restarts the backend service so any rotated secrets are
-# picked up without manual intervention.
+# ── Step 0.5: Secret refresh timer ─────────────────────────────────────────────
+# Provisions a daily systemd timer that restarts the backend service so any
+# rotated Azure Key Vault secrets are picked up without manual intervention.
 #
 # "Going native with the SDK" means the app fetches secrets in-process at
 # startup (via kv_secrets.py).  The timer simply triggers that path daily by
 # gracefully restarting the backend — no daemon or sidecar required.
-#
-# Set INFISICAL_PROJECT_ID in .env (or pass as env var before running setup)
-# to enable the Infisical path.  See kv_secrets.py for full auth method docs.
-step_header "INFISICAL CLI + SECRET REFRESH"
-
-# ── Install Infisical CLI ──────────────────────────────────────────────────────
-if command -v infisical >/dev/null 2>&1; then
-    success "Infisical CLI already installed — $(infisical --version 2>/dev/null || echo 'ok')"
-else
-    info "Installing Infisical CLI ..."
-    curl -1sLf 'https://dl.cloudsmith.io/public/infisical/infisical-cli/setup.deb.sh' \
-        | bash 2>/dev/null
-    apt-get install -y -qq infisical 2>/dev/null
-    if command -v infisical >/dev/null 2>&1; then
-        success "Infisical CLI installed"
-    else
-        warn "Infisical CLI install failed — manual install may be required"
-        warn "  See: https://infisical.com/docs/cli/overview"
-    fi
-fi
+step_header "SECRET REFRESH TIMER"
 
 # ── Write secret refresh script ───────────────────────────────────────────────
 # This script is called by the systemd timer.  It gracefully reloads the
 # backend (SIGHUP to gunicorn triggers a worker restart without dropping
 # connections), which re-runs load_kv_secrets() and picks up any rotated values.
 mkdir -p /opt/cycentra/scripts
-cat > /opt/cycentra/scripts/infisical-refresh.sh << 'REFRESHEOF'
+cat > /opt/cycentra/scripts/secret-refresh.sh << 'REFRESHEOF'
 #!/bin/bash
-# /opt/cycentra/scripts/infisical-refresh.sh
+# /opt/cycentra/scripts/secret-refresh.sh
 # Triggered daily by cycentra-secret-refresh.timer
 # Reloads the backend to pick up any rotated secrets from the vault.
 set -euo pipefail
@@ -521,24 +480,6 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Starting secret refresh" >> "$LOG"
 BACKEND="${SECRETS_BACKEND:-$(grep '^SECRETS_BACKEND=' /opt/cycentra/.env 2>/dev/null | cut -d= -f2)}"
 
 case "${BACKEND:-azure}" in
-  infisical)
-    PROJECT_ID="$(grep '^INFISICAL_PROJECT_ID=' /opt/cycentra/.env 2>/dev/null | cut -d= -f2)"
-    if [[ -z "$PROJECT_ID" ]]; then
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] INFISICAL_PROJECT_ID not set — skipping" >> "$LOG"
-        exit 0
-    fi
-    # Validate Arc MSI endpoint is reachable (confirms Arc agent is healthy).
-    # HIMDS always returns 401 first (challenge-response) — a 401 means healthy.
-    # Do NOT use -f flag; it treats 4xx as errors and always reports unreachable.
-    _himds_code=$(curl -s --max-time 3 -o /dev/null -w "%{http_code}" \
-        -H "Metadata: true" \
-        "http://localhost:40342/metadata/identity/oauth2/token?api-version=2020-06-01&resource=https://management.azure.com/" \
-        2>/dev/null || echo "000")
-    if [[ "$_himds_code" != "401" ]]; then
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARN: Arc MSI endpoint unhealthy (HTTP ${_himds_code}) — skipping reload" >> "$LOG"
-        exit 1
-    fi
-    ;;
   azure)
     VAULT_URL="$(grep '^AZURE_KEYVAULT_URL=' /opt/cycentra/.env 2>/dev/null | cut -d= -f2)"
     [[ -z "$VAULT_URL" ]] && { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] AZURE_KEYVAULT_URL not set — skipping" >> "$LOG"; exit 0; }
@@ -553,7 +494,7 @@ else
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Backend service not active — skipping reload" >> "$LOG"
 fi
 REFRESHEOF
-chmod 700 /opt/cycentra/scripts/infisical-refresh.sh
+chmod 700 /opt/cycentra/scripts/secret-refresh.sh
 
 # ── Install systemd service + timer for daily secret refresh ──────────────────
 cat > /etc/systemd/system/cycentra-secret-refresh.service << 'SRVCEOF'
@@ -564,7 +505,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/opt/cycentra/scripts/infisical-refresh.sh
+ExecStart=/opt/cycentra/scripts/secret-refresh.sh
 StandardOutput=journal
 StandardError=journal
 SRVCEOF
@@ -838,320 +779,6 @@ if [[ "$MODE" == "update" ]]; then
     fi
 fi
 
-# ── Step 4: CySIEM install — NOW OPTIONAL ────────────────────────────────────
-# CySIEM (Wazuh) was previously mandatory in full-install mode. It is now an
-# opt-out choice: a client can rely entirely on CyEDR + CyCollector (Sigma
-# rules) + CyDataLake connectors instead. See docs/CYDATALAKE_MIGRATION_PLAN.md
-# for what each path does and does not cover today before recommending "no" to
-# a client — CySIEM/Wazuh is still the deepest detection coverage available.
-# _INSTALL_CYSIEM was already decided in the upfront interactive-configuration
-# block at the top of this script — nothing to ask here.
-_CYSIEM_FRESH=false
-_CYSIEM_ADMIN_PASS=""
-_CYSIEM_WUI_PASS=""
-_CYSIEM_KS_PASS=""
-
-if [[ "$MODE" == "full" && "$_INSTALL_CYSIEM" == "true" ]]; then
-
-    step_header "CySIEM INSTALLATION"
-
-    if dpkg -l 2>/dev/null | grep -q wazuh-manager; then
-        success "CySIEM already installed — ensuring services running"
-        systemctl start wazuh-manager wazuh-indexer wazuh-dashboard 2>/dev/null || true
-    else
-        info "Running CySIEM all-in-one installer (this takes 5–10 minutes) ..."
-        cd ~
-        curl -sO https://packages.wazuh.com/4.14/wazuh-install.sh
-        bash wazuh-install.sh -a
-        success "CySIEM installed"
-        _CYSIEM_FRESH=true
-        # Capture generated credentials from passwords file (non-fatal — Step 4.2 auto-detects from dashboard config)
-        _cysiem_pwfile=$(tar -xOf ~/wazuh-install-files.tar wazuh-install-files/wazuh-passwords.txt 2>/dev/null || echo "")
-        _CYSIEM_ADMIN_PASS=$(echo "$_cysiem_pwfile" | grep -A 1 "^username: admin$"      | grep "^password:" | awk '{print $2}' || true)
-        _CYSIEM_WUI_PASS=$(echo  "$_cysiem_pwfile" | grep -A 1 "^username: wazuh-wui$"   | grep "^password:" | awk '{print $2}' || true)
-        _CYSIEM_KS_PASS=$(echo   "$_cysiem_pwfile" | grep -A 1 "^username: kibanaserver$" | grep "^password:" | awk '{print $2}' || true)
-        # Fallback: Wazuh 4.x installer prints credentials in stdout summary — capture if tar extract above found nothing
-        if [[ -z "$_CYSIEM_ADMIN_PASS" ]]; then
-            _CYSIEM_ADMIN_PASS=$(grep -oP '(?<=Password: )\S+' ~/wazuh-install-files.tar 2>/dev/null | head -1 || true)
-        fi
-        cd ~
-    fi
-
-fi  # end CySIEM install block
-
-
-# ── Step 4.1: CySIEM Dashboard configuration ─────────────────────────────────
-WAZUH_YML="/etc/wazuh-dashboard/opensearch_dashboards.yml"
-if [[ -f "$WAZUH_YML" ]]; then
-
-    step_header "CySIEM DASHBOARD CONFIGURATION"
-
-    cp "$WAZUH_YML" "${WAZUH_YML}.backup-$(date +%Y%m%d)" 2>/dev/null || true
-    grep -q "^server.host:" "$WAZUH_YML" \
-        && sed -i 's|^server.host:.*|server.host: "127.0.0.1"|' "$WAZUH_YML" \
-        || echo 'server.host: "127.0.0.1"' >> "$WAZUH_YML"
-    grep -q "^server.port:" "$WAZUH_YML" \
-        && sed -i 's|^server.port:.*|server.port: 5601|' "$WAZUH_YML" \
-        || echo 'server.port: 5601' >> "$WAZUH_YML"
-
-    # ── Ensure kibanaserver service-account credentials are active ────────────
-    # Wazuh installer generates a random kibanaserver password but may leave the
-    # credential lines commented in opensearch_dashboards.yml.  Dashboard cannot
-    # reach OpenSearch without them → every request returns 401 regardless of
-    # proxy auth config.
-    # Priority: (1) uncomment existing real password, (2) inject from installer
-    # tar, (3) fall-back to checking if tar is available from a previous install.
-    #
-    # NOTE: On a CyCentra 360 installation, step 4.3b (further in this script)
-    # configures opensearch_security.auth.type: openid, which replaces the
-    # kibanaserver username/password auth entirely.  If OIDC is already active
-    # (re-run / --update) or will be configured this run (CYSIEM_OIDC_SECRET is
-    # set), the kibanaserver credential block is not needed and its absence is
-    # not an error.  Skip with an info message in those cases.
-    # grep -c exits 1 on zero matches (and outputs "0") — using || echo "0" would
-    # produce "0\n0" and break the [[ ]] arithmetic test.  Use || true instead and
-    # fall back via parameter expansion for the file-not-found (empty output) case.
-    _oidc_already_active=$(grep -c "^opensearch_security.auth.type: openid" "$WAZUH_YML" 2>/dev/null || true)
-    if [[ "${_oidc_already_active:-0}" -gt 0 ]]; then
-        info "CySIEM Dashboard: OIDC auth already active — kibanaserver credentials not required"
-    else
-        _ks_line_user=$(grep -E "^#?\s*opensearch\.username:" "$WAZUH_YML" | head -1 || true)
-        _ks_line_pass=$(grep -E "^#?\s*opensearch\.password:" "$WAZUH_YML" | head -1 || true)
-        _ks_pass_val=$(echo "$_ks_line_pass" | awk '{print $NF}' | tr -d '"')
-        if [[ -n "$_ks_line_user" && -n "$_ks_pass_val" && "$_ks_pass_val" != "kibanaserver" ]]; then
-            # Lines exist with a real (non-placeholder) password — uncomment if needed
-            sed -i 's|^#\s*\(opensearch\.username:\)|\1|' "$WAZUH_YML" || true
-            sed -i 's|^#\s*\(opensearch\.password:\)|\1|' "$WAZUH_YML" || true
-            success "CySIEM Dashboard: kibanaserver credentials uncommented"
-        else
-            # Try to obtain the real password: installer variable, then fall back to tar
-            if [[ -z "$_CYSIEM_KS_PASS" && -f ~/wazuh-install-files.tar ]]; then
-                _pwfile2=$(tar -xOf ~/wazuh-install-files.tar wazuh-install-files/wazuh-passwords.txt 2>/dev/null || true)
-                _CYSIEM_KS_PASS=$(echo "$_pwfile2" | grep -A 1 "^username: kibanaserver$" | grep "^password:" | awk '{print $2}' || true)
-            fi
-            if [[ -n "$_CYSIEM_KS_PASS" ]]; then
-                # Remove any existing (commented or not) username/password lines and rewrite
-                sed -i '/^#\?\s*opensearch\.username:/d; /^#\?\s*opensearch\.password:/d' "$WAZUH_YML" || true
-                printf 'opensearch.username: kibanaserver\nopensearch.password: "%s"\n' "$_CYSIEM_KS_PASS" >> "$WAZUH_YML"
-                success "CySIEM Dashboard: kibanaserver credentials set from installer"
-            else
-                # CYSIEM_OIDC_SECRET being set means step 4.3b will configure OIDC this
-                # run, making kibanaserver credentials irrelevant.  Demote to info.
-                if [[ -n "${CYSIEM_OIDC_SECRET:-}" ]]; then
-                    info "kibanaserver password not found — not required (step 4.3b will configure OIDC auth)"
-                else
-                    warn "kibanaserver password unknown — opensearch.username/password may be missing from opensearch_dashboards.yml. Re-run once CYSIEM_OIDC_SECRET is set to switch to OIDC auth."
-                fi
-            fi
-        fi
-    fi
-
-    # ── Strip legacy proxy-auth settings (idempotent early cleanup) ─────────
-    # Removes proxy-cache and requestHeadersAllowlist overrides left by older
-    # proxy_auth_domain installs. OIDC settings (auth.type, openid.*) are NOT
-    # stripped here — step 4.3b handles those idempotently. Stripping OIDC keys
-    # here without re-writing them (when step 4.3b is gated on oauth2proxy
-    # secrets) leaves the dashboard in basic-auth mode on every --update.
-    python3 - "$WAZUH_YML" << 'WAZUH_EARLY_PROXY_EOF'
-import sys
-path = sys.argv[1]
-with open(path, "rb") as f:
-    raw = f.read().replace(b"\x00", b"")
-text = raw.decode("utf-8")
-remove_prefixes = [
-    "opensearch_security.proxycache.",
-    "opensearch.requestHeadersAllowlist",
-    "# Authentication gate:",
-    "# Wazuh trusts",
-]
-cleaned = "\n".join(
-    line for line in text.splitlines()
-    if not any(line.strip().startswith(p) for p in remove_prefixes)
-).rstrip() + "\n"
-with open(path, "w") as f:
-    f.write(cleaned)
-print("Legacy proxy-auth settings removed — OIDC config preserved for step 4.3b")
-WAZUH_EARLY_PROXY_EOF
-
-    systemctl restart wazuh-dashboard 2>/dev/null || true
-    success "CySIEM Dashboard configured: host=127.0.0.1, port=5601 (OIDC settings applied in step 4.3b)"
-
-fi
-
-# ── Step 4.3: CySIEM Dashboard variable reference ────────────────────────────
-# OIDC auth is configured in step 4.3b after .env is available.
-_WAZUH_DASH_YML="/etc/wazuh-dashboard/opensearch_dashboards.yml"
-
-# ── Step 4.2: Auto-detect CySIEM API password ─────────────────────────────────
-# Read the wazuh-wui password from the dashboard config file.
-# Works for both fresh installs and existing installs; runs in all modes.
-if [[ -f "/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml" ]]; then
-    step_header "CySIEM API PASSWORD DETECTION"
-    _detected=$(grep -v '^#' /usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml 2>/dev/null \
-        | grep -oP '(?<=password: ")[^"]+' | head -1 || true)
-    if [[ -n "$_detected" ]]; then
-        _CYSIEM_WUI_PASS="$_detected"
-        success "CySIEM API password auto-detected from dashboard config"
-        # Patch cysiemstack.env immediately — handles update mode (step 10 is skipped)
-        if [[ -f "/opt/cycentra/cysiemstack.env" ]]; then
-            if grep -q "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env; then
-                sed -i "s|^WAZUH_API_PASSWORD=.*|WAZUH_API_PASSWORD=$(_escape_sed_repl "${_detected}")|" /opt/cycentra/cysiemstack.env
-            else
-                echo "WAZUH_API_PASSWORD=${_detected}" >> /opt/cycentra/cysiemstack.env
-            fi
-            success "WAZUH_API_PASSWORD updated in cysiemstack.env"
-        fi
-    else
-        warn "CySIEM API password not found — update WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env manually"
-    fi
-fi
-
-# ── CySIEM → Redis bridge ─────────────────────────────────────────────────────
-# Deployed AFTER CySIEM is installed so alerts.json exists when the service starts.
-# Runs in all modes (full/infra/update) IF CySIEM/Wazuh is actually installed —
-# skipped entirely when _INSTALL_CYSIEM=false (Step 4), since there would be no
-# alerts.json to ever tail and this would just be a permanently-idle service.
-# NOTE: Filebeat 7.x (Wazuh-distributed) crashes on kernel 6.x (seccomp SIGABRT);
-#       this pure-Python watcher replaces it with no kernel-compatibility issues.
-if [[ "$_INSTALL_CYSIEM" == "true" ]]; then
-step_header "CySIEM → REDIS BRIDGE (Python watcher)"
-
-# Install redis-py if not already present
-python3 -c "import redis" 2>/dev/null \
-    || PIP_ROOT_USER_ACTION=ignore pip3 install ${_PIP_BSP} --quiet redis
-
-# Ensure deploy directory exists
-mkdir -p /opt/cycentra
-
-# Write the watcher script
-cat > /opt/cycentra/cysiem_to_redis.py << 'PYEOF'
-#!/usr/bin/env python3
-"""CySIEM alerts.json → Redis bridge — tails alerts and pushes NDJSON lines to Redis."""
-import json
-import logging
-import os
-import time
-from pathlib import Path
-
-import redis
-
-ALERTS_FILE = "/var/ossec/logs/alerts/alerts.json"
-REDIS_HOST  = "127.0.0.1"
-REDIS_PORT  = 6379
-REDIS_KEY   = "cysiemstack:alerts:raw"
-MAX_LIST    = 200_000   # cap Redis list to avoid unbounded memory growth
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-)
-log = logging.getLogger("cysiem_to_redis")
-
-
-def tail_forever() -> None:
-    r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-    r.ping()
-
-    path = Path(ALERTS_FILE)
-    log.info("watching %s  →  redis:%d/%s", ALERTS_FILE, REDIS_PORT, REDIS_KEY)
-
-    # Open in raw unbuffered binary mode so OS-level appends are immediately
-    # visible — Python text-mode buffering can silently stall on tailed files.
-    with open(path, "rb", buffering=0) as fb:
-        fb.seek(0, 2)                         # start at EOF — no history replay
-        inode  = os.stat(path).st_ino
-        buf    = b""
-        pushed = 0
-
-        while True:
-            chunk = fb.read(65536)
-            if chunk:
-                buf += chunk
-                while b"\n" in buf:
-                    raw, buf = buf.split(b"\n", 1)
-                    line = raw.decode("utf-8", errors="replace").strip()
-                    if not line:
-                        continue
-                    try:
-                        json.loads(line)      # validate before pushing
-                        pipe = r.pipeline()
-                        pipe.lpush(REDIS_KEY, line)
-                        pipe.ltrim(REDIS_KEY, 0, MAX_LIST - 1)
-                        pipe.execute()
-                        pushed += 1
-                        if pushed % 100 == 0:
-                            log.info("pushed %d alerts total", pushed)
-                    except json.JSONDecodeError as exc:
-                        log.warning("invalid JSON — skipped: %s", exc)
-                    except redis.RedisError as exc:
-                        log.error("redis error: %s", exc)
-                        raise  # let outer loop reconnect
-            else:
-                # detect CySIEM daily log rotation
-                try:
-                    if os.stat(path).st_ino != inode:
-                        log.info("log rotation detected — reopening %s", path)
-                        buf = b""
-                        fb.close()
-                        fb = open(path, "rb", buffering=0)
-                        inode = os.stat(path).st_ino
-                except FileNotFoundError:
-                    pass
-                time.sleep(0.05)
-
-
-if __name__ == "__main__":
-    while True:
-        try:
-            tail_forever()
-        except Exception as exc:
-            log.error("fatal: %s — retrying in 5 s", exc)
-            time.sleep(5)
-PYEOF
-chmod 750 /opt/cycentra/cysiem_to_redis.py
-
-# Write the systemd unit
-cat > /etc/systemd/system/cysiem-to-redis.service << 'UNITEOF'
-[Unit]
-Description=CySIEM alerts.json → Redis bridge
-After=network.target redis.service wazuh-manager.service
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/python3 /opt/cycentra/cysiem_to_redis.py
-Restart=always
-RestartSec=5
-StandardOutput=append:/opt/cycentra/engine.log
-StandardError=append:/opt/cycentra/engine.log
-
-[Install]
-WantedBy=multi-user.target
-UNITEOF
-
-# Ensure CySIEM alerts log is readable (may not exist yet if CySIEM not generating alerts)
-if [[ -f /var/ossec/logs/alerts/alerts.json ]]; then
-    chmod o+r /var/ossec/logs/alerts/alerts.json 2>/dev/null || true
-    chmod o+x /var/ossec/logs/alerts/ 2>/dev/null || true
-    success "CySIEM alerts.json readable"
-else
-    warn "CySIEM alerts.json not found — watcher will retry once CySIEM generates alerts"
-fi
-
-systemctl daemon-reload
-systemctl enable cysiem-to-redis
-systemctl restart cysiem-to-redis 2>/dev/null \
-    || { warn "cysiem-to-redis failed to start — check: journalctl -u cysiem-to-redis -n 20"; \
-         ERRORS+=("cysiem-to-redis restart failed"); }
-sleep 2
-systemctl is-active cysiem-to-redis >/dev/null 2>&1 \
-    && success "cysiem-to-redis running — tailing CySIEM alerts → Redis :6379" \
-    || { warn "cysiem-to-redis failed — check: journalctl -u cysiem-to-redis -n 20"; \
-         ERRORS+=("cysiem-to-redis failed"); }
-else
-    info "CySIEM not installed — skipping cysiem-to-redis bridge (CyEDR/CyCollector/connectors feed the pipeline instead)"
-    systemctl disable --now cysiem-to-redis 2>/dev/null || true
-fi
-
 # ── Download release bundle ───────────────────────────────────────────────────
 step_header "DOWNLOAD RELEASE BUNDLE"
 
@@ -1291,7 +918,7 @@ if [[ -d "$_early_bundle_pkgs" ]]; then
     done
 fi
 
-# ── Stage CyEDR installer + agent files (mirrors Wazuh package seeding above) ─
+# ── Stage CyEDR installer + agent files (mirrors agent package seeding above) ─
 # Source files live in the repo; this block copies them to the NGINX-served dir
 # automatically on every install/update run — no manual download-packages step needed.
 _EDR_PKG_DEST="${_EARLY_PKG_DIR}/edr"
@@ -1602,25 +1229,6 @@ PATCHEOF
         info "Added MAXMIND_KEY to .env"
     fi
 
-    # Sync Wazuh API vars from cysiemstack.env → .env.
-    # cycentra-backend.service loads EnvironmentFile=/opt/cycentra/.env only;
-    # cysiemstack-engine.service loads EnvironmentFile=/opt/cycentra/cysiemstack.env only.
-    # Both services need Wazuh creds — .env is the Flask copy, cysiemstack.env is the master.
-    _siem_env_path="/opt/cycentra/cysiemstack.env"
-    if [[ -f "$_siem_env_path" ]]; then
-        _wp="$(grep "^WAZUH_API_PASSWORD=" "$_siem_env_path" 2>/dev/null | cut -d= -f2)"
-        if [[ -n "$_wp" ]]; then
-            if grep -q "^WAZUH_API_PASSWORD=" "$_env" 2>/dev/null; then
-                sed -i "s|^WAZUH_API_PASSWORD=.*|WAZUH_API_PASSWORD=$(_escape_sed_repl "${_wp}")|" "$_env"
-            else
-                echo "WAZUH_API_PASSWORD=${_wp}" >> "$_env"
-            fi
-            grep -q "^WAZUH_API_URL="  "$_env" || echo "WAZUH_API_URL=https://127.0.0.1:55000" >> "$_env"
-            grep -q "^WAZUH_API_USER=" "$_env" || echo "WAZUH_API_USER=wazuh-wui"              >> "$_env"
-            info "Wazuh API vars synced from cysiemstack.env → .env"
-        fi
-    fi
-
     # Remove stale CYMIND_API_KEY / CYMIND_API_URL from cysiemstack.env.
     # v1.2.45+ moves these shared keys to .env which the engine service now loads
     # FIRST via EnvironmentFile=/opt/cycentra/.env. If the old cymk_ admin key is
@@ -1735,7 +1343,6 @@ CYMIND_API_KEY=${CYMIND_API_KEY:-}
 #   azure      → Azure Key Vault via DefaultAzureCredential
 #                (supports Azure Arc Managed Identity automatically)
 #   hashicorp  → HashiCorp Vault via Token or AppRole auth
-#   infisical  → Infisical via Machine Identity (Universal Auth or Native Azure Auth)
 # Leave blank to rely solely on values in this .env file.
 SECRETS_BACKEND=${SECRETS_BACKEND:-azure}
 
@@ -1746,24 +1353,6 @@ SECRETS_BACKEND=${SECRETS_BACKEND:-azure}
 #   2. AZURE_CLIENT_ID + AZURE_CLIENT_SECRET + AZURE_TENANT_ID  ← Service Principal
 #   3. `az login` CLI session  ← local dev
 AZURE_KEYVAULT_URL=${AZURE_KEYVAULT_URL:-}
-
-# ── Infisical — set these to use Infisical as the secrets backend ──────────────
-# INFISICAL_URL: your self-hosted Infisical URL (omit for Infisical Cloud)
-# INFISICAL_CLIENT_ID: Machine Identity client ID (UUID from Infisical UI)
-# INFISICAL_AUTH_METHOD: how to authenticate to Infisical
-#   azure      → Azure Native Auth via Arc MSI (default, recommended for prod)
-#   oidc       → Manual Arc JWT exchange (Machine Identity must be OIDC type in Infisical UI)
-#   universal  → Client ID + Secret (dev/staging — not Arc-enrolled machines)
-# INFISICAL_CLIENT_SECRET: required for universal auth only
-#   (omit when using azure or oidc — Arc MSI is used instead)
-# INFISICAL_PROJECT_ID: your Infisical project ID
-# INFISICAL_ENVIRONMENT: secret environment to pull from (dev | staging | prod)
-INFISICAL_URL=${INFISICAL_URL:-}
-INFISICAL_CLIENT_ID=${INFISICAL_CLIENT_ID:-}
-INFISICAL_AUTH_METHOD=${INFISICAL_AUTH_METHOD:-azure}
-INFISICAL_CLIENT_SECRET=${INFISICAL_CLIENT_SECRET:-}
-INFISICAL_PROJECT_ID=${INFISICAL_PROJECT_ID:-}
-INFISICAL_ENVIRONMENT=${INFISICAL_ENVIRONMENT:-prod}
 ENVEOF
     echo "MAXMIND_KEY=${MAXMIND_KEY:-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}" >> /opt/cycentra/.env
 
@@ -1791,14 +1380,15 @@ ASMEOF
     # Manual on-demand analysis (analyst-triggered from the portal) is never blocked.
     _LLM_FLAG="true"
 
-    # Use auto-detected password if available, otherwise preserve existing, or placeholder.
-    # The `|| true` matters: with CySIEM skipped (or on a truly fresh install),
-    # /opt/cycentra/cysiemstack.env doesn't exist yet, so grep exits 2 (file not
-    # found). That exit code is what a `VAR="${OTHER:-$(...)}"` assignment reports
-    # as its own status, and set -e treats a failing assignment like any other
-    # failing command — it aborted the whole script here before this fix.
-    _WAZUH_PASS="${_CYSIEM_WUI_PASS:-$(grep "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null | cut -d= -f2 || true)}"
-    _WAZUH_PASS="${_WAZUH_PASS:-CHANGE_ME_after_cysiem_install}"
+    # WAZUH_API_* below is only consumed if an admin points siem_proxy.py at an
+    # externally-managed Wazuh Manager API — this script no longer installs Wazuh
+    # itself. Preserve a manually-set password across re-runs; otherwise placeholder.
+    # The `|| true` matters: on a fresh install /opt/cycentra/cysiemstack.env
+    # doesn't exist yet, so grep exits 2 (file not found). That exit code is what
+    # a `VAR="${OTHER:-$(...)}"` assignment reports as its own status, and set -e
+    # treats a failing assignment like any other failing command.
+    _WAZUH_PASS="$(grep "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null | cut -d= -f2 || true)"
+    _WAZUH_PASS="${_WAZUH_PASS:-CHANGE_ME_if_using_external_wazuh}"
 
     cat > /opt/cycentra/cysiemstack.env << SIEMEOF
 # CySIEMStack environment — auto-generated by setup.sh — DO NOT EDIT MANUALLY
@@ -1813,6 +1403,7 @@ POSTGRES_PASSWORD=${CORR_DB_PASS}
 REDIS_URL=redis://127.0.0.1:6379/0
 REDIS_ALERT_KEY=cysiemstack:alerts:raw
 
+# Only used if siem_proxy.py is pointed at an externally-managed Wazuh Manager API.
 WAZUH_API_URL=https://127.0.0.1:55000
 WAZUH_API_USER=wazuh-wui
 WAZUH_API_PASSWORD=${_WAZUH_PASS}
@@ -1834,10 +1425,11 @@ SIEMEOF
     chmod 600 /opt/cycentra/cysiemstack.env
     success "cysiemstack.env written → /opt/cycentra/cysiemstack.env"
 
-    # Propagate Wazuh credentials to Flask env (full install; --update mode does the same
-    # in the update-mode patch section above).  Flask (cycentra-backend.service) loads only
-    # EnvironmentFile=/opt/cycentra/.env while the correlation engine loads only
-    # EnvironmentFile=/opt/cycentra/cysiemstack.env, so both files must carry these vars.
+    # Propagate the same WAZUH_API_* vars to Flask's env (full install; --update
+    # mode does the same in the update-mode patch section above). Flask
+    # (cycentra-backend.service) loads only EnvironmentFile=/opt/cycentra/.env
+    # while the correlation engine loads only EnvironmentFile=/opt/cycentra/cysiemstack.env,
+    # so both files must carry these vars for an externally-managed Wazuh to work.
     if grep -q "^WAZUH_API_PASSWORD=" /opt/cycentra/.env 2>/dev/null; then
         sed -i "s|^WAZUH_API_PASSWORD=.*|WAZUH_API_PASSWORD=$(_escape_sed_repl "${_WAZUH_PASS}")|" /opt/cycentra/.env
     else
@@ -1853,8 +1445,8 @@ SIEMEOF
 
     # Auto-detect and persist the server's public IP as CY360_PUBLIC_IP.
     # The agent installer uses this so clients connect directly to the server IP
-    # instead of the Cloudflare-proxied hostname (Wazuh ports 1514/1515 are TCP,
-    # not HTTP — Cloudflare does not proxy them).
+    # instead of the Cloudflare-proxied hostname (an externally-managed Wazuh's
+    # agent-enrollment ports are raw TCP, not HTTP — Cloudflare does not proxy them).
     _PUBLIC_IP=$(curl -fsSL --max-time 5 https://ifconfig.me 2>/dev/null || \
                  curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || true)
     if [[ -n "$_PUBLIC_IP" ]]; then
@@ -1874,129 +1466,11 @@ SIEMEOF
     chmod 755 /opt/cycentra/ml_models
     success "ML model directory created → /opt/cycentra/ml_models"
 
-    # ── Vault bootstrap: push freshly-generated secrets to Infisical ────────
-    # If SECRETS_BACKEND=infisical is set in the installer environment AND the
-    # infisical CLI is available, push every vault-managed key from .env into
-    # Infisical immediately after the .env is written.  This makes vault the
-    # source of truth from the very first install — no manual CSV export needed.
-    #
-    # Auth method determines how the CLI authenticates:
-    #   universal  → uses INFISICAL_CLIENT_ID + INFISICAL_CLIENT_SECRET (scripted)
-    #   azure/oidc → uses Arc Managed Identity; vault push is skipped with
-    #                instructions because the CLI does not support non-interactive
-    #                Azure Native Auth for 'secrets set'.  Add secrets via the
-    #                Infisical UI or run the push separately after an interactive
-    #                'infisical login --native-azure' session.
-    #
-    # Skipped silently if:
-    #   - SECRETS_BACKEND != infisical
-    #   - infisical CLI is not installed
-    #   - INFISICAL_PROJECT_ID or INFISICAL_CLIENT_ID not set
-    #   - auth method is azure/oidc (runtime reads work; write bootstrap requires UI)
-    #
-    # Keys that are intentionally excluded from vault (app-managed at runtime)
-    # are also excluded here: CLOUD_MISP_API_KEY,
-    # CYSOAR_SESSION_SECRET, WAZUH_API_URL, WAZUH_API_USER, WAZUH_API_PASSWORD.
-    _vault_push_env() {
-        local env_file="$1"
-        local env_tag="${INFISICAL_ENVIRONMENT:-prod}"
-        local project_id="${INFISICAL_PROJECT_ID:-}"
-        local client_id="${INFISICAL_CLIENT_ID:-}"
-        local client_secret="${INFISICAL_CLIENT_SECRET:-}"
-        local auth_method="${INFISICAL_AUTH_METHOD:-azure}"
-        local infisical_url="${INFISICAL_URL:-}"
-
-        [[ "${SECRETS_BACKEND:-}" != "infisical" ]] && return 0
-        command -v infisical &>/dev/null || { warn "infisical CLI not found — skipping vault push"; return 0; }
-        [[ -z "$project_id" || -z "$client_id" ]] && { warn "INFISICAL_PROJECT_ID / INFISICAL_CLIENT_ID not set — skipping vault push"; return 0; }
-
-        # Azure Native Auth and OIDC: runtime reads work (Python SDK), but the
-        # CLI 'secrets set' command does not support non-interactive Arc auth.
-        # Print the list of keys so the operator can paste them into the Infisical UI.
-        if [[ "$auth_method" == "azure" || "$auth_method" == "oidc" ]]; then
-            warn "Vault bootstrap: auth_method=${auth_method} — CLI push requires Universal Auth."
-            warn "  Add the following secrets manually in the Infisical UI (Project → Secrets → ${env_tag}):"
-            local -a VAULT_KEYS_INFO=(MARKETPLACE_CATALOG_TOKEN SSO_CLIENT_ID SSO_CLIENT_SECRET
-                GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MICROSOFT_CLIENT_ID MICROSOFT_CLIENT_SECRET
-                GH_TOKEN MAXMIND_KEY CLOUD_MISP_URL CLOUD_MISP_API_KEY CYMIND_API_URL CYMIND_API_KEY)
-            for key in "${VAULT_KEYS_INFO[@]}"; do
-                local val
-                val=$(grep -m1 "^${key}=" "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
-                [[ -n "$val" ]] && info "  ${key} = ${val}"
-            done
-            info "  Once added, secrets are pulled automatically at every backend restart."
-            return 0
-        fi
-
-        # Universal Auth — fully scripted push
-        if [[ -z "$client_secret" ]]; then
-            warn "INFISICAL_CLIENT_SECRET not set — skipping vault push (required for universal auth)"
-            return 0
-        fi
-
-        step_header "VAULT BOOTSTRAP (Infisical — Universal Auth)"
-
-        # Only company-wide secrets are pushed to the vault — values that are
-        # identical across every CyCentra deployment (external API keys, company
-        # OAuth apps, shared SMTP / catalog credentials).
-        #
-        # Install-specific secrets (generated by setup.sh or unique per server)
-        # are intentionally excluded:
-        #   SECRET_KEY, JWT_SECRET, ADMIN_API_KEY          — openssl rand per install
-        #   CYCENTRA_DB_URL, POSTGRES_PASSWORD              — per-install DB
-        #   OAUTH2PROXY_SECRET, OAUTH2PROXY_COOKIE_SECRET   — openssl rand per install
-        #   CYSIEM_OIDC_SECRET,
-        #     CY360SSO_OIDC_SECRET                          — openssl rand per install
-                #   NODE_RED_CREDENTIAL_SECRET                      — openssl rand per install
-        #   CORRELATION_DB_URL                              — per-install DB URL
-        local -a VAULT_KEYS=(
-            # Marketplace
-            MARKETPLACE_CATALOG_TOKEN
-            # OAuth2 / SSO (company-registered apps, same on all deployments)
-            SSO_CLIENT_ID SSO_CLIENT_SECRET
-            GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET
-            MICROSOFT_CLIENT_ID MICROSOFT_CLIENT_SECRET
-            # External integrations (company-level credentials)
-            GH_TOKEN MAXMIND_KEY
-            CLOUD_MISP_URL CLOUD_MISP_API_KEY
-            CYMIND_API_URL CYMIND_API_KEY
-        )
-
-        local _auth_args=(
-            "--clientId=${client_id}"
-            "--clientSecret=${client_secret}"
-            "--projectId=${project_id}"
-            "--env=${env_tag}"
-        )
-        [[ -n "$infisical_url" ]] && _auth_args+=("--domain=${infisical_url}")
-
-        local pushed=0 skipped=0
-        for key in "${VAULT_KEYS[@]}"; do
-            local val
-            val=$(grep -m1 "^${key}=" "${env_file}" 2>/dev/null | cut -d= -f2- | tr -d '"' || true)
-            if [[ -z "$val" ]]; then
-                ((skipped++)) || true
-                continue
-            fi
-            if infisical secrets set "${key}=${val}" "${_auth_args[@]}" --silent 2>/dev/null; then
-                ((pushed++)) || true
-            else
-                warn "Vault push failed for ${key} — check Infisical credentials"
-            fi
-        done
-        success "Vault bootstrap complete: ${pushed} secrets pushed, ${skipped} skipped (empty)"
-    }
-    _vault_push_env /opt/cycentra/.env
-
 fi  # end full env block
 
-# ── Step 4.3b: IAP Gateway + CySIEM OIDC ────────────────────────────────────
+# ── Step 4.3b: IAP Gateway (oauth2-proxy) ─────────────────────────────────────
 # Runs in all modes (full / update). Idempotent.
-# oauth2-proxy: single OIDC gate for cysoar and cysiem subdomains.
-# Wazuh Dashboard: configured for native OIDC auth via cyasm.DOMAIN/oidc.
-#   - Individual user identity from OIDC token email claim
-#   - OpenSearch Security backend roles from OIDC token roles claim
-#   - admin/analyst → all_access; viewer → kibana_user + wazuh_ui_user
+# Single OIDC gate for cysoar and other subdomains behind nginx auth_request.
 
 step_header "IAP GATEWAY (oauth2-proxy)"
 
@@ -2070,370 +1544,21 @@ else
     fi
 fi  # end oauth2proxy gate
 
-# ── Wazuh Dashboard: configure OIDC authentication ───────────────────────────
-# Runs in all modes regardless of oauth2proxy secrets — Wazuh OIDC is
-# independent of oauth2proxy. The SSO mechanism: Wazuh Dashboard authenticates
-# via the CyCentra OIDC IdP at cyasm.DOMAIN. Each user gets their individual
-# identity; the `roles` OIDC claim maps to OpenSearch Security backend roles:
-#   admin / analyst → all_access (full Wazuh Dashboard access)
-#   viewer          → kibana_user + wazuh_ui_user (read-only)
-if [[ -f "$_WAZUH_DASH_YML" ]]; then
-    step_header "CySIEM OIDC Authentication"
-    cp "$_WAZUH_DASH_YML" "${_WAZUH_DASH_YML}.pre-oidc-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
-
-        # ── Inject OIDC settings into opensearch_dashboards.yml ─────────────────
-        if [[ -n "${CYSIEM_OIDC_SECRET:-}" ]]; then
-            python3 - "$_WAZUH_DASH_YML" "$CYSIEM_OIDC_SECRET" "$BASE_DOMAIN" << 'WAZUH_OIDC_PY'
-import sys
-path, secret, domain = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(path, "rb") as f:
-    raw = f.read().replace(b"\x00", b"")
-text = raw.decode("utf-8")
-remove_prefixes = [
-    "opensearch_security.auth.type",
-    "opensearch_security.proxycache.",
-    "opensearch_security.openid.",
-    "opensearch.requestHeadersAllowlist",
-    "# CyCentra 360",
-    "# ── CyCentra 360",
-    "# Authentication gate:",
-    "# Wazuh trusts",
-]
-cleaned = "\n".join(
-    line for line in text.splitlines()
-    if not any(line.strip().startswith(p) for p in remove_prefixes)
-).rstrip()
-oidc = (
-    "\n# ── CyCentra 360 OIDC SSO ─────────────────────────────────────────────────────\n"
-    "opensearch_security.auth.type: openid\n"
-    f'opensearch_security.openid.connect_url: "https://cyasm.{domain}/oidc/.well-known/openid-configuration"\n'
-    'opensearch_security.openid.client_id: "cysiem"\n'
-    f'opensearch_security.openid.client_secret: "{secret}"\n'
-    'opensearch_security.openid.scope: "openid email profile"\n'
-    f'opensearch_security.openid.base_redirect_url: "https://cysiem.{domain}"\n'
-    f'opensearch_security.openid.logout_url: "https://cyasm.{domain}/auth/logout"\n'
-    "opensearch_security.openid.verify_hostnames: false\n"
-)
-# Insert OIDC block BEFORE the Custom Branding section so that
-# apply-custom-branding.sh (which deletes from "# Custom Branding" to EOF)
-# does not erase the OIDC settings on every branding update.
-if "# Custom Branding" in cleaned:
-    idx = cleaned.index("# Custom Branding")
-    result = cleaned[:idx].rstrip() + oidc + "\n" + cleaned[idx:]
-else:
-    result = cleaned + oidc
-with open(path, "w") as f:
-    f.write(result)
-print("Wazuh Dashboard OIDC settings applied")
-WAZUH_OIDC_PY
-            success "CySIEM Dashboard: OIDC settings written"
-        else
-            warn "CYSIEM_OIDC_SECRET not available — OIDC settings not written; re-run --update"
-        fi
-
-        _OS_SEC_CFG="/etc/wazuh-indexer/opensearch-security/config.yml"
-        _CY_SEC_LOG="/var/log/cycentra/securityadmin.log"
-        _CERT_DIR="/etc/wazuh-indexer/certs"
-        _SEC_ADMIN="/usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh"
-        _IU_YML="/etc/wazuh-indexer/opensearch-security/internal_users.yml"
-        mkdir -p /var/log/cycentra 2>/dev/null || true
-
-        # ── Keep cy360_sso / cy360_readonly as internal users (legacy compat) ────
-        if [[ -f "$_IU_YML" && -f "${_CERT_DIR}/admin.pem" ]]; then
-            _CY360_SSO_HASH='$2y$12$nv335OI0o5tb4dnYtda8OeQastkTuiivxpkzh0nAYoxoZpMrJZ40S'
-            _CY360_RO_HASH='$2y$12$0Tim1grS5kbbBdG20PFsF.WF2eovIc23rrYO2D0E92pqdNjecI.lO'
-            _USERS_CHANGED=false
-            if ! grep -q "^cy360_sso:" "$_IU_YML" 2>/dev/null; then
-                cat >> "$_IU_YML" << CY360_SSO_EOF
-
-cy360_sso:
-  hash: "${_CY360_SSO_HASH}"
-  reserved: false
-  backend_roles:
-  - "admin"
-  description: "CyCentra 360 admin SSO service account (legacy)"
-CY360_SSO_EOF
-                _USERS_CHANGED=true
-                success "OpenSearch cy360_sso user added"
-            else
-                success "OpenSearch cy360_sso user already present"
-            fi
-            if ! grep -q "^cy360_readonly:" "$_IU_YML" 2>/dev/null; then
-                cat >> "$_IU_YML" << CY360_RO_EOF
-
-cy360_readonly:
-  hash: "${_CY360_RO_HASH}"
-  reserved: false
-  backend_roles:
-  - "viewer"
-  description: "CyCentra 360 viewer SSO service account (legacy)"
-CY360_RO_EOF
-                _USERS_CHANGED=true
-                success "OpenSearch cy360_readonly user added"
-            else
-                success "OpenSearch cy360_readonly user already present"
-            fi
-            if [[ "$_USERS_CHANGED" == "true" ]]; then
-                export JAVA_HOME=/usr/share/wazuh-indexer/jdk
-                cd / && "$_SEC_ADMIN" \
-                    -f "$_IU_YML" -t internalusers \
-                    -icl -nhnv \
-                    -cacert "${_CERT_DIR}/root-ca.pem" \
-                    -cert   "${_CERT_DIR}/admin.pem" \
-                    -key    "${_CERT_DIR}/admin-key.pem" \
-                    -h 127.0.0.1 2>>"$_CY_SEC_LOG" \
-                    && success "OpenSearch internal users applied via securityadmin" \
-                    || warn "securityadmin.sh failed — check ${_CY_SEC_LOG}"
-            fi
-        fi
-
-        # ── OpenSearch Security: add openid_auth_domain to config.yml ────────────
-        if [[ -f "$_OS_SEC_CFG" && -f "${_CERT_DIR}/admin.pem" ]]; then
-            _cfg_py_rc=0
-            python3 - "$_OS_SEC_CFG" "$BASE_DOMAIN" << 'OS_OIDC_PY' || _cfg_py_rc=$?
-import sys, re
-path, domain = sys.argv[1], sys.argv[2]
-with open(path, "r") as f:
-    lines = f.read().splitlines()
-if any("openid_auth_domain:" in ln for ln in lines):
-    print("openid_auth_domain already present in config.yml")
-    sys.exit(2)  # 2 = already present, no change needed
-anchor_idx = None
-anchor_indent = 0
-for i, ln in enumerate(lines):
-    m = re.match(r'^(\s+)basic_internal_auth_domain:', ln)
-    if m:
-        anchor_idx    = i
-        anchor_indent = len(m.group(1))
-        break
-if anchor_idx is None:
-    print("WARNING: basic_internal_auth_domain not found — config.yml unchanged", file=sys.stderr)
-    sys.exit(1)
-block_end = anchor_idx + 1
-while block_end < len(lines):
-    ln = lines[block_end]
-    stripped = ln.lstrip()
-    if stripped and not stripped.startswith("#"):
-        if len(ln) - len(stripped) <= anchor_indent:
-            break
-    block_end += 1
-p  = " " * anchor_indent
-c  = " " * (anchor_indent + 2)
-g  = " " * (anchor_indent + 4)
-gg = " " * (anchor_indent + 6)
-oidc = [
-    "",
-    f"{p}openid_auth_domain:",
-    f"{c}http_enabled: true",
-    f"{c}transport_enabled: false",
-    f"{c}order: 0",
-    f"{c}http_authenticator:",
-    f"{g}type: openid",
-    f"{g}challenge: false",
-    f"{g}config:",
-    f"{gg}subject_key: email",
-    f"{gg}roles_key: roles",
-    f'{gg}openid_connect_url: "https://cyasm.{domain}/oidc/.well-known/openid-configuration"',
-    f"{gg}jwt_clock_skew_tolerance_seconds: 30",
-    f"{c}authentication_backend:",
-    f"{g}type: noop",
-]
-result = lines[:block_end] + oidc + lines[block_end:]
-with open(path, "w") as f:
-    f.write("\n".join(result) + "\n")
-print("openid_auth_domain added to config.yml")
-OS_OIDC_PY
-
-            # Wait for OpenSearch indexer (up to 90 s)
-            info "Waiting for OpenSearch indexer to be ready (up to 90 s)..."
-            _INDEXER_READY=false
-            for _n in $(seq 1 18); do
-                _code=$(curl -sk -o /dev/null -w '%{http_code}' \
-                    --cert "${_CERT_DIR}/admin.pem" \
-                    --key  "${_CERT_DIR}/admin-key.pem" \
-                    "https://127.0.0.1:9200/_cluster/health" 2>/dev/null || true)
-                [[ "$_code" =~ ^2 ]] && { _INDEXER_READY=true; success "OpenSearch indexer ready"; break; }
-                sleep 5
-            done
-
-            if [[ "$_INDEXER_READY" == "true" ]]; then
-                # Apply config.yml (openid_auth_domain) via securityadmin.sh
-                # rc=0: file updated; rc=2: already present; rc=1: error
-                if [[ "$_cfg_py_rc" -eq 0 && -x "$_SEC_ADMIN" ]]; then
-                    export JAVA_HOME=/usr/share/wazuh-indexer/jdk
-                    cd / && "$_SEC_ADMIN" \
-                        -f "$_OS_SEC_CFG" -t config \
-                        -icl -nhnv \
-                        -cacert "${_CERT_DIR}/root-ca.pem" \
-                        -cert   "${_CERT_DIR}/admin.pem" \
-                        -key    "${_CERT_DIR}/admin-key.pem" \
-                        -h 127.0.0.1 2>>"$_CY_SEC_LOG" \
-                        && success "OpenSearch openid_auth_domain applied via securityadmin" \
-                        || warn "securityadmin.sh failed — see ${_CY_SEC_LOG}"
-                elif [[ "$_cfg_py_rc" -eq 2 ]]; then
-                    success "openid_auth_domain already in config.yml — securityadmin not needed"
-                else
-                    warn "config.yml patch failed (rc=${_cfg_py_rc}) — check ${_OS_SEC_CFG}"
-                fi
-
-                # ── Roles mapping via REST API ────────────────────────────────────
-                # admin + analyst OIDC roles → all_access; viewer → kibana_user + wazuh_ui_user
-                _rm_aa=$(curl -sk -o /dev/null -w '%{http_code}' \
-                    --cert "${_CERT_DIR}/admin.pem" --key "${_CERT_DIR}/admin-key.pem" \
-                    -X PUT "https://127.0.0.1:9200/_plugins/_security/api/rolesmapping/all_access" \
-                    -H 'Content-Type: application/json' \
-                    -d '{"backend_roles":["admin","analyst","all_access"],"hosts":[],"users":[]}' \
-                    2>/dev/null || true)
-                _rm_ku=$(curl -sk -o /dev/null -w '%{http_code}' \
-                    --cert "${_CERT_DIR}/admin.pem" --key "${_CERT_DIR}/admin-key.pem" \
-                    -X PUT "https://127.0.0.1:9200/_plugins/_security/api/rolesmapping/kibana_user" \
-                    -H 'Content-Type: application/json' \
-                    -d '{"backend_roles":["viewer","kibanauser"],"hosts":[],"users":[]}' \
-                    2>/dev/null || true)
-                # wazuh_ui_user is a Wazuh-defined OpenSearch role that may be absent in
-                # some installations (renamed or not pre-loaded).  Ensure it exists before
-                # attempting the rolesmapping PUT — a missing role returns 404 from the API.
-                _role_wu_status=$(curl -sk -o /dev/null -w '%{http_code}' \
-                    --cert "${_CERT_DIR}/admin.pem" --key "${_CERT_DIR}/admin-key.pem" \
-                    "https://127.0.0.1:9200/_plugins/_security/api/roles/wazuh_ui_user" \
-                    2>/dev/null || true)
-                if [[ "$_role_wu_status" == "404" ]]; then
-                    info "wazuh_ui_user role absent — creating with read-only Wazuh index permissions ..."
-                    curl -sk -o /dev/null \
-                        --cert "${_CERT_DIR}/admin.pem" --key "${_CERT_DIR}/admin-key.pem" \
-                        -X PUT "https://127.0.0.1:9200/_plugins/_security/api/roles/wazuh_ui_user" \
-                        -H 'Content-Type: application/json' \
-                        -d '{"cluster_permissions":["cluster_composite_ops_ro"],"index_permissions":[{"index_patterns":["wazuh-*",".wazuh",".wazuh-version",".kibana*"],"allowed_actions":["read","indices:data/read/search"]}],"tenant_permissions":[]}' \
-                        2>/dev/null || true
-                fi
-                _rm_wu=$(curl -sk -o /dev/null -w '%{http_code}' \
-                    --cert "${_CERT_DIR}/admin.pem" --key "${_CERT_DIR}/admin-key.pem" \
-                    -X PUT "https://127.0.0.1:9200/_plugins/_security/api/rolesmapping/wazuh_ui_user" \
-                    -H 'Content-Type: application/json' \
-                    -d '{"backend_roles":["viewer","wazuh_ui_user"],"hosts":[],"users":[]}' \
-                    2>/dev/null || true)
-                [[ "$_rm_aa" =~ ^(200|201)$ ]] && success "all_access rolesmapping updated (admin+analyst)" \
-                    || warn "all_access rolesmapping REST PUT returned ${_rm_aa}"
-                [[ "$_rm_ku" =~ ^(200|201)$ ]] && success "kibana_user rolesmapping updated (viewer)" \
-                    || warn "kibana_user rolesmapping REST PUT returned ${_rm_ku}"
-                [[ "$_rm_wu" =~ ^(200|201)$ ]] && success "wazuh_ui_user rolesmapping updated (viewer)" \
-                    || warn "wazuh_ui_user rolesmapping REST PUT returned ${_rm_wu}"
-            else
-                warn "OpenSearch not reachable — security config skipped; re-run --update once Wazuh is healthy"
-            fi
-        fi
-
-        # ── Wazuh Manager API RBAC rules (maps OIDC backend_roles → Wazuh roles) ────
-        # OpenSearch Security gives dashboard access; the Wazuh Manager API has its own
-        # RBAC layer that controls Wazuh operations (agent mgmt, policies, etc.).
-        # Map OIDC backend_roles to Wazuh roles via the security/rules + roles API.
-        #   admin   → administrator (id 1) — full Wazuh access incl. agent management
-        #   analyst → agents_admin (id 5)  — manage agents, no user/role administration
-        #   viewer  → readonly (id 2)       — read-only access to all Wazuh resources
-        # Idempotent: skips rule creation if a rule with the same name already exists.
-        if [[ -n "${_WAZUH_PASS:-}" ]]; then
-            _WAPI_TOKEN=$(curl -sk -u "wazuh-wui:${_WAZUH_PASS}" \
-                -X POST 'https://127.0.0.1:55000/security/user/authenticate?raw=true' 2>/dev/null)
-            if [[ -n "$_WAPI_TOKEN" && "$_WAPI_TOKEN" != *"error"* ]]; then
-                _existing_rules=$(curl -sk \
-                    -H "Authorization: Bearer ${_WAPI_TOKEN}" \
-                    'https://127.0.0.1:55000/security/rules' 2>/dev/null)
-
-                _make_wazuh_rule() {
-                    local name="$1" field="$2" value="$3" role_id="$4"
-                    if echo "$_existing_rules" | grep -q "\"$name\"" 2>/dev/null; then
-                        info "Wazuh rule '$name' already exists — skipping"
-                        return
-                    fi
-                    local new_rule
-                    new_rule=$(curl -sk -H "Authorization: Bearer ${_WAPI_TOKEN}" \
-                        -H 'Content-Type: application/json' \
-                        -X POST 'https://127.0.0.1:55000/security/rules' \
-                        -d "{\"name\":\"${name}\",\"rule\":{\"FIND\":{\"${field}\":\"${value}\"}}}" 2>/dev/null)
-                    local new_id
-                    new_id=$(echo "$new_rule" | python3 -c \
-                        'import sys,json; d=json.load(sys.stdin); print(d["data"]["affected_items"][0]["id"])' 2>/dev/null)
-                    if [[ -n "$new_id" ]]; then
-                        curl -sk -H "Authorization: Bearer ${_WAPI_TOKEN}" \
-                            -X POST "https://127.0.0.1:55000/security/roles/${role_id}/rules?rule_ids=${new_id}" \
-                            >/dev/null 2>&1
-                        success "Wazuh rule '$name' → Wazuh role ${role_id} (id ${new_id})"
-                    else
-                        warn "Wazuh rule '$name' creation failed: $new_rule"
-                    fi
-                }
-
-                _make_wazuh_rule "cy360_oidc_admin"   "backend_roles" "admin"   1
-                _make_wazuh_rule "cy360_oidc_analyst"  "backend_roles" "analyst" 5
-                _make_wazuh_rule "cy360_oidc_viewer"   "backend_roles" "viewer"  2
-            else
-                warn "Wazuh API auth failed — RBAC rules skipped; check WAZUH_API_PASSWORD"
-            fi
-        else
-            warn "WAZUH_API_PASSWORD not set — Wazuh API RBAC rules skipped"
-        fi
-
-        systemctl restart wazuh-dashboard 2>/dev/null || true
-        success "CySIEM OIDC: Dashboard configured, OpenSearch security updated"
-    else
-        info "Wazuh not installed — CySIEM OIDC will run when Wazuh is deployed"
-    fi
-
-    # ── Migrate nginx cysiem block to OIDC mode (idempotent) ─────────────────────
-    # Removes the siem-gate auth_request + Authorization header injection.
-    # Wazuh Dashboard OIDC now handles authentication natively.
-    _NGINX_MOD="/etc/nginx/sites-available/cycentra-modules"
-    if [[ -f "$_NGINX_MOD" ]]; then
-        if ! grep -q 'siem-gate\|Authorization.*wazuh_auth\|proxy_set_header.*Authorization.*wazuh' "$_NGINX_MOD" 2>/dev/null; then
-            success "nginx cysiem: already in OIDC mode"
-        else
-            python3 - "$_NGINX_MOD" << 'NGINX_OIDC_PY'
-import sys, re
-path = sys.argv[1]
-with open(path) as f:
-    text = f.read()
-
-# Remove IAP comments + siem-gate auth_request lines
-text = re.sub(
-    r'    # IAP gate[^\n]*\n(?:    # [^\n]*\n)*'
-    r'    auth_request\s+/siem-gate[^\n]*\n'
-    r'    auth_request_set[^\n]*\n'
-    r'    error_page 401 = @error401;\n',
-    '    # Authentication handled by Wazuh Dashboard OIDC (cyasm.DOMAIN/oidc)\n',
-    text
-)
-# Remove location @error401 block pointing to cysiem
-text = re.sub(r'    location @error401 \{ return 302[^\n]*cysiem[^\n]*\n', '', text)
-# Remove location = /siem-gate { ... } block
-text = re.sub(r'    location = /siem-gate \{[^}]+\}\n', '', text, flags=re.DOTALL)
-# Remove Role-appropriate comment + Authorization $wazuh_auth header
-text = re.sub(r'        # Role-appropriate[^\n]*\n', '', text)
-text = re.sub(r'        proxy_set_header Authorization \$wazuh_auth;\n', '', text)
-
-with open(path, 'w') as f:
-    f.write(text)
-print("nginx cysiem: migrated to OIDC mode (siem-gate removed)")
-NGINX_OIDC_PY
-            nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
-                success "nginx cysiem: migrated to OIDC mode" || \
-                warn "nginx config invalid after OIDC migration — check: nginx -t"
-        fi
-    fi
-
-    # ── Remove duplicate CORS headers from cyasm nginx block (added before v1.0.286) ──
-    # Flask's global after_request hook is the single CORS authority. nginx was also
-    # adding CORS headers on the cyasm vhost, producing duplicates that caused the
-    # browser to reject every /auth/local response with "Network error".
-    if [[ -f "$_NGINX_MOD" ]] && grep -q 'cors_origin\|Access-Control-Allow-Origin' "$_NGINX_MOD" 2>/dev/null; then
-        sed -i '/set \$cors_origin/d' "$_NGINX_MOD" || true
-        sed -i '/if.*http_origin.*cors_origin/d' "$_NGINX_MOD" || true
-        sed -i '/add_header Access-Control-Allow-Origin/d' "$_NGINX_MOD" || true
-        sed -i '/add_header Access-Control-Allow-Credentials/d' "$_NGINX_MOD" || true
-        sed -i '/add_header Access-Control-Allow-Methods/d' "$_NGINX_MOD" || true
-        sed -i '/add_header Access-Control-Allow-Headers.*CyCentra/d' "$_NGINX_MOD" || true
-        nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
-            success "nginx cyasm: duplicate CORS headers removed" || \
-            warn "nginx reload failed after CORS patch — check: nginx -t"
+# ── Remove duplicate CORS headers from cyasm nginx block (added before v1.0.286) ──
+# Flask's global after_request hook is the single CORS authority. nginx was also
+# adding CORS headers on the cyasm vhost, producing duplicates that caused the
+# browser to reject every /auth/local response with "Network error".
+_NGINX_MOD="/etc/nginx/sites-available/cycentra-modules"
+if [[ -f "$_NGINX_MOD" ]] && grep -q 'cors_origin\|Access-Control-Allow-Origin' "$_NGINX_MOD" 2>/dev/null; then
+    sed -i '/set \$cors_origin/d' "$_NGINX_MOD" || true
+    sed -i '/if.*http_origin.*cors_origin/d' "$_NGINX_MOD" || true
+    sed -i '/add_header Access-Control-Allow-Origin/d' "$_NGINX_MOD" || true
+    sed -i '/add_header Access-Control-Allow-Credentials/d' "$_NGINX_MOD" || true
+    sed -i '/add_header Access-Control-Allow-Methods/d' "$_NGINX_MOD" || true
+    sed -i '/add_header Access-Control-Allow-Headers.*CyCentra/d' "$_NGINX_MOD" || true
+    nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
+        success "nginx cyasm: duplicate CORS headers removed" || \
+        warn "nginx reload failed after CORS patch — check: nginx -t"
     fi
 
     # ── Remove OPTIONS intercept from cyasm nginx block (added before v1.0.295) ──
@@ -2569,51 +1694,6 @@ ALIAS_FIX_PY
         nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
             success "nginx: agent-packages alias verified/fixed and nginx reloaded" || \
             warn "nginx reload failed — check: nginx -t"
-    fi
-
-    # ── Inject /agent-packages/ into cysiem nginx block if missing (idempotent) ──
-    # Packages must also be downloadable from cysiem.DOMAIN because the agent
-    # connects to CySIEM (Wazuh) and the installer uses SERVER_URL=cysiem.DOMAIN.
-    if [[ -f "$_NGINX_MOD" ]]; then
-        python3 - "$_NGINX_MOD" << 'CYSIEM_PKG_INJECT_PY'
-import sys
-
-path = sys.argv[1]
-text = open(path).read()
-
-# Anchor unique to the cysiem block — the Wazuh Dashboard proxy_pass
-cysiem_anchor = "    location / {\n        proxy_pass https://127.0.0.1:5601;\n"
-
-if cysiem_anchor not in text:
-    print("nginx cysiem: anchor not found (block may not exist yet)")
-    sys.exit(0)
-
-anchor_pos = text.find(cysiem_anchor)
-# Check 600 chars before anchor for an existing agent-packages block
-if "/agent-packages/" in text[max(0, anchor_pos - 600):anchor_pos]:
-    print("nginx cysiem: /agent-packages/ already present")
-    sys.exit(0)
-
-block = (
-    "    location /agent-packages/ {\n"
-    "        alias /var/lib/cycentra-agent-packages/;\n"
-    "        autoindex off;\n"
-    "        add_header Content-Disposition \"attachment\" always;\n"
-    "        add_header X-Content-Type-Options \"nosniff\" always;\n"
-    "        add_header Cache-Control \"no-store, must-revalidate\" always;\n"
-    "    }\n"
-)
-
-new_text = text.replace(cysiem_anchor, block + cysiem_anchor, 1)
-open(path, 'w').write(new_text)
-print("nginx cysiem: /agent-packages/ location block injected")
-CYSIEM_PKG_INJECT_PY
-        _py_exit=$?
-        if [[ $_py_exit -eq 0 ]]; then
-            nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
-                success "nginx cysiem: /agent-packages/ block added and nginx reloaded" || \
-                warn "nginx reload failed after cysiem agent-packages injection — check: nginx -t"
-        fi
     fi
 
     # ── Ensure sites-enabled is a symlink to sites-available ─────────────────────
@@ -2845,7 +1925,7 @@ UNITEOF
 cat > /opt/cycentra/license-watchdog.sh << 'WATCHEOF'
 #!/bin/bash
 LOG="/var/log/cycentra/license-watchdog.log"
-SERVICES=(cycentra-backend cysiemstack-engine cysiem-to-redis)
+SERVICES=(cycentra-backend cysiemstack-engine)
 _log() { echo "$(date -u +"%Y-%m-%dT%H:%M:%SZ")  $*" | tee -a "$LOG"; }
 mkdir -p "$(dirname "$LOG")"
 # Guard: a missing validator makes python3 exit 2 ("can't open file"), which
@@ -3277,46 +2357,9 @@ server {
     }
 }
 
-$(if [[ "$_INSTALL_CYSIEM" == "true" ]]; then
-cat << CYSIEMVHOSTEOF
-# ── CySIEM / Wazuh Dashboard (cysiem) ────────────────────────────────────────
-server { listen 80; server_name cysiem.${BASE_DOMAIN}; return 301 https://\$host\$request_uri; }
-server {
-    listen 443 ssl http2; server_name cysiem.${BASE_DOMAIN};
-    ssl_certificate     /etc/letsencrypt/live/cysiem.${BASE_DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/cysiem.${BASE_DOMAIN}/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
-    add_header Strict-Transport-Security "max-age=31536000" always;
-    add_header X-Frame-Options "" always;
-    add_header Content-Security-Policy "frame-ancestors 'self' https://cy360.${BASE_DOMAIN}" always;
-    # Authentication handled by Wazuh Dashboard OIDC (cyasm.${BASE_DOMAIN}/oidc).
-    # Individual user identity is established per OIDC token; roles claim maps to
-    # OpenSearch Security backend roles (admin/analyst → all_access; viewer → read-only).
-    location /agent-packages/ {
-        alias /var/lib/cycentra-agent-packages/;
-        autoindex off;
-        add_header Content-Disposition "attachment" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header Cache-Control "no-store, must-revalidate" always;
-    }
-    location / {
-        proxy_pass https://127.0.0.1:5601;
-        proxy_ssl_verify off;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \$connection_upgrade;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_read_timeout 120;
-        proxy_buffering off;
-        proxy_cookie_flags ~ samesite=none secure;
-    }
-}
-CYSIEMVHOSTEOF
-fi)
-# When _INSTALL_CYSIEM=false, no cysiem.${BASE_DOMAIN} vhost is written above —
-# agent/EDR package downloads still work via cy360.${BASE_DOMAIN}/agent-packages/.
+# No cysiem.${BASE_DOMAIN} vhost is written — this script no longer installs a
+# local Wazuh Dashboard to proxy to. Agent/EDR package downloads still work via
+# cy360.${BASE_DOMAIN}/agent-packages/.
 # Module server blocks are added by routes.py when modules are installed via portal
 # cymisp.DOMAIN server block is added by routes.py when CyMISP is installed via portal
 # cymind.DOMAIN server block is added by cymind/install.sh when CyMind is installed
@@ -3503,14 +2546,6 @@ SSLOPTEOF
         && success "SSL cert ready (cy360, cyasm)" \
         || true   # self-signed fallback below handles missing cert
 
-    # ── certbot: cysiem (only if CySIEM/Wazuh is actually installed — Step 4) ──
-    if [[ "$_INSTALL_CYSIEM" == "true" ]]; then
-        _CB_LOG_SIEM="/tmp/certbot-cysiem-$$.log"
-        _certbot_if_needed "cysiem.${BASE_DOMAIN}" "$_CB_LOG_SIEM" \
-            -m "$CLIENT_EMAIL" -d cysiem.${BASE_DOMAIN} \
-            && success "SSL cert ready (cysiem)" \
-            || true
-    fi
     # NOTE: cymisp certs are obtained by routes.py (certbot --nginx -d cymisp.DOMAIN)
     # when those modules are installed via the portal. No cert is needed here
     # because no cymisp nginx block exists until the module is installed.
@@ -3528,7 +2563,6 @@ SSLOPTEOF
     # and the portal / backend remain reachable.  When setup is re-run after DNS
     # resolves, certbot will obtain real certs and overwrite the live/ symlinks.
     _BASE_CERT="/etc/letsencrypt/live/cy360.${BASE_DOMAIN}/fullchain.pem"
-    _SIEM_CERT="/etc/letsencrypt/live/cysiem.${BASE_DOMAIN}/fullchain.pem"
     _SELFSIGNED_DIR="/etc/ssl/cycentra/selfsigned"
 
     if [[ ! -f "$_BASE_CERT" ]]; then
@@ -3549,25 +2583,8 @@ SSLOPTEOF
             || warn "Self-signed cert generation failed for cy360/cyasm"
     fi
 
-    if [[ ! -f "$_SIEM_CERT" ]]; then
-        info "Generating self-signed cert for cysiem (temporary)..."
-        mkdir -p "$_SELFSIGNED_DIR" "/etc/letsencrypt/live/cysiem.${BASE_DOMAIN}"
-        openssl req -x509 -nodes -newkey rsa:2048 \
-            -keyout "$_SELFSIGNED_DIR/cysiem-privkey.pem" \
-            -out    "$_SELFSIGNED_DIR/cysiem-fullchain.pem" \
-            -days 90 \
-            -subj "/CN=cysiem.${BASE_DOMAIN}/O=CyCentra/C=US" \
-            2>/dev/null \
-            && { ln -sf "$_SELFSIGNED_DIR/cysiem-fullchain.pem" \
-                        "/etc/letsencrypt/live/cysiem.${BASE_DOMAIN}/fullchain.pem"
-                 ln -sf "$_SELFSIGNED_DIR/cysiem-privkey.pem" \
-                        "/etc/letsencrypt/live/cysiem.${BASE_DOMAIN}/privkey.pem"
-                 warn "Self-signed cert installed for cysiem — re-run setup to replace with Let's Encrypt"; } \
-            || warn "Self-signed cert generation failed for cysiem"
-    fi
-
-    # Restore full SSL nginx config now that certs exist (real or self-signed).
-    if [[ -f "$_BASE_CERT" && -f "$_SIEM_CERT" ]]; then
+    # Restore full SSL nginx config now that the cert exists (real or self-signed).
+    if [[ -f "$_BASE_CERT" ]]; then
         cp "$SSL_CONF_BACKUP" "$SSL_CONF"
 
         # Detect whether any cert in live/ is self-signed (issuer == subject).
@@ -3601,310 +2618,39 @@ SSLOPTEOF
 
 fi  # end SSL block
 
-# ── Step 18: Wazuh rules, decoders, ossec.conf, agent config ─────────────────
-if [[ -d "/var/ossec" ]]; then
+# ── Step 18: GeoIP enrichment + CyEDR Sysmon config staging ──────────────────
+# Runs unconditionally — GeoIP feeds the correlation engine's alert enrichment
+# and Sysmon config is served to CyEDR's Windows installer; neither depends on
+# a locally-installed SIEM.
+CONFIG_SRC="/tmp/cycentra-config"
 
-    step_header "WAZUH RULES & CONFIG"
+# ── geoip2 Python library ──────────────────────────────────────────────────
+if ! python3 -c "import geoip2" 2>/dev/null; then
+    info "Installing geoip2 Python library..."
+    PIP_ROOT_USER_ACTION=ignore pip3 install geoip2 ${_PIP_BSP} -q \
+        && success "geoip2 installed" \
+        || warn "geoip2 install failed — GeoIP enrichment will be disabled"
+else
+    success "geoip2 already installed"
+fi
 
-    CONFIG_SRC="/tmp/cycentra-config"
-    [[ -d "$CONFIG_SRC/rules" ]] && \
-        cp "$CONFIG_SRC/rules/"*.xml /var/ossec/etc/rules/ 2>/dev/null || true
-    [[ -d "$CONFIG_SRC/decoders" ]] && \
-        cp "$CONFIG_SRC/decoders/"*.xml /var/ossec/etc/decoders/ 2>/dev/null || true
-
-    # ── Active-response scripts — deploy all from CYSIEM-Config/active-response/ ──
-    mkdir -p /var/ossec/active-response/bin
-    for _ar_script in isolate-host.sh quarantine-file.sh scan-endpoint.sh block-usb.sh block-wifi.sh restrict-network.sh collect-forensics.sh; do
-        if [[ -f "$CONFIG_SRC/active-response/$_ar_script" ]]; then
-            cp "$CONFIG_SRC/active-response/$_ar_script" /var/ossec/active-response/bin/
-            chmod 750 "/var/ossec/active-response/bin/$_ar_script"
-            chown root:wazuh "/var/ossec/active-response/bin/$_ar_script"
-            success "$_ar_script deployed to active-response/bin"
-        else
-            warn "$_ar_script not found in CYSIEM-Config/active-response — skipping"
-        fi
-    done
-
-    # ── Clean up legacy LLM integration left from prior installs ─────────────
-    if [[ -f "/var/ossec/integrations/custom-llm.py" ]]; then
-        rm -f /var/ossec/integrations/custom-llm.py
-        info "Removed legacy custom-llm.py from /var/ossec/integrations/"
-    fi
-
-    if [[ -f "$CONFIG_SRC/conf/ossec.conf" ]]; then
-        if [[ "$MODE" == "update" && -f "/var/ossec/etc/ossec.conf" ]]; then
-            # --update: preserve the live ossec.conf so custom integrations
-            # (O365, Google Workspace, AWS, etc.) configured post-install are not wiped.
-            # The template is saved alongside the live file for reference/diffing.
-            cp "$CONFIG_SRC/conf/ossec.conf" "/var/ossec/etc/ossec.conf.new-$(date +%Y%m%d)"
-            info "ossec.conf update skipped — live config preserved (custom integrations safe)"
-            info "New template saved as /var/ossec/etc/ossec.conf.new-$(date +%Y%m%d) for reference"
-        else
-            # Fresh install or explicit --upgrade: deploy the bundled template
-            if [[ -f "/var/ossec/etc/ossec.conf" ]]; then
-                cp "/var/ossec/etc/ossec.conf" "/var/ossec/etc/ossec.conf.backup-$(date +%Y%m%d-%H%M%S)"
-                info "Existing ossec.conf backed up"
-            fi
-            cp "$CONFIG_SRC/conf/ossec.conf" /var/ossec/etc/ossec.conf
-            chmod 660 /var/ossec/etc/ossec.conf
-            success "ossec.conf deployed"
-        fi
-    fi
-
-    # ── MISP blacklist stub + idempotent ossec.conf patching ─────────────────
-    # On fresh install the deployed template already contains these blocks.
-    # On --update the live ossec.conf is preserved; we patch it in place.
-
-    # 1. Create MISP global blacklist CDB stub if absent
-    MISP_LIST_PATH="/var/ossec/etc/lists/misp_global_blacklist"
-    if [[ ! -f "$MISP_LIST_PATH" ]]; then
-        mkdir -p "$(dirname "$MISP_LIST_PATH")"
-        touch "$MISP_LIST_PATH"
-        chown root:wazuh "$MISP_LIST_PATH"
-        chmod 660 "$MISP_LIST_PATH"
-        info "MISP blacklist stub created at $MISP_LIST_PATH — populate via MISP feed sync"
-    fi
-
-    # 2. Patch live ossec.conf (each block guarded by grep — safe to re-run)
-    _OSSEC_LIVE="/var/ossec/etc/ossec.conf"
-    if [[ -f "$_OSSEC_LIVE" ]]; then
-
-        # 2a. MISP CDB list entry
-        if ! grep -q "misp_global_blacklist" "$_OSSEC_LIVE"; then
-            sed -i 's|<list>etc/lists/malicious-ioc/malicious-domains</list>|<list>etc/lists/malicious-ioc/malicious-domains</list>\n    <list>etc/lists/misp_global_blacklist</list>|' "$_OSSEC_LIVE"
-            info "misp_global_blacklist CDB entry injected into ossec.conf"
-        fi
-
-        # 2b. isolate-host command block
-        if ! grep -q "isolate-host" "$_OSSEC_LIVE"; then
-            sed -i 's|<!-- Active response -->|<!-- Active response -->\n\n  <!-- CyCentra 360 XDR: host isolation command -->\n  <command>\n    <name>isolate-host<\/name>\n    <executable>isolate-host.sh<\/executable>\n    <timeout_allowed>yes<\/timeout_allowed>\n  <\/command>|' "$_OSSEC_LIVE"
-            info "isolate-host command block injected into ossec.conf"
-        fi
-
-        # 2c. isolate-host active-response blocks (python3 for clean multi-line insert)
-        # rules_id 101000,101010,101030,101031 — Wazuh + CyEDR anti-tamper triggers only.
-        # 101001 (auditd ptrace/memfd) removed: CyEDR owns process injection detection.
-        # 101011 (Sysmon CreateRemoteThread) removed: Wazuh no longer receives Sysmon events.
-        if ! grep -qF '<rules_id>101000,101010,101030,101031' "$_OSSEC_LIVE"; then
-            python3 - "$_OSSEC_LIVE" << 'PYEOF'
-import sys
-path = sys.argv[1]
-with open(path) as f:
-    content = f.read()
-AR_BLOCK = (
-    "\n  <!-- CyCentra 360 XDR: local isolation — agent anti-tamper\n"
-    "       101000: auditd Wazuh tamper | 101010: Windows Wazuh service stop\n"
-    "       101030: auditd CyEDR tamper | 101031: Windows CyEDR service stop -->\n"
-    "  <active-response>\n"
-    "    <command>isolate-host</command>\n"
-    "    <location>local</location>\n"
-    "    <rules_id>101000,101010,101030,101031</rules_id>\n"
-    "    <timeout>600</timeout>\n"
-    "    <disabled>no</disabled>\n"
-    "  </active-response>\n\n"
-    "  <!-- CyCentra 360 XDR: extended local isolation — ransomware precursor -->\n"
-    "  <active-response>\n"
-    "    <command>isolate-host</command>\n"
-    "    <location>local</location>\n"
-    "    <rules_id>100203</rules_id>\n"
-    "    <timeout>3600</timeout>\n"
-    "    <disabled>no</disabled>\n"
-    "  </active-response>\n\n"
-    "  <!-- CyCentra 360 XDR: global isolation — absolute MISP threat intel match -->\n"
-    "  <active-response>\n"
-    "    <command>isolate-host</command>\n"
-    "    <location>all</location>\n"
-    "    <rules_id>101002,101003</rules_id>\n"
-    "    <timeout>3600</timeout>\n"
-    "    <disabled>no</disabled>\n"
-    "  </active-response>\n\n"
-)
-content = content.replace('<!-- Log analysis -->', AR_BLOCK + '<!-- Log analysis -->', 1)
-with open(path, 'w') as f:
-    f.write(content)
-PYEOF
-            info "isolate-host active-response blocks injected into ossec.conf"
-        fi
-
-        # 2d. Migrate stale AR rule_id sets from prior installs to the current canonical set.
-        # Old sets that predate CyEDR migration contained 101001 (auditd injection — now CyEDR)
-        # and 101011 (Sysmon CreateRemoteThread — now CyEDR). Replace all known stale variants.
-        for _stale in \
-            '101000,101001</rules_id>' \
-            '101000,101001,101010,101011</rules_id>' \
-            '101000,101010,101011</rules_id>'; do
-            if grep -qF "$_stale" "$_OSSEC_LIVE"; then
-                sed -i "s|<rules_id>${_stale%<*}|<rules_id>101000,101010,101030,101031</rules_id>|g" "$_OSSEC_LIVE"
-                info "isolate-host AR block migrated: $_stale → 101000,101010,101030,101031"
-            fi
-        done
-
-        # 2e. Remove stale custom-llm.py integration block
-        if grep -q 'custom-llm\.py' "$_OSSEC_LIVE"; then
-            python3 - "$_OSSEC_LIVE" << 'PYEOF'
-import sys, re
-path = sys.argv[1]
-with open(path) as f: content = f.read()
-content = re.sub(
-    r'\n?\s*<integration>\s*<name>custom-llm\.py</name>.*?</integration>',
-    '', content, flags=re.DOTALL
-)
-with open(path, 'w') as f: f.write(content)
-PYEOF
-            info "Removed stale custom-llm.py integration block from ossec.conf"
-        fi
-
-        # 2f. Remove stale CyAI active-response blocks (rules_id 100050)
-        if grep -q 'rules_id>100050' "$_OSSEC_LIVE"; then
-            python3 - "$_OSSEC_LIVE" << 'PYEOF'
-import sys, re
-path = sys.argv[1]
-with open(path) as f: content = f.read()
-content = re.sub(
-    r'\n?\s*<active-response>(?:(?!</active-response>).)*?<rules_id>100050</rules_id>.*?</active-response>',
-    '', content, flags=re.DOTALL
-)
-with open(path, 'w') as f: f.write(content)
-PYEOF
-            info "Removed stale CyAI active-response blocks (rule 100050) from ossec.conf"
-        fi
-
-        # 2g. Add new CyCentra commands + AR blocks (python3 for multi-line insert)
-        if ! grep -q 'quarantine-file' "$_OSSEC_LIVE"; then
-            python3 - "$_OSSEC_LIVE" << 'PYEOF'
-import sys
-path = sys.argv[1]
-with open(path) as f: content = f.read()
-NEW_CMDS = (
-    "\n  <!-- CyCentra 360: quarantine malicious file and kill owning process -->\n"
-    "  <command>\n"
-    "    <name>quarantine-file</name>\n"
-    "    <executable>quarantine-file.sh</executable>\n"
-    "    <timeout_allowed>no</timeout_allowed>\n"
-    "  </command>\n\n"
-    "  <!-- CyCentra 360: on-demand endpoint malware scan (portal-triggered) -->\n"
-    "  <command>\n"
-    "    <name>scan-endpoint</name>\n"
-    "    <executable>scan-endpoint.sh</executable>\n"
-    "    <timeout_allowed>no</timeout_allowed>\n"
-    "  </command>\n\n"
-    "  <!-- CyCentra 360: block USB storage device on endpoint -->\n"
-    "  <command>\n"
-    "    <name>block-usb</name>\n"
-    "    <executable>block-usb.sh</executable>\n"
-    "    <timeout_allowed>yes</timeout_allowed>\n"
-    "  </command>\n\n"
-    "  <!-- CyCentra 360: disable WiFi/wireless on endpoint (portal-triggered) -->\n"
-    "  <command>\n"
-    "    <name>block-wifi</name>\n"
-    "    <executable>block-wifi.sh</executable>\n"
-    "    <timeout_allowed>yes</timeout_allowed>\n"
-    "  </command>\n"
-)
-NEW_AR = (
-    "\n  <!-- CyCentra 360: C2 / DCSync / PtH / cryptominer — firewall-drop on local agent -->\n"
-    "  <active-response>\n"
-    "    <command>firewall-drop</command>\n"
-    "    <location>local</location>\n"
-    "    <rules_id>100950,100951,100952,100953</rules_id>\n"
-    "    <timeout>3600</timeout>\n"
-    "    <disabled>no</disabled>\n"
-    "  </active-response>\n\n"
-    "  <!-- CyCentra 360: MFA push bombing — lock targeted OS account -->\n"
-    "  <active-response>\n"
-    "    <command>disable-account</command>\n"
-    "    <location>local</location>\n"
-    "    <rules_id>100801</rules_id>\n"
-    "    <timeout>3600</timeout>\n"
-    "    <disabled>no</disabled>\n"
-    "  </active-response>\n\n"
-    "  <!-- CyCentra 360: MISP hash match — quarantine matched process binary -->\n"
-    "  <active-response>\n"
-    "    <command>quarantine-file</command>\n"
-    "    <location>local</location>\n"
-    "    <rules_id>101003</rules_id>\n"
-    "    <disabled>no</disabled>\n"
-    "  </active-response>\n\n"
-    "  <!-- CyCentra 360: USB insertion — block USB storage on endpoint -->\n"
-    "  <active-response>\n"
-    "    <command>block-usb</command>\n"
-    "    <location>local</location>\n"
-    "    <rules_id>100910,100911</rules_id>\n"
-    "    <timeout>0</timeout>\n"
-    "    <disabled>no</disabled>\n"
-    "  </active-response>\n"
-)
-content = content.replace('<!-- Log analysis -->', NEW_CMDS + '\n' + NEW_AR + '\n  <!-- Log analysis -->', 1)
-with open(path, 'w') as f: f.write(content)
-PYEOF
-            info "CyCentra 360 AR commands and blocks injected into ossec.conf"
-        fi
-
-        # 2h. Add <expect>user</expect> to disable-account command if missing
-        if grep -q 'name>disable-account<' "$_OSSEC_LIVE" \
-           && ! grep -A5 'name>disable-account<' "$_OSSEC_LIVE" | grep -q 'expect'; then
-            sed -i '/name>disable-account<\/name>/a\    <expect>user<\/expect>' "$_OSSEC_LIVE"
-            info "Added <expect>user</expect> to disable-account command in ossec.conf"
-        fi
-
-    fi
-
-    # ── Agent configuration (shared/default/agent.conf) ──────────────────────
-    if [[ -f "$CONFIG_SRC/agent_config/agent.conf" ]]; then
-        _AGENT_DEST="/var/ossec/etc/shared/default/agent.conf"
-        # Back up any existing agent.conf before overwriting
-        if [[ -f "$_AGENT_DEST" ]]; then
-            cp "$_AGENT_DEST" "${_AGENT_DEST}.backup-$(date +%Y%m%d-%H%M%S)"
-            info "Existing agent.conf backed up"
-        fi
-        mkdir -p /var/ossec/etc/shared/default
-        cp "$CONFIG_SRC/agent_config/agent.conf" "$_AGENT_DEST"
-        chmod 660 "$_AGENT_DEST"
-        chown root:wazuh "$_AGENT_DEST"
-        success "agent.conf deployed to shared/default (pushed to enrolled agents via remoted)"
-    else
-        warn "agent_config/agent.conf not in CYSIEM-Config bundle — skipping"
-    fi
-
-    # ── Deploy cy360 resource monitoring scripts to Wazuh shared folder ──────────
-    info "Deploying resource monitoring scripts to Wazuh shared config..."
-    WAZUH_SHARED="/var/ossec/etc/shared/default"
-    if [ -d "$WAZUH_SHARED" ]; then
-        cp -f "$CONFIG_SRC/agent_config/cy360_resource_check.sh"  "$WAZUH_SHARED/cy360_resource_check.sh"
-        cp -f "$CONFIG_SRC/agent_config/cy360_resource_check.ps1" "$WAZUH_SHARED/cy360_resource_check.ps1"
-        chmod 755 "$WAZUH_SHARED/cy360_resource_check.sh"
-        success "Resource monitoring scripts deployed to $WAZUH_SHARED"
-    else
-        warn "Wazuh shared dir not found at $WAZUH_SHARED — skipping resource script deploy"
-    fi
-
-    # ── 19.1 geoip2 Python library ────────────────────────────────────────────
-    if ! python3 -c "import geoip2" 2>/dev/null; then
-        info "Installing geoip2 Python library..."
-        PIP_ROOT_USER_ACTION=ignore pip3 install geoip2 ${_PIP_BSP} -q \
-            && success "geoip2 installed" \
-            || warn "geoip2 install failed — GeoIP enrichment will be disabled"
-    else
-        success "geoip2 already installed"
-    fi
-
-    # ── 19.2 GeoLite2-City.mmdb download (always refreshed — MaxMind updates monthly) ──
-    GEOIP_DIR="/opt/cycentra/geoip"
-    mkdir -p "$GEOIP_DIR"
-    GEOLITE_DB="$GEOIP_DIR/GeoLite2-City.mmdb"
-    _MMKEY="$(grep "^MAXMIND_KEY=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2)"
-    if [[ -n "$_MMKEY" ]]; then
-        info "Downloading/refreshing GeoLite2-City.mmdb..."
-        GEOURL="https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${_MMKEY}&suffix=tar.gz"
-        TMP_GEO=$(mktemp /tmp/geolite2_XXXXXX.tar.gz)
-        curl -sL "$GEOURL" -o "$TMP_GEO" \
-            && tar -xzf "$TMP_GEO" -C "$GEOIP_DIR" --strip-components=1 --wildcards "*.mmdb" 2>/dev/null || true
-        find "$GEOIP_DIR" -name "*.mmdb" ! -name "GeoLite2-City.mmdb" -exec mv {} "$GEOLITE_DB" \; 2>/dev/null || true
-        rm -f "$TMP_GEO"
-        if [[ -f "$GEOLITE_DB" ]]; then
-            success "GeoLite2-City.mmdb downloaded/refreshed"
-            # Install monthly cron to keep the DB current (MaxMind releases a new DB every month)
-            cat > /etc/cron.monthly/cycentra-geoip-refresh << 'GEOCRON'
+# ── GeoLite2-City.mmdb download (always refreshed — MaxMind updates monthly) ──
+GEOIP_DIR="/opt/cycentra/geoip"
+mkdir -p "$GEOIP_DIR"
+GEOLITE_DB="$GEOIP_DIR/GeoLite2-City.mmdb"
+_MMKEY="$(grep "^MAXMIND_KEY=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2)"
+if [[ -n "$_MMKEY" ]]; then
+    info "Downloading/refreshing GeoLite2-City.mmdb..."
+    GEOURL="https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-City&license_key=${_MMKEY}&suffix=tar.gz"
+    TMP_GEO=$(mktemp /tmp/geolite2_XXXXXX.tar.gz)
+    curl -sL "$GEOURL" -o "$TMP_GEO" \
+        && tar -xzf "$TMP_GEO" -C "$GEOIP_DIR" --strip-components=1 --wildcards "*.mmdb" 2>/dev/null || true
+    find "$GEOIP_DIR" -name "*.mmdb" ! -name "GeoLite2-City.mmdb" -exec mv {} "$GEOLITE_DB" \; 2>/dev/null || true
+    rm -f "$TMP_GEO"
+    if [[ -f "$GEOLITE_DB" ]]; then
+        success "GeoLite2-City.mmdb downloaded/refreshed"
+        # Install monthly cron to keep the DB current (MaxMind releases a new DB every month)
+        cat > /etc/cron.monthly/cycentra-geoip-refresh << 'GEOCRON'
 #!/bin/bash
 # Refresh GeoLite2-City.mmdb — MaxMind releases an updated DB monthly.
 MMKEY="$(grep "^MAXMIND_KEY=" /opt/cycentra/.env 2>/dev/null | cut -d= -f2)"
@@ -3919,91 +2665,34 @@ rm -f "$TMP"
 # Restart the correlation engine so it reloads the updated DB from disk
 systemctl restart cycentra-siem 2>/dev/null || true
 GEOCRON
-            chmod +x /etc/cron.monthly/cycentra-geoip-refresh
-            success "Monthly GeoIP refresh cron installed → /etc/cron.monthly/cycentra-geoip-refresh"
-        else
-            warn "GeoLite2 download failed — GeoIP enrichment disabled until next refresh"
-        fi
+        chmod +x /etc/cron.monthly/cycentra-geoip-refresh
+        success "Monthly GeoIP refresh cron installed → /etc/cron.monthly/cycentra-geoip-refresh"
     else
-        warn "MAXMIND_KEY not set — GeoLite2 DB skipped (GeoIP enrichment disabled)"
+        warn "GeoLite2 download failed — GeoIP enrichment disabled until next refresh"
     fi
+else
+    warn "MAXMIND_KEY not set — GeoLite2 DB skipped (GeoIP enrichment disabled)"
+fi
 
-    # ── MISP sync script deployment ───────────────────────────────────────────
-    MISP_SYNC_SRC="$CONFIG_SRC/lists/sync_misp_cache.py"
-    MISP_SYNC_DEST="/var/ossec/etc/lists/sync_misp_cache.py"
-    MISP_CRON="/etc/cron.d/cycentra-misp-sync"
-    if [[ -f "$MISP_SYNC_SRC" ]]; then
-        cp "$MISP_SYNC_SRC" "$MISP_SYNC_DEST"
-        chmod 750 "$MISP_SYNC_DEST"
-        chown root:wazuh "$MISP_SYNC_DEST"
-        success "sync_misp_cache.py deployed to $MISP_SYNC_DEST"
-    else
-        warn "sync_misp_cache.py not in CYSIEM-Config/lists — skipping MISP sync deploy"
-    fi
-    # Install hourly cron (idempotent — overwrites same file each run)
-    if [[ -f "$MISP_SYNC_DEST" ]]; then
-        cat > "$MISP_CRON" << 'MISPCRON'
-# CyCentra 360 — MISP threat intel hourly sync
-# Fetches IOCs from MISP and compiles the Wazuh CDB blacklist.
-# Logs to /var/ossec/logs/misp_sync.log
-SHELL=/bin/bash
-PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
-0 * * * * root /var/ossec/framework/python/bin/python3 /var/ossec/etc/lists/sync_misp_cache.py >> /var/ossec/logs/misp_sync.log 2>&1
-MISPCRON
-        chmod 644 "$MISP_CRON"
-        success "MISP sync cron installed → $MISP_CRON (runs every hour)"
-    fi
+# ── CyEDR: stage Sysmon config for platform download endpoint ────────────
+# cycentra_sysmon_config.xml is served by the Flask backend at:
+#   GET /api/edr/installer/sysmon-config
+# cyedr-install.ps1 downloads it from there during Windows endpoint enrollment.
+_SYSMON_PKG="/opt/cycentra/sysmon"
+if [[ -f "$CONFIG_SRC/sysmon/cycentra_sysmon_config.xml" ]]; then
+    mkdir -p "$_SYSMON_PKG"
+    cp "$CONFIG_SRC/sysmon/cycentra_sysmon_config.xml" "$_SYSMON_PKG/"
+    success "cycentra_sysmon_config.xml staged to $_SYSMON_PKG (served via /api/edr/installer/sysmon-config)"
+fi
 
-    # ── CyEDR: stage Sysmon config for platform download endpoint ────────────
-    # cycentra_sysmon_config.xml is now served by the Flask backend at:
-    #   GET /api/edr/installer/sysmon-config
-    # cyedr-install.ps1 downloads it from there during Windows endpoint enrollment.
-    # We still stage it to /opt/cycentra/sysmon/ so the backend can serve it,
-    # but operators no longer need to copy it manually — cyedr-install.ps1 handles that.
-    _SYSMON_PKG="/opt/cycentra/sysmon"
-    if [[ -f "$CONFIG_SRC/sysmon/cycentra_sysmon_config.xml" ]]; then
-        mkdir -p "$_SYSMON_PKG"
-        cp "$CONFIG_SRC/sysmon/cycentra_sysmon_config.xml" "$_SYSMON_PKG/"
-        success "cycentra_sysmon_config.xml staged to $_SYSMON_PKG (served via /api/edr/installer/sysmon-config)"
-    fi
+info "Post-install manual steps:"
+info "  1. GeoIP DB is refreshed automatically every month (MAXMIND_KEY is pre-configured)"
+info "  2. Deploy CyEDR on endpoints:"
+info "       Linux/macOS: curl -fsSL https://<platform>/cyedr-install.sh | sudo bash -s -- --token <TOKEN> --platform <URL>"
+info "       Windows:     .\\cyedr-install.ps1 -Token <TOKEN> -Platform <URL>"
+info "  3. Audit policy for Domain Controllers: run scripts/cyedr-install.ps1 or"
+info "     copy /opt/cycentra/sysmon/apply_audit_policy.ps1 to the DC and run as Domain Admin"
 
-    # Stage CyEDR installer scripts, agent, and YARA rules to the package directory
-    # served by Flask at /api/edr/installer/{unix,win,agent-py,yara-rules}
-    _EDR_PKG="/var/lib/cycentra-agent-packages/edr"
-    mkdir -p "$_EDR_PKG"
-    for _src in \
-        "$_SCRIPT_DIR/scripts/cyedr-install.sh" \
-        "$_SCRIPT_DIR/scripts/cyedr-install.ps1" \
-        "$_SCRIPT_DIR/agent/cyedr_agent.py" \
-        "$_SCRIPT_DIR/CYSIEM-Config/yara/cycentra.yar"; do
-        if [[ -f "$_src" ]]; then
-            cp "$_src" "$_EDR_PKG/"
-            success "Staged $(basename "$_src") → $_EDR_PKG/"
-        else
-            warn "CyEDR file not found, skipping: $_src"
-        fi
-    done
-
-    # ── Reload Wazuh after config/decoder/agent changes ───────────────────────
-    /var/ossec/bin/wazuh-analysisd -t 2>/dev/null \
-        && { systemctl reload wazuh-manager 2>/dev/null || systemctl restart wazuh-manager 2>/dev/null; \
-             success "wazuh-manager reloaded with new rules/decoders/agent config"; } \
-        || warn "Wazuh config validation failed — fix errors before reloading"
-
-    info "Post-install manual steps:"
-    info "  1. Edit /var/ossec/etc/ossec.conf — replace PLACEHOLDER_ values in cloud wodles,"
-    info "     then change <disabled>yes</disabled> → <disabled>no</disabled>"
-    info "  2. GeoIP DB is refreshed automatically every month (MAXMIND_KEY is pre-configured)"
-    info "  3. Deploy CyEDR on endpoints (Sysmon/auditd/ULS now managed by CyEDR, not Wazuh):"
-    info "       Linux/macOS: curl -fsSL https://<platform>/cyedr-install.sh | sudo bash -s -- --token <TOKEN> --platform <URL>"
-    info "       Windows:     .\\cyedr-install.ps1 -Token <TOKEN> -Platform <URL>"
-    info "       Add --with-cysiem to also install the Wazuh (CySIEM) agent on the same endpoint"
-    info "  4. Audit policy for Domain Controllers: run scripts/cyedr-install.ps1 or"
-    info "     copy /opt/cycentra/sysmon/apply_audit_policy.ps1 to the DC and run as Domain Admin"
-    info "  5. Agent config: agent.conf is deployed automatically above (pushed to agents via remoted)"
-    info "     To update agent.conf post-install: sudo bash scripts/deploy_agent_config.sh"
-
-fi  # end Wazuh block
 
 # ── Step 20: Platform branding (cylogo) ──────────────────────────────────────
 step_header "PLATFORM BRANDING (CYLOGO)"
@@ -4021,8 +2710,6 @@ for script in apply-favicons apply-logos enable-multitenancy apply-custom-brandi
         warn "${script}.sh not found at ${_SPATH} — skipping"
     fi
 done
-
-systemctl restart wazuh-dashboard.service 2>/dev/null || true
 
 # ── Step 21: Inject domain into portal index.html ────────────────────────────
 step_header "PORTAL DOMAIN INJECTION"
@@ -4087,7 +2774,10 @@ mkdir -p /var/log/cycentra && touch /var/log/cycentra/auth.log
 chmod 644 /var/log/cycentra/auth.log
 
 # ── Step 22b: Agent Package Repository ───────────────────────────────────────
-# Downloads Wazuh agent packages and renames them to the cy360-agent-* scheme.
+# Downloads Wazuh AGENT packages (client software for endpoints) and renames
+# them to the cy360-agent-* scheme, for customers who point WAZUH_API_* at
+# their own externally-managed Wazuh Manager. This script does not install a
+# Wazuh server itself — see Sensor Deployment in Host Intelligence.
 # Runs on both fresh installs and updates. Packages are stored at
 # /var/lib/cycentra-agent-packages/ — directly accessible by NGINX (www-data, 755).
 # Keeping packages outside /opt/cycentra/ (which is root-only 700) avoids NGINX 403.
@@ -4252,7 +2942,7 @@ info "Cron schedule management delegated to System Settings → Scheduler tab"
 
 # ── Step 23b: Firewall (UFW) ──────────────────────────────────────────────────
 # Strategy: all public traffic flows through nginx (80/443).  Internal services
-# (Flask 5252, SIEM engine 8100, PostgreSQL 5433, Redis 6379, Wazuh 5601,
+# (Flask 5252, SIEM engine 8100, PostgreSQL 5433, Redis 6379,
 # oauth2-proxy 4180, CySOAR 1880) bind to loopback only — no UFW
 # rules needed for them.  CyMind on Server B reaches CyCentra via port 80
 # (nginx proxy), so no extra firewall holes are required.
@@ -4270,20 +2960,16 @@ ufw default allow outgoing >/dev/null 2>&1 || true
 ufw allow 22/tcp   comment "SSH (temp — moved to 2026 by Step 26)" >/dev/null 2>&1 || true
 ufw allow 80/tcp   comment "HTTP (nginx)"   >/dev/null 2>&1 || true
 ufw allow 443/tcp  comment "HTTPS (nginx)"  >/dev/null 2>&1 || true
-# Wazuh agent ports — cannot be proxied through nginx (binary protocol)
-ufw allow 1514/tcp comment "Wazuh remoted (agent ↔ manager encrypted comms)" >/dev/null 2>&1 || true
-ufw allow 1515/tcp comment "Wazuh authd (agent enrollment/registration)"      >/dev/null 2>&1 || true
 
 # Remove any legacy rules that expose internal services directly
-for _p in 5252 8100 5433 6379 5601 4180 4433 1880 11434 6333; do
+for _p in 5252 8100 5433 6379 5601 4180 4433 1880 11434 6333 1514 1515; do
     ufw delete allow ${_p}/tcp >/dev/null 2>&1 || true
     ufw delete allow ${_p}     >/dev/null 2>&1 || true
 done
 
 echo "y" | ufw enable >/dev/null 2>&1 || ufw --force enable >/dev/null 2>&1 || true
-success "UFW: ports 22 (temp), 80, 443, 1514, 1515 open — all other ports blocked externally"
+success "UFW: ports 22 (temp), 80, 443 open — all other ports blocked externally"
 info    "Internal services (Flask 5252, engine 8100, Redis, PG) bind to loopback only"
-info    "Wazuh agent ports 1514 (remoted) and 1515 (authd) open for external agent enrollment"
 info    "SSH will be moved from port 22 → 2026 in Step 26 (last step)"
 
 # ── Step 24: Health checks ────────────────────────────────────────────────────
@@ -4303,7 +2989,6 @@ _port_up 5252 && success "Flask backend   :5252 UP" || warn "Flask backend   :52
 _port_up 8100 && success "SIEM engine     :8100 UP" || warn "SIEM engine     :8100 DOWN"
 _port_up 5433 && success "PostgreSQL      :5433 UP" || warn "PostgreSQL      :5433 DOWN"
 _port_up 6379 && success "Redis           :6379 UP" || warn "Redis           :6379 DOWN"
-_port_up 5601 && success "CySIEM Dashboard :5601 UP" || warn "CySIEM Dashboard :5601 DOWN (install via portal)"
 _port_up 1880 && success "CySOAR          :1880 UP" || warn "CySOAR          :1880 DOWN (install via portal)"
 curl -sk --max-time 5 "http://127.0.0.1:5252/oidc/.well-known/openid-configuration" \
     | python3 -c "import sys,json; d=json.load(sys.stdin); assert '/oidc' in d.get('issuer',''), 'bad issuer'" 2>/dev/null \
@@ -4311,7 +2996,7 @@ curl -sk --max-time 5 "http://127.0.0.1:5252/oidc/.well-known/openid-configurati
     || warn    "OIDC IdP discovery  DOWN or issuer mismatch — check cycentra-backend"
 
 echo ""; info "── Systemd services ──"
-for svc in cycentra-backend cysiemstack-engine postgresql redis-server nginx cysiem-to-redis; do
+for svc in cycentra-backend cysiemstack-engine postgresql redis-server nginx; do
     systemctl is-active "$svc" >/dev/null 2>&1 \
         && success "${svc} active" \
         || warn    "${svc} inactive"
@@ -4325,7 +3010,6 @@ if [[ "$MODE" == "full" ]]; then
     echo ""; info "── External HTTPS ──"
     chk "Portal"  "https://cy360.${BASE_DOMAIN}"
     chk "Backend" "https://cyasm.${BASE_DOMAIN}/health"
-    chk "CySIEM"  "https://cysiem.${BASE_DOMAIN}"
 fi
 
 # ── Agent package distribution validation ─────────────────────────────────────
@@ -4390,7 +3074,6 @@ fi
 step_header "CLEANUP"
 
 rm -rf "$BUNDLE_DIR" /tmp/cycentra-release.tar.gz /tmp/cycentra-config
-rm -f ~/wazuh-install.sh ~/wazuh-install-files* 2>/dev/null || true
 success "Staging files removed"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
@@ -4401,7 +3084,6 @@ echo -e "  ${CYAN}Version        ${NC}  ${BUNDLE_VERSION}"
 if [[ "$MODE" == "full" ]]; then
     echo -e "  ${CYAN}Portal         ${NC}  https://cy360.${BASE_DOMAIN}"
     echo -e "  ${CYAN}Backend API    ${NC}  https://cyasm.${BASE_DOMAIN}"
-    echo -e "  ${CYAN}CySIEM         ${NC}  https://cysiem.${BASE_DOMAIN}"
     echo -e "  ${CYAN}CySOAR         ${NC}  https://cysoar.${BASE_DOMAIN}"
 fi
 echo ""
@@ -4420,27 +3102,11 @@ if [[ "$MODE" == "full" ]]; then
     echo ""
 fi
 
-if [[ "${_CYSIEM_FRESH:-false}" == "true" ]]; then
-    echo -e "  ${BOLD}${CYAN}── CySIEM Initial Credentials ──${NC}"
-    echo -e "  ${CYAN}Dashboard URL  ${NC}  https://cysiem.${BASE_DOMAIN}"
-    if [[ -n "${_CYSIEM_ADMIN_PASS:-}" ]]; then
-        echo -e "  ${BOLD}Admin login    :${NC}  ${WHITE}admin / ${_CYSIEM_ADMIN_PASS}${NC}"
-    else
-        echo -e "  ${DIM}Admin password : See ~/wazuh-install-files.tar → wazuh-passwords.txt${NC}"
-    fi
-    if [[ -n "${_CYSIEM_WUI_PASS:-}" ]]; then
-        echo -e "  ${BOLD}API user (wui) :${NC}  ${WHITE}wazuh-wui / ${_CYSIEM_WUI_PASS}${NC}"
-    else
-        echo -e "  ${DIM}API password   : Stored in /opt/cycentra/cysiemstack.env${NC}"
-    fi
-    echo ""
-fi
-
 echo -e "  ${BOLD}${YELLOW}Next steps:${NC}"
-echo -e "  ${DIM}1. Verify WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env (auto-detected if CySIEM is installed)${NC}"
-echo -e "  ${DIM}   then: systemctl restart cysiemstack-engine${NC}"
+echo -e "  ${DIM}1. If pointing at an externally-managed Wazuh Manager, set WAZUH_API_PASSWORD${NC}"
+echo -e "  ${DIM}   in /opt/cycentra/cysiemstack.env, then: systemctl restart cysiemstack-engine${NC}"
 echo -e "  ${DIM}2. Verify alerts flowing: redis-cli -p 6379 llen cysiemstack:alerts:raw${NC}"
-echo -e "  ${DIM}   (cysiem-to-redis tails CySIEM alerts → Redis — check: journalctl -u cysiem-to-redis -n 20)${NC}"
+echo -e "  ${DIM}   (CyEDR/CyCollector/connectors feed this queue — check their bridge logs)${NC}"
 echo -e "  ${DIM}3. Check engine log: tail -f /opt/cycentra/engine.log${NC}"
 echo -e "  ${DIM}4. Security MCP bridge available at http://127.0.0.1:8100/mcp/sse (inside cysiemstack-engine)${NC}"
 echo -e "  ${DIM}5. Install CySOAR or CyMISP via portal${NC}"
@@ -4466,7 +3132,6 @@ Email  : ${CLIENT_EMAIL:-n/a}
 URLs:
   Portal:   https://cy360.${BASE_DOMAIN}
   Backend:  https://cyasm.${BASE_DOMAIN}
-  CySIEM:   https://cysiem.${BASE_DOMAIN}
   CySOAR:   https://cysoar.${BASE_DOMAIN}
 
 Services:
@@ -4475,7 +3140,6 @@ Services:
   PostgreSQL     : systemctl status postgresql   (port 5433)
   Redis          : systemctl status redis-server (port 6379)
   nginx          : systemctl status nginx
-  CySIEM         : systemctl status wazuh-manager
 
 Paths:
   Flask log    : /opt/cycentra/flask.log
@@ -4488,10 +3152,10 @@ Paths:
   Branding     : $BUNDLE_DIR/backend/blueprints/cylogo
 
 Next steps:
-  1. Verify WAZUH_API_PASSWORD in /opt/cycentra/cysiemstack.env (auto-detected if CySIEM is installed)
-     then: systemctl restart cysiemstack-engine
+  1. If pointing at an externally-managed Wazuh Manager, set WAZUH_API_PASSWORD
+     in /opt/cycentra/cysiemstack.env, then: systemctl restart cysiemstack-engine
   2. Verify alerts flowing: redis-cli -p 6379 llen cysiemstack:alerts:raw
-     (cysiem-to-redis service tails CySIEM alerts → Redis)
+     (CyEDR/CyCollector/connectors feed this queue — check their bridge logs)
   3. Check engine log: tail -f /opt/cycentra/engine.log
   4. Security MCP bridge: http://127.0.0.1:8100/mcp/sse (inside cysiemstack-engine)
   5. Install CySOAR or CyMISP via portal
