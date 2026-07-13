@@ -291,15 +291,23 @@ else
 fi
 divider; echo ""
 
-# ── Step 1: Prompt for base domain ──────────────────────────────────────────
-if [[ "$MODE" == "full" && ! -f "/opt/cycentra/.env" ]]; then
+# ── Step 1: Interactive configuration — every prompt lives here, up front ────
+# All operator questions (domain, environment type, CySIEM, CyDataLake) are
+# asked in this single block before any work starts. This matters because the
+# "DOWNLOAD RELEASE BUNDLE" step further down re-execs this script from a
+# freshly downloaded copy (`exec bash "$_BUNDLE_SETUP" "$@"`) once the bundle
+# is fetched — that replaces the running process, so anything asked *after*
+# that point but not exported is lost and silently re-asked from the top on
+# the next pass. Asking everything here, then exporting the answers, means
+# the re-exec'd process inherits them and never re-prompts.
+_FRESH_INSTALL=false
+[[ "$MODE" == "full" && ! -f "/opt/cycentra/.env" ]] && _FRESH_INSTALL=true
+
+if [[ "$_FRESH_INSTALL" == "true" ]]; then
     step_header "BASE DOMAIN CONFIGURATION"
     read -p "Enter your base domain name [cycentra.com]: " USER_DOMAIN
     BASE_DOMAIN="${USER_DOMAIN:-cycentra.com}"
-fi
 
-# ── Step 1a: Prompt for environment type (fresh install only) ────────────────
-if [[ "$MODE" == "full" && ! -f "/opt/cycentra/.env" ]]; then
     step_header "ENVIRONMENT TYPE"
     echo "  Select environment type:"
     echo "    [1] PROD     — request a real Let's Encrypt certificate"
@@ -313,6 +321,55 @@ if [[ "$MODE" == "full" && ! -f "/opt/cycentra/.env" ]]; then
         info "STAGING selected — using Let's Encrypt staging environment for certbot."
     fi
 fi
+
+# CySIEM (Wazuh) is opt-out in full-install mode — a client can instead rely
+# entirely on CyEDR + CyCollector (Sigma rules) + CyDataLake connectors. See
+# docs/CYDATALAKE_MIGRATION_PLAN.md for what each path does/doesn't cover
+# before recommending "no" to a client.
+# _INSTALL_CYSIEM also drives the CySIEM→Redis bridge, the cysiem nginx
+# vhost, and the cysiem SSL cert further down in the script.
+if dpkg -l 2>/dev/null | grep -q wazuh-manager; then
+    _INSTALL_CYSIEM=true   # already installed — nothing to ask, keep managing it
+elif [[ "$MODE" == "full" ]]; then
+    step_header "CySIEM / WAZUH"
+    if ask_yn "Install CySIEM (Wazuh-based SIEM engine)? Recommended unless this deployment will rely entirely on CyEDR + CyCollector + CyDataLake connectors for detection" "y"; then
+        _INSTALL_CYSIEM=true
+    else
+        _INSTALL_CYSIEM=false
+        warn "Skipping CySIEM/Wazuh — detection coverage relies on CyEDR + CyCollector's Sigma rules + CyDataLake connectors only"
+        warn "This deployment will have no FIM, no rootcheck, no SCA/CIS benchmarking, and no built-in OSSEC ruleset — see docs/CYDATALAKE_MIGRATION_PLAN.md before committing to this for a production client"
+    fi
+else
+    # update/infra mode on a box that never had Wazuh and isn't doing a fresh full install
+    _INSTALL_CYSIEM=false
+fi
+
+# CyDataLake (Kafka + ClickHouse) — optional multi-vendor SIEM aggregation
+# backbone. Disabled by default; installing here is opt-in and never required
+# for the base product. See docs/CYDATALAKE_MIGRATION_PLAN.md and
+# docs/CYDATALAKE_OPS_RUNBOOK.md for the full architecture/manual-step context.
+_CYDATALAKE_ALREADY=false
+[[ -f /etc/systemd/system/kafka.service && -f /etc/systemd/system/clickhouse-server.service ]] \
+    && _CYDATALAKE_ALREADY=true
+
+if [[ "$_CYDATALAKE_ALREADY" == "true" ]]; then
+    _INSTALL_CYDATALAKE=true
+elif [[ "$MODE" == "full" || "$MODE" == "update" ]]; then
+    step_header "CYDATALAKE (KAFKA + CLICKHOUSE) — OPTIONAL"
+    if ask_yn "Install CyDataLake (Kafka + ClickHouse) for multi-vendor SIEM aggregation? Optional — can be added later by re-running this script" "n"; then
+        _INSTALL_CYDATALAKE=true
+    else
+        _INSTALL_CYDATALAKE=false
+        info "Skipping CyDataLake — KAFKA_ENABLED/CLICKHOUSE_ENABLED remain false, zero impact on the base product"
+    fi
+else
+    _INSTALL_CYDATALAKE=false
+fi
+
+# Export every collected decision so it survives the self-update re-exec
+# further down — without this, the re-exec'd process is a brand-new bash
+# with no memory of these answers and re-asks all of the above from scratch.
+export BASE_DOMAIN CERTBOT_ENV _INSTALL_CYSIEM _INSTALL_CYDATALAKE
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -772,29 +829,12 @@ fi
 # rules) + CyDataLake connectors instead. See docs/CYDATALAKE_MIGRATION_PLAN.md
 # for what each path does and does not cover today before recommending "no" to
 # a client — CySIEM/Wazuh is still the deepest detection coverage available.
+# _INSTALL_CYSIEM was already decided in the upfront interactive-configuration
+# block at the top of this script — nothing to ask here.
 _CYSIEM_FRESH=false
 _CYSIEM_ADMIN_PASS=""
 _CYSIEM_WUI_PASS=""
 _CYSIEM_KS_PASS=""
-
-# _INSTALL_CYSIEM drives this step plus the CySIEM→Redis bridge, the cysiem
-# nginx vhost, and the cysiem SSL cert further down — computed here so it has
-# a sane value in every MODE (full/update/infra), not just full-install.
-if dpkg -l 2>/dev/null | grep -q wazuh-manager; then
-    _INSTALL_CYSIEM=true   # already installed — nothing to ask, keep managing it
-elif [[ "$MODE" == "full" ]]; then
-    step_header "CySIEM / WAZUH"
-    if ask_yn "Install CySIEM (Wazuh-based SIEM engine)? Recommended unless this deployment will rely entirely on CyEDR + CyCollector + CyDataLake connectors for detection" "y"; then
-        _INSTALL_CYSIEM=true
-    else
-        _INSTALL_CYSIEM=false
-        warn "Skipping CySIEM/Wazuh — detection coverage relies on CyEDR + CyCollector's Sigma rules + CyDataLake connectors only"
-        warn "This deployment will have no FIM, no rootcheck, no SCA/CIS benchmarking, and no built-in OSSEC ruleset — see docs/CYDATALAKE_MIGRATION_PLAN.md before committing to this for a production client"
-    fi
-else
-    # update/infra mode on a box that never had Wazuh and isn't doing a fresh full install
-    _INSTALL_CYSIEM=false
-fi
 
 if [[ "$MODE" == "full" && "$_INSTALL_CYSIEM" == "true" ]]; then
 
@@ -2901,22 +2941,16 @@ done
 # to false in core/config.py) — installing here is opt-in and never required
 # for the base product. See docs/CYDATALAKE_MIGRATION_PLAN.md and
 # docs/CYDATALAKE_OPS_RUNBOOK.md for the full architecture/manual-step context.
+# _INSTALL_CYDATALAKE / _CYDATALAKE_ALREADY were already decided in the
+# upfront interactive-configuration block at the top of this script.
 step_header "CYDATALAKE (KAFKA + CLICKHOUSE) — OPTIONAL"
 
-_CYDATALAKE_ALREADY=false
-[[ -f /etc/systemd/system/kafka.service && -f /etc/systemd/system/clickhouse-server.service ]] \
-    && _CYDATALAKE_ALREADY=true
-
-_INSTALL_CYDATALAKE=false
-if [[ "$_CYDATALAKE_ALREADY" == "true" ]]; then
+if [[ "$_INSTALL_CYDATALAKE" == "true" && "$_CYDATALAKE_ALREADY" == "true" ]]; then
     success "CyDataLake (Kafka + ClickHouse) already installed — refreshing ingest worker only"
-    _INSTALL_CYDATALAKE=true
-elif [[ "$MODE" == "full" || "$MODE" == "update" ]]; then
-    if ask_yn "Install CyDataLake (Kafka + ClickHouse) for multi-vendor SIEM aggregation? Optional — can be added later by re-running this script" "n"; then
-        _INSTALL_CYDATALAKE=true
-    else
-        info "Skipping CyDataLake — KAFKA_ENABLED/CLICKHOUSE_ENABLED remain false, zero impact on the base product"
-    fi
+elif [[ "$_INSTALL_CYDATALAKE" == "true" ]]; then
+    info "Installing CyDataLake (Kafka + ClickHouse)..."
+else
+    info "Skipping CyDataLake — KAFKA_ENABLED/CLICKHOUSE_ENABLED remain false, zero impact on the base product"
 fi
 
 if [[ "$_INSTALL_CYDATALAKE" == "true" ]]; then
