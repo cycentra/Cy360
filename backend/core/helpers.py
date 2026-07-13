@@ -108,13 +108,16 @@ def fix_session_cookie_domain(response):
     cookies = response.headers.getlist('Set-Cookie')
     if not cookies:
         return response
-    domain_suffix = f'; Domain=.{BASE_DOMAIN}'
-    if not any(domain_suffix in c for c in cookies):
+    # Werkzeug drops the RFC-2965-style leading dot when it writes the header
+    # (Domain=cycentra.com, not Domain=.cycentra.com), so match loosely on the
+    # bare domain rather than the dotted app.config value.
+    domain_re = re.compile(r';\s*Domain=\.?' + re.escape(BASE_DOMAIN), re.IGNORECASE)
+    if not any(domain_re.search(c) for c in cookies):
         return response
 
     del response.headers['Set-Cookie']
     for cookie in cookies:
-        response.headers.add('Set-Cookie', cookie.replace(domain_suffix, ''))
+        response.headers.add('Set-Cookie', domain_re.sub('', cookie))
     return response
 
 
