@@ -104,17 +104,27 @@ def _wrap_as_wazuh(alert: dict[str, Any]) -> dict[str, Any]:
 
 def forward_to_siem(alert: dict[str, Any]) -> bool:
     """
-    Push a normalised EDR alert into the SIEM Redis queue.
+    Push a normalised EDR alert into the SIEM Redis queue (the pipeline the
+    correlation engine actually consumes today), and additively onto the
+    Phase 2 Kafka bus if KAFKA_ENABLED (see kafka_bridge.py — CyDataLake
+    migration; nothing consumes that topic yet, transport only).
 
     Returns True on success, False on failure (non-fatal — caller logs and continues).
     """
+    envelope = _wrap_as_wazuh(alert)
+
+    from . import kafka_bridge
+    try:
+        kafka_bridge.publish(kafka_bridge.TOPIC_EDR, envelope)
+    except Exception as exc:
+        _log.debug("EDR bridge: Kafka publish skipped: %s", exc)
+
     r = _get_redis()
     if r is None:
         _log.warning("EDR bridge: Redis unavailable — alert dropped from SIEM queue")
         return False
 
     try:
-        envelope = _wrap_as_wazuh(alert)
         r.rpush(_REDIS_KEY, json.dumps(envelope))
         _log.debug(
             "EDR→SIEM: agent=%s rule=%s score=%.1f",
@@ -193,15 +203,23 @@ def _try_open_case(alert: dict[str, Any]) -> None:
 
 
 def bulk_forward(alerts: list[dict[str, Any]]) -> int:
-    """Push multiple alerts in a single Redis pipeline. Returns success count."""
+    """Push multiple alerts in a single Redis pipeline (plus an additive Kafka
+    publish, see forward_to_siem). Returns success count."""
     r = _get_redis()
     if r is None:
         return 0
+    envelopes = [_wrap_as_wazuh(alert) for alert in alerts]
+
+    from . import kafka_bridge
+    try:
+        kafka_bridge.publish_many(kafka_bridge.TOPIC_EDR, envelopes)
+    except Exception as exc:
+        _log.debug("EDR bridge: Kafka bulk publish skipped: %s", exc)
+
     success = 0
     try:
         pipe = r.pipeline()
-        for alert in alerts:
-            envelope = _wrap_as_wazuh(alert)
+        for envelope in envelopes:
             pipe.rpush(_REDIS_KEY, json.dumps(envelope))
         pipe.execute()
         success = len(alerts)

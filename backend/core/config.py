@@ -152,6 +152,14 @@ IRIS_API_KEY = os.environ.get("IRIS_API_KEY", "")
 # WAZUH_URL example: https://wazuh.cycentra.com
 WAZUH_URL    = os.environ.get("WAZUH_URL", "")
 
+# ── CyDataLake — Phase 2 Kafka bus ────────────────────────────────────────────
+# Disabled by default. When enabled, cysiemstack/collector_bridge.py and
+# cysiemstack/edr_bridge.py publish to Kafka ADDITIVELY alongside their
+# existing Redis push — this does not replace the Redis-based pipeline until
+# Phase 3's consumer is proven. See docs/CYDATALAKE_MIGRATION_PLAN.md.
+KAFKA_ENABLED = os.environ.get("KAFKA_ENABLED", "false").lower() == "true"
+KAFKA_BROKERS = os.environ.get("KAFKA_BROKERS", "127.0.0.1:9092")
+
 # ── Cloud Marketplace ─────────────────────────────────────────────────────────
 # Pre-shared token sent as X-CyCentra-Token when the backend proxies the
 # cloud catalog from cycentra.com. One token covers all installations —

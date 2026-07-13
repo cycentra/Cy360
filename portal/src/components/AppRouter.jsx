@@ -32,6 +32,7 @@ import ItamCoveragePage                 from '../pages/itam/index.jsx';
 import IotRegistryPage                  from '../pages/itam/IotRegistryPage.jsx';
 import ShadowAiPage                     from '../pages/itam/ShadowAiPage.jsx';
 import AssetDetailPage                  from '../pages/itam/AssetDetailPage.jsx';
+import ConnectorsPage                   from '../pages/connectors/index.jsx';
 
 export function AppRouter({ activeTab, user, assets, data, stats, installedModules,
   scanHistory, selectedScanId, onScanSelect, onScanComplete,
@@ -84,6 +85,7 @@ export function AppRouter({ activeTab, user, assets, data, stats, installedModul
       {activeTab==="itam-iot"       && <IotRegistryPage/>}
       {activeTab==="itam-shadow-ai" && <ShadowAiPage/>}
       {activeTab==="itam-asset-detail" && <AssetDetailPage assetId={selectedItamAsset} onBack={() => setActiveTab("itam-coverage")}/>}
+      {activeTab==="connectors"     && <ConnectorsPage/>}
     </>
   );
 }

@@ -20,6 +20,8 @@ from blueprints.cases.routes        import cases_bp
 from blueprints.integrations.routes import integrations_bp
 from blueprints.edr.routes          import edr_bp, init_edr
 from blueprints.itam.routes         import itam_bp, init_itam_tables
+from blueprints.collector.routes    import collector_bp, ensure_tables as ensure_collector_tables
+from blueprints.connectors.routes   import connectors_bp, ensure_tables as ensure_connector_tables
 from siem_proxy                     import siem_bp
 
 try: from tenant_manager import validate_tenant
@@ -33,10 +35,14 @@ def create_app() -> Flask:
 
     for bp in (auth_bp, oidc_bp, rbac_bp, platform_bp, asm_bp, siem_bp, system_bp,
                backup_bp, scheduler_bp, marketplace_bp, audit_bp, sso_bp, benchmark_bp,
-               comp_bp, cases_bp, integrations_bp, edr_bp, itam_bp):
+               comp_bp, cases_bp, integrations_bp, edr_bp, itam_bp, collector_bp, connectors_bp):
         app.register_blueprint(bp)
     init_edr(app)
     try: init_itam_tables(CYCENTRA_DB_URL)
+    except Exception as _e: pass
+    try: ensure_collector_tables(CYCENTRA_DB_URL)
+    except Exception as _e: pass
+    try: ensure_connector_tables(CYCENTRA_DB_URL)
     except Exception as _e: pass
 
     try:

@@ -548,6 +548,13 @@ def init_scheduler(app) -> None:
     except Exception as _mdns_exc:
         log.warning("scheduler: mDNS discovery startup failed: %s", _mdns_exc)
 
+    # ── SIEM connector polling (CyDataLake multi-vendor connectors) ───────────
+    try:
+        from blueprints.connectors.routes import register_connector_scheduler
+        register_connector_scheduler(_scheduler)
+    except Exception as _conn_exc:
+        log.warning("scheduler: SIEM connector poll dispatcher registration failed: %s", _conn_exc)
+
     # ── Integration health monitor (always on, interval from env/config) ───────
     try:
         from blueprints.integrations.health import run_all_checks as _health_check

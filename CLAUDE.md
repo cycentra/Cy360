@@ -205,6 +205,9 @@ Cy360/
 | `docs/SCHEDULER.md` | Background job schedule |
 | `docs/RELEASE_NOTES.md` | Changelog |
 | `docs/MARKETPLACE.md` | Marketplace architecture, catalog.json format |
+| `docs/CYDATALAKE_MIGRATION_PLAN.md` | CyDataLake multi-vendor SIEM aggregation plan (Wazuh/Splunk/QRadar/SentinelOne/Cortex XDR as pull connectors + CyCollector for raw logs + Sigma detection engine); Phases 0-5 all have shipped code or a completed audit (v1.0.207-210), nothing yet run against real infra/vendor tenants, Phase 6 blocked on that; rule ID registry for synthetic alerts |
+| `docs/SIEM_PROXY_AUDIT.md` | Phase 5 route-by-route audit of `siem_proxy.py`'s Wazuh-Manager-API dependency — analysis only, no code changed; keep/retire/rebuild classification per route |
+| `docs/CYDATALAKE_OPS_RUNBOOK.md` | Manual infra/credential steps for CyDataLake: Kafka provisioning, ClickHouse provisioning, ingest worker systemd deploy, per-vendor connector credential retrieval, Phase 6 cutover checklist |
 
 ---
 

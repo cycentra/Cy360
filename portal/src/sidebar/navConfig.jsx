@@ -110,6 +110,12 @@ export function buildNavSections({ installedModules = {}, data = null }) {
       ],
     },
     {
+      section: "CYDATALAKE",
+      items: [
+        { id: "connectors", label: "SIEM Connectors", icon: <span style={{ fontSize: 13 }}>🗄️</span>, accent: "#4d9eff" },
+      ],
+    },
+    {
       section: "MARKETPLACE",
       items: [
         { id: "marketplace", label: "Marketplace", icon: SvgMkt, accent: "#4d9eff" },
