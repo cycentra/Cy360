@@ -2981,8 +2981,12 @@ if [[ "$_INSTALL_CYDATALAKE" == "true" ]]; then
         command -v java >/dev/null 2>&1 || apt-get install -y -qq openjdk-17-jre-headless
 
         if [[ ! -d /opt/kafka ]]; then
+            # downloads.apache.org only mirrors *current* releases and prunes older
+            # ones as new minor versions ship — a pinned old version 404s there
+            # without warning. archive.apache.org retains every release permanently,
+            # so it's the correct source for a version-pinned download like this.
             curl -fsSL -o /tmp/kafka.tgz \
-                https://downloads.apache.org/kafka/3.7.0/kafka_2.13-3.7.0.tgz \
+                https://archive.apache.org/dist/kafka/3.7.0/kafka_2.13-3.7.0.tgz \
                 && tar -xzf /tmp/kafka.tgz -C /opt \
                 && mv /opt/kafka_2.13-3.7.0 /opt/kafka \
                 && rm -f /tmp/kafka.tgz \
@@ -3003,7 +3007,12 @@ if [[ "$_INSTALL_CYDATALAKE" == "true" ]]; then
                 || { error "Kafka storage format failed"; ERRORS+=("Kafka format failed"); }
         fi
 
-        cat > /etc/systemd/system/kafka.service << 'KAFKAUNITEOF'
+        # Everything below assumes /opt/kafka/bin/* actually exists — skip it
+        # cleanly (rather than writing a systemd unit for a missing binary and
+        # then hard-failing on kafka-topics.sh) if the download/extract above
+        # didn't succeed. The failure is already recorded in ERRORS.
+        if [[ -x /opt/kafka/bin/kafka-server-start.sh ]]; then
+            cat > /etc/systemd/system/kafka.service << 'KAFKAUNITEOF'
 [Unit]
 Description=Apache Kafka (KRaft, single broker)
 After=network.target
@@ -3018,18 +3027,21 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 KAFKAUNITEOF
-        systemctl daemon-reload
-        systemctl enable --now kafka \
-            && success "Kafka started :9092" \
-            || { warn "Kafka failed to start — check: journalctl -u kafka -n 30"; ERRORS+=("Kafka start failed"); }
-        sleep 5
+            systemctl daemon-reload
+            systemctl enable --now kafka \
+                && success "Kafka started :9092" \
+                || { warn "Kafka failed to start — check: journalctl -u kafka -n 30"; ERRORS+=("Kafka start failed"); }
+            sleep 5
 
-        for _t in raw.syslog raw.edr raw.network raw.audit raw.splunk raw.qradar raw.sentinelone raw.paloalto \
-                  raw.office365 raw.azure raw.aws raw.gcp; do
-            /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic "$_t" \
-                --bootstrap-server 127.0.0.1:9092 --partitions 3 --replication-factor 1 >/dev/null 2>&1
-        done
-        success "CyDataLake Kafka topics ensured (12 topics: syslog, edr, network, audit, splunk, qradar, sentinelone, paloalto, office365, azure, aws, gcp)"
+            for _t in raw.syslog raw.edr raw.network raw.audit raw.splunk raw.qradar raw.sentinelone raw.paloalto \
+                      raw.office365 raw.azure raw.aws raw.gcp; do
+                /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --topic "$_t" \
+                    --bootstrap-server 127.0.0.1:9092 --partitions 3 --replication-factor 1 >/dev/null 2>&1
+            done
+            success "CyDataLake Kafka topics ensured (12 topics: syslog, edr, network, audit, splunk, qradar, sentinelone, paloalto, office365, azure, aws, gcp)"
+        else
+            warn "Kafka binaries missing (see download error above) — skipping Kafka service setup and topic creation. Re-run this script once the download succeeds."
+        fi
     else
         systemctl is-active --quiet kafka && success "Kafka already running :9092" \
             || { systemctl restart kafka; warn "Kafka was not running — restarted"; }
