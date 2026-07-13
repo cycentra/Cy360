@@ -298,78 +298,93 @@ divider; echo ""
 # freshly downloaded copy (`exec bash "$_BUNDLE_SETUP" "$@"`) once the bundle
 # is fetched — that replaces the running process, so anything asked *after*
 # that point but not exported is lost and silently re-asked from the top on
-# the next pass. Asking everything here, then exporting the answers, means
-# the re-exec'd process inherits them and never re-prompts.
-_FRESH_INSTALL=false
-[[ "$MODE" == "full" && ! -f "/opt/cycentra/.env" ]] && _FRESH_INSTALL=true
+# the next pass.
+#
+# Exporting the answers is not enough by itself: the detection checks below
+# (dpkg/.env/systemd-unit existence) reflect *system* state, not "was this
+# already decided this run" — on the re-exec'd process those checks land on
+# the same answer as before (e.g. Wazuh still isn't installed because you
+# said no), so without an explicit run-once guard this block would ask every
+# question a second time regardless of the export. _CYCENTRA_PROMPTS_DONE is
+# that guard: it's what actually makes the re-exec'd process trust the
+# inherited answers instead of re-deriving them.
+if [[ -z "${_CYCENTRA_PROMPTS_DONE:-}" ]]; then
 
-if [[ "$_FRESH_INSTALL" == "true" ]]; then
-    step_header "BASE DOMAIN CONFIGURATION"
-    read -p "Enter your base domain name [cycentra.com]: " USER_DOMAIN
-    BASE_DOMAIN="${USER_DOMAIN:-cycentra.com}"
+    _FRESH_INSTALL=false
+    [[ "$MODE" == "full" && ! -f "/opt/cycentra/.env" ]] && _FRESH_INSTALL=true
 
-    step_header "ENVIRONMENT TYPE"
-    echo "  Select environment type:"
-    echo "    [1] PROD     — request a real Let's Encrypt certificate"
-    echo "    [2] STAGING  — use Let's Encrypt staging (no browser-trusted cert)"
-    read -p "  Choice [1/2, default=2]: " _ENV_CHOICE
-    if [[ "$_ENV_CHOICE" == "1" ]]; then
-        CERTBOT_ENV=""
-        info "PROD selected — using Let's Encrypt production environment for certbot."
-    else
-        CERTBOT_ENV="--staging"
-        info "STAGING selected — using Let's Encrypt staging environment for certbot."
+    if [[ "$_FRESH_INSTALL" == "true" ]]; then
+        step_header "BASE DOMAIN CONFIGURATION"
+        read -p "Enter your base domain name [cycentra.com]: " USER_DOMAIN
+        BASE_DOMAIN="${USER_DOMAIN:-cycentra.com}"
+
+        step_header "ENVIRONMENT TYPE"
+        echo "  Select environment type:"
+        echo "    [1] PROD     — request a real Let's Encrypt certificate"
+        echo "    [2] STAGING  — use Let's Encrypt staging (no browser-trusted cert)"
+        read -p "  Choice [1/2, default=2]: " _ENV_CHOICE
+        if [[ "$_ENV_CHOICE" == "1" ]]; then
+            CERTBOT_ENV=""
+            info "PROD selected — using Let's Encrypt production environment for certbot."
+        else
+            CERTBOT_ENV="--staging"
+            info "STAGING selected — using Let's Encrypt staging environment for certbot."
+        fi
     fi
-fi
 
-# CySIEM (Wazuh) is opt-out in full-install mode — a client can instead rely
-# entirely on CyEDR + CyCollector (Sigma rules) + CyDataLake connectors. See
-# docs/CYDATALAKE_MIGRATION_PLAN.md for what each path does/doesn't cover
-# before recommending "no" to a client.
-# _INSTALL_CYSIEM also drives the CySIEM→Redis bridge, the cysiem nginx
-# vhost, and the cysiem SSL cert further down in the script.
-if dpkg -l 2>/dev/null | grep -q wazuh-manager; then
-    _INSTALL_CYSIEM=true   # already installed — nothing to ask, keep managing it
-elif [[ "$MODE" == "full" ]]; then
-    step_header "CySIEM / WAZUH"
-    if ask_yn "Install CySIEM (Wazuh-based SIEM engine)? Recommended unless this deployment will rely entirely on CyEDR + CyCollector + CyDataLake connectors for detection" "y"; then
-        _INSTALL_CYSIEM=true
+    # CySIEM (Wazuh) is opt-out in full-install mode — a client can instead rely
+    # entirely on CyEDR + CyCollector (Sigma rules) + CyDataLake connectors. See
+    # docs/CYDATALAKE_MIGRATION_PLAN.md for what each path does/doesn't cover
+    # before recommending "no" to a client.
+    # _INSTALL_CYSIEM also drives the CySIEM→Redis bridge, the cysiem nginx
+    # vhost, and the cysiem SSL cert further down in the script.
+    if dpkg -l 2>/dev/null | grep -q wazuh-manager; then
+        _INSTALL_CYSIEM=true   # already installed — nothing to ask, keep managing it
+    elif [[ "$MODE" == "full" ]]; then
+        step_header "CySIEM / WAZUH"
+        if ask_yn "Install CySIEM (Wazuh-based SIEM engine)? Recommended unless this deployment will rely entirely on CyEDR + CyCollector + CyDataLake connectors for detection" "y"; then
+            _INSTALL_CYSIEM=true
+        else
+            _INSTALL_CYSIEM=false
+            warn "Skipping CySIEM/Wazuh — detection coverage relies on CyEDR + CyCollector's Sigma rules + CyDataLake connectors only"
+            warn "This deployment will have no FIM, no rootcheck, no SCA/CIS benchmarking, and no built-in OSSEC ruleset — see docs/CYDATALAKE_MIGRATION_PLAN.md before committing to this for a production client"
+        fi
     else
+        # update/infra mode on a box that never had Wazuh and isn't doing a fresh full install
         _INSTALL_CYSIEM=false
-        warn "Skipping CySIEM/Wazuh — detection coverage relies on CyEDR + CyCollector's Sigma rules + CyDataLake connectors only"
-        warn "This deployment will have no FIM, no rootcheck, no SCA/CIS benchmarking, and no built-in OSSEC ruleset — see docs/CYDATALAKE_MIGRATION_PLAN.md before committing to this for a production client"
     fi
-else
-    # update/infra mode on a box that never had Wazuh and isn't doing a fresh full install
-    _INSTALL_CYSIEM=false
-fi
 
-# CyDataLake (Kafka + ClickHouse) — optional multi-vendor SIEM aggregation
-# backbone. Disabled by default; installing here is opt-in and never required
-# for the base product. See docs/CYDATALAKE_MIGRATION_PLAN.md and
-# docs/CYDATALAKE_OPS_RUNBOOK.md for the full architecture/manual-step context.
-_CYDATALAKE_ALREADY=false
-[[ -f /etc/systemd/system/kafka.service && -f /etc/systemd/system/clickhouse-server.service ]] \
-    && _CYDATALAKE_ALREADY=true
+    # CyDataLake (Kafka + ClickHouse) — optional multi-vendor SIEM aggregation
+    # backbone. Disabled by default; installing here is opt-in and never required
+    # for the base product. See docs/CYDATALAKE_MIGRATION_PLAN.md and
+    # docs/CYDATALAKE_OPS_RUNBOOK.md for the full architecture/manual-step context.
+    _CYDATALAKE_ALREADY=false
+    [[ -f /etc/systemd/system/kafka.service && -f /etc/systemd/system/clickhouse-server.service ]] \
+        && _CYDATALAKE_ALREADY=true
 
-if [[ "$_CYDATALAKE_ALREADY" == "true" ]]; then
-    _INSTALL_CYDATALAKE=true
-elif [[ "$MODE" == "full" || "$MODE" == "update" ]]; then
-    step_header "CYDATALAKE (KAFKA + CLICKHOUSE) — OPTIONAL"
-    if ask_yn "Install CyDataLake (Kafka + ClickHouse) for multi-vendor SIEM aggregation? Optional — can be added later by re-running this script" "n"; then
+    if [[ "$_CYDATALAKE_ALREADY" == "true" ]]; then
         _INSTALL_CYDATALAKE=true
+    elif [[ "$MODE" == "full" || "$MODE" == "update" ]]; then
+        step_header "CYDATALAKE (KAFKA + CLICKHOUSE) — OPTIONAL"
+        if ask_yn "Install CyDataLake (Kafka + ClickHouse) for multi-vendor SIEM aggregation? Optional — can be added later by re-running this script" "n"; then
+            _INSTALL_CYDATALAKE=true
+        else
+            _INSTALL_CYDATALAKE=false
+            info "Skipping CyDataLake — KAFKA_ENABLED/CLICKHOUSE_ENABLED remain false, zero impact on the base product"
+        fi
     else
         _INSTALL_CYDATALAKE=false
-        info "Skipping CyDataLake — KAFKA_ENABLED/CLICKHOUSE_ENABLED remain false, zero impact on the base product"
     fi
-else
-    _INSTALL_CYDATALAKE=false
-fi
 
-# Export every collected decision so it survives the self-update re-exec
-# further down — without this, the re-exec'd process is a brand-new bash
-# with no memory of these answers and re-asks all of the above from scratch.
-export BASE_DOMAIN CERTBOT_ENV _INSTALL_CYSIEM _INSTALL_CYDATALAKE
+    # Export every collected decision (plus the guard itself) so they survive
+    # the self-update re-exec further down. _CYDATALAKE_ALREADY must be
+    # exported too — Step 14.5 (much later in the script, after the re-exec)
+    # reads it purely to decide its status message; without exporting it,
+    # that read hits an unset variable under `set -u` in the re-exec'd process.
+    export BASE_DOMAIN CERTBOT_ENV _INSTALL_CYSIEM _INSTALL_CYDATALAKE _CYDATALAKE_ALREADY
+    export _CYCENTRA_PROMPTS_DONE=1
+
+fi
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -973,7 +988,7 @@ _WAZUH_DASH_YML="/etc/wazuh-dashboard/opensearch_dashboards.yml"
 if [[ -f "/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml" ]]; then
     step_header "CySIEM API PASSWORD DETECTION"
     _detected=$(grep -v '^#' /usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml 2>/dev/null \
-        | grep -oP '(?<=password: ")[^"]+' | head -1)
+        | grep -oP '(?<=password: ")[^"]+' | head -1 || true)
     if [[ -n "$_detected" ]]; then
         _CYSIEM_WUI_PASS="$_detected"
         success "CySIEM API password auto-detected from dashboard config"
@@ -1776,8 +1791,13 @@ ASMEOF
     # Manual on-demand analysis (analyst-triggered from the portal) is never blocked.
     _LLM_FLAG="true"
 
-    # Use auto-detected password if available, otherwise preserve existing, or placeholder
-    _WAZUH_PASS="${_CYSIEM_WUI_PASS:-$(grep "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null | cut -d= -f2)}"
+    # Use auto-detected password if available, otherwise preserve existing, or placeholder.
+    # The `|| true` matters: with CySIEM skipped (or on a truly fresh install),
+    # /opt/cycentra/cysiemstack.env doesn't exist yet, so grep exits 2 (file not
+    # found). That exit code is what a `VAR="${OTHER:-$(...)}"` assignment reports
+    # as its own status, and set -e treats a failing assignment like any other
+    # failing command — it aborted the whole script here before this fix.
+    _WAZUH_PASS="${_CYSIEM_WUI_PASS:-$(grep "^WAZUH_API_PASSWORD=" /opt/cycentra/cysiemstack.env 2>/dev/null | cut -d= -f2 || true)}"
     _WAZUH_PASS="${_WAZUH_PASS:-CHANGE_ME_after_cysiem_install}"
 
     cat > /opt/cycentra/cysiemstack.env << SIEMEOF
