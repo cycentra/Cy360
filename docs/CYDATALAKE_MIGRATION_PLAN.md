@@ -273,6 +273,42 @@ relaxed risk tolerance):
   unfiltered (measured locally, single-threaded, non-matching fixture). At CyCollector's default
   500-event ship batch size this keeps Sigma matching well under the 5s ship interval even fully loaded.
 
+### v1.0.214 update — MITRE ATT&CK tag surfacing + automated corpus refresh (Sigma + YARA)
+
+Two follow-ups from a product-owner question: "do these rules map to techniques, not just
+signatures, and how do we keep them current?"
+
+- **MITRE tags were always in the data, never parsed.** `sigma_engine._parse_mitre_tags()` extracts
+  technique IDs (`attack.t1110` → `T1110`) and tactic names (`attack.credential-access` → `Credential
+  Access`) from each rule's `tags:` block — **3,268 of 3,739 rules (87%) carry technique tags**.
+  Exposed as `SigmaRule.mitre_techniques`/`.mitre_tactics`, in the `/api/detection-rules/sigma` API,
+  and as a column in the Sigma tab (rules with none show "signature-only"). Group (`attack.gXXXX`)
+  and software (`attack.sXXXX`) tags are deliberately not surfaced — that's threat-actor attribution,
+  a different question than technique coverage.
+- **Correlation (55 rules) and UEBA (~18 detectors) were already technique/behavior-based** —
+  `correlator.py`'s `tactics`/`KILL_CHAIN_MAP` predates this update. **YARA is the one layer that's
+  inherently signature-based** (scans file bytes, no behavioral awareness) — that's what the
+  technology is, not a gap any engine change closes.
+- **Automated refresh, previously nonexistent**: both `import_sigma_rules.py` and
+  `CYSIEM-Config/yara/import_signature_base.py` were on-demand-only — nothing re-ran them, so
+  coverage would go stale silently. `cysiemstack/detection/rule_corpus_refresh.py` now git-fetches
+  both upstreams on a weekly schedule (Sigma Sun 04:00 UTC, YARA Sun 04:30 UTC, via the existing
+  APScheduler infra in `blueprints/scheduler/routes.py` — same registration pattern as the ITAM
+  NVD/KEV/CVE/OUI jobs) plus a manual "⟳ Refresh Corpus Now" button per tab (admin-gated).
+  **Validate-before-activate, same safety principle as everything else in this doc**: Sigma re-runs
+  the offline fixture smoke test against a throwaway engine built from the staged fetch, plus an 85%
+  rule-count floor (catches a truncated/partial clone); YARA does a real `yarac` compile of the
+  staged merge. Either failing leaves the previous corpus/ruleset running, logs why, and does not
+  touch the live rules — an automated refresh must never be the thing that silently degrades
+  coverage. Sigma refreshes `rules/imported/` in place (that's already the runtime path); YARA
+  refreshes the DEPLOYED `EDR_PKG_DIR/cycentra.yar`, deliberately not the git-tracked
+  `CYSIEM-Config/yara/cycentra.yar` — a background job should not be rewriting committed source on a
+  running server.
+- **YARA corpus itself grew from 23 to 1,618 rules** this same session (23 hand-written + 1,595
+  curated from Neo23x0/signature-base, excluding `apt_*`/`expl_*`/`exploit_*` categories) — see
+  `CYSIEM-Config/yara/ATTRIBUTION.md`. Verified with a real `yarac` compile (zero errors/warnings)
+  and a real scan timing test (0.47s against 884 files/80MB, zero false positives).
+
 ## 5. Phase 1 — CyCollector agent — ✅ SHIPPED v1.0.207
 
 Scope was deliberately collection + transport only, dual-running alongside Wazuh with zero

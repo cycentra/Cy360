@@ -203,6 +203,7 @@ function SigmaTab({ notify }) {
   const [loadError, setLoadError] = useState("");
   const [editing, setEditing] = useState(null);
   const [showNew, setShowNew] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const limit = 25;
 
   const load = useCallback(async () => {
@@ -218,6 +219,23 @@ function SigmaTab({ notify }) {
     }
     setLoading(false);
   }, [q, source, offset]);
+
+  async function refreshCorpus() {
+    setRefreshing(true);
+    try {
+      const r = await fetch(`${API}/sigma/refresh-corpus`, { method: "POST", credentials: "include" });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok) {
+        notify(`Sigma corpus refreshed — ${d.rule_count} rules (was ${d.previous_count}). Active immediately.`);
+        load();
+      } else {
+        notify(`Refresh not applied: ${d.error || `HTTP ${r.status}`} — previous corpus is still running.`, false);
+      }
+    } catch (e) {
+      notify(`Refresh request failed: ${e.message}`, false);
+    }
+    setRefreshing(false);
+  }
 
   useEffect(() => { load(); }, [load]);
 
@@ -248,7 +266,7 @@ function SigmaTab({ notify }) {
       )}
       <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center" }}>
         <input value={q} onChange={e => { setOffset(0); setQ(e.target.value); }}
-               placeholder="Search title or rule id…" style={{ ...inputStyle, maxWidth: 280 }} />
+               placeholder="Search title, rule id, or technique (e.g. T1110)…" style={{ ...inputStyle, maxWidth: 320 }} />
         <select value={source} onChange={e => { setOffset(0); setSource(e.target.value); }} style={{ ...inputStyle, maxWidth: 160 }}>
           <option value="">All sources</option>
           <option value="bundled">Bundled (starter)</option>
@@ -256,6 +274,9 @@ function SigmaTab({ notify }) {
           <option value="custom">Custom</option>
         </select>
         <div style={{ flex: 1 }} />
+        <Btn onClick={refreshCorpus} disabled={refreshing} accent={T.blue} style={{ marginRight: 10 }}>
+          {refreshing ? "Refreshing… (may take a minute)" : "⟳ Refresh Corpus Now"}
+        </Btn>
         <Btn onClick={() => setShowNew(true)} accent={T.accent}>+ New Custom Rule</Btn>
       </div>
 
@@ -267,7 +288,7 @@ function SigmaTab({ notify }) {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                  {["Title", "Level", "Logsource", "Source", "Enabled", ""].map(h => (
+                  {["Title", "Level", "MITRE ATT&CK", "Logsource", "Source", "Enabled", ""].map(h => (
                     <th key={h} style={{ color: T.muted, fontSize: 9, textTransform: "uppercase",
                                          padding: "6px 10px", textAlign: "left", fontWeight: 400 }}>{h}</th>
                   ))}
@@ -278,6 +299,19 @@ function SigmaTab({ notify }) {
                   <tr key={r.rule_id} style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
                     <td style={{ padding: "8px 10px", color: T.text, fontSize: 12, fontFamily: T.mono }}>{r.title}</td>
                     <td style={{ padding: "8px 10px" }}><Badge label={r.level} color={levelColor[r.level] || T.muted} /></td>
+                    <td style={{ padding: "8px 10px", fontSize: 10 }}>
+                      {(r.mitre_techniques || []).length === 0 ? (
+                        <span style={{ color: "rgba(255,255,255,0.2)" }}>signature-only</span>
+                      ) : (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                          {r.mitre_techniques.map(t => (
+                            <span key={t} title={(r.mitre_tactics || []).join(", ")}
+                                  style={{ background: `${T.orange}18`, color: T.orange, padding: "1px 6px",
+                                           borderRadius: 2, fontFamily: T.mono, fontWeight: 700 }}>{t}</span>
+                          ))}
+                        </div>
+                      )}
+                    </td>
                     <td style={{ padding: "8px 10px", color: T.muted, fontSize: 11 }}>
                       {Object.entries(r.logsource || {}).map(([k, v]) => `${k}:${v}`).join(" ") || "—"}
                     </td>
@@ -599,6 +633,119 @@ function RuleEngineTab({ kind, notify }) {
   );
 }
 
+// ── Bundled YARA rules (read-only — static file, not a DB registry) ─────────
+function BundledYaraPanel({ notify }) {
+  const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [staged, setStaged] = useState(true);
+  const [q, setQ] = useState("");
+  const [offset, setOffset] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const limit = 25;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError("");
+    const params = new URLSearchParams({ q, limit, offset });
+    try {
+      const r = await fetch(`/api/edr/yara-rules/bundled?${params}`, { credentials: "include" });
+      if (r.ok) {
+        const d = await r.json();
+        setItems(d.items || []); setTotal(d.total || 0); setStaged(d.staged !== false);
+      } else {
+        setItems([]); setTotal(0); setLoadError(`HTTP ${r.status} — ${await r.text().catch(() => "")}`);
+      }
+    } catch (e) {
+      setLoadError(`Network error — is the backend reachable? (${e.message})`);
+    }
+    setLoading(false);
+  }, [q, offset]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function refreshCorpus() {
+    setRefreshing(true);
+    try {
+      const r = await fetch(`${API}/yara/refresh-corpus`, { method: "POST", credentials: "include" });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok) {
+        notify(`YARA corpus refreshed — ${d.rule_count} rules (was ${d.previous_count}). Deployed immediately; agents pick it up on next hourly sync or Fleet Scan.`);
+        load();
+      } else {
+        notify(`Refresh not applied: ${d.error || `HTTP ${r.status}`} — previous ruleset is still deployed.`, false);
+      }
+    } catch (e) {
+      notify(`Refresh request failed: ${e.message}`, false);
+    }
+    setRefreshing(false);
+  }
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      {loadError && (
+        <div style={{ background: "rgba(255,59,59,0.06)", border: `1px solid ${T.red}40`, borderRadius: 4,
+                      padding: "10px 14px", marginBottom: 14, color: T.red, fontSize: 11, fontFamily: T.mono }}>
+          Failed to load bundled YARA rules: {loadError}
+        </div>
+      )}
+      {!staged && !loadError && (
+        <div style={{ background: "rgba(255,140,0,0.06)", border: `1px solid ${T.orange}40`, borderRadius: 4,
+                      padding: "10px 14px", marginBottom: 14, color: T.orange, fontSize: 11, fontFamily: T.mono }}>
+          cycentra.yar is not staged on this server — RUN_SCAN has no bundled ruleset to use until it's deployed.
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+        <input value={q} onChange={e => { setOffset(0); setQ(e.target.value); }}
+               placeholder="Search rule name or description…" style={{ ...inputStyle, maxWidth: 320 }} />
+        <div style={{ flex: 1 }} />
+        <Btn onClick={refreshCorpus} disabled={refreshing} accent={T.blue}>
+          {refreshing ? "Refreshing… (may take a minute)" : "⟳ Refresh Corpus Now"}
+        </Btn>
+      </div>
+      <Panel title="Bundled YARA Rules (cycentra.yar — static file, not editable here)" accent={T.blue} badge={total}>
+        {loading ? (
+          <div style={{ color: T.muted, fontSize: 12, textAlign: "center", padding: 20 }}>Loading…</div>
+        ) : (
+          <>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                  {["Rule Name", "Description", "Source"].map(h => (
+                    <th key={h} style={{ color: T.muted, fontSize: 9, textTransform: "uppercase",
+                                         padding: "6px 10px", textAlign: "left", fontWeight: 400 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {items.map(r => (
+                  <tr key={r.name} style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+                    <td style={{ padding: "8px 10px", color: T.text, fontSize: 12, fontFamily: T.mono }}>{r.name}</td>
+                    <td style={{ padding: "8px 10px", color: T.muted, fontSize: 11 }}>{r.description || "—"}</td>
+                    <td style={{ padding: "8px 10px" }}>
+                      <Badge label={r.source} color={r.source === "bundled" ? T.accent : T.blue} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12 }}>
+              <span style={{ color: T.muted, fontSize: 11 }}>
+                {total === 0 ? "0" : `${offset + 1}–${Math.min(offset + limit, total)}`} of {total}
+              </span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Btn onClick={() => setOffset(Math.max(0, offset - limit))} disabled={offset === 0} accent={T.muted}>← Prev</Btn>
+                <Btn onClick={() => setOffset(offset + limit)} disabled={offset + limit >= total} accent={T.muted}>Next →</Btn>
+              </div>
+            </div>
+          </>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 const TABS = [
   { id: "sigma",       label: "Sigma" },
@@ -640,7 +787,12 @@ export default function DetectionRulesPage() {
       </div>
 
       {tab === "sigma" && <SigmaTab notify={notify} />}
-      {tab === "yara" && <CyScanRulesContent />}
+      {tab === "yara" && (
+        <div>
+          <BundledYaraPanel notify={notify} />
+          <CyScanRulesContent />
+        </div>
+      )}
       {tab === "correlation" && <RuleEngineTab kind="correlation" notify={notify} />}
       {tab === "ueba" && <RuleEngineTab kind="ueba" notify={notify} />}
 

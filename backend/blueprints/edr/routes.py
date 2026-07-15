@@ -20,6 +20,7 @@ RBAC summary:
 from __future__ import annotations
 import json
 import os
+import re
 import uuid
 import secrets
 import logging
@@ -1492,6 +1493,55 @@ def installer_yara_rules():
     if not os.path.exists(fpath):
         return jsonify({"error": "YARA rules not staged"}), 404
     return send_file(fpath, mimetype="text/plain")
+
+
+_YARA_RULE_RE = re.compile(r'^\s*(?:private\s+|global\s+)*rule\s+(\w+)', re.MULTILINE)
+_YARA_META_RE = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
+
+
+@edr_bp.route("/yara-rules/bundled", methods=["GET"])
+@require_viewer
+def list_bundled_yara_rules():
+    """Read-only listing of the bundled cycentra.yar ruleset (hand-written
+    CyCentra_* rules + the curated Neo23x0/signature-base import — see
+    CYSIEM-Config/yara/ATTRIBUTION.md). Unlike custom rules, these aren't
+    individually toggleable/editable — cycentra.yar is a single static file
+    staged at install/update time, not a DB-backed rule registry. This
+    endpoint exists so the Detection Rules UI doesn't show a misleading
+    "0 rules" for YARA when a substantial bundled ruleset is actually active."""
+    fpath = os.path.join(_EDR_PKG_DIR, "cycentra.yar")
+    if not os.path.exists(fpath):
+        return jsonify({"total": 0, "items": [], "staged": False})
+
+    q = (request.args.get("q") or "").strip().lower()
+    limit = min(int(request.args.get("limit", 100)), 500)
+    offset = int(request.args.get("offset", 0))
+
+    text = open(fpath, errors="ignore").read()
+    starts = [(m.start(), m.group(1)) for m in _YARA_RULE_RE.finditer(text)]
+    items = []
+    for i, (start, name) in enumerate(starts):
+        end = starts[i + 1][0] if i + 1 < len(starts) else len(text)
+        block = text[start:end]
+        meta_block = block.split("strings:")[0].split("condition:")[0]
+        meta = dict(_YARA_META_RE.findall(meta_block))
+        items.append({
+            "name": name,
+            "description": meta.get("description", ""),
+            "severity": meta.get("severity", meta.get("score", "")),
+            "category": meta.get("category", ""),
+            "author": meta.get("author", ""),
+            # "bundled" = hand-written CyCentra_* starters; "imported" =
+            # Neo23x0/signature-base corpus. Matches Sigma tab's vocabulary —
+            # neither is the same as the separately-listed "custom" (user-authored
+            # via this page's + New Custom Rule, stored in edr_custom_yara_rules).
+            "source": "bundled" if name.startswith("CyCentra_") else "imported",
+        })
+
+    if q:
+        items = [r for r in items if q in r["name"].lower() or q in r["description"].lower()]
+    total = len(items)
+    return jsonify({"total": total, "staged": True, "items": items[offset:offset + limit]})
 
 
 @edr_bp.route("/installer/yara-exe", methods=["GET"])

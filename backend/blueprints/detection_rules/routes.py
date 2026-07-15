@@ -115,16 +115,20 @@ def list_sigma_rules():
     ones — list_all_rules() builds a fresh engine rather than reading the
     live matching singleton's enabled-only `.rules`, so a disabled rule
     stays visible with a way back to re-enabling it instead of vanishing."""
-    q       = (request.args.get("q") or "").strip().lower()
-    source  = (request.args.get("source") or "").strip().lower()
-    limit   = min(int(request.args.get("limit", 100)), 500)
-    offset  = int(request.args.get("offset", 0))
+    q         = (request.args.get("q") or "").strip().lower()
+    source    = (request.args.get("source") or "").strip().lower()
+    technique = (request.args.get("technique") or "").strip().upper()
+    limit     = min(int(request.args.get("limit", 100)), 500)
+    offset    = int(request.args.get("offset", 0))
 
     rules = list_all_rules()
     if q:
-        rules = [r for r in rules if q in r.title.lower() or q in r.rule_id.lower()]
+        rules = [r for r in rules if q in r.title.lower() or q in r.rule_id.lower()
+                 or any(q in t.lower() for t in r.mitre_techniques)]
     if source:
         rules = [r for r in rules if r.source == source]
+    if technique:
+        rules = [r for r in rules if technique in r.mitre_techniques]
 
     total = len(rules)
     page = rules[offset:offset + limit]
@@ -135,10 +139,35 @@ def list_sigma_rules():
                 "rule_id": r.rule_id, "title": r.title, "level": r.level,
                 "logsource": r.logsource, "source": r.source, "db_id": r.db_id,
                 "enabled": r.enabled, "editable": r.source == "custom",
+                "mitre_techniques": r.mitre_techniques, "mitre_tactics": r.mitre_tactics,
             }
             for r in page
         ],
     })
+
+
+@detection_rules_bp.route("/sigma/refresh-corpus", methods=["POST"])
+@require_admin
+def refresh_sigma_corpus_route():
+    """Manual trigger for the same refresh the weekly scheduled job runs
+    (cysiemstack/detection/rule_corpus_refresh.py) — re-fetches SigmaHQ,
+    validates, and only activates if the validation gate passes. Runs
+    synchronously; a full refresh (git fetch + reimport + smoke test) can
+    take anywhere from several seconds to a couple minutes depending on
+    network conditions, same as the scheduled run."""
+    from cysiemstack.detection.rule_corpus_refresh import refresh_sigma_corpus
+    result = refresh_sigma_corpus()
+    return jsonify(result), (200 if result.get("ok") else 502)
+
+
+@detection_rules_bp.route("/yara/refresh-corpus", methods=["POST"])
+@require_admin
+def refresh_yara_corpus_route():
+    """Manual trigger for the YARA (signature-base) corpus refresh — see
+    refresh_sigma_corpus_route()'s docstring for the synchronous-timing note."""
+    from cysiemstack.detection.rule_corpus_refresh import refresh_yara_corpus
+    result = refresh_yara_corpus()
+    return jsonify(result), (200 if result.get("ok") else 502)
 
 
 @detection_rules_bp.route("/sigma", methods=["POST"])

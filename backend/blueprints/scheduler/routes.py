@@ -555,6 +555,13 @@ def init_scheduler(app) -> None:
     except Exception as _conn_exc:
         log.warning("scheduler: SIEM connector poll dispatcher registration failed: %s", _conn_exc)
 
+    # ── Detection rule corpus refresh (Sigma + YARA, weekly) ──────────────────
+    try:
+        from cysiemstack.detection.rule_corpus_refresh import register_rule_corpus_scheduler
+        register_rule_corpus_scheduler(_scheduler)
+    except Exception as _rules_exc:
+        log.warning("scheduler: rule corpus refresh job registration failed: %s", _rules_exc)
+
     # ── Integration health monitor (always on, interval from env/config) ───────
     try:
         from blueprints.integrations.health import run_all_checks as _health_check

@@ -97,6 +97,40 @@ def _canon_product(value: Any) -> str:
     return _PRODUCT_ALIASES.get(str(value).lower(), str(value).lower())
 
 
+# MITRE ATT&CK tactic slugs as used in SigmaHQ's `tags:` convention
+# (`attack.<slug>`) — distinct from technique tags (`attack.tXXXX[.YYY]`),
+# group tags (`attack.gXXXX` — threat-actor IDs), software tags
+# (`attack.sXXXX`), and data-source tags (`attack.dsXXXX`), none of which
+# this platform surfaces (group/software/data-source attribution isn't
+# what the Detection Rules UI's MITRE column is for — technique/tactic
+# coverage is).
+_MITRE_TACTIC_SLUGS = {
+    "reconnaissance", "resource-development", "initial-access", "execution",
+    "persistence", "privilege-escalation", "defense-evasion", "defense-impairment",
+    "credential-access", "discovery", "lateral-movement", "collection",
+    "command-and-control", "exfiltration", "impact",
+}
+_MITRE_TECHNIQUE_RE = re.compile(r"^t(\d{4})(\.\d{3})?$")
+
+
+def _parse_mitre_tags(tags: list) -> tuple[list[str], list[str]]:
+    """Splits a Sigma rule's `tags:` list into (technique_ids, tactics).
+    3,269 of the 3,739 rules in this platform's corpus (87%) carry these —
+    see docs/CYDATALAKE_MIGRATION_PLAN.md and the g-cyra-360 skill file for
+    the coverage numbers. Previously parsed nowhere; this is what makes
+    "is this signature-only or does it map to a technique" answerable from
+    the Detection Rules UI instead of requiring someone to open the YAML."""
+    techniques, tactics = [], []
+    for tag in tags or []:
+        slug = str(tag).lower().removeprefix("attack.")
+        m = _MITRE_TECHNIQUE_RE.match(slug)
+        if m:
+            techniques.append(f"T{m.group(1)}{m.group(2) or ''}".upper())
+        elif slug in _MITRE_TACTIC_SLUGS:
+            tactics.append(slug.replace("-", " ").title())
+    return techniques, tactics
+
+
 class SigmaRule:
     def __init__(self, data: dict[str, Any], source: str = "bundled", db_id: Optional[int] = None):
         self.title = data["title"]
@@ -105,6 +139,7 @@ class SigmaRule:
         if self.level not in SIGMA_RULE_IDS:
             self.level = "medium"
         self.logsource = {k: str(v).lower() for k, v in (data.get("logsource") or {}).items() if v}
+        self.mitre_techniques, self.mitre_tactics = _parse_mitre_tags(data.get("tags"))
         detection = data["detection"]
         self.condition = detection["condition"]
         self.selections = {k: v for k, v in detection.items() if k != "condition"}
