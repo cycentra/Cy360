@@ -285,12 +285,13 @@ function SigmaTab({ notify }) {
           <div style={{ color: T.muted, fontSize: 12, textAlign: "center", padding: 20 }}>Loading…</div>
         ) : (
           <>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                  {["Title", "Level", "MITRE ATT&CK", "Logsource", "Source", "Enabled", ""].map(h => (
+                  {[["Title", "26%"], ["Level", "8%"], ["MITRE ATT&CK", "20%"], ["Logsource", "18%"],
+                    ["Source", "10%"], ["Enabled", "8%"], ["", "10%"]].map(([h, w]) => (
                     <th key={h} style={{ color: T.muted, fontSize: 9, textTransform: "uppercase",
-                                         padding: "6px 10px", textAlign: "left", fontWeight: 400 }}>{h}</th>
+                                         padding: "6px 10px", textAlign: "left", fontWeight: 400, width: w }}>{h}</th>
                   ))}
                 </tr>
               </thead>

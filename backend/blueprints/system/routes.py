@@ -366,15 +366,11 @@ def _run_setup_in_background(flags: list[str], label: str) -> None:
 
     def _run():
         global _update_running, _update_log
-        # Read token fresh inside the thread so the latest .env value is used
-        gh_token = _get_server_gh_token()
-        if not gh_token:
-            _update_log.append(
-                f"[{label} ERROR] GH_TOKEN not found — add GH_TOKEN=ghp_... to /opt/cycentra/.env"
-            )
-            _update_running = False
-            return
         try:
+            # Read token fresh inside the thread so the latest .env value is used.
+            # Must stay inside this try/finally — if it raises before the lock is
+            # released, _update_running gets stuck True until a process restart.
+            gh_token = _get_server_gh_token()
             env = {**os.environ, "GH_TOKEN": gh_token}
             api_headers = {
                 "Authorization": f"Bearer {gh_token}",
@@ -539,7 +535,13 @@ def system_latest_version():
     """
     if not session.get("user_email"):
         return jsonify({"error": "Authentication required"}), 401
-    gh_token = _get_server_gh_token()
+    try:
+        gh_token = _get_server_gh_token()
+    except RuntimeError as e:
+        return jsonify({
+            "current": "unknown", "latest": None, "up_to_date": False,
+            "error": str(e),
+        })
 
     # Read currently installed version
     current = "unknown"

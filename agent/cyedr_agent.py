@@ -146,6 +146,17 @@ class Config:
         with open(self._path, "w") as f:
             json.dump(d, f, indent=2)
 
+    def save_enrollment_token(self, token: str):
+        """Persist the per-agent token returned by self-enroll — the initial
+        deploy_token is shared/rotatable and is not valid for authenticated
+        calls (heartbeat, telemetry) once the server has minted this one."""
+        self.enrollment_token = token
+        with open(self._path) as f:
+            d = json.load(f)
+        d["enrollment_token"] = token
+        with open(self._path, "w") as f:
+            json.dump(d, f, indent=2)
+
     def save_arp_state(self, enabled: bool, until_iso: str):
         """Persist arp_enabled + arp_enabled_until from heartbeat response."""
         self.arp_enabled       = enabled
@@ -3191,8 +3202,12 @@ def ensure_enrolled(cfg: Config, http: requests.Session):
         if resp.ok:
             data = resp.json()
             agent_id = data.get("agent_id")
+            token    = data.get("enrollment_token")
             if agent_id:
                 cfg.save_agent_id(agent_id, hardware_uuid=hardware_uuid)
+                if token:
+                    cfg.save_enrollment_token(token)
+                    http.headers["Authorization"] = f"Bearer {token}"
                 logger.info("Enrolled — Agent ID: %s", agent_id)
             else:
                 logger.error("Enrollment response missing agent_id: %s", resp.text)

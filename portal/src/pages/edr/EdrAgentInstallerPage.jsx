@@ -253,7 +253,6 @@ export default function EdrAgentInstallerPage() {
   const [selectedCmd,  setSelectedCmd]  = useState("bash");
   const [activeToken,  setActiveToken]  = useState(null);
   const [cmds,         setCmds]         = useState(null);
-  const [withSiem,     setWithSiem]     = useState(false);
   const [error,        setError]        = useState("");
 
   const loadTokens = useCallback(async () => {
@@ -303,8 +302,7 @@ export default function EdrAgentInstallerPage() {
   const activeTokens = tokens.filter(t => !t.revoked && (!t.expires_at || new Date(t.expires_at) > new Date()));
   const osCfg        = OS_CFG[selectedOs];
   const archCmds     = cmds?.[selectedOs]?.[selectedArch] || {};
-  const siemKey      = withSiem ? `${selectedCmd}+siem` : selectedCmd;
-  const displayCmd   = archCmds[siemKey] || archCmds[selectedCmd] || "";
+  const displayCmd   = archCmds[selectedCmd] || "";
 
   return (
     <div style={{ padding:"28px 32px", minHeight:"100vh", background:BG }}>
@@ -405,33 +403,6 @@ export default function EdrAgentInstallerPage() {
           />
         </div>
 
-        {/* CySIEM toggle */}
-        <div style={{
-          display:"flex", alignItems:"center", gap:10, marginBottom:16,
-          background:"rgba(0,229,160,0.04)", border:"1px solid rgba(0,229,160,0.12)",
-          borderRadius:8, padding:"10px 14px",
-        }}>
-          <div style={{ flex:1 }}>
-            <div style={{ fontSize:12, fontWeight:700, color:"#e8eaf0" }}>
-              Include CySIEM (Wazuh) agent
-            </div>
-            <div style={{ fontSize:11, color:"#555", marginTop:2 }}>
-              Adds FIM, auth log collection, and compliance aggregation alongside CyEDR
-            </div>
-          </div>
-          <button
-            onClick={() => setWithSiem(v => !v)}
-            style={{
-              border: `1px solid ${withSiem ? ACCENT : "#444"}`,
-              borderRadius: 20,
-              background: withSiem ? `${ACCENT}22` : "transparent",
-              color: withSiem ? ACCENT : "#555",
-              padding: "5px 16px", fontSize: 11, fontWeight: 600, cursor: "pointer",
-              transition: "all 0.2s", whiteSpace: "nowrap",
-            }}
-          >{withSiem ? "✓ Included" : "Optional"}</button>
-        </div>
-
         {/* Install command */}
         {cmds && activeToken ? (
           <>
@@ -450,13 +421,8 @@ export default function EdrAgentInstallerPage() {
             {displayCmd && (
               <CopyBox
                 value={displayCmd}
-                label={`${osCfg.label} ${osCfg.archLabels[selectedArch]} — ${selectedCmd}${withSiem ? " + CySIEM" : ""}`}
+                label={`${osCfg.label} ${osCfg.archLabels[selectedArch]} — ${selectedCmd}`}
               />
-            )}
-            {withSiem && (
-              <div style={{ fontSize:11, color: ACCENT, marginTop:4 }}>
-                <code style={{ fontFamily:"monospace" }}>--with-cysiem</code> flag active — Wazuh agent will also be installed
-              </div>
             )}
             <div style={{ fontSize:11, color:"#444", marginTop:8 }}>
               Platform URL: <code style={{ color:"#7090b0", fontFamily:"monospace" }}>{cmds.collector_url}</code>
