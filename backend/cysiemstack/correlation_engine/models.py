@@ -328,6 +328,69 @@ class FpPattern(Base):
         Index("ix_fp_patterns_auto_close",  "auto_close"),
     )
 
+
+class RuleToggle(Base):
+    """Enable/disable state for a BUILT-IN rule (correlator.py's CR-xxx classes or
+    ueba.py's numbered anomaly_type detectors). Absence of a row means enabled —
+    this table only ever needs to hold the rules an operator has explicitly
+    turned off, so a fresh install has zero rows and every rule runs exactly as
+    it did before this feature existed."""
+    __tablename__ = "rule_toggles"
+    __table_args__ = (UniqueConstraint("rule_kind", "rule_key"),)
+
+    id         = Column(BigInteger, primary_key=True, autoincrement=True)
+    rule_kind  = Column(Text, nullable=False)   # "correlation" | "ueba"
+    rule_key   = Column(Text, nullable=False)   # e.g. "CR-001" or "off_hours_login"
+    enabled    = Column(Boolean, default=True, nullable=False)
+    updated_at = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+    updated_by = Column(Text)
+
+
+class CustomCorrelationRule(Base):
+    """User-authored correlation rule, evaluated alongside the built-in CR-001..055
+    rules in correlator.py. Unlike the built-ins (which pattern-match specific
+    attack chains in Python), a custom rule is a generic "N alerts matching these
+    field conditions within a time window" pattern — see custom_rules_engine.py."""
+    __tablename__ = "custom_correlation_rules"
+
+    id                 = Column(BigInteger, primary_key=True, autoincrement=True)
+    rule_key           = Column(Text, nullable=False, unique=True)
+    name               = Column(Text, nullable=False)
+    description        = Column(Text)
+    enabled            = Column(Boolean, default=True, nullable=False)
+    conditions         = Column(JSONB, nullable=False, default=list)   # [{field, op, value}, ...] ANDed
+    window_minutes     = Column(Integer, default=15, nullable=False)
+    min_count          = Column(Integer, default=1, nullable=False)
+    severity_override  = Column(Text)   # "low"|"medium"|"high"|"critical" or NULL = don't escalate
+    tags               = Column(ARRAY(Text), default=list)
+    created_at         = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+    updated_at         = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+    created_by         = Column(Text)
+
+
+class CustomUebaRule(Base):
+    """User-authored UEBA anomaly rule, evaluated alongside the built-in
+    detectors in ueba.py. Same condition/window/count shape as
+    CustomCorrelationRule but scoped to one entity (user or host) — see
+    custom_rules_engine.py."""
+    __tablename__ = "custom_ueba_rules"
+
+    id                 = Column(BigInteger, primary_key=True, autoincrement=True)
+    rule_key           = Column(Text, nullable=False, unique=True)
+    name               = Column(Text, nullable=False)
+    description        = Column(Text)
+    enabled            = Column(Boolean, default=True, nullable=False)
+    conditions         = Column(JSONB, nullable=False, default=list)
+    window_minutes     = Column(Integer, default=15, nullable=False)
+    min_count          = Column(Integer, default=1, nullable=False)
+    entity_type        = Column(Text, default="user", nullable=False)  # "user" | "host"
+    anomaly_type       = Column(Text, nullable=False)   # display label, e.g. "custom_data_hoarding"
+    risk_contribution  = Column(Integer, default=40, nullable=False)
+    created_at         = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+    updated_at         = Column(TIMESTAMP(timezone=True), default=datetime.utcnow)
+    created_by         = Column(Text)
+
+
 async def write_audit(
     db,
     entity_type: str,

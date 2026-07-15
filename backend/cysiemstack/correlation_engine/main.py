@@ -2820,6 +2820,210 @@ except ImportError:
     log.info("mcp_package_not_installed", hint="pip install 'mcp[cli]' to enable the Security MCP bridge")
 
 
+# ── Detection Rules: correlation + UEBA rule toggles and custom rules ────────
+# Consumed by the Flask "Detection Rules" page (blueprints/detection_rules/
+# routes.py), which proxies to these routes exactly like siem_proxy.py does
+# for incidents/alerts. This service is the sole writer for rule_toggles /
+# custom_correlation_rules / custom_ueba_rules — Sigma's equivalent tables are
+# owned directly by Flask instead, since sigma_engine.py runs inside Flask,
+# not here (see blueprints/detection_rules/routes.py's module docstring).
+import rule_cache
+from models import RuleToggle, CustomCorrelationRule, CustomUebaRule
+from correlator import ALL_RULES as _ALL_CORRELATION_RULES
+from ueba import RISK_CONTRIBUTIONS as _ALL_UEBA_TYPES
+
+
+class RuleToggleReq(BaseModel):
+    enabled: bool
+
+
+class CustomCorrelationRuleBody(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    enabled: bool = True
+    conditions: list[dict] = []
+    window_minutes: int = 15
+    min_count: int = 1
+    severity_override: Optional[str] = None
+    tags: list[str] = []
+
+
+class CustomUebaRuleBody(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    enabled: bool = True
+    conditions: list[dict] = []
+    window_minutes: int = 15
+    min_count: int = 1
+    entity_type: str = "user"
+    anomaly_type: str
+    risk_contribution: int = 40
+
+
+async def _get_toggle_map(db: AsyncSession, kind: str) -> dict[str, bool]:
+    rows = (await db.execute(select(RuleToggle).where(RuleToggle.rule_kind == kind))).scalars().all()
+    return {r.rule_key: r.enabled for r in rows}
+
+
+@app.get("/rules/correlation")
+async def list_correlation_rules(db: AsyncSession = Depends(get_db)):
+    """Built-in CR-001..055 rules (from correlator.ALL_RULES) + their toggle state."""
+    toggles = await _get_toggle_map(db, "correlation")
+    return [
+        {
+            "rule_key": r.rule_id, "name": r.name, "description": r.description,
+            "severity": r.severity, "tactics": r.tactics,
+            "window_minutes": int(r.window.total_seconds() // 60),
+            "enabled": toggles.get(r.rule_id, True), "kind": "built_in",
+        }
+        for r in _ALL_CORRELATION_RULES
+    ]
+
+
+@app.post("/rules/correlation/{rule_key}/toggle")
+async def toggle_correlation_rule(rule_key: str, body: RuleToggleReq, db: AsyncSession = Depends(get_db)):
+    if rule_key not in {r.rule_id for r in _ALL_CORRELATION_RULES}:
+        raise HTTPException(status_code=404, detail="Unknown correlation rule_key")
+    row = (await db.execute(
+        select(RuleToggle).where(RuleToggle.rule_kind == "correlation", RuleToggle.rule_key == rule_key)
+    )).scalar_one_or_none()
+    if row is None:
+        row = RuleToggle(rule_kind="correlation", rule_key=rule_key)
+        db.add(row)
+    row.enabled = body.enabled
+    row.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    rule_cache.invalidate()
+    return {"ok": True, "rule_key": rule_key, "enabled": body.enabled}
+
+
+@app.get("/rules/correlation/custom")
+async def list_custom_correlation_rules(db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(CustomCorrelationRule).order_by(CustomCorrelationRule.created_at))).scalars().all()
+    return [
+        {
+            "id": r.id, "rule_key": r.rule_key, "name": r.name, "description": r.description,
+            "enabled": r.enabled, "conditions": r.conditions, "window_minutes": r.window_minutes,
+            "min_count": r.min_count, "severity_override": r.severity_override, "tags": r.tags,
+            "kind": "custom",
+        }
+        for r in rows
+    ]
+
+
+@app.post("/rules/correlation/custom")
+async def create_custom_correlation_rule(body: CustomCorrelationRuleBody, db: AsyncSession = Depends(get_db)):
+    rule_key = f"CUSTOM-CORR-{int(datetime.now(timezone.utc).timestamp() * 1000)}"
+    row = CustomCorrelationRule(rule_key=rule_key, **body.model_dump())
+    db.add(row)
+    await db.commit()
+    rule_cache.invalidate()
+    return {"ok": True, "id": row.id, "rule_key": rule_key}
+
+
+@app.patch("/rules/correlation/custom/{rule_id}")
+async def update_custom_correlation_rule(rule_id: int, body: CustomCorrelationRuleBody, db: AsyncSession = Depends(get_db)):
+    row = (await db.execute(select(CustomCorrelationRule).where(CustomCorrelationRule.id == rule_id))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Custom correlation rule not found")
+    for k, v in body.model_dump().items():
+        setattr(row, k, v)
+    row.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    rule_cache.invalidate()
+    return {"ok": True, "id": row.id}
+
+
+@app.delete("/rules/correlation/custom/{rule_id}")
+async def delete_custom_correlation_rule(rule_id: int, db: AsyncSession = Depends(get_db)):
+    row = (await db.execute(select(CustomCorrelationRule).where(CustomCorrelationRule.id == rule_id))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Custom correlation rule not found")
+    await db.delete(row)
+    await db.commit()
+    rule_cache.invalidate()
+    return {"ok": True}
+
+
+@app.get("/rules/ueba")
+async def list_ueba_rules(db: AsyncSession = Depends(get_db)):
+    """Built-in UEBA anomaly types (from ueba.RISK_CONTRIBUTIONS) + toggle state."""
+    toggles = await _get_toggle_map(db, "ueba")
+    return [
+        {
+            "rule_key": anomaly_type, "name": anomaly_type.replace("_", " ").title(),
+            "risk_contribution": contribution,
+            "enabled": toggles.get(anomaly_type, True), "kind": "built_in",
+        }
+        for anomaly_type, contribution in _ALL_UEBA_TYPES.items()
+    ]
+
+
+@app.post("/rules/ueba/{rule_key}/toggle")
+async def toggle_ueba_rule(rule_key: str, body: RuleToggleReq, db: AsyncSession = Depends(get_db)):
+    if rule_key not in _ALL_UEBA_TYPES:
+        raise HTTPException(status_code=404, detail="Unknown UEBA rule_key")
+    row = (await db.execute(
+        select(RuleToggle).where(RuleToggle.rule_kind == "ueba", RuleToggle.rule_key == rule_key)
+    )).scalar_one_or_none()
+    if row is None:
+        row = RuleToggle(rule_kind="ueba", rule_key=rule_key)
+        db.add(row)
+    row.enabled = body.enabled
+    row.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    rule_cache.invalidate()
+    return {"ok": True, "rule_key": rule_key, "enabled": body.enabled}
+
+
+@app.get("/rules/ueba/custom")
+async def list_custom_ueba_rules(db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(CustomUebaRule).order_by(CustomUebaRule.created_at))).scalars().all()
+    return [
+        {
+            "id": r.id, "rule_key": r.rule_key, "name": r.name, "description": r.description,
+            "enabled": r.enabled, "conditions": r.conditions, "window_minutes": r.window_minutes,
+            "min_count": r.min_count, "entity_type": r.entity_type, "anomaly_type": r.anomaly_type,
+            "risk_contribution": r.risk_contribution, "kind": "custom",
+        }
+        for r in rows
+    ]
+
+
+@app.post("/rules/ueba/custom")
+async def create_custom_ueba_rule(body: CustomUebaRuleBody, db: AsyncSession = Depends(get_db)):
+    rule_key = f"CUSTOM-UEBA-{int(datetime.now(timezone.utc).timestamp() * 1000)}"
+    row = CustomUebaRule(rule_key=rule_key, **body.model_dump())
+    db.add(row)
+    await db.commit()
+    rule_cache.invalidate()
+    return {"ok": True, "id": row.id, "rule_key": rule_key}
+
+
+@app.patch("/rules/ueba/custom/{rule_id}")
+async def update_custom_ueba_rule(rule_id: int, body: CustomUebaRuleBody, db: AsyncSession = Depends(get_db)):
+    row = (await db.execute(select(CustomUebaRule).where(CustomUebaRule.id == rule_id))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Custom UEBA rule not found")
+    for k, v in body.model_dump().items():
+        setattr(row, k, v)
+    row.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    rule_cache.invalidate()
+    return {"ok": True, "id": row.id}
+
+
+@app.delete("/rules/ueba/custom/{rule_id}")
+async def delete_custom_ueba_rule(rule_id: int, db: AsyncSession = Depends(get_db)):
+    row = (await db.execute(select(CustomUebaRule).where(CustomUebaRule.id == rule_id))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Custom UEBA rule not found")
+    await db.delete(row)
+    await db.commit()
+    rule_cache.invalidate()
+    return {"ok": True}
+
+
 # ── CyMind MCP access-control (ASGI-level, streaming-safe) ───────────────────
 # Wraps the FastAPI app so that /mcp/* requests are rejected unless the caller
 # presents a valid API key.  Uses raw ASGI to avoid BaseHTTPMiddleware's

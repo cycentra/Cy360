@@ -797,6 +797,7 @@ const ALL_PAGES = [
   { id: "comp-reports",        label: "Reports",                 section: "SECURITY COMPLIANCE" },
   { id: "marketplace",         label: "Marketplace",             section: "MARKETPLACE" },
   { id: "system-settings",     label: "Settings",                section: "PLATFORM CONFIG" },
+  { id: "detection-rules",     label: "Detection Rules",         section: "PLATFORM CONFIG" },
   { id: "platform-extensions", label: "Extensions",              section: "PLATFORM CONFIG" },
   { id: "audit-trail",         label: "Audit Trail",             section: "PLATFORM CONFIG" },
 ];

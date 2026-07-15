@@ -11,6 +11,7 @@ import { AssetsPage }                   from '../pages/assets/AssetsPage.jsx';
 import { VulnerabilityPage }            from '../pages/vulnerabilities/VulnerabilityPage.jsx';
 import { MarketplacePage }              from '../pages/marketplace/MarketplacePage.jsx';
 import { SystemSettingsPage }           from '../pages/settings/SystemSettingsPage.jsx';
+import DetectionRulesPage               from '../pages/settings/DetectionRulesPage.jsx';
 import { AuditTrailPage }               from '../pages/audit/AuditTrailPage.jsx';
 import { BenchmarkPage }                from '../pages/benchmark/BenchmarkPage.jsx';
 import { PlatformExtensionsPage }       from '../pages/platform-extensions/index.jsx';
@@ -61,6 +62,7 @@ export function AppRouter({ activeTab, user, assets, data, stats, installedModul
       {activeTab==="marketplace"    && <MarketplacePage user={user} installedModules={installedModules} onInstall={onInstallModule} onUninstall={onUninstallModule}/>}
       {activeTab==="benchmark"            && <BenchmarkPage/>}
       {activeTab==="system-settings"     && <SystemSettingsPage/>}
+      {activeTab==="detection-rules"     && <DetectionRulesPage/>}
       {activeTab==="audit-trail"         && <AuditTrailPage/>}
       {activeTab==="platform-extensions" && <PlatformExtensionsPage installedModules={installedModules} onInstall={onInstallModule} onUninstall={onUninstallModule}/>}
       {activeTab==="comp-dashboard"   && <ComplianceDashboardPage setActiveTab={setActiveTab}/>}

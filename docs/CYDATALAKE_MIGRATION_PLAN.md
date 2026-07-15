@@ -8,10 +8,15 @@ Cortex/Wazuh-indexer/O365/Azure/AWS/GCP tenant. Phase 5 is analysis-only by desi
 cannot start until 2-4 are proven with real traffic. **`docs/CYDATALAKE_OPS_RUNBOOK.md`** covers every
 manual infrastructure/credential step; **`docs/SIEM_PROXY_AUDIT.md`** covers the Phase 5 route audit.
 
-**Read §4 before trusting anything Sigma-related.** Testing the imported 279-rule SigmaHQ corpus
-against synthetic events surfaced a real logic bug (now fixed) and a real, structural false-positive
-risk (not fully fixable without more work) — the imported corpus is **opt-in, not loaded by default**
-as a direct result. This is the single most important finding in this revision; don't skip it.
+**v1.0.213 update — the structural false-positive risk described below is now fixed, and the corpus
+is loaded by default.** §4/§14 below describe the *original* haystack/substring matcher and why it was
+kept opt-in; that matcher has been replaced with real per-field lookup + `logsource` product/category/
+service routing (see "v1.0.213 update" near the end of §4 for what changed and why it was judged safe
+to flip on), and the corpus itself grew from 279 to ~3,739 rules (SigmaHQ's `rules/` +
+`rules-emerging-threats/` + `rules-threat-hunting/`). `SIGMA_IMPORTED_RULES_ENABLED` still exists but
+now defaults to `true` and functions as an emergency rollback switch, not the normal control path.
+Read the rest of this section for the history of *why* the original design was cautious — that
+reasoning is still correct about the old matcher, just no longer describes the current one.
 
 **Owner:** g-cyra-360 (backend/agent), coordinate with g-cyra-devops before any infra (Kafka/
 ClickHouse) work.
@@ -28,7 +33,7 @@ Legend: ✅ Done/shipped-and-verified · ⚠️ Shipped, not verified against re
 | # | Phase / Task | Key component(s) | Status | Version | Next step / planned future task |
 |---|---|---|---|---|---|
 | 0 | Detection-engine decision | Sigma-rule-subset engine (`sigma_engine.py`) | ✅ Decided + implemented | v1.0.210 | Grow past 3 starter rules with real CyCollector traffic |
-| 0 | Sigma community rule bulk-import | `import_sigma_rules.py`, 279 rules in `rules/imported/` | 🔒 Opt-in (`SIGMA_IMPORTED_RULES_ENABLED=false`) | v1.0.212 | Build real per-field/logsource-aware matching before enabling in production (§14) |
+| 0 | Sigma community rule bulk-import | `import_sigma_rules.py`, ~3,739 rules in `rules/imported/` | ✅ On by default (`SIGMA_IMPORTED_RULES_ENABLED=true`, kill switch only) | v1.0.213 | Watch rule IDs 101150-101153/101380-101383 in the Alert Feed against first real production traffic |
 | 1 | CyCollector agent (raw log collection) | `collector_bp`, `collector_bridge.py`, `agent/cycollector_agent.py` | ✅ Shipped | v1.0.207 | Portal UI for agent fleet visibility (not built yet) |
 | 2 | Kafka bus (producer side) | `kafka_bridge.py`, `KAFKA_ENABLED` | ⚠️ Code shipped, no broker provisioned | v1.0.208 | Provision broker (installer step exists, opt-in — see row 2b) |
 | 2b | Kafka + ClickHouse installer automation | `cycentra-setup.sh` `_INSTALL_CYDATALAKE` step | 🔒 Opt-in installer prompt (default no) | v1.0.211 | Run it on a real server; currently untested end-to-end |
@@ -207,13 +212,66 @@ real bugs rather than assume the engine worked:
   use/modification/redistribution allowed, attribution required). Author fields are preserved
   unmodified in every copied file, satisfying the license's attribution condition.
 
-**Bottom line on Sigma:** the infrastructure to bulk-adopt community rules is real and works — the
-condition-parsing/loading side is solid (100% compatibility on the tested sample after the fixes
-above). What's NOT solid yet is field-scoped matching precision at scale, which is exactly why the
+**Bottom line on Sigma (as of v1.0.212):** the infrastructure to bulk-adopt community rules is real and
+works — the condition-parsing/loading side is solid (100% compatibility on the tested sample after the
+fixes above). What's NOT solid yet is field-scoped matching precision at scale, which is exactly why the
 279 rules are gated behind an explicit opt-in rather than silently active. Turning that flag on in
 production without further engine work (real per-field structured matching, logsource-based rule
 routing) risks the same class of false-positive-everywhere failure this session already found and
 had to catch by hand.
+
+### v1.0.213 update — root cause fixed (not worked around), corpus expanded to full SigmaHQ + emerging-threats + threat-hunting, opt-in flipped to on-by-default
+
+Product owner decision: keep a kill switch (`SIGMA_IMPORTED_RULES_ENABLED`, now defaulting to `true`)
+given Sigma-matched alerts feed the same auto-case-opening path as every other HIGH/CRITICAL alert, but
+otherwise stop gating the corpus behind opt-in — and import the full upstream corpus rather than a
+curated subset, since the number of source integrations is expected to grow from a handful to
+hundreds/thousands over the near term and hand-curating rule-by-rule wouldn't scale with that.
+
+What actually changed in `sigma_engine.py` to justify flipping the default (this is a real fix, not a
+relaxed risk tolerance):
+- **`SigmaRule.matches_logsource(hint)`** — parses each rule's `logsource:` block (product/category/
+  service) and rejects evaluating a rule against an event whose bridge-supplied hint disagrees on any
+  field both sides declare. `collector_bridge.py` derives the hint from `source_type`
+  (journald/syslog→linux, oslog→macos, windows_eventlog→windows); `connector_bridge.py`'s
+  `_sigma_envelope()` passes `{"product": vendor}`. `_PRODUCT_ALIASES` reconciles naming differences
+  (SigmaHQ's rules use `m365`, this platform's connector is named `office365`, etc.). This alone stops
+  an AWS-specific rule from ever being evaluated against a Windows event log line, closing the
+  cross-category class of the "coincidental substring" bug.
+- **`SigmaRule._lookup_field(root, field)`** replaced the flattened-haystack substring search entirely.
+  It resolves the actual named field against the event's real structure — dotted-path lookup first
+  (`userIdentity.type`), then a depth-limited recursive key search — and the default (no-modifier) Sigma
+  match semantics were corrected from "contains" to real exact-match-with-wildcard (`fnmatch`), plus
+  explicit `field: null` handling (absent-or-None). The `event_type_id: 3` / `userIdentity.type: Root`
+  collision class described above is now structurally impossible: the engine looks up the actual field
+  by name instead of searching the entire event's flattened text for the value.
+- The only remaining full-text search path is Sigma's field-less `keywords:` list shape (a bare list of
+  strings with no field name at all) — full-text search is the *correct* semantics there, not a
+  workaround, since there's nothing to look up by name.
+- **Regression + smoke-test tool**: `backend/cysiemstack/detection/validate_sigma_rules.py` — loads the
+  full corpus and runs a set of hand-built benign events (one per logsource this platform ingests) plus
+  known-bad events (do the 3 starter rules and a couple of imported AWS rules still fire correctly) and
+  reports PASS/FAIL. All 13 fixtures passed after the fix (0 benign false matches, all known-bad events
+  still detected). **This is an offline smoke test only** — it proves the hand-built fixtures don't
+  misfire, not that the full ~3,700-rule corpus is silent against everything a real environment
+  produces. No live-tenant/production traffic has validated this corpus; watch rule IDs
+  101150-101153 (CyCollector) / 101380-101383 (cloud connectors) in the Alert Feed after the first
+  stretch of real traffic post-deploy.
+- **Corpus grew from 279 → 3,736 rules** (3 starters + this = ~3,739 total): re-ran
+  `import_sigma_rules.py` (now preserving upstream subdirectory structure under `--dest`, since
+  flattening filenames at this scale caused real collisions) against SigmaHQ's `rules/` (3,129),
+  `rules-emerging-threats/` (467), and `rules-threat-hunting/` (140). Deliberately excluded:
+  `rules-placeholder/` (would all fail the placeholder filter anyway), `unsupported/` (SigmaHQ
+  maintainers already flag these as unreliable), `deprecated/`, `rules-compliance/` (out of scope —
+  compliance-framework mapping, not threat detection). See
+  `rules/imported/ATTRIBUTION.md` for the full provenance table and license terms (DRL 1.1).
+  `identity/` rules (okta/onelogin/cisco `logsource.product`) load but stay dormant — no connector
+  supplies that hint yet; this is expected, not a bug, given the "rule coverage ahead of connector
+  coverage" decision above.
+- **Performance note**: logsource routing measured as a ~3x latency win, not just a correctness fix —
+  5.7ms/event when routed to the matching product's rules vs. 17.8ms/event evaluating all ~3,739 rules
+  unfiltered (measured locally, single-threaded, non-matching fixture). At CyCollector's default
+  500-event ship batch size this keeps Sigma matching well under the 5s ship interval even fully loaded.
 
 ## 5. Phase 1 — CyCollector agent — ✅ SHIPPED v1.0.207
 
@@ -488,11 +546,14 @@ Severity mapping reminder (`grouper._score_to_severity()`): level 15→critical,
 
 ## 14. Open questions for the product owner (do not guess — ask)
 
-- **Sigma field-matching precision** — the biggest open item from this revision. Fixing this
-  properly means building real per-field structured matching (normalize each source's fields into a
-  consistent per-logsource schema) and logsource-based rule routing, so a rule scoped to
-  `product: aws` doesn't get evaluated against a Linux syslog line. Until that exists, keep
-  `SIGMA_IMPORTED_RULES_ENABLED=false` in production.
+- ~~**Sigma field-matching precision**~~ — **RESOLVED v1.0.213.** Product owner decided: keep the
+  `SIGMA_IMPORTED_RULES_ENABLED` kill switch (now defaulting to `true`) but stop treating the corpus as
+  opt-in, and import the full SigmaHQ corpus (not a curated subset) since source-integration count is
+  expected to grow substantially and hand-curation wouldn't scale. Real per-field structured matching
+  (`SigmaRule._lookup_field`) and `logsource`-based rule routing (`SigmaRule.matches_logsource`) were
+  built to make that safe — see the v1.0.213 update in §4. Remaining open item: no live-tenant traffic
+  has validated the corpus yet (only the offline `validate_sigma_rules.py` smoke test) — watch the
+  Alert Feed's Sigma rule IDs closely after first real deploy, per §4.
 - Kafka footprint: single-broker KRaft acceptable, or a proper cluster? (Ops runbook assumes
   single-broker as the pragmatic starting point.)
 - Which vendor should get real credentials first for pilot verification — Wazuh (lowest risk, no

@@ -78,8 +78,11 @@ async def _record_anomaly(
     description: str,
     incident_id: str,
     alert_ids: list,
+    risk_contribution: int | None = None,
 ) -> UEBAAnomaly:
-    contribution = RISK_CONTRIBUTIONS.get(anomaly_type, 20)
+    # risk_contribution override is for custom_rules_engine.py's user-defined
+    # anomaly types, which aren't in the built-in RISK_CONTRIBUTIONS table.
+    contribution = risk_contribution if risk_contribution is not None else RISK_CONTRIBUTIONS.get(anomaly_type, 20)
     anomaly = UEBAAnomaly(
         username          = username,
         anomaly_type      = anomaly_type,
@@ -110,6 +113,8 @@ async def analyse_alert(
     recent_alerts: list[dict],
     incident_id: str,
     entity_type: str = "user",
+    disabled: frozenset[str] = frozenset(),
+    custom_rules: list[dict] | None = None,
 ) -> list[UEBAAnomaly]:
     """
     Run all UEBA detectors against the current alert + recent context.
@@ -117,6 +122,12 @@ async def analyse_alert(
     When entity_type='user' (default), user-based detectors run on alert.username.
     When entity_type='host', host-based detectors run on alert.agent_id /
     alert.agent_name — covers multi-host burst, C2 beaconing, impossible travel.
+
+    disabled — anomaly_type keys toggled off via the Detection Rules UI
+    (rule_cache.get_disabled_ueba_keys()); each detector block below is
+    gated on its own anomaly_type not being in this set.
+    custom_rules — user-authored rules from rule_cache.get_custom_ueba_rules(),
+    evaluated after the built-ins via custom_rules_engine.run_custom_ueba_rules().
 
     Returns list of UEBAAnomaly objects created this call.
     """
@@ -128,7 +139,8 @@ async def analyse_alert(
         if entity_type == "host":
             # Use host sentinel so we don't mix user/host baselines
             host_entity = f"host:{alert.get('agent_id', 'unknown')}"
-            return await _analyse_host_alert(db, alert, recent_alerts, incident_id, host_entity)
+            return await _analyse_host_alert(db, alert, recent_alerts, incident_id, host_entity,
+                                              disabled=disabled, custom_rules=custom_rules)
         return []
 
     baseline  = await _get_or_create_baseline(db, username)
@@ -139,7 +151,7 @@ async def analyse_alert(
     agent_id  = alert['agent_id']
 
     # ── 1. Off-hours login ─────────────────────────────────────────────────────
-    if rule_id in AUTH_SUCCESS_IDS:
+    if 'off_hours_login' not in disabled and rule_id in AUTH_SUCCESS_IDS:
         typical = set(baseline.typical_hours or [])
         is_off_hours = not (7 <= hour <= 19)
         if is_off_hours and hour not in typical and len(typical) >= 5:
@@ -150,7 +162,7 @@ async def analyse_alert(
             ))
 
     # ── 2. High auth failure rate ──────────────────────────────────────────────
-    if rule_id in AUTH_FAIL_IDS:
+    if 'high_auth_fail_rate' not in disabled and rule_id in AUTH_FAIL_IDS:
         recent_fails = sum(1 for a in recent_alerts if a['rule_id'] in AUTH_FAIL_IDS)
         recent_total = len(recent_alerts) + 1
         fail_rate = recent_fails / recent_total if recent_total > 0 else 0
@@ -164,7 +176,7 @@ async def analyse_alert(
             ))
 
     # ── 3. New agent access ────────────────────────────────────────────────────
-    if rule_id in AUTH_SUCCESS_IDS:
+    if 'new_agent_access' not in disabled and rule_id in AUTH_SUCCESS_IDS:
         typical_agents = set(baseline.typical_agents or [])
         if typical_agents and agent_id not in typical_agents:
             anomalies.append(await _record_anomaly(
@@ -174,19 +186,20 @@ async def analyse_alert(
             ))
 
     # ── 4. Multi-host burst ────────────────────────────────────────────────────
-    burst_window = timedelta(minutes=10)
-    burst_cutoff = ts - burst_window
-    recent_hosts = {a['agent_id'] for a in recent_alerts if a['timestamp'] >= burst_cutoff}
-    recent_hosts.add(agent_id)
-    if len(recent_hosts) >= 4:
-        anomalies.append(await _record_anomaly(
-            db, username, 'multi_host_burst',
-            f"Activity across {len(recent_hosts)} hosts in 10 minutes: {', '.join(list(recent_hosts)[:4])}",
-            incident_id, [alert.get('wazuh_id')],
-        ))
+    if 'multi_host_burst' not in disabled:
+        burst_window = timedelta(minutes=10)
+        burst_cutoff = ts - burst_window
+        recent_hosts = {a['agent_id'] for a in recent_alerts if a['timestamp'] >= burst_cutoff}
+        recent_hosts.add(agent_id)
+        if len(recent_hosts) >= 4:
+            anomalies.append(await _record_anomaly(
+                db, username, 'multi_host_burst',
+                f"Activity across {len(recent_hosts)} hosts in 10 minutes: {', '.join(list(recent_hosts)[:4])}",
+                incident_id, [alert.get('wazuh_id')],
+            ))
 
     # ── 5. Service account interactive ────────────────────────────────────────
-    if any(p in username.lower() for p in SERVICE_PATTERNS):
+    if 'svc_account_interactive' not in disabled and any(p in username.lower() for p in SERVICE_PATTERNS):
         if rule_id in AUTH_SUCCESS_IDS | {5501, 5502}:
             anomalies.append(await _record_anomaly(
                 db, username, 'svc_account_interactive',
@@ -195,7 +208,7 @@ async def analyse_alert(
             ))
 
     # ── 6. Privilege escalation ────────────────────────────────────────────────
-    if rule_id in PRIVESC_IDS:
+    if 'privilege_escalation' not in disabled and rule_id in PRIVESC_IDS:
         # Plain sudo during business hours by a regular user is normal admin
         # activity — flagging every sudo creates high noise with no signal value.
         # Only record an anomaly when at least one corroborating context is present:
@@ -213,7 +226,7 @@ async def analyse_alert(
             ))
 
     # ── 7. Impossible travel ───────────────────────────────────────────────────
-    if rule_id in AUTH_SUCCESS_IDS and recent_alerts:
+    if 'impossible_travel' not in disabled and rule_id in AUTH_SUCCESS_IDS and recent_alerts:
         travel_window = timedelta(minutes=2)
         recent_success = [
             a for a in recent_alerts
@@ -230,7 +243,7 @@ async def analyse_alert(
             ))
 
     # ── 8. Dormant account rebirth ──────────────────────────────────────────────
-    if rule_id in AUTH_SUCCESS_IDS:
+    if 'dormant_account_login' not in disabled and rule_id in AUTH_SUCCESS_IDS:
         last_seen_ts = baseline.updated_at
         if last_seen_ts:
             days_inactive = (ts - last_seen_ts.replace(tzinfo=timezone.utc)).days
@@ -242,7 +255,7 @@ async def analyse_alert(
                 ))
 
     # ── 9. Concurrent sessions from different agents ───────────────────────────
-    if rule_id in AUTH_SUCCESS_IDS and recent_alerts:
+    if 'concurrent_session' not in disabled and rule_id in AUTH_SUCCESS_IDS and recent_alerts:
         concurrent_window = timedelta(seconds=30)
         concurrent_sessions = [
             a for a in recent_alerts
@@ -259,7 +272,7 @@ async def analyse_alert(
             ))
 
     # ── 10. Activity volume spike (data hoarding precursor) ───────────────────
-    if rule_id in AUTH_SUCCESS_IDS or alert.get('category') == 'fim':
+    if 'activity_volume_spike' not in disabled and (rule_id in AUTH_SUCCESS_IDS or alert.get('category') == 'fim'):
         baseline_daily = float(baseline.avg_daily_events or 0)
         if baseline_daily > 0:
             recent_count = len(recent_alerts) + 1
@@ -273,7 +286,7 @@ async def analyse_alert(
 
     # ── 11. First-seen suspicious process ─────────────────────────────────────
     process = alert.get('process_name')
-    if process and alert.get('category') in ('malware', 'system'):
+    if 'suspicious_process' not in disabled and process and alert.get('category') in ('malware', 'system'):
         COMMON_PROCS = {'svchost.exe', 'explorer.exe', 'lsass.exe', 'winlogon.exe',
                         'csrss.exe', 'wininit.exe', 'services.exe', 'bash', 'sh',
                         'python3', 'python', 'node', 'systemd'}
@@ -290,7 +303,7 @@ async def analyse_alert(
                 ))
 
     # ── 12. Rapid privilege escalation attempts ────────────────────────────────
-    if rule_id in AUTH_FAIL_IDS:
+    if 'repeated_privesc_attempt' not in disabled and rule_id in AUTH_FAIL_IDS:
         recent_privesc_attempts = sum(1 for a in recent_alerts if a['rule_id'] in PRIVESC_IDS)
         if recent_privesc_attempts >= 3:
             anomalies.append(await _record_anomaly(
@@ -302,7 +315,7 @@ async def analyse_alert(
     # ── 13. MFA fatigue / push bombing ───────────────────────────────────────
     MFA_PROMPT_RULES = {'mfa prompt', 'push notification', 'mfa challenge',
                         'duo push', 'authenticator request', 'otp sent'}
-    if any(k in (alert.get('rule_desc') or '').lower() for k in MFA_PROMPT_RULES):
+    if 'mfa_fatigue' not in disabled and any(k in (alert.get('rule_desc') or '').lower() for k in MFA_PROMPT_RULES):
         recent_mfa_prompts = sum(
             1 for a in recent_alerts
             if a.get('username') == username and
@@ -318,8 +331,10 @@ async def analyse_alert(
     # ── 14. Data staging (mass file ops + archive tool) ───────────────────────
     ARCHIVE_SIGNALS = ('7z ', 'zip ', 'rar ', 'tar czf', 'compress-archive',
                        'gzip', 'bzip2', 'zstd', 'winrar')
-    if any(k in (alert.get('rule_desc') or '').lower() or k in (alert.get('raw_log') or '').lower()
-           for k in ARCHIVE_SIGNALS):
+    if 'data_staging' not in disabled and any(
+        k in (alert.get('rule_desc') or '').lower() or k in (alert.get('raw_log') or '').lower()
+        for k in ARCHIVE_SIGNALS
+    ):
         recent_fim = sum(1 for a in recent_alerts if a.get('category') == 'fim')
         if recent_fim >= 10:
             anomalies.append(await _record_anomaly(
@@ -331,8 +346,10 @@ async def analyse_alert(
     # ── 15. WMI-based execution ───────────────────────────────────────────────
     WMI_SIGNALS = ('wmic ', 'wmiprvse', 'win32_process create', 'wbemexec',
                    'invoke-wmimethod', 'wmi commandline')
-    if any(k in (alert.get('rule_desc') or '').lower() or k in (alert.get('raw_log') or '').lower()
-           for k in WMI_SIGNALS):
+    if 'wmi_execution' not in disabled and any(
+        k in (alert.get('rule_desc') or '').lower() or k in (alert.get('raw_log') or '').lower()
+        for k in WMI_SIGNALS
+    ):
         anomalies.append(await _record_anomaly(
             db, username, 'wmi_execution',
             f"WMI process execution by {username} on {alert.get('agent_name')} — possible lateral execution",
@@ -342,35 +359,45 @@ async def analyse_alert(
     # ── 16. Session token / cookie theft indicator ────────────────────────────
     TOKEN_SIGNALS = ('cookie theft', 'session hijack', 'token replay', 'stolen token',
                      'pass-the-cookie', 'session from new ip', 'session fixation')
-    if any(k in (alert.get('rule_desc') or '').lower() for k in TOKEN_SIGNALS):
-        anomalies.append(await _record_anomaly(
-            db, username, 'token_theft',
-            f"Session token theft indicator for {username}: {(alert.get('rule_desc') or '')[:80]}",
-            incident_id, [alert.get('wazuh_id')],
-        ))
-    # Heuristic: same user, 5+ distinct src_ip auth events in 2h.
-    # Threshold raised from 3 → 5: mobile users or VPN split-tunnel users
-    # regularly authenticate from 3-4 IPs (phone, laptop, home, VPN egress)
-    # without any credential compromise.
-    if rule_id in AUTH_SUCCESS_IDS:
-        distinct_ips = {a.get('src_ip') for a in recent_alerts
-                        if a.get('username') == username and a.get('src_ip')}
-        if len(distinct_ips) >= 5:
+    if 'token_theft' not in disabled:
+        if any(k in (alert.get('rule_desc') or '').lower() for k in TOKEN_SIGNALS):
             anomalies.append(await _record_anomaly(
                 db, username, 'token_theft',
-                f"Token theft heuristic: {username} authenticated from {len(distinct_ips)} IPs in 2h window",
+                f"Session token theft indicator for {username}: {(alert.get('rule_desc') or '')[:80]}",
                 incident_id, [alert.get('wazuh_id')],
             ))
+        # Heuristic: same user, 5+ distinct src_ip auth events in 2h.
+        # Threshold raised from 3 → 5: mobile users or VPN split-tunnel users
+        # regularly authenticate from 3-4 IPs (phone, laptop, home, VPN egress)
+        # without any credential compromise.
+        if rule_id in AUTH_SUCCESS_IDS:
+            distinct_ips = {a.get('src_ip') for a in recent_alerts
+                            if a.get('username') == username and a.get('src_ip')}
+            if len(distinct_ips) >= 5:
+                anomalies.append(await _record_anomaly(
+                    db, username, 'token_theft',
+                    f"Token theft heuristic: {username} authenticated from {len(distinct_ips)} IPs in 2h window",
+                    incident_id, [alert.get('wazuh_id')],
+                ))
 
     # ── 17. Cryptominer process / connection ──────────────────────────────────
     MINER_SIGNALS = ('xmrig', 'stratum+tcp', 'stratum+ssl', 'cryptonight', 'minexmr',
                      'xmrpool', 'nanopool', 'f2pool', 'nicehash', 'coinhive', 'mining pool')
-    if any(k in (alert.get('rule_desc') or '').lower() or k in (alert.get('raw_log') or '').lower()
-           for k in MINER_SIGNALS):
+    if 'crypto_miner' not in disabled and any(
+        k in (alert.get('rule_desc') or '').lower() or k in (alert.get('raw_log') or '').lower()
+        for k in MINER_SIGNALS
+    ):
         anomalies.append(await _record_anomaly(
             db, username, 'crypto_miner',
             f"Cryptomining activity on {alert.get('agent_name')} under {username}: {(alert.get('rule_desc') or '')[:80]}",
             incident_id, [alert.get('wazuh_id')],
+        ))
+
+    # ── Custom UEBA rules (user-authored, evaluated after all built-ins) ──────
+    if custom_rules:
+        from custom_rules_engine import run_custom_ueba_rules
+        anomalies.extend(await run_custom_ueba_rules(
+            db, alert, recent_alerts, incident_id, username, "user", custom_rules,
         ))
 
     # ── Update baseline ────────────────────────────────────────────────────────
@@ -424,6 +451,8 @@ async def _analyse_host_alert(
     recent_alerts: list[dict],
     incident_id: str,
     host_entity: str,
+    disabled: frozenset[str] = frozenset(),
+    custom_rules: list[dict] | None = None,
 ) -> list[UEBAAnomaly]:
     """Host-centric UEBA detectors when no username is available.
 
@@ -437,59 +466,68 @@ async def _analyse_host_alert(
     agent_id = alert['agent_id']
 
     # ── Multi-host burst (host touches 4+ agents in 10 min) ───────────────────
-    burst_cutoff = ts - timedelta(minutes=10)
-    burst_agents = {a['agent_id'] for a in recent_alerts if a['timestamp'] >= burst_cutoff}
-    burst_agents.add(agent_id)
-    if len(burst_agents) >= 4:
-        anomalies.append(await _record_anomaly(
-            db, host_entity, 'multi_host_burst',
-            f"Host-based burst: activity across {len(burst_agents)} agents in 10 min: "
-            f"{', '.join(list(burst_agents)[:4])}",
-            incident_id, [alert.get('wazuh_id')],
-        ))
-
-    # ── Impossible travel (same host appears on two src_ips within 2 min) ─────
-    travel_window = timedelta(minutes=2)
-    current_ip = alert.get('src_ip')
-    if current_ip:
-        recent_ips = {
-            a.get('src_ip') for a in recent_alerts
-            if a.get('src_ip')
-            and a['agent_id'] == agent_id
-            and ts - a['timestamp'] <= travel_window
-            and a.get('src_ip') != current_ip
-        }
-        if recent_ips:
+    if 'multi_host_burst' not in disabled:
+        burst_cutoff = ts - timedelta(minutes=10)
+        burst_agents = {a['agent_id'] for a in recent_alerts if a['timestamp'] >= burst_cutoff}
+        burst_agents.add(agent_id)
+        if len(burst_agents) >= 4:
             anomalies.append(await _record_anomaly(
-                db, host_entity, 'impossible_travel',
-                f"Agent {alert.get('agent_name', agent_id)} seen from {current_ip} "
-                f"and {next(iter(recent_ips))} within 2 minutes",
+                db, host_entity, 'multi_host_burst',
+                f"Host-based burst: activity across {len(burst_agents)} agents in 10 min: "
+                f"{', '.join(list(burst_agents)[:4])}",
                 incident_id, [alert.get('wazuh_id')],
             ))
 
-    # ── C2 beaconing pattern (≥5 outbound events with tight inter-arrival) ────
-    # Look for repeated network/outbound events with low time variance
-    outbound_ts = sorted(
-        a['timestamp'] for a in recent_alerts
-        if a['agent_id'] == agent_id
-        and a.get('rule_id', 0) >= 18100   # generic outbound / network rule range
-    )
-    if len(outbound_ts) >= 5:
-        intervals = [
-            (outbound_ts[i + 1] - outbound_ts[i]).total_seconds()
-            for i in range(len(outbound_ts) - 1)
-        ]
-        avg_iv = sum(intervals) / len(intervals)
-        if avg_iv > 0:
-            variance = sum((x - avg_iv) ** 2 for x in intervals) / len(intervals)
-            cv = (variance ** 0.5) / avg_iv   # coefficient of variation
-            if cv < 0.25 and avg_iv < 600:   # tight interval < 10 min
+    # ── Impossible travel (same host appears on two src_ips within 2 min) ─────
+    if 'impossible_travel' not in disabled:
+        travel_window = timedelta(minutes=2)
+        current_ip = alert.get('src_ip')
+        if current_ip:
+            recent_ips = {
+                a.get('src_ip') for a in recent_alerts
+                if a.get('src_ip')
+                and a['agent_id'] == agent_id
+                and ts - a['timestamp'] <= travel_window
+                and a.get('src_ip') != current_ip
+            }
+            if recent_ips:
                 anomalies.append(await _record_anomaly(
-                    db, host_entity, 'c2_beaconing',
-                    f"C2 beaconing pattern on {alert.get('agent_name', agent_id)}: "
-                    f"{len(outbound_ts)} outbound events, avg interval {avg_iv:.0f}s (CV={cv:.2f})",
+                    db, host_entity, 'impossible_travel',
+                    f"Agent {alert.get('agent_name', agent_id)} seen from {current_ip} "
+                    f"and {next(iter(recent_ips))} within 2 minutes",
                     incident_id, [alert.get('wazuh_id')],
                 ))
+
+    # ── C2 beaconing pattern (≥5 outbound events with tight inter-arrival) ────
+    # Look for repeated network/outbound events with low time variance
+    if 'c2_beaconing' not in disabled:
+        outbound_ts = sorted(
+            a['timestamp'] for a in recent_alerts
+            if a['agent_id'] == agent_id
+            and a.get('rule_id', 0) >= 18100   # generic outbound / network rule range
+        )
+        if len(outbound_ts) >= 5:
+            intervals = [
+                (outbound_ts[i + 1] - outbound_ts[i]).total_seconds()
+                for i in range(len(outbound_ts) - 1)
+            ]
+            avg_iv = sum(intervals) / len(intervals)
+            if avg_iv > 0:
+                variance = sum((x - avg_iv) ** 2 for x in intervals) / len(intervals)
+                cv = (variance ** 0.5) / avg_iv   # coefficient of variation
+                if cv < 0.25 and avg_iv < 600:   # tight interval < 10 min
+                    anomalies.append(await _record_anomaly(
+                        db, host_entity, 'c2_beaconing',
+                        f"C2 beaconing pattern on {alert.get('agent_name', agent_id)}: "
+                        f"{len(outbound_ts)} outbound events, avg interval {avg_iv:.0f}s (CV={cv:.2f})",
+                        incident_id, [alert.get('wazuh_id')],
+                    ))
+
+    if custom_rules:
+        from custom_rules_engine import run_custom_ueba_rules
+        anomalies.extend(await run_custom_ueba_rules(
+            db, alert, recent_alerts, incident_id, host_entity, "host", custom_rules,
+        ))
 
     if anomalies:
         log.info('ueba_host_anomalies', host=host_entity, count=len(anomalies),

@@ -4,14 +4,21 @@ cysiemstack/detection/import_sigma_rules.py
 ==============================================
 Bulk-imports SigmaHQ rules into cysiemstack/detection/rules/imported/,
 filtering to what this engine (sigma_engine.py) can actually load and
-evaluate. This is how the current 279-rule starter corpus was produced —
-run it again against a fresh clone to pull in more categories or pick up
-upstream updates.
+evaluate. Run it against a fresh SigmaHQ clone to (re)pull the full corpus
+or pick up upstream updates — full-corpus import is the current default
+posture (see sigma_engine.get_engine()), not an opt-in curated subset.
 
-Usage:
+Usage (single pass over the whole upstream rules/ tree — preserves
+upstream subdirectory structure under --dest, see the collision-avoidance
+note below):
     git clone --depth 1 https://github.com/SigmaHQ/sigma /tmp/sigma-upstream
+    python3 import_sigma_rules.py /tmp/sigma-upstream/rules \
+        --dest rules/imported
+
+Can also be pointed at a single upstream subdirectory if you want to
+refresh/add just one category:
     python3 import_sigma_rules.py /tmp/sigma-upstream/rules/cloud/aws \
-        --dest rules/imported/cloud/aws_cloudtrail
+        --dest rules/imported/cloud/aws
 
 What gets filtered out (and why — see docs/CYDATALAKE_MIGRATION_PLAN.md §4
 for the full writeup, this is a summary):
@@ -25,15 +32,17 @@ for the full writeup, this is a summary):
   - Rules whose `detection.condition` doesn't parse/evaluate cleanly against
     SigmaRule's condition grammar (reported, not silently dropped).
 
-What does NOT get filtered, but should make you cautious:
-  - Short/common field values (e.g. `event_type_id: 3`, `userIdentity.type:
-    Root`) are a real false-positive risk under this engine's haystack/
-    substring matching (no per-field structured lookup, no logsource-based
-    rule routing yet). This importer does not detect or filter these —
-    it's a structural limitation of the engine, not a per-rule property
-    that's easy to statically flag. This is why imported rules are
-    OPT-IN (SIGMA_IMPORTED_RULES_ENABLED=true) rather than loaded by
-    default — see sigma_engine.py's SigmaEngine.__init__ docstring.
+Field-matching false positives (e.g. a rule keyed on `event_type_id: 3`
+matching any event containing the substring "3") were a structural
+limitation of the OLD haystack/substring matcher with no logsource-based
+rule routing. sigma_engine.py now does real per-field lookup
+(`SigmaRule._lookup_field`) plus `logsource` product/category/service
+routing (`SigmaRule.matches_logsource`), which is why the imported corpus
+graduated from opt-in to loaded-by-default. This importer still can't
+statically prove a rule is noise-free against YOUR traffic — validate new
+imports with validate_sigma_rules.py (shadow-mode sample check) before
+assuming zero false positives, and SIGMA_IMPORTED_RULES_ENABLED=false stays
+available as a fast rollback if a real deployment turns up a noisy rule.
 """
 from __future__ import annotations
 import argparse
@@ -100,6 +109,7 @@ def main():
 
     imported, skipped = 0, 0
     skip_reasons: dict[str, int] = {}
+    seen_names: dict[str, int] = {}
 
     for path in sorted(src.rglob("*.yml")):
         try:
@@ -111,7 +121,19 @@ def main():
 
         ok, reason = _is_compatible(data)
         if ok:
-            shutil.copy(path, dest / path.name)
+            # Preserve the upstream relative directory structure instead of
+            # flattening into dest/path.name — a full-corpus bulk import
+            # pulls thousands of rules from many upstream subdirectories,
+            # and filenames collide across categories (e.g. the same
+            # generic rule name reused under both windows/ and linux/).
+            # Flattening would silently clobber one with the other.
+            rel = path.relative_to(src)
+            out_path = dest / rel
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            if out_path.exists():
+                seen_names[str(rel)] = seen_names.get(str(rel), 1) + 1
+                out_path = out_path.with_name(f"{out_path.stem}__{seen_names[str(rel)]}{out_path.suffix}")
+            shutil.copy(path, out_path)
             imported += 1
         else:
             skipped += 1
@@ -121,8 +143,9 @@ def main():
     print(f"Skipped {skipped} rule(s):")
     for reason, count in sorted(skip_reasons.items(), key=lambda x: -x[1]):
         print(f"  {count:4d}  {reason}")
-    print("\nRemember: imported rules are OPT-IN at runtime "
-          "(SIGMA_IMPORTED_RULES_ENABLED=true) — see sigma_engine.py.")
+    print("\nImported rules load by default at runtime now (SIGMA_IMPORTED_RULES_ENABLED=false "
+          "to roll back to the 3 starter rules only) — see sigma_engine.py. Run "
+          "validate_sigma_rules.py before deploying a fresh import.")
 
 
 if __name__ == "__main__":

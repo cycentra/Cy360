@@ -1861,11 +1861,19 @@ async def run_correlation(
     db: AsyncSession,
     incident: Incident,
     new_alert: dict,
+    disabled_rule_keys: frozenset[str] = frozenset(),
+    custom_rules: list[dict] | None = None,
 ) -> list[dict]:
     """
     Run all correlation rules against the incident's full alert set.
     Updates incident.correlated_rules with any newly-fired rules.
     Returns list of newly-fired rule dicts.
+
+    disabled_rule_keys — CR-xxx rule_ids toggled off via the Detection Rules
+    UI (rule_cache.get_disabled_correlation_keys()); skipped like an
+    already-fired rule. custom_rules — user-authored rules from
+    rule_cache.get_custom_correlation_rules(), evaluated after the built-ins
+    via custom_rules_engine.run_custom_correlation_rules().
     """
     # Fetch all alerts for this incident
     result = await db.execute(
@@ -1894,7 +1902,7 @@ async def run_correlation(
     sev_order     = ['low', 'medium', 'high', 'critical']
 
     for rule in ALL_RULES:
-        if rule.rule_id in already_fired:
+        if rule.rule_id in already_fired or rule.rule_id in disabled_rule_keys:
             continue
         # ENH-4: filter alerts to this rule's specific time window
         if new_alert.get('timestamp'):
@@ -1919,6 +1927,11 @@ async def run_correlation(
             # Escalate incident severity
             if sev_order.index(rule.severity) > sev_order.index(incident.severity or 'low'):
                 incident.severity = rule.severity
+
+    if custom_rules:
+        from custom_rules_engine import run_custom_correlation_rules
+        custom_fired = await run_custom_correlation_rules(incident, alerts, new_alert, custom_rules)
+        newly_fired.extend(custom_fired)
 
     if newly_fired:
         incident.correlated_rules = (incident.correlated_rules or []) + newly_fired

@@ -142,7 +142,7 @@ def _normalize_paloalto(incident: dict[str, Any]) -> dict[str, Any]:
 def _sigma_envelope(vendor: str, raw: dict[str, Any], entity: str) -> Optional[dict[str, Any]]:
     try:
         from .detection.sigma_engine import get_engine, CONNECTOR_SIGMA_RULE_IDS
-        matched = get_engine().match_raw(raw)
+        matched = get_engine().match_raw(raw, logsource_hint={"product": vendor})
     except Exception as exc:
         _log.debug("Connector bridge: Sigma match skipped for %s: %s", vendor, exc)
         return None

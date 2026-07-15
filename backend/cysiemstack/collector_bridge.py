@@ -46,6 +46,15 @@ _RULE_LEVEL = 3   # normaliser.MIN_RULE_LEVEL floor -> grouper maps this to 'low
 # level → rule_level, mirrors grouper._score_to_severity() thresholds
 _SIGMA_LEVELS = {"critical": 15, "high": 12, "medium": 7, "low": 3}
 
+# CyCollector's reader source_type -> Sigma logsource `product`, so the
+# engine only evaluates rules declared for the OS a given event actually
+# came from (see sigma_engine.SigmaRule.matches_logsource).
+_SOURCE_TYPE_PRODUCT = {
+    "journald": "linux", "syslog": "linux",
+    "oslog": "macos",
+    "windows_eventlog": "windows",
+}
+
 _redis_client = None
 
 
@@ -78,7 +87,8 @@ def _wrap_as_wazuh(agent: dict[str, Any], event: dict[str, Any]) -> dict[str, An
     rule_id, level, description = _RULE_ID, _RULE_LEVEL, f"[CyCollector] {program or source_type}"
     try:
         from .detection.sigma_engine import get_engine, SIGMA_RULE_IDS
-        matched = get_engine().match(event)
+        hint = {"product": _SOURCE_TYPE_PRODUCT.get(source_type, source_type)}
+        matched = get_engine().match(event, logsource_hint=hint)
         if matched:
             rule_id     = SIGMA_RULE_IDS[matched.level]
             level       = _SIGMA_LEVELS[matched.level]

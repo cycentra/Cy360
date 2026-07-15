@@ -21,6 +21,7 @@ from normaliser import normalise
 from grouper import group_alert
 from correlator import run_correlation
 from ueba import analyse_alert
+import rule_cache
 from risk_scorer import calculate_entity_risk, compute_fp_score, CLOUD_ENTITY_NAMES
 from cytim_enricher import enrich_incident as cytim_enrich_incident
 from llm_enricher import enrich_incident as llm_enrich_incident, _store_incident_pattern
@@ -136,8 +137,17 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
             # 1. Group → Incident
             incident, created = await group_alert(db, alert)
 
+            # 1b. Rule toggles + custom rules — cached in-process, refreshed on
+            # write (rule_cache.invalidate()) or a 30s TTL fallback (see rule_cache.py)
+            disabled_corr_keys = await rule_cache.get_disabled_correlation_keys()
+            disabled_ueba_keys = await rule_cache.get_disabled_ueba_keys()
+            custom_corr_rules  = await rule_cache.get_custom_correlation_rules()
+            custom_ueba_rules  = await rule_cache.get_custom_ueba_rules()
+
             # 2. Correlation rules
-            new_rules = await run_correlation(db, incident, alert)
+            new_rules = await run_correlation(db, incident, alert,
+                                               disabled_rule_keys=disabled_corr_keys,
+                                               custom_rules=custom_corr_rules)
 
             # 3. UEBA — user-based and host-based paths
             ueba_anomalies = []
@@ -145,7 +155,9 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                 cutoff = alert["timestamp"] - UEBA_CONTEXT_WINDOW
                 recent = await _get_recent_user_alerts(db, alert["username"], cutoff)
                 ueba_anomalies  = await analyse_alert(db, alert, recent, incident.id,
-                                                      entity_type="user")
+                                                      entity_type="user",
+                                                      disabled=disabled_ueba_keys,
+                                                      custom_rules=custom_ueba_rules)
                 ml_anomalies    = await ml_analyse_alert(db, alert, recent, incident.id)
                 ueba_anomalies.extend(ml_anomalies)
             else:
@@ -178,7 +190,9 @@ async def _do_process_alert(raw_bytes: bytes, pubsub: aioredis.Redis):
                         _ueba_ctx_cache[cache_key] = (now_ts_cache, recent_host)
 
                     ueba_anomalies = await analyse_alert(db, alert, recent_host, incident.id,
-                                                         entity_type="host")
+                                                         entity_type="host",
+                                                         disabled=disabled_ueba_keys,
+                                                         custom_rules=custom_ueba_rules)
 
             # 4. Risk scoring — throttled per entity to avoid 8 DB queries per alert
             now_ts = time.monotonic()
