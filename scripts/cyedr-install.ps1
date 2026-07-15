@@ -334,11 +334,16 @@ function Invoke-Enrollment {
     try {
         $resp = Invoke-ApiJson -Method POST -Uri "$Platform/api/edr/agents/self-enroll" -Body $body
         $agentId = $resp.agent_id
+        $enrollToken = $resp.enrollment_token
         if (-not $agentId) { Write-CyError "Enrollment response missing agent_id: $resp" }
+        if (-not $enrollToken) { Write-CyError "Enrollment response missing enrollment_token: $resp" }
 
-        # Update config with agent_id
+        # Update config with agent_id AND the per-agent enrollment_token — without the
+        # latter, the agent falls back to the shared deploy_token for heartbeat/telemetry
+        # auth, which never matches the server's per-agent token and 401s permanently.
         $cfg = Get-Content "$EdrHome\config.json" | ConvertFrom-Json
         $cfg | Add-Member -NotePropertyName "agent_id" -NotePropertyValue $agentId -Force
+        $cfg | Add-Member -NotePropertyName "enrollment_token" -NotePropertyValue $enrollToken -Force
         $cfg | ConvertTo-Json -Depth 5 | Out-File -FilePath "$EdrHome\config.json" -Encoding UTF8
 
         Write-CyOk "Enrolled — Agent ID: $agentId"

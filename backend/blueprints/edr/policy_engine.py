@@ -487,8 +487,36 @@ def revoke_deployment_token(db_url: str, tok_id: str) -> None:
         conn.close()
 
 
+def check_deployment_token_valid(db_url: str, token: str) -> bool:
+    """Read-only validity check (revoked / expired / max_uses) — does NOT
+    increment used_count. A single install downloads several gated assets
+    (agent binary, YARA rules, Sysmon config, ...) before the agent ever
+    self-enrolls; none of those downloads represent a distinct agent 'use'."""
+    conn = _db(db_url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, expires_at, used_count, max_uses, revoked
+                FROM edr_deployment_tokens WHERE token=%s
+                """,
+                [token],
+            )
+            row = cur.fetchone()
+            if not row or row["revoked"]:
+                return False
+            if row["expires_at"] and row["expires_at"] < datetime.now(timezone.utc):
+                return False
+            if row["max_uses"] > 0 and row["used_count"] >= row["max_uses"]:
+                return False
+        return True
+    finally:
+        conn.close()
+
+
 def validate_deployment_token(db_url: str, token: str) -> bool:
-    """Called during agent self-enrollment to validate a deployment token."""
+    """Called during agent self-enrollment — the only point that actually
+    consumes a 'use' against max_uses (one enrolled agent = one use)."""
     conn = _db(db_url)
     try:
         with conn.cursor() as cur:

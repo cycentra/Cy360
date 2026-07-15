@@ -298,6 +298,14 @@ def init_itam_tables(db_url: str) -> None:
             ensure_exploit_tables(conn)
         except Exception as _e:
             _log.debug("exploit_intel init skipped: %s", _e)
+        try:
+            # Required unconditionally by GET /assets (LEFT JOIN software_inventory) —
+            # previously only created lazily after a deep scan, so /assets 500'd on
+            # any deployment where no deep scan had ever run.
+            from blueprints.itam.software_inventory import ensure_software_tables
+            ensure_software_tables(conn)
+        except Exception as _e:
+            _log.debug("software_inventory init skipped: %s", _e)
 
         # Backfill discovery_source from source for rows where discovery_source
         # was never set (defaults to 'manual' even for EDR/SIEM auto-registered assets)

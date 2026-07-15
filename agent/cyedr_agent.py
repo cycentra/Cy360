@@ -48,7 +48,7 @@ except ImportError:
 
 # ── Globals ────────────────────────────────────────────────────────────────────
 VERSION       = "1.0.0"
-AGENT_VERSION = "1.0.206"           # bumped with every platform release; drives self-update
+AGENT_VERSION = "1.0.224"           # bumped with every platform release; drives self-update
 OS_TYPE       = platform.system().upper()   # LINUX, DARWIN, WINDOWS
 _RUNNING      = True
 _STOP_EVENT   = threading.Event()
@@ -366,7 +366,12 @@ def _self_update(cfg: "Config", http: "requests.Session", server_version: str) -
             tmp_path.chmod(script_path.stat().st_mode)
             tmp_path.replace(script_path)
             logger.info("Self-update: script applied %s — restarting", server_version)
-            sys.exit(0)
+            # _self_update() runs inside the Heartbeat background thread, not the
+            # main thread — sys.exit() there only raises SystemExit in that thread
+            # and silently leaves the process (and old in-memory code) running
+            # forever. os._exit() terminates the whole process unconditionally so
+            # systemd's Restart=always actually relaunches with the new script.
+            os._exit(0)
         except Exception as exc:
             logger.error("Self-update (script) failed: %s", exc)
             try:
@@ -409,7 +414,7 @@ def _self_update(cfg: "Config", http: "requests.Session", server_version: str) -
         tmp_path.chmod(script_path.stat().st_mode | 0o111)  # ensure executable
         tmp_path.replace(script_path)   # atomic POSIX rename — safe while binary is running
         logger.info("Self-update: binary %s applied — restarting via service manager", server_version)
-        sys.exit(0)
+        os._exit(0)  # see script-mode comment above — must exit the whole process, not this thread
     except Exception as exc:
         logger.error("Self-update (binary) failed: %s", exc)
         try:
@@ -2506,10 +2511,13 @@ class CommandPoller(threading.Thread):
 # ── Heartbeat ──────────────────────────────────────────────────────────────────
 class Heartbeat(threading.Thread):
 
+    _RECOVERY_COOLDOWN = 300  # seconds — avoid hammering self-enroll if deploy_token is also bad
+
     def __init__(self, http: requests.Session, cfg: Config):
         super().__init__(daemon=True, name="Heartbeat")
         self._http = http
         self._cfg  = cfg
+        self._last_recovery_attempt = 0.0
 
     def run(self):
         while not _STOP_EVENT.is_set():
@@ -2577,6 +2585,21 @@ class Heartbeat(threading.Thread):
                 server_ver = data.get("agent_version", "")
                 if server_ver and server_ver != AGENT_VERSION:
                     _self_update(self._cfg, self._http, server_ver)
+            elif resp.status_code in (401, 403):
+                # Bearer token is stale/rotated — self-heal by re-enrolling with the
+                # still-valid deploy_token, rather than 401-ing forever until someone
+                # notices the agent went offline. Cooldown avoids hammering the server
+                # if deploy_token itself has since been revoked/expired.
+                now = time.time()
+                if now - self._last_recovery_attempt >= self._RECOVERY_COOLDOWN:
+                    self._last_recovery_attempt = now
+                    logger.warning(
+                        "Heartbeat auth failed (%s) — attempting enrollment recovery",
+                        resp.status_code,
+                    )
+                    ensure_enrolled(self._cfg, self._http, force=True)
+            else:
+                logger.debug("Heartbeat returned %s", resp.status_code)
         except Exception as exc:
             logger.debug("Heartbeat error: %s", exc)
 
@@ -3159,8 +3182,13 @@ class NetworkProbePoller(threading.Thread):
 
 
 # ── Self-enrollment (if no agent_id yet) ──────────────────────────────────────
-def ensure_enrolled(cfg: Config, http: requests.Session):
-    if cfg.agent_id:
+def ensure_enrolled(cfg: Config, http: requests.Session, force: bool = False):
+    """`force=True` re-enrolls even if cfg.agent_id is already set — used by the
+    heartbeat self-heal path (see Heartbeat._beat) to recover from a rotated or
+    stale enrollment_token using the still-valid, never-rotated deploy_token.
+    The server matches the existing row by hardware_uuid/hostname and UPDATEs
+    it, so this never creates a duplicate agent."""
+    if cfg.agent_id and not force:
         logger.info("Agent already enrolled: %s", cfg.agent_id)
         return
 

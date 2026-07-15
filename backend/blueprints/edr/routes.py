@@ -1412,8 +1412,8 @@ def _require_deploy_token():
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return jsonify({"error": "Bearer deployment token required"}), 401
-    from .policy_engine import validate_deployment_token
-    if not validate_deployment_token(CYCENTRA_DB_URL, auth[7:]):
+    from .policy_engine import check_deployment_token_valid
+    if not check_deployment_token_valid(CYCENTRA_DB_URL, auth[7:]):
         return jsonify({"error": "Invalid or expired deployment token"}), 401
     return None  # OK
 

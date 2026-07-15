@@ -329,15 +329,6 @@ deploy_agent() {
         -o "$EDR_HOME/yara_rules/cycentra.yar" 2>/dev/null \
         || warn "YARA rules download failed — local scanning will use built-in signatures only"
 
-    # Preserve existing enrollment credentials + hardware UUID before overwriting config.
-    # Without this, every reinstall creates a duplicate agent in the fleet.
-    _PREV_AGENT_ID=""; _PREV_TOKEN=""; _PREV_HW_UUID=""
-    if [[ -f "$EDR_HOME/config.json" ]]; then
-        _PREV_AGENT_ID=$(python3 -c "import json; d=json.load(open('$EDR_HOME/config.json')); print(d.get('agent_id',''))" 2>/dev/null || true)
-        _PREV_TOKEN=$(python3 -c "import json; d=json.load(open('$EDR_HOME/config.json')); print(d.get('enrollment_token',''))" 2>/dev/null || true)
-        _PREV_HW_UUID=$(python3 -c "import json; d=json.load(open('$EDR_HOME/config.json')); print(d.get('hardware_uuid',''))" 2>/dev/null || true)
-    fi
-
     # Write agent config
     HOSTNAME="$(hostname -f 2>/dev/null || hostname)"
     YARA_BIN="$(resolve_yara_binary)"
@@ -360,22 +351,10 @@ deploy_agent() {
 }
 CONF
 
-    # Re-inject enrollment credentials so the agent skips re-enrollment on restart.
-    if [[ -n "$_PREV_AGENT_ID" && -n "$_PREV_TOKEN" ]]; then
-        python3 - << PYINLINE
-import json
-with open("$EDR_HOME/config.json") as f:
-    cfg = json.load(f)
-cfg["agent_id"]         = "$_PREV_AGENT_ID"
-cfg["enrollment_token"] = "$_PREV_TOKEN"
-if "$_PREV_HW_UUID":
-    cfg["hardware_uuid"] = "$_PREV_HW_UUID"
-with open("$EDR_HOME/config.json", "w") as f:
-    json.dump(cfg, f, indent=2)
-PYINLINE
-        ok "Preserved existing enrollment (Agent ID: $_PREV_AGENT_ID)"
-    fi
-
+    # agent_id/enrollment_token are intentionally left unset here — enroll_agent()
+    # always re-enrolls fresh below and writes the current, valid token. Carrying
+    # a stale token forward across reinstalls previously left agents permanently
+    # broken with no way to recover short of manually editing config.json.
     chmod 600 "$EDR_HOME/config.json"
     ok "CyEDR agent deployed to $EDR_HOME"
 }
@@ -579,19 +558,11 @@ PLIST
 
 # ── Enroll with platform ───────────────────────────────────────────────────────
 enroll_agent() {
-    # Skip enrollment if a valid agent_id + enrollment_token already exist in config
-    if [[ -f "$EDR_HOME/config.json" ]]; then
-        local _existing_id _existing_tok
-        _existing_id=$(python3 -c "import json,sys; d=json.load(open('$EDR_HOME/config.json')); print(d.get('agent_id',''))" 2>/dev/null || true)
-        _existing_tok=$(python3 -c "import json,sys; d=json.load(open('$EDR_HOME/config.json')); print(d.get('enrollment_token',''))" 2>/dev/null || true)
-        if [[ -n "$_existing_id" && -n "$_existing_tok" ]]; then
-            AGENT_ID="$_existing_id"
-            ENROLLMENT_TOKEN="$_existing_tok"
-            ok "Re-using existing enrollment — Agent ID: $AGENT_ID"
-            return
-        fi
-    fi
-
+    # Always re-enroll, even on reinstall. self_enroll_agent() on the server matches
+    # the existing row by hardware_uuid/hostname and UPDATEs it rather than inserting
+    # a duplicate, so this is safe — and it guarantees the agent always ends up with
+    # the current, valid enrollment_token instead of silently carrying a stale one
+    # forward across reinstalls.
     info "Enrolling with CyCentra 360 platform..."
     HOSTNAME="$(hostname -f 2>/dev/null || hostname)"
 
