@@ -4676,6 +4676,8 @@ _uninstall_cysiem() {{
         rm -rf /var/ossec 2>/dev/null || true
         rm -f /etc/audit/rules.d/cy360-baseline.rules 2>/dev/null || true
         command -v augenrules &>/dev/null && augenrules --load 2>/dev/null || true
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl reset-failed  2>/dev/null || true
     else
         /Library/Ossec/bin/wazuh-control stop 2>/dev/null || true
         launchctl unload /Library/LaunchDaemons/com.wazuh.agent.plist 2>/dev/null || true
@@ -4688,13 +4690,17 @@ _uninstall_cysiem() {{
 _uninstall_cyedr() {{
     info "Stopping CyEDR Agent service..."
     if [[ "$OS" == Linux ]]; then
-        systemctl stop    cyedr-agent    2>/dev/null || true
-        systemctl stop    cyedr-watchdog 2>/dev/null || true
-        systemctl disable cyedr-agent    2>/dev/null || true
-        systemctl disable cyedr-watchdog 2>/dev/null || true
+        systemctl stop    cyedr-agent           2>/dev/null || true
+        systemctl stop    cyedr-watchdog.timer  2>/dev/null || true
+        systemctl stop    cyedr-watchdog        2>/dev/null || true
+        systemctl disable cyedr-agent           2>/dev/null || true
+        systemctl disable cyedr-watchdog.timer  2>/dev/null || true
+        systemctl disable cyedr-watchdog        2>/dev/null || true
         rm -f /etc/systemd/system/cyedr-agent.service    2>/dev/null || true
         rm -f /etc/systemd/system/cyedr-watchdog.service 2>/dev/null || true
-        systemctl daemon-reload 2>/dev/null || true
+        rm -f /etc/systemd/system/cyedr-watchdog.timer   2>/dev/null || true
+        systemctl daemon-reload  2>/dev/null || true
+        systemctl reset-failed   2>/dev/null || true
         rm -rf /opt/cycentra/edr 2>/dev/null || true
         rm -f /etc/audit/rules.d/60-cyedr.rules 2>/dev/null || true
         command -v augenrules &>/dev/null && augenrules --load 2>/dev/null || true

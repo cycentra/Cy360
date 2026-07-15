@@ -1119,14 +1119,16 @@ def get_policies():
 @require_admin
 def post_policy():
     body = request.get_json(force=True, silent=True) or {}
-    name        = (body.get("name") or "").strip()
-    policy_type = body.get("policy_type", "")
+    name         = (body.get("name") or "").strip()
+    policy_types = body.get("policy_types")
+    if policy_types is None and body.get("policy_type"):
+        policy_types = [body["policy_type"]]  # legacy single-type callers
     config      = body.get("config", {})
     description = body.get("description", "")
     if not name:
         return jsonify({"error": "name required"}), 400
     try:
-        pol = create_policy(CYCENTRA_DB_URL, name, policy_type, config, description,
+        pol = create_policy(CYCENTRA_DB_URL, name, policy_types or [], config, description,
                             session.get("user_email", "system"))
         auth_event(session.get("user_email", ""), "edr_policy_create", f"Created policy: {name}")
         return jsonify(pol), 201

@@ -1,8 +1,9 @@
 /**
  * pages/edr/EdrPoliciesPage.jsx — CyEDR Policy Management Console
  *
- * Full policy management: create, edit, and assign endpoint policies across
- * all 7 policy types mirroring enterprise EDR vendors:
+ * Full policy management: create, edit, and assign endpoint policies. A
+ * single policy may combine multiple rule types below, mirroring enterprise
+ * EDR vendors:
  *
  *   threat_prevention   — real-time AI, quarantine, CyScan, ransomware rollback
  *   device_control      — USB, WiFi, Bluetooth, camera, microphone, clipboard
@@ -13,7 +14,6 @@
  *   isolation_exceptions — IPs/ports reachable during network isolation
  */
 import React, { useEffect, useState, useCallback, useRef } from "react";
-import { CyScanRulesContent } from "./EdrCyScanRulesPage";
 
 const BG      = "#0a0e1a";
 const CARD_BG = "rgba(255,255,255,0.03)";
@@ -477,7 +477,9 @@ function AssignModal({ policy, agents, groups, onClose, onAssigned }) {
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999 }}>
       <div style={{ background:"#12182b", border:BORDER, borderRadius:12, padding:24, maxWidth:500, width:"90%", maxHeight:"80vh", display:"flex", flexDirection:"column" }}>
         <div style={{ fontSize:15, fontWeight:700, color:"#e8eaf0", marginBottom:4 }}>Assign Policy</div>
-        <div style={{ fontSize:12, color:"#555", marginBottom:16 }}>{policy.name} → {policy.policy_type}</div>
+        <div style={{ fontSize:12, color:"#555", marginBottom:16 }}>
+          {policy.name} → {(policy.policy_types || [policy.policy_type]).map(t => POLICY_TYPE_CFG[t]?.label || t).join(", ")}
+        </div>
         <div style={{ display:"flex", gap:8, marginBottom:14 }}>
           {["agent","group"].map(t => (
             <button key={t} onClick={()=>{setTargetType(t);setSelected([]);}} style={{
@@ -627,10 +629,35 @@ function GroupsTab({ agents }) {
   );
 }
 
+// ── Multi-select rule-type picker (create + edit panels) ──────────────────────
+function TypeMultiSelect({ selected, onToggle }) {
+  return (
+    <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+      {Object.entries(POLICY_TYPE_CFG).map(([t,cfg]) => {
+        const on = selected.includes(t);
+        return (
+          <span key={t} onClick={()=>onToggle(t)} style={{
+            display:"flex", alignItems:"center", gap:6, cursor:"pointer",
+            border:`1px solid ${on?cfg.color:"#333"}66`, borderRadius:6,
+            background:on?`${cfg.color}22`:"transparent",
+            color:on?cfg.color:"#666", padding:"5px 12px", fontSize:11,
+          }}>
+            <span style={{
+              width:13, height:13, borderRadius:3, flexShrink:0,
+              border:`1.5px solid ${on?cfg.color:"#444"}`, background:on?cfg.color:"transparent",
+              display:"flex", alignItems:"center", justifyContent:"center",
+            }}>{on && <span style={{ color:"#0a0e1a", fontSize:9, fontWeight:700 }}>✓</span>}</span>
+            {cfg.icon} {cfg.label}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 const PAGE_TABS = [
-  { id:"policies", label:"Policies",     icon:"📋" },
-  { id:"cyscan",   label:"CyScan Rules", icon:"🧬" },
-  { id:"groups",   label:"Groups",       icon:"👥" },
+  { id:"policies", label:"Policies", icon:"📋" },
+  { id:"groups",   label:"Groups",   icon:"👥" },
 ];
 
 // ── Main page ─────────────────────────────────────────────────────────────────
@@ -642,10 +669,10 @@ export default function EdrPoliciesPage() {
   const [loading,    setLoading]   = useState(true);
   const [editing,    setEditing]   = useState(null);   // policy being edited
   const [creating,   setCreating]  = useState(false);
-  const [newType,    setNewType]   = useState("threat_prevention");
+  const [newTypes,   setNewTypes]  = useState(["threat_prevention"]);
   const [newName,    setNewName]   = useState("");
   const [newDesc,    setNewDesc]   = useState("");
-  const [newConfig,  setNewConfig] = useState({});
+  const [newConfig,  setNewConfig] = useState({});      // { [policy_type]: config }
   const [assigning,  setAssigning] = useState(null);  // policy to assign
   const [filterType, setFilterType] = useState("");
   const [saving,     setSaving]    = useState(false);
@@ -672,13 +699,22 @@ export default function EdrPoliciesPage() {
   useEffect(() => { load(); }, [load]);
 
   const startCreate = () => {
-    setNewConfig(JSON.parse(JSON.stringify(defaults[newType] || {})));
+    const cfg = {};
+    for (const t of newTypes) cfg[t] = JSON.parse(JSON.stringify(defaults[t] || {}));
+    setNewConfig(cfg);
     setCreating(true);
   };
 
-  const handleTypeChange = (t) => {
-    setNewType(t);
-    setNewConfig(JSON.parse(JSON.stringify(defaults[t] || {})));
+  const toggleNewType = (t) => {
+    setNewTypes(curr => {
+      if (curr.includes(t)) {
+        if (curr.length === 1) return curr; // at least one type required
+        setNewConfig(cfg => { const { [t]:_, ...rest } = cfg; return rest; });
+        return curr.filter(x => x !== t);
+      }
+      setNewConfig(cfg => ({ ...cfg, [t]: JSON.parse(JSON.stringify(defaults[t] || {})) }));
+      return [...curr, t];
+    });
   };
 
   const saveNew = async () => {
@@ -688,7 +724,7 @@ export default function EdrPoliciesPage() {
       const res = await fetch("/api/edr/policies", {
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ name:newName, policy_type:newType, config:newConfig, description:newDesc }),
+        body: JSON.stringify({ name:newName, policy_types:newTypes, config:newConfig, description:newDesc }),
       });
       if (!res.ok) throw new Error((await res.json()).error || res.status);
       setCreating(false); setNewName(""); setNewDesc("");
@@ -697,13 +733,32 @@ export default function EdrPoliciesPage() {
     finally { setSaving(false); }
   };
 
+  const toggleEditType = (t) => {
+    setEditing(curr => {
+      const types = curr.policy_types || [curr.policy_type];
+      if (types.includes(t)) {
+        if (types.length === 1) return curr; // at least one type required
+        const { [t]:_, ...restConfig } = curr.config;
+        return { ...curr, policy_types: types.filter(x => x !== t), config: restConfig };
+      }
+      return {
+        ...curr,
+        policy_types: [...types, t],
+        config: { ...curr.config, [t]: JSON.parse(JSON.stringify(defaults[t] || {})) },
+      };
+    });
+  };
+
   const saveEdit = async () => {
     setSaving(true); setError("");
     try {
       const res = await fetch(`/api/edr/policies/${editing.id}`, {
         method:"PUT",
         headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ name:editing.name, description:editing.description, config:editing.config, enabled:editing.enabled }),
+        body: JSON.stringify({
+          name:editing.name, description:editing.description, config:editing.config,
+          enabled:editing.enabled, policy_types: editing.policy_types || [editing.policy_type],
+        }),
       });
       if (!res.ok) throw new Error((await res.json()).error || res.status);
       setEditing(null); load();
@@ -717,9 +772,9 @@ export default function EdrPoliciesPage() {
     load();
   };
 
-  const filtered = filterType ? policies.filter(p => p.policy_type === filterType) : policies;
-  const EditorComponent = editing ? EDITORS[editing.policy_type] : null;
-  const NewEditorComponent = creating ? EDITORS[newType] : null;
+  const filtered = filterType
+    ? policies.filter(p => (p.policy_types || [p.policy_type]).includes(filterType))
+    : policies;
 
   return (
     <div style={{ padding:"28px 32px", minHeight:"100vh", background:BG }}>
@@ -745,7 +800,6 @@ export default function EdrPoliciesPage() {
         ))}
       </div>
 
-      {activeTab==="cyscan" && <CyScanRulesContent />}
       {activeTab==="groups" && <GroupsTab agents={agents} />}
       {activeTab==="policies" && (<>
 
@@ -783,30 +837,32 @@ export default function EdrPoliciesPage() {
       {creating && (
         <div style={{ background:CARD_BG, border:BORDER, borderRadius:12, padding:"20px 24px", marginBottom:24 }}>
           <div style={{ fontSize:14, fontWeight:700, color:"#e8eaf0", marginBottom:16 }}>Create Policy</div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:14 }}>
-            <div>
-              <div style={{ fontSize:11, color:"#555", marginBottom:4 }}>Policy Name</div>
-              <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="e.g. Production Workstations — Strict"
-                style={{ background:"rgba(255,255,255,0.05)", border:BORDER, borderRadius:6, color:"#e8eaf0", padding:"7px 12px", fontSize:12, width:"100%", boxSizing:"border-box", outline:"none" }}/>
-            </div>
-            <div>
-              <div style={{ fontSize:11, color:"#555", marginBottom:4 }}>Policy Type</div>
-              <select value={newType} onChange={e=>handleTypeChange(e.target.value)}
-                style={{ background:"rgba(255,255,255,0.05)", border:BORDER, borderRadius:6, color:"#e8eaf0", padding:"7px 12px", fontSize:12, width:"100%", cursor:"pointer" }}>
-                {Object.entries(POLICY_TYPE_CFG).map(([t,cfg]) => (
-                  <option key={t} value={t}>{cfg.icon} {cfg.label}</option>
-                ))}
-              </select>
-            </div>
+          <div style={{ marginBottom:14 }}>
+            <div style={{ fontSize:11, color:"#555", marginBottom:4 }}>Policy Name</div>
+            <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="e.g. Production Workstations — Strict"
+              style={{ background:"rgba(255,255,255,0.05)", border:BORDER, borderRadius:6, color:"#e8eaf0", padding:"7px 12px", fontSize:12, width:"100%", boxSizing:"border-box", outline:"none" }}/>
+          </div>
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontSize:11, color:"#555", marginBottom:6 }}>Rule Types — a policy can cover multiple types at once</div>
+            <TypeMultiSelect selected={newTypes} onToggle={toggleNewType} />
           </div>
           <div style={{ marginBottom:16 }}>
             <div style={{ fontSize:11, color:"#555", marginBottom:4 }}>Description (optional)</div>
             <input value={newDesc} onChange={e=>setNewDesc(e.target.value)} placeholder="Brief description of this policy's purpose"
               style={{ background:"rgba(255,255,255,0.05)", border:BORDER, borderRadius:6, color:"#e8eaf0", padding:"7px 12px", fontSize:12, width:"100%", boxSizing:"border-box", outline:"none" }}/>
           </div>
-          <div style={{ borderTop:BORDER, paddingTop:16, marginBottom:16 }}>
-            {NewEditorComponent && <NewEditorComponent config={newConfig} onChange={setNewConfig} />}
-          </div>
+          {newTypes.map(t => {
+            const TypeEditor = EDITORS[t];
+            if (!TypeEditor) return null;
+            return (
+              <div key={t} style={{ borderTop:BORDER, paddingTop:16, marginBottom:16 }}>
+                <div style={{ fontSize:12, fontWeight:700, color:POLICY_TYPE_CFG[t]?.color, marginBottom:14 }}>
+                  {POLICY_TYPE_CFG[t]?.icon} {POLICY_TYPE_CFG[t]?.label}
+                </div>
+                <TypeEditor config={newConfig[t] || {}} onChange={c=>setNewConfig({ ...newConfig, [t]:c })} />
+              </div>
+            );
+          })}
           <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
             <button onClick={()=>setCreating(false)} style={{ border:BORDER, borderRadius:6, background:"transparent", color:"#888", padding:"7px 18px", cursor:"pointer" }}>Cancel</button>
             <button onClick={saveNew} disabled={saving} style={{ border:"none", borderRadius:6, background:ACCENT, color:"#0a0e1a", fontWeight:700, padding:"7px 20px", cursor:"pointer", opacity:saving?0.6:1 }}>{saving?"Saving…":"Create Policy"}</button>
@@ -824,38 +880,62 @@ export default function EdrPoliciesPage() {
       ) : (
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
           {filtered.map(pol => {
-            const typeCfg = POLICY_TYPE_CFG[pol.policy_type] || {};
+            const polTypes = pol.policy_types || [pol.policy_type];
+            const primaryCfg = POLICY_TYPE_CFG[polTypes[0]] || {};
             const isEditingThis = editing?.id === pol.id;
+            const editTypes = isEditingThis ? (editing.policy_types || [editing.policy_type]) : [];
             return (
               <div key={pol.id} style={{
                 background:CARD_BG, border:BORDER, borderRadius:10,
-                borderLeft:`3px solid ${typeCfg.color||"#888"}`,
+                borderLeft:`3px solid ${primaryCfg.color||"#888"}`,
                 overflow:"hidden",
               }}>
                 <div style={{ padding:"14px 20px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-                  <span style={{ fontSize:18 }}>{typeCfg.icon}</span>
+                  <span style={{ fontSize:18 }}>{primaryCfg.icon}</span>
                   <div style={{ flex:1, minWidth:160 }}>
                     <div style={{ fontSize:14, fontWeight:700, color:"#e8eaf0" }}>{pol.name}</div>
-                    <div style={{ fontSize:11, color:"#555", marginTop:2 }}>
-                      {typeCfg.label} · {pol.description || "No description"}
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginTop:4 }}>
+                      {polTypes.map(t => (
+                        <span key={t} style={{
+                          fontSize:10, padding:"1px 8px", borderRadius:4,
+                          color:POLICY_TYPE_CFG[t]?.color||"#888",
+                          background:`${POLICY_TYPE_CFG[t]?.color||"#888"}1a`,
+                        }}>{POLICY_TYPE_CFG[t]?.icon} {POLICY_TYPE_CFG[t]?.label||t}</span>
+                      ))}
                     </div>
+                    <div style={{ fontSize:11, color:"#555", marginTop:4 }}>{pol.description || "No description"}</div>
                   </div>
                   <span style={{
                     fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:4,
                     color:pol.enabled?"#00e5a0":"#888", background:pol.enabled?"rgba(0,229,160,0.12)":"rgba(136,136,136,0.12)",
                   }}>{pol.enabled?"ENABLED":"DISABLED"}</span>
                   <div style={{ display:"flex", gap:8 }}>
-                    <button onClick={()=>setAssigning(pol)} style={{ border:`1px solid ${typeCfg.color}44`, borderRadius:5, background:"transparent", color:typeCfg.color, padding:"4px 12px", fontSize:11, cursor:"pointer" }}>Assign</button>
-                    <button onClick={()=>setEditing(isEditingThis?null:{...pol,config:{...pol.config}})} style={{ border:"1px solid #4d9eff44", borderRadius:5, background:"transparent", color:"#4d9eff", padding:"4px 12px", fontSize:11, cursor:"pointer" }}>
+                    <button onClick={()=>setAssigning(pol)} style={{ border:`1px solid ${primaryCfg.color}44`, borderRadius:5, background:"transparent", color:primaryCfg.color, padding:"4px 12px", fontSize:11, cursor:"pointer" }}>Assign</button>
+                    <button onClick={()=>setEditing(isEditingThis?null:{...pol,config:{...pol.config},policy_types:[...polTypes]})} style={{ border:"1px solid #4d9eff44", borderRadius:5, background:"transparent", color:"#4d9eff", padding:"4px 12px", fontSize:11, cursor:"pointer" }}>
                       {isEditingThis?"Cancel":"Edit"}
                     </button>
                     <button onClick={()=>deletePolicy(pol)} style={{ border:"1px solid #ff3b3b44", borderRadius:5, background:"transparent", color:"#ff3b3b", padding:"4px 12px", fontSize:11, cursor:"pointer" }}>Delete</button>
                   </div>
                 </div>
 
-                {isEditingThis && EditorComponent && (
+                {isEditingThis && (
                   <div style={{ borderTop:BORDER, padding:"16px 20px" }}>
-                    <EditorComponent config={editing.config} onChange={c=>setEditing({...editing,config:c})} />
+                    <div style={{ marginBottom:16 }}>
+                      <div style={{ fontSize:11, color:"#555", marginBottom:6 }}>Rule Types</div>
+                      <TypeMultiSelect selected={editTypes} onToggle={toggleEditType} />
+                    </div>
+                    {editTypes.map(t => {
+                      const TypeEditor = EDITORS[t];
+                      if (!TypeEditor) return null;
+                      return (
+                        <div key={t} style={{ borderTop:BORDER, paddingTop:16, marginBottom:16 }}>
+                          <div style={{ fontSize:12, fontWeight:700, color:POLICY_TYPE_CFG[t]?.color, marginBottom:14 }}>
+                            {POLICY_TYPE_CFG[t]?.icon} {POLICY_TYPE_CFG[t]?.label}
+                          </div>
+                          <TypeEditor config={editing.config[t] || {}} onChange={c=>setEditing({...editing,config:{...editing.config,[t]:c}})} />
+                        </div>
+                      );
+                    })}
                     <div style={{ display:"flex", gap:10, justifyContent:"flex-end", marginTop:12, paddingTop:12, borderTop:BORDER }}>
                       <button onClick={()=>setEditing(null)} style={{ border:BORDER, borderRadius:6, background:"transparent", color:"#888", padding:"6px 16px", cursor:"pointer" }}>Cancel</button>
                       <button onClick={saveEdit} disabled={saving} style={{ border:"none", borderRadius:6, background:ACCENT, color:"#0a0e1a", fontWeight:700, padding:"6px 18px", cursor:"pointer", opacity:saving?0.6:1 }}>{saving?"Saving…":"Save Changes"}</button>

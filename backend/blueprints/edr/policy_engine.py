@@ -179,6 +179,8 @@ def ensure_policy_tables(db_url: str) -> None:
         enabled     BOOLEAN DEFAULT TRUE
     );
     CREATE INDEX IF NOT EXISTS idx_edr_pol_type ON edr_policies(policy_type);
+    ALTER TABLE edr_policies ADD COLUMN IF NOT EXISTS policy_types JSONB;
+    CREATE INDEX IF NOT EXISTS idx_edr_pol_types ON edr_policies USING GIN (policy_types);
 
     CREATE TABLE IF NOT EXISTS edr_policy_assignments (
         id          TEXT PRIMARY KEY,
@@ -204,10 +206,20 @@ def ensure_policy_tables(db_url: str) -> None:
         revoked     BOOLEAN DEFAULT FALSE
     );
     """
+    # One-time backfill: legacy rows have a single scalar policy_type + flat
+    # config; new rows carry policy_types (array) + config nested per type.
+    # Guarded on policy_types IS NULL so it only ever touches un-migrated rows.
+    backfill = """
+    UPDATE edr_policies
+    SET policy_types = to_jsonb(ARRAY[policy_type]),
+        config = jsonb_build_object(policy_type, config)
+    WHERE policy_types IS NULL;
+    """
     try:
         conn = _db(db_url)
         with conn.cursor() as cur:
             cur.execute(ddl)
+            cur.execute(backfill)
         conn.commit()
         conn.close()
     except Exception as exc:
@@ -216,23 +228,28 @@ def ensure_policy_tables(db_url: str) -> None:
 
 # ── Policy CRUD ───────────────────────────────────────────────────────────────
 
-def create_policy(db_url: str, name: str, policy_type: str, config: dict,
+def create_policy(db_url: str, name: str, policy_types: list[str], config: dict,
                   description: str, created_by: str) -> dict:
-    if policy_type not in POLICY_TYPES:
-        raise ValueError(f"Invalid policy_type: {policy_type}. Valid: {sorted(POLICY_TYPES)}")
-    # Merge with defaults so config is always complete
-    merged = dict(POLICY_DEFAULTS.get(policy_type, {}))
-    merged.update(config)
+    if not policy_types:
+        raise ValueError("At least one policy_type is required")
+    invalid = [t for t in policy_types if t not in POLICY_TYPES]
+    if invalid:
+        raise ValueError(f"Invalid policy_type(s): {invalid}. Valid: {sorted(POLICY_TYPES)}")
+    # Merge each selected type's config with its defaults so every type is complete
+    merged = {}
+    for t in policy_types:
+        merged[t] = {**POLICY_DEFAULTS.get(t, {}), **config.get(t, {})}
     pid = str(uuid.uuid4())
     conn = _db(db_url)
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO edr_policies (id, name, description, policy_type, config, created_by)
-                VALUES (%s,%s,%s,%s,%s,%s) RETURNING *
+                INSERT INTO edr_policies (id, name, description, policy_type, policy_types, config, created_by)
+                VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *
                 """,
-                [pid, name, description, policy_type, json.dumps(merged), created_by],
+                [pid, name, description, policy_types[0], json.dumps(policy_types),
+                 json.dumps(merged), created_by],
             )
             row = dict(cur.fetchone())
         conn.commit()
@@ -246,7 +263,10 @@ def list_policies(db_url: str, policy_type: str = None) -> list[dict]:
     try:
         with conn.cursor() as cur:
             if policy_type:
-                cur.execute("SELECT * FROM edr_policies WHERE policy_type=%s ORDER BY created_at DESC", [policy_type])
+                cur.execute(
+                    "SELECT * FROM edr_policies WHERE policy_types @> %s::jsonb ORDER BY created_at DESC",
+                    [json.dumps([policy_type])],
+                )
             else:
                 cur.execute("SELECT * FROM edr_policies ORDER BY policy_type, name")
             rows = [dict(r) for r in cur.fetchall()]
@@ -275,13 +295,19 @@ def get_policy(db_url: str, policy_id: str) -> dict | None:
 
 
 def update_policy(db_url: str, policy_id: str, updates: dict) -> dict:
-    allowed_fields = {"name", "description", "config", "enabled"}
+    allowed_fields = {"name", "description", "config", "enabled", "policy_types"}
     sets, vals = [], []
+    if "policy_types" in updates:
+        types = updates["policy_types"]
+        if not types or any(t not in POLICY_TYPES for t in types):
+            raise ValueError(f"Invalid policy_types: {types}. Valid: {sorted(POLICY_TYPES)}")
+        sets.append("policy_type=%s")
+        vals.append(types[0])
     for k, v in updates.items():
         if k not in allowed_fields:
             continue
         sets.append(f"{k}=%s")
-        vals.append(json.dumps(v) if k == "config" else v)
+        vals.append(json.dumps(v) if k in ("config", "policy_types") else v)
     if not sets:
         raise ValueError("No valid fields to update")
     sets.append("updated_at=NOW()")
@@ -341,23 +367,30 @@ def assign_policy(db_url: str, policy_id: str, target_type: str,
             policy_row = cur.fetchone()
 
             if policy_row:
+                pr = dict(policy_row)
+                types = pr.get("policy_types") or [pr["policy_type"]]
+                cfg_map = pr.get("config") or {}
+                # One APPLY_POLICY command per type per agent — the agent's
+                # _apply_policy() only ever understands a single scalar
+                # policy_type + flat config, so this keeps it untouched.
                 for aid in agent_ids:
-                    cur.execute(
-                        """
-                        INSERT INTO edr_response_commands
-                          (id, agent_id, action, parameters, issued_by, auto_triggered)
-                        VALUES (%s,%s,'APPLY_POLICY',%s,%s,FALSE)
-                        """,
-                        [
-                            str(uuid.uuid4()), aid,
-                            json.dumps({
-                                "policy_id":   policy_id,
-                                "policy_type": dict(policy_row)["policy_type"],
-                                "config":      dict(policy_row)["config"],
-                            }),
-                            assigned_by,
-                        ],
-                    )
+                    for ptype in types:
+                        cur.execute(
+                            """
+                            INSERT INTO edr_response_commands
+                              (id, agent_id, action, parameters, issued_by, auto_triggered)
+                            VALUES (%s,%s,'APPLY_POLICY',%s,%s,FALSE)
+                            """,
+                            [
+                                str(uuid.uuid4()), aid,
+                                json.dumps({
+                                    "policy_id":   policy_id,
+                                    "policy_type": ptype,
+                                    "config":      cfg_map.get(ptype, {}),
+                                }),
+                                assigned_by,
+                            ],
+                        )
         conn.commit()
     finally:
         conn.close()

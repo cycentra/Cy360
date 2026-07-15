@@ -2270,7 +2270,14 @@ server {
 }
 
 # ── Portal (cy360) ───────────────────────────────────────────────────────────
-server { listen 80; server_name cy360.${BASE_DOMAIN}; return 301 https://\$host\$request_uri; }
+server {
+    listen 80; server_name cy360.${BASE_DOMAIN};
+    # ACME http-01 challenges must be served in plain HTTP — redirecting them to
+    # HTTPS forces the validator through Cloudflare's edge, which then fails the
+    # backend TLS handshake against an origin cert that isn't valid yet (526).
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://\$host\$request_uri; }
+}
 server {
     listen 443 ssl http2; server_name cy360.${BASE_DOMAIN};
     ssl_certificate     /etc/letsencrypt/live/cy360.${BASE_DOMAIN}/fullchain.pem;
@@ -2339,7 +2346,11 @@ server {
 }
 
 # ── Backend / OIDC IdP (cyasm) ──────────────────────────────────────────────
-server { listen 80; server_name cyasm.${BASE_DOMAIN}; return 301 https://\$host\$request_uri; }
+server {
+    listen 80; server_name cyasm.${BASE_DOMAIN};
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://\$host\$request_uri; }
+}
 server {
     listen 443 ssl http2; server_name cyasm.${BASE_DOMAIN};
     ssl_certificate     /etc/letsencrypt/live/cy360.${BASE_DOMAIN}/fullchain.pem;

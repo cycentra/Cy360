@@ -168,18 +168,27 @@ function AppliedPolicies({ agentId }) {
   const TYPE_COLOR = {
     threat_prevention:"#ff3b3b", device_control:"#ff8c00", app_control:"#b06eff",
     network_control:"#4d9eff", exclusions:"#f5c518", update_policy:"#00e5a0", isolation_exceptions:"#888",
+    network_probe:"#00d4ff",
   };
   return (
     <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
-      {policies.map(p => (
-        <div key={p.id} style={{
-          border:`1px solid ${TYPE_COLOR[p.policy_type]||"#888"}44`,
-          borderRadius:7, padding:"8px 14px", background:`${TYPE_COLOR[p.policy_type]||"#888"}0d`,
-        }}>
-          <div style={{ fontSize:12, fontWeight:700, color:TYPE_COLOR[p.policy_type]||"#888" }}>{p.name}</div>
-          <div style={{ fontSize:10, color:"#555", marginTop:2 }}>{p.policy_type?.replace("_"," ")}</div>
-        </div>
-      ))}
+      {policies.map(p => {
+        const types = p.policy_types || [p.policy_type];
+        const primary = TYPE_COLOR[types[0]] || "#888";
+        return (
+          <div key={p.id} style={{
+            border:`1px solid ${primary}44`,
+            borderRadius:7, padding:"8px 14px", background:`${primary}0d`,
+          }}>
+            <div style={{ fontSize:12, fontWeight:700, color:primary }}>{p.name}</div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginTop:2 }}>
+              {types.map(t => (
+                <span key={t} style={{ fontSize:10, color:TYPE_COLOR[t]||"#888" }}>{t?.replace("_"," ")}</span>
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
