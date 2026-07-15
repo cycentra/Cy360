@@ -200,17 +200,22 @@ function SigmaTab({ notify }) {
   const [source, setSource] = useState("");
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [editing, setEditing] = useState(null);
   const [showNew, setShowNew] = useState(false);
   const limit = 25;
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError("");
     const params = new URLSearchParams({ q, source, limit, offset });
     try {
       const r = await fetch(`${API}/sigma?${params}`, { credentials: "include" });
       if (r.ok) { const d = await r.json(); setItems(d.items || []); setTotal(d.total || 0); }
-    } catch (_) {}
+      else { setItems([]); setTotal(0); setLoadError(`HTTP ${r.status} — ${await r.text().catch(() => "")}`); }
+    } catch (e) {
+      setLoadError(`Network error — is the backend reachable? (${e.message})`);
+    }
     setLoading(false);
   }, [q, source, offset]);
 
@@ -235,6 +240,12 @@ function SigmaTab({ notify }) {
 
   return (
     <div>
+      {loadError && (
+        <div style={{ background: "rgba(255,59,59,0.06)", border: `1px solid ${T.red}40`, borderRadius: 4,
+                      padding: "10px 14px", marginBottom: 14, color: T.red, fontSize: 11, fontFamily: T.mono }}>
+          Failed to load Sigma rules — this is a request failure, not "zero rules": {loadError}
+        </div>
+      )}
       <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center" }}>
         <input value={q} onChange={e => { setOffset(0); setQ(e.target.value); }}
                placeholder="Search title or rule id…" style={{ ...inputStyle, maxWidth: 280 }} />
@@ -467,19 +478,27 @@ function RuleEngineTab({ kind, notify }) {
   const [builtIn, setBuiltIn] = useState([]);
   const [custom, setCustom] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError("");
+    let firstError = "";
     try {
       const [b, c] = await Promise.all([
         fetch(`${API}/${kind}`, { credentials: "include" }),
         fetch(`${API}/${kind}/custom`, { credentials: "include" }),
       ]);
-      if (b.ok) setBuiltIn(await b.json());
-      if (c.ok) setCustom(await c.json());
-    } catch (_) {}
+      if (b.ok) { setBuiltIn(await b.json()); }
+      else { setBuiltIn([]); firstError = firstError || `Built-in ${kind} rules: HTTP ${b.status} — ${await b.text().catch(() => "")}`; }
+      if (c.ok) { setCustom(await c.json()); }
+      else { setCustom([]); firstError = firstError || `Custom ${kind} rules: HTTP ${c.status} — ${await c.text().catch(() => "")}`; }
+      if (firstError) setLoadError(firstError);
+    } catch (e) {
+      setLoadError(`Network error reaching ${API}/${kind} — is the backend/correlation engine reachable? (${e.message})`);
+    }
     setLoading(false);
   }, [kind]);
 
@@ -515,6 +534,12 @@ function RuleEngineTab({ kind, notify }) {
 
   return (
     <div>
+      {loadError && (
+        <div style={{ background: "rgba(255,59,59,0.06)", border: `1px solid ${T.red}40`, borderRadius: 4,
+                      padding: "10px 14px", marginBottom: 16, color: T.red, fontSize: 11, fontFamily: T.mono }}>
+          Failed to load {kind} rules — this is a request failure, not "zero rules": {loadError}
+        </div>
+      )}
       <Panel title={`Built-in ${kind === "correlation" ? "Correlation Rules (CR-001..055)" : "UEBA Detectors"}`}
              accent={T.accent} badge={builtIn.length} style={{ marginBottom: 20 }}>
         {loading ? <div style={{ color: T.muted, fontSize: 12, padding: 20, textAlign: "center" }}>Loading…</div>

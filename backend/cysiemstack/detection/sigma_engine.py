@@ -442,9 +442,15 @@ def reset_engine() -> None:
 
 
 def list_all_rules() -> list[SigmaRule]:
-    """For the Detection Rules UI's listing endpoint only — builds a FRESH
-    engine (not the cached matching singleton) so a disabled rule still
-    shows up with enabled=False rather than disappearing. This is an admin
-    action, not the per-event hot path, so the extra corpus parse (a couple
-    seconds for ~3,700 rules) is an acceptable cost."""
-    return SigmaEngine(include_imported=_resolve_include_imported()).all_rules
+    """For the Detection Rules UI's listing endpoint — returns the cached
+    singleton's all_rules (bundled + imported + custom, including disabled
+    ones with enabled=False, so a disabled rule stays visible with a way
+    back to re-enabling it instead of vanishing).
+
+    This used to build a brand-new SigmaEngine from scratch on every call —
+    a full ~3,700-rule disk parse + DB round-trip on every page load,
+    search keystroke, and pagination click. That was unnecessary caution:
+    reset_engine() already invalidates the cached singleton on every Sigma
+    write in blueprints/detection_rules/routes.py, so the cache is never
+    stale by more than the current request. Reuse get_engine() instead."""
+    return get_engine().all_rules
