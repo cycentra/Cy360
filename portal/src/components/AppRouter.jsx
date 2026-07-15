@@ -20,7 +20,6 @@ import { ComplianceFindingsPage }       from '../pages/compliance/ComplianceFind
 import { ComplianceReportsPage }        from '../pages/compliance/ComplianceReportsPage.jsx';
 import { PolicyDocumentsPage }          from '../pages/compliance/PolicyDocumentsPage.jsx';
 import { ComplianceAssessmentPage }     from '../pages/compliance/ComplianceAssessmentPage.jsx';
-import RiskPredictionPage               from '../pages/compliance/RiskPredictionPage.jsx';
 import IntegrationHealthPage            from '../pages/integrations/index.jsx';
 import EdrFleetPage                     from '../pages/edr/index.jsx';
 import EdrDetectionsPage                from '../pages/edr/EdrDetectionsPage.jsx';
@@ -32,7 +31,6 @@ import ItamCoveragePage                 from '../pages/itam/index.jsx';
 import IotRegistryPage                  from '../pages/itam/IotRegistryPage.jsx';
 import ShadowAiPage                     from '../pages/itam/ShadowAiPage.jsx';
 import AssetDetailPage                  from '../pages/itam/AssetDetailPage.jsx';
-import ConnectorsPage                   from '../pages/connectors/index.jsx';
 
 export function AppRouter({ activeTab, user, assets, data, stats, installedModules,
   scanHistory, selectedScanId, onScanSelect, onScanComplete,
@@ -73,7 +71,6 @@ export function AppRouter({ activeTab, user, assets, data, stats, installedModul
       {activeTab==="comp-appetite"    && <RiskAppetitePage/>}
       {activeTab==="comp-reports"     && <ComplianceReportsPage/>}
       {activeTab==="comp-policy"      && <PolicyDocumentsPage/>}
-      {activeTab==="comp-predict"     && <RiskPredictionPage/>}
       {activeTab==="integration-health" && <IntegrationHealthPage onNavigate={nav}/>}
       {activeTab==="edr-fleet"      && <EdrFleetPage onViewDetail={id => { setSelectedEdrAgent(id); setActiveTab("edr-endpoint-detail"); }}/>}
       {activeTab==="edr-detections" && <EdrDetectionsPage/>}
@@ -85,7 +82,6 @@ export function AppRouter({ activeTab, user, assets, data, stats, installedModul
       {activeTab==="itam-iot"       && <IotRegistryPage/>}
       {activeTab==="itam-shadow-ai" && <ShadowAiPage/>}
       {activeTab==="itam-asset-detail" && <AssetDetailPage assetId={selectedItamAsset} onBack={() => setActiveTab("itam-coverage")}/>}
-      {activeTab==="connectors"     && <ConnectorsPage/>}
     </>
   );
 }

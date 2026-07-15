@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { API_BASE } from "../../core/constants.js";
+import RiskPredictionPage from "./RiskPredictionPage.jsx";
 import { CY_FW_FILTER_KEY } from "./ComplianceDashboardPage.jsx";
 
 const C = {
@@ -746,6 +747,7 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
     { id: "list",     label: "Risk Register" },
     { id: "appetite", label: "Risk Appetite" },
     { id: "exposure", label: "Exposure" },
+    { id: "predict",  label: "Risk Prediction" },
   ];
 
   return (
@@ -1142,6 +1144,9 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
 
       {/* ── EXPOSURE ── */}
       {view === "exposure" && <ExposureTab />}
+
+      {/* ── RISK PREDICTION ── */}
+      {view === "predict" && <RiskPredictionPage />}
 
       {msg && (
         <div style={{ marginTop: 12, padding: "8px 14px", borderRadius: 6, fontSize: 11,

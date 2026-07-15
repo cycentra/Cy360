@@ -105,14 +105,7 @@ export function buildNavSections({ installedModules = {}, data = null }) {
         { id: "comp-assessment", label: "Assessments",          icon: <span style={{ fontSize: 13 }}>📋</span>, accent: "#6378ff" },
         { id: "comp-findings",   label: "Findings & Alerts",    icon: SvgRisk,   accent: "#ff3b3b" },
         { id: "comp-risks",      label: "Risk Management",      icon: SvgRisk,   accent: "#ff8c00" },
-        { id: "comp-predict",    label: "Risk Prediction",      icon: <span style={{ fontSize: 13 }}>📈</span>, accent: "#10b981" },
         { id: "comp-reports",    label: "Reports",              icon: SvgReport, accent: "#b06eff" },
-      ],
-    },
-    {
-      section: "CYDATALAKE",
-      items: [
-        { id: "connectors", label: "SIEM Connectors", icon: <span style={{ fontSize: 13 }}>🗄️</span>, accent: "#4d9eff" },
       ],
     },
     {

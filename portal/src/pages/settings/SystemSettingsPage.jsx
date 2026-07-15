@@ -12,6 +12,7 @@ import { useState, useEffect, useRef } from "react";
 import { API_BASE } from "../../core/constants.js";
 import { getSavedUser } from "../../core/auth.js";
 import { SSOTab } from "./SSOTab.jsx";
+import ConnectorsPage from "../connectors/index.jsx";
 
 // ── Shared style constants ────────────────────────────────────────────────────
 const CARD  = { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "20px 24px", marginBottom: 20 };
@@ -4058,6 +4059,7 @@ const MODULES = [
   { id: "platform",    label: "Platform Settings",   icon: "⚙️",  color: "#00e5a0" },
   { id: "comp",        label: "Security Compliance", icon: "🛡️",  color: "#4d9eff" },
   { id: "asset-mgmt", label: "Asset Management",    icon: "🖥️",  color: "#ff8c00" },
+  { id: "siem-connector", label: "SIEM Connector",  icon: "🗄️",  color: "#4d9eff" },
 ];
 
 export function SystemSettingsPage() {
@@ -4110,7 +4112,7 @@ export function SystemSettingsPage() {
         {/* Right: tab content */}
         <div style={{ flex: 1, minWidth: 0 }}>
           {/* Tab bar — only for platform and comp modules */}
-          {module !== "asset-mgmt" && (
+          {module !== "asset-mgmt" && module !== "siem-connector" && (
             <div style={{ display: "flex", gap: 4, borderBottom: "1px solid rgba(255,255,255,0.06)", marginBottom: 24 }}>
               {currentTabs.map(t => {
                 const active = module === "platform" ? tab === t.id : compTab === t.id;
@@ -4168,6 +4170,9 @@ export function SystemSettingsPage() {
 
           {/* Asset Management Settings */}
           {module === "asset-mgmt" && <AssetMgmtSettingsTab />}
+
+          {/* SIEM Connector */}
+          {module === "siem-connector" && <ConnectorsPage />}
         </div>
       </div>
     </div>
