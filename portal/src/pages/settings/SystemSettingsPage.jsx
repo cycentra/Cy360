@@ -9,7 +9,7 @@
  */
 
 import { useState, useEffect, useRef } from "react";
-import { API_BASE, CYSCAN_URL } from "../../core/constants.js";
+import { API_BASE } from "../../core/constants.js";
 import { getSavedUser } from "../../core/auth.js";
 import { SSOTab } from "./SSOTab.jsx";
 
@@ -843,9 +843,9 @@ function UserManagementTab() {
   const reloadUsers = () => {
     setRefreshing(true);
     return Promise.all([
-      fetch(`${CYSCAN_URL}/api/rbac/users`, { credentials: "include" })
+      fetch(`${API_BASE}/api/rbac/users`, { credentials: "include" })
         .then(r => { if (!r.ok) throw new Error(`Server returned ${r.status}`); return r.json(); }),
-      fetch(`${CYSCAN_URL}/api/rbac/roles`, { credentials: "include" })
+      fetch(`${API_BASE}/api/rbac/roles`, { credentials: "include" })
         .then(r => r.ok ? r.json() : null).catch(() => null),
     ])
       .then(([userData, rolesData]) => {
@@ -864,9 +864,9 @@ function UserManagementTab() {
     setAuthRole(role);
     if (role === "admin") {
       Promise.all([
-        fetch(`${CYSCAN_URL}/api/rbac/users`, { credentials: "include" })
+        fetch(`${API_BASE}/api/rbac/users`, { credentials: "include" })
           .then(r => { if (!r.ok) throw new Error(`Server returned ${r.status} — check backend logs`); return r.json(); }),
-        fetch(`${CYSCAN_URL}/api/rbac/roles`, { credentials: "include" })
+        fetch(`${API_BASE}/api/rbac/roles`, { credentials: "include" })
           .then(r => r.ok ? r.json() : null).catch(() => null),
       ])
         .then(([userData, rolesData]) => {
@@ -882,7 +882,7 @@ function UserManagementTab() {
   }, []);
 
   const handleRoleChange = async (email, role) => {
-    const r = await fetch(`${CYSCAN_URL}/api/rbac/users`, {
+    const r = await fetch(`${API_BASE}/api/rbac/users`, {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, role }),
@@ -898,7 +898,7 @@ function UserManagementTab() {
 
   const handleDelete = async (email) => {
     if (!window.confirm(`Remove ${email}? They will no longer be able to log in.`)) return;
-    const r = await fetch(`${CYSCAN_URL}/api/rbac/users/${encodeURIComponent(email)}`, {
+    const r = await fetch(`${API_BASE}/api/rbac/users/${encodeURIComponent(email)}`, {
       method: "DELETE", credentials: "include",
     });
     if (r.ok) {
@@ -911,7 +911,7 @@ function UserManagementTab() {
 
   const handleApprove = async (email) => {
     setApproving(email);
-    const r = await fetch(`${CYSCAN_URL}/api/sso/approve/${encodeURIComponent(email)}`, {
+    const r = await fetch(`${API_BASE}/api/sso/approve/${encodeURIComponent(email)}`, {
       method: "POST", credentials: "include",
     });
     const d = await r.json().catch(() => ({}));
@@ -926,7 +926,7 @@ function UserManagementTab() {
 
   const handleRevoke = async (email) => {
     if (!window.confirm(`Revoke approval for ${email}? They will be blocked until re-approved.`)) return;
-    const r = await fetch(`${CYSCAN_URL}/api/sso/revoke/${encodeURIComponent(email)}`, {
+    const r = await fetch(`${API_BASE}/api/sso/revoke/${encodeURIComponent(email)}`, {
       method: "POST", credentials: "include",
     });
     const d = await r.json().catch(() => ({}));
@@ -940,7 +940,7 @@ function UserManagementTab() {
 
   const handleReject = async (email) => {
     setRejectFor(null);
-    const r = await fetch(`${CYSCAN_URL}/api/sso/reject/${encodeURIComponent(email)}`, {
+    const r = await fetch(`${API_BASE}/api/sso/reject/${encodeURIComponent(email)}`, {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reason: rejectReason }),
@@ -963,7 +963,7 @@ function UserManagementTab() {
     setAdding(true);
     const payload = { email: trimmed, role: newRole, auth_type: newAuthType };
     if (newAuthType === "local") payload.password = newPassword;
-    const r = await fetch(`${CYSCAN_URL}/api/rbac/users`, {
+    const r = await fetch(`${API_BASE}/api/rbac/users`, {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -982,7 +982,7 @@ function UserManagementTab() {
   const handleResetPassword = async (email) => {
     if (resetPw.trim().length < 8) { showMsg(false, "Password must be at least 8 characters"); return; }
     setResetLoading(true);
-    const r = await fetch(`${CYSCAN_URL}/api/rbac/users/${encodeURIComponent(email)}/reset-password`, {
+    const r = await fetch(`${API_BASE}/api/rbac/users/${encodeURIComponent(email)}/reset-password`, {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password: resetPw }),
@@ -1370,7 +1370,7 @@ function RoleManagementSection() {
   };
 
   const reloadRoles = () =>
-    fetch(`${CYSCAN_URL}/api/rbac/roles`, { credentials: "include" })
+    fetch(`${API_BASE}/api/rbac/roles`, { credentials: "include" })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(d => { if (Array.isArray(d)) setRoles(d); })
       .catch(() => {});
@@ -1411,7 +1411,7 @@ function RoleManagementSection() {
     const perms = editRole.role_name === "admin"
       ? null
       : (editPages === null ? null : Array.from(editPages));
-    const r = await fetch(`${CYSCAN_URL}/api/rbac/roles`, {
+    const r = await fetch(`${API_BASE}/api/rbac/roles`, {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1434,7 +1434,7 @@ function RoleManagementSection() {
   const handleCreate = async () => {
     if (!createName.trim()) return;
     setCreating(true);
-    const r = await fetch(`${CYSCAN_URL}/api/rbac/roles`, {
+    const r = await fetch(`${API_BASE}/api/rbac/roles`, {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1456,7 +1456,7 @@ function RoleManagementSection() {
   };
 
   const handleDelete = async (roleName) => {
-    const r = await fetch(`${CYSCAN_URL}/api/rbac/roles/${encodeURIComponent(roleName)}`, {
+    const r = await fetch(`${API_BASE}/api/rbac/roles/${encodeURIComponent(roleName)}`, {
       method: "DELETE", credentials: "include",
     });
     if (r.ok) {

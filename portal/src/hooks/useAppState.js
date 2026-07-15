@@ -14,7 +14,7 @@ import { useState, useEffect } from "react";
 import { getSavedUser, saveUser, clearSSOToken, setSSOToken, validateStorage } from '../core/auth.js';
 import { adaptCyCentraJSON } from '../core/adapter.js';
 import { DEFAULT_PROMPTS } from '../registry/aiProviders.js';
-import { API_BASE, CYSCAN_URL } from '../core/constants.js';
+import { API_BASE } from '../core/constants.js';
 
 export function useAppState() {
   const [user,             setUser]             = useState(null);
@@ -102,7 +102,7 @@ export function useAppState() {
   // ── Fetch page permissions when user is known ────────────────────────────────
   useEffect(() => {
     if (!user) { setAllowedPages(null); return; }
-    fetch(`${CYSCAN_URL}/api/rbac/my-permissions`, { credentials: "include" })
+    fetch(`${API_BASE}/api/rbac/my-permissions`, { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d && "allowed_pages" in d) setAllowedPages(d.allowed_pages); })
       .catch(() => {}); // keep null (unrestricted) on network failure

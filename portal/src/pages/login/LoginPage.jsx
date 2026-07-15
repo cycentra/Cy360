@@ -71,7 +71,7 @@ export function LoginPage() {
     setLocalError("");
     setLoading("local");
     try {
-      const resp = await fetch(`${CYSCAN_URL}/auth/local`, {
+      const resp = await fetch(`${API_BASE}/auth/local`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -106,7 +106,7 @@ export function LoginPage() {
     setReqErr("");
     setLoading("request");
     try {
-      const resp = await fetch(`${CYSCAN_URL}/api/auth/request-access`, {
+      const resp = await fetch(`${API_BASE}/api/auth/request-access`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
