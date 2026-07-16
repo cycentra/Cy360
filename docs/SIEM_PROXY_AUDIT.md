@@ -1,5 +1,12 @@
 # siem_proxy.py Route Audit — Phase 5 Input (CyDataLake Migration)
 
+> **Update, v1.0.229 (2026-07-16):** the product decision flagged below for `/agent-groups/*` and
+> `/endpoint-policies/*` has been made — retire, not rebuild. Both route blocks (13 agent-groups
+> routes + the full endpoint-policies block, helpers included) and their Host Intelligence UI tabs
+> ("Agent Groups", "Response Playbooks") were deleted in full, since Wazuh is no longer used as a
+> sensor. The rows below describing them are kept as historical record of the routes that existed,
+> not as a live keep/retire recommendation.
+
 **Status: analysis only, no code changed.** This is the Phase 5 "route-by-route inventory" task
 from `docs/CYDATALAKE_MIGRATION_PLAN.md` §9, produced by grepping `siem_proxy.py` for every
 `@siem_bp.route` and tracing which handlers actually call the Wazuh Manager API

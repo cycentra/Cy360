@@ -1,5 +1,11 @@
 # CyCentra 360 — Endpoint Policy Engine
 
+> **REMOVED in v1.0.229 (2026-07-16).** This feature ("Response Playbooks" tab in Host
+> Intelligence) depended entirely on the Wazuh Manager API, which is no longer used as a sensor.
+> The tab, the `EndpointPoliciesTab.jsx` component, and every `/api/siem/endpoint-policies/*`
+> route + helper in `siem_proxy.py` were deleted. This doc is kept for historical reference only —
+> do not use it to reintroduce the feature without redesigning around a non-Wazuh backend.
+
 **Location in Portal:** Host Intelligence → Endpoint Policies tab  
 **Backend routes:** `/api/siem/endpoint-policies/*`  
 **Introduced:** v1.0.31+

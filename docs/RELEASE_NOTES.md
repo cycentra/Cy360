@@ -1,3 +1,21 @@
+## v1.0.229 -- 2026-07-16
+
+### Removed
+
+  - Removed the Host Intelligence "Agent Groups", "Response Playbooks", and "Sensor Deployment"
+    tabs and their components (`AgentGroupsTab.jsx`, `EndpointPoliciesTab.jsx`,
+    `SensorDeploymentTab.jsx`) — these were Wazuh-Manager-API-dependent features and Wazuh is no
+    longer used as a sensor.
+  - Removed all backing backend routes: `/api/siem/agent-groups*` and
+    `/api/siem/endpoint-policies*` (`siem_proxy.py`), and `/api/system/agent-installer`,
+    `/api/system/agent-packages*` (`blueprints/system/routes.py`), including the embedded
+    installer shell/PowerShell script templates. Deleted the now-obsolete
+    `tests/unit/test_agent_installer.py`.
+  - CyEDR's own agent installer (`/api/edr/installer/*`) and its unrelated `edr_agent_groups`
+    policy-engine tables (`blueprints/edr/policy_engine.py`) are unaffected.
+
+---
+
 ## v1.0.228 -- 2026-07-16
 
 ### Improvements

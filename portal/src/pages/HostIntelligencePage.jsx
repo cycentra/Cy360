@@ -11,9 +11,6 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { HostDetailPanel } from "./hosts/HostDetailPanel.jsx";
-import { AgentGroupsTab } from "./hosts/AgentGroupsTab.jsx";
-import { EndpointPoliciesTab } from "./hosts/EndpointPoliciesTab.jsx";
-import { SensorDeploymentTab } from "./hosts/SensorDeploymentTab.jsx";
 import { siemApi, siemFetch } from "../siem/siemApi";
 
 const API = "/api/siem";
@@ -730,9 +727,6 @@ export function HostIntelligencePage() {
           {[
             { id: "hosts",      label: "🖥  Hosts & Posture" },
             { id: "risk",       label: "⚡  Entity Risk Scores" },
-            { id: "groups",     label: "⬡  Agent Groups" },
-            { id: "policies",   label: "⚡  Response Playbooks" },
-            { id: "deployment", label: "📡  Sensor Deployment" },
           ].map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               style={{
@@ -764,15 +758,6 @@ export function HostIntelligencePage() {
         )}
         {tab === "risk" && (
           <RiskTab riskScores={riskScores} loading={riskLoading} />
-        )}
-        {tab === "groups" && (
-          <AgentGroupsTab />
-        )}
-        {tab === "policies" && (
-          <EndpointPoliciesTab />
-        )}
-        {tab === "deployment" && (
-          <SensorDeploymentTab />
         )}
 
         {/* Host detail panel */}
