@@ -1,5 +1,13 @@
 ## v1.0.229 -- 2026-07-16
 
+### Improvements
+
+  - Stability and performance improvements.
+
+---
+
+## v1.0.229 -- 2026-07-16
+
 ### Removed
 
   - Removed the Host Intelligence "Agent Groups", "Response Playbooks", and "Sensor Deployment"
