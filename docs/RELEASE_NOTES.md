@@ -1,3 +1,15 @@
+## v1.0.226 -- 2026-07-16
+
+### Bug Fixes
+
+  - Fix CyEDR telemetry pipeline dropping every event before scoring
+
+### Improvements
+
+  - chore(docs): weekly architecture review 2026-07-16
+
+---
+
 ## v1.0.225 -- 2026-07-15
 
 ### Improvements
