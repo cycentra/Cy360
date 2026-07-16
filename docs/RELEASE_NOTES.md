@@ -1,3 +1,11 @@
+## v1.0.232 -- 2026-07-16
+
+### Bug Fixes
+
+  - Fix cyedr-install.sh reinstall not restarting a running agent (Linux
+
+---
+
 ## v1.0.231 -- 2026-07-16
 
 ### Improvements
