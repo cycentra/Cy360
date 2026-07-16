@@ -2911,6 +2911,39 @@ if [[ -d "$_bundle_pkgs" ]]; then
     [[ $_bundled -gt 0 ]] && success "Installed $_bundled agent package(s) from release bundle"
 fi
 
+# ── Seed CyEDR agent + tray binaries from release bundle ────────────────────
+# Built automatically by CI (.github/workflows/deploy.yml — build-edr-linux/
+# macos/windows jobs) on every release and bundled here, same mechanism as
+# cy360-agent-* above. This is what lets a customer paste a single install
+# link copied from the Cy360 portal — /api/edr/installer/agent-bundle and
+# /tray-bundle can always serve a real binary with no manual build step by
+# devops or the customer. Filenames are OS/arch-keyed only (no version
+# suffix — see routes.py's installer_agent_bundle/installer_tray_bundle
+# _map), so this is a plain overwrite-on-update copy, not the versioned
+# rename cy360-agent-* needs above.
+_bundle_edr="${_bundle_pkgs}/edr"
+if [[ -d "$_bundle_edr" ]]; then
+    # Matches routes.py's _EDR_PKG_DIR = "/var/lib/cycentra-agent-packages/edr"
+    _edr_dest="${_AGENT_PKG_DIR}/edr"
+    mkdir -p "$_edr_dest"
+    _edr_seeded=0
+    for _epkg in "${_bundle_edr}"/cyedr-agent-* "${_bundle_edr}"/cyedr-tray-*; do
+        [[ -f "$_epkg" ]] || continue
+        _ebn=$(basename "$_epkg")
+        cp "$_epkg" "${_edr_dest}/${_ebn}"
+        chmod 755 "${_edr_dest}/${_ebn}"
+        chown www-data:www-data "${_edr_dest}/${_ebn}" 2>/dev/null || true
+        _edr_seeded=$((_edr_seeded+1))
+    done
+    if [[ $_edr_seeded -gt 0 ]]; then
+        success "CyEDR agent/tray binaries staged from release bundle: ${_edr_seeded} file(s) → ${_edr_dest}"
+    else
+        warn "Release bundle has no CyEDR agent/tray binaries (a build-edr-* CI job likely failed this release) — endpoints fall back to the Python-mode installer path until the next successful release"
+    fi
+else
+    warn "No agent-packages/edr/ in release bundle — CyEDR binary quick-install unavailable until the next release; run agent-packages/build-edr-packages.sh manually to stage them now"
+fi
+
 _dl_agent_pkg \
     "https://packages.wazuh.com/4.x/yum/wazuh-agent-${_WAZUH_VR}.x86_64.rpm" \
     "${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}-x86_64.rpm"

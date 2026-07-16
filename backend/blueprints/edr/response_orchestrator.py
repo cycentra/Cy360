@@ -194,6 +194,22 @@ def ensure_tables(db_url: str) -> None:
     );
     CREATE INDEX IF NOT EXISTS idx_edr_sca_agent  ON edr_sca_results(agent_id);
     CREATE INDEX IF NOT EXISTS idx_edr_sca_result ON edr_sca_results(agent_id, result);
+
+    -- System-tray tamper protection audit trail: every scan/stop request the
+    -- local tray app sends the agent, and every password check outcome, so an
+    -- admin can see who tried to disable protection on which host even though
+    -- the check itself happens locally on the endpoint (see cyedr_agent.py's
+    -- IPCListener). action ∈ scan_requested|stop_requested|stop_denied|stop_authorized.
+    CREATE TABLE IF NOT EXISTS edr_tamper_events (
+        id              TEXT PRIMARY KEY,
+        agent_id        TEXT NOT NULL REFERENCES edr_agents(agent_id),
+        action          TEXT NOT NULL,
+        success         BOOLEAN DEFAULT TRUE,
+        detail          TEXT,
+        created_at      TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_edr_tamper_agent   ON edr_tamper_events(agent_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_edr_tamper_action  ON edr_tamper_events(action, created_at DESC);
     """
     # New columns added after initial table creation
     _arp_guard_alters = [
@@ -438,3 +454,59 @@ def update_agent_isolation(db_url: str, agent_id: str, state: str) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+TAMPER_ACTIONS = {"scan_requested", "stop_requested", "stop_denied", "stop_authorized"}
+
+
+def record_tamper_event(db_url: str, agent_id: str, action: str,
+                        success: bool = True, detail: str = "") -> None:
+    """Called by the tray-facing tamper-event route whenever the local
+    system-tray app requests a scan/stop or fails/passes the admin-password
+    check on an endpoint. The password check itself happens locally on the
+    agent (see cyedr_agent.py IPCListener) — this is the audit trail only."""
+    if action not in TAMPER_ACTIONS:
+        return
+    conn = _get_db(db_url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO edr_tamper_events (id, agent_id, action, success, detail)
+                VALUES (%s,%s,%s,%s,%s)
+                """,
+                [str(uuid.uuid4()), agent_id, action, success, detail[:500]],
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_tamper_events(db_url: str, agent_id: Optional[str] = None, limit: int = 200) -> list[dict]:
+    conn = _get_db(db_url)
+    try:
+        with conn.cursor() as cur:
+            if agent_id:
+                cur.execute(
+                    """
+                    SELECT t.*, a.hostname FROM edr_tamper_events t
+                    LEFT JOIN edr_agents a ON a.agent_id=t.agent_id
+                    WHERE t.agent_id=%s ORDER BY t.created_at DESC LIMIT %s
+                    """,
+                    [agent_id, limit],
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT t.*, a.hostname FROM edr_tamper_events t
+                    LEFT JOIN edr_agents a ON a.agent_id=t.agent_id
+                    ORDER BY t.created_at DESC LIMIT %s
+                    """,
+                    [limit],
+                )
+            rows = [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+    for r in rows:
+        r["created_at"] = r["created_at"].isoformat() if r.get("created_at") else None
+    return rows

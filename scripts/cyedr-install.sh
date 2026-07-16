@@ -9,6 +9,12 @@
 # CySIEM (Wazuh) is optional. Use --with-cysiem to auto-install, or
 # --no-cysiem to skip the prompt, or answer the interactive question.
 #
+# A system-tray/menu-bar icon (cyedr-tray) is installed by default on
+# workstation asset types — shows CyEDR is running, offers an on-demand scan,
+# and a password-gated Stop/Exit (admin password set in Cy360 -> EDR Policies
+# -> Tamper Protection). Use --no-tray to skip it, or --with-tray to force it
+# on non-workstation asset types.
+#
 # Usage:
 #   curl -fsSL https://<platform>/cyedr-install.sh | bash -s -- \
 #       --token <DEPLOY_TOKEN> --platform https://<platform> [OPTIONS]
@@ -20,6 +26,8 @@
 #                            api_gateway|jump_server (default: workstation)
 #     --with-cysiem          Also install CySIEM (Wazuh) agent
 #     --no-cysiem            Skip CySIEM installation without prompting
+#     --with-tray            Install the system-tray app even on non-workstation asset types
+#     --no-tray              Skip installing the system-tray app
 #     --silent               Non-interactive; --no-cysiem implied unless --with-cysiem set
 #     --help                 Show this help
 
@@ -37,10 +45,13 @@ DEPLOY_TOKEN=""
 PLATFORM_URL=""
 ASSET_TYPE="workstation"
 WITH_CYSIEM=""          # empty=prompt, "yes"=install, "no"=skip
+WITH_TRAY=""            # empty=default (workstation only), "yes"=force install, "no"=skip
 SILENT=false
 EDR_HOME="/opt/cycentra/edr"
 EDR_USER="cyedr"
 PYTHON_BIN=""
+TRAY_HOME="/opt/cycentra/edr-tray"   # separate from EDR_HOME (root-only 750) — the tray
+                                      # binary must be world-executable for any local user
 
 banner() {
     echo -e "${BLU}"
@@ -66,6 +77,8 @@ parse_args() {
             --asset-type) ASSET_TYPE="$2"; shift 2 ;;
             --with-cysiem) WITH_CYSIEM="yes"; shift ;;
             --no-cysiem)   WITH_CYSIEM="no"; shift ;;
+            --with-tray)   WITH_TRAY="yes"; shift ;;
+            --no-tray)     WITH_TRAY="no"; shift ;;
             --silent)      SILENT=true; shift ;;
             --help|-h)
                 banner
@@ -375,6 +388,102 @@ CONF
     # broken with no way to recover short of manually editing config.json.
     chmod 600 "$EDR_HOME/config.json"
     ok "CyEDR agent deployed to $EDR_HOME"
+}
+
+# ── Decide whether to install the system-tray app ──────────────────────────────
+want_tray() {
+    [[ "$WITH_TRAY" == "no" ]] && return 1
+    [[ "$WITH_TRAY" == "yes" ]] && return 0
+    [[ "$ASSET_TYPE" == "workstation" ]] && return 0
+    return 1   # default: skip on headless server/database/DC/etc. asset types
+}
+
+# ── Deploy CyEDR system-tray binary ─────────────────────────────────────────────
+# Separate download, separate directory from EDR_HOME on purpose: EDR_HOME is
+# locked to root-only traversal (750) by harden_permissions() below because
+# config.json inside it holds the enrollment token — the tray binary and its
+# IPC token/socket must be reachable by any locally logged-in user, so they
+# live in their own world-traversable directory instead of loosening EDR_HOME.
+deploy_tray() {
+    info "Downloading CyEDR system-tray binary (${OS_KEY}/${AGENT_ARCH})..."
+    mkdir -p "$TRAY_HOME"
+    local TRAY_ARCH="$AGENT_ARCH"
+    [[ "$OS_KEY" == "MACOS" ]] && TRAY_ARCH="$PKG_ARCH"
+    local TRAY_URL="$PLATFORM_URL/api/edr/installer/tray-bundle?os=${OS_KEY}&arch=${TRAY_ARCH}"
+    if curl -fsSL --max-time 60 \
+        -H "Authorization: Bearer $DEPLOY_TOKEN" \
+        "$TRAY_URL" \
+        -o "$TRAY_HOME/cyedr-tray" 2>/dev/null; then
+        chown root:root "$TRAY_HOME/cyedr-tray" 2>/dev/null || true
+        chmod 755 "$TRAY_HOME/cyedr-tray"
+        chmod 755 "$TRAY_HOME"
+        ok "System-tray binary installed to $TRAY_HOME"
+        return 0
+    fi
+    warn "Tray binary not available for ${OS_KEY}/${TRAY_ARCH} — skipping tray install " \
+         "(run agent-packages/build-edr-packages.sh on the platform server, or pass --no-tray to silence this)"
+    return 1
+}
+
+# ── Linux: XDG autostart for the tray (any desktop session, any user) ──────────
+install_tray_autostart_linux() {
+    mkdir -p /etc/xdg/autostart
+    cat > /etc/xdg/autostart/cyedr-tray.desktop << DESKTOP
+[Desktop Entry]
+Type=Application
+Name=CyEDR
+Comment=CyCentra 360 endpoint protection status
+Exec=$TRAY_HOME/cyedr-tray
+Icon=security-high
+Terminal=false
+X-GNOME-Autostart-enabled=true
+NoDisplay=false
+DESKTOP
+    chmod 644 /etc/xdg/autostart/cyedr-tray.desktop
+    ok "Tray autostart registered (XDG autostart — starts for any user's desktop session)"
+}
+
+# ── macOS: system-wide LaunchAgent for the tray (any GUI login session) ────────
+install_tray_launchagent_macos() {
+    local PLIST="/Library/LaunchAgents/com.cycentra.edrtray.plist"
+    cat > "$PLIST" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cycentra.edrtray</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$TRAY_HOME/cyedr-tray</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
+PLIST
+    chown root:wheel "$PLIST"
+    chmod 644 "$PLIST"
+    # /Library/LaunchAgents plists auto-load for every user at their next GUI
+    # login with no further action. Best-effort: also load it immediately for
+    # whichever user is in the current console session, if any.
+    local console_user
+    console_user="$(stat -f%Su /dev/console 2>/dev/null || true)"
+    if [[ -n "$console_user" && "$console_user" != "root" ]]; then
+        local console_uid
+        console_uid="$(id -u "$console_user" 2>/dev/null || true)"
+        if [[ -n "$console_uid" ]]; then
+            launchctl asuser "$console_uid" launchctl bootstrap "gui/$console_uid" "$PLIST" 2>/dev/null || true
+        fi
+    fi
+    ok "Tray LaunchAgent installed: com.cycentra.edrtray (system-wide, any GUI login)"
 }
 
 # ── Linux: auditd configuration ────────────────────────────────────────────────
@@ -766,6 +875,10 @@ print_summary() {
         echo "  Status:     launchctl list com.cycentra.edr"
         echo "  Logs:       tail -f $EDR_HOME/logs/cyedr_agent.log"
     fi
+    if [[ -x "$TRAY_HOME/cyedr-tray" ]]; then
+        echo ""
+        echo "  Tray:       $TRAY_HOME/cyedr-tray (starts automatically at next login)"
+    fi
     echo ""
     echo -e "${YEL}  Next: View this endpoint in CyCentra 360 > Endpoint Fleet${NC}"
     echo ""
@@ -793,6 +906,14 @@ main() {
         install_systemd_service
     else
         install_launchdaemon
+    fi
+
+    if want_tray && deploy_tray; then
+        if [[ "$OS_KEY" == "LINUX" ]]; then
+            install_tray_autostart_linux
+        else
+            install_tray_launchagent_macos
+        fi
     fi
 
     harden_permissions

@@ -30,6 +30,12 @@
 .PARAMETER Silent
     Non-interactive mode (implies -NoCySIEM unless -WithCySIEM is set)
 
+.PARAMETER WithTray
+    Switch: install the CyEDR system-tray app even on non-workstation asset types
+
+.PARAMETER NoTray
+    Switch: skip installing the system-tray app
+
 .EXAMPLE
     iex ((New-Object Net.WebClient).DownloadString('https://cy360.example.com/api/edr/installer/win'))
 
@@ -49,6 +55,8 @@ param(
 
     [switch]$WithCySIEM,
     [switch]$NoCySIEM,
+    [switch]$WithTray,
+    [switch]$NoTray,
     [switch]$Silent
 )
 
@@ -61,6 +69,14 @@ $EdrHome   = "C:\Program Files\CyCentra\edr"
 $SysmonDir = "C:\Program Files\CyCentra\sysmon"
 $LogFile   = "$EdrHome\logs\cyedr_agent.log"
 $Platform  = $Platform.TrimEnd("/")
+# Separate from $EdrHome on purpose: Set-AntiTamper below strips ALL access for
+# BUILTIN\Users on $EdrHome (it holds config.json's enrollment token), which
+# would make the tray binary unreadable/unrunnable for a standard user. This
+# sibling directory inherits Program Files' default ACL (Users: Read & Execute)
+# instead. The agent's IPC token/pipe live in yet another sibling, edr-ipc —
+# see Config.ipc_dir's default in cyedr_agent.py — created by the agent
+# itself at startup, not by this installer.
+$TrayHome  = "C:\Program Files\CyCentra\edr-tray"
 
 # ── Architecture detection ─────────────────────────────────────────────────────
 $EdrArch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
@@ -142,6 +158,52 @@ function Install-EdrBinary {
     Download-File -Url "$Platform/api/edr/installer/agent-bundle?os=WINDOWS&arch=$Arch" `
         -Dest $binDest
     Write-CyOk "CyEDR agent binary downloaded → $binDest"
+}
+
+# ── Download CyEDR system-tray binary ───────────────────────────────────────────
+function Install-TrayBinary {
+    param([string]$Arch)
+    if ($NoTray) {
+        Write-CyInfo "System-tray install skipped (-NoTray)."
+        return $null
+    }
+    if (-not $WithTray -and $AssetType -ne "workstation") {
+        Write-CyInfo "System-tray install skipped (asset type '$AssetType' is not workstation; pass -WithTray to force)."
+        return $null
+    }
+    Write-CyInfo "Downloading CyEDR system-tray binary ($Arch)..."
+    New-Item -ItemType Directory -Path $TrayHome -Force | Out-Null
+    $trayExe = "$TrayHome\cyedr-tray.exe"
+    try {
+        Download-File -Url "$Platform/api/edr/installer/tray-bundle?os=WINDOWS&arch=$Arch" -Dest $trayExe
+        Write-CyOk "System-tray binary downloaded -> $trayExe"
+        return $trayExe
+    } catch {
+        Write-CyWarn "Tray binary not available for WINDOWS/$Arch ($($_.Exception.Message)) — skipping tray install"
+        return $null
+    }
+}
+
+# ── Register tray auto-start for every user, at logon ───────────────────────────
+function Install-TrayScheduledTask {
+    param([string]$TrayExe)
+    Write-CyInfo "Registering CyEDR tray auto-start (any user, at logon)..."
+    try {
+        Unregister-ScheduledTask -TaskName "CyEDR Tray" -Confirm:$false -ErrorAction SilentlyContinue
+        $action    = New-ScheduledTaskAction -Execute $TrayExe
+        # No -User on the trigger + a GroupId principal: this fires for ANY
+        # user's logon and the task runs in that user's own session/token —
+        # not as a fixed service account. Well-known pattern for per-user
+        # startup tasks registered once machine-wide.
+        $trigger   = New-ScheduledTaskTrigger -AtLogOn
+        $principal = New-ScheduledTaskPrincipal -GroupId "S-1-5-32-545" -RunLevel Limited
+        $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+        Register-ScheduledTask -TaskName "CyEDR Tray" -Action $action -Trigger $trigger `
+            -Principal $principal -Settings $settings -Force | Out-Null
+        Write-CyOk "Tray scheduled task registered (starts for any user at logon)"
+    } catch {
+        Write-CyWarn "Could not register tray scheduled task: $_"
+    }
 }
 
 # ── Install Sysmon ─────────────────────────────────────────────────────────────
@@ -481,6 +543,10 @@ function Show-Summary {
     Write-Host "  Status: Get-Service CyEDRAgent" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  Sysmon is active: Microsoft-Windows-Sysmon/Operational" -ForegroundColor Cyan
+    if (Test-Path "$TrayHome\cyedr-tray.exe") {
+        Write-Host ""
+        Write-Host "  Tray:       $TrayHome\cyedr-tray.exe (starts automatically at next logon, any user)" -ForegroundColor Cyan
+    }
     Write-Host "  Next: View endpoint in CyCentra 360 > Endpoint Fleet" -ForegroundColor Yellow
     Write-Host ""
 }
@@ -508,6 +574,8 @@ Deploy-Agent
 Set-AntiTamper
 Invoke-Enrollment
 Install-WindowsService
+$TrayExePath = Install-TrayBinary -Arch $EdrArch
+if ($TrayExePath) { Install-TrayScheduledTask -TrayExe $TrayExePath }
 Maybe-InstallCySIEM
 Start-CyEDRService
 Show-Summary

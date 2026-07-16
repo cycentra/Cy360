@@ -12,16 +12,25 @@
 #
 # Environment:
 #   AGENT_SRC     Path to cyedr_agent.py (default: ../agent/cyedr_agent.py)
+#   TRAY_SRC      Path to cyedr_tray.py (default: ../agent/cyedr_tray.py)
 #   DEST_DIR      Output directory (default: /var/lib/cycentra-agent-packages/edr)
 #   SKIP_WIN      Set to 1 to skip Windows MSI (needs Wine + cross-compile toolchain)
+#   SKIP_TRAY     Set to 1 to skip building the system-tray binaries
+#   SKIP_DEB_RPM  Set to 1 to skip DEB/RPM packaging — no installer script consumes
+#                 these today (cyedr-install.sh/.ps1 only ever download the raw
+#                 binaries via /api/edr/installer/agent-bundle|tray-bundle). Used
+#                 by CI (.github/workflows/deploy.yml) to build just the binaries
+#                 every release needs, fast, without dpkg-deb/fpm dependencies.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
 
 CY360_VERSION="${1:-$(cat /opt/cycentra/version 2>/dev/null || echo "1.0.0")}"
 AGENT_SRC="${AGENT_SRC:-$(cd "$(dirname "$0")/.." && pwd)/agent/cyedr_agent.py}"
+TRAY_SRC="${TRAY_SRC:-$(cd "$(dirname "$0")/.." && pwd)/agent/cyedr_tray.py}"
 DEST_DIR="${DEST_DIR:-/var/lib/cycentra-agent-packages/edr}"
 SKIP_WIN="${SKIP_WIN:-0}"
+SKIP_TRAY="${SKIP_TRAY:-0}"
 BUILD_DIR="/tmp/cyedr-build-$$"
 
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
@@ -152,6 +161,120 @@ for macos_arch in "intel64" "arm64"; do
     fi
 done
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# CyEDR System Tray — separate binary from cyedr-agent above on purpose.
+# The agent runs as a privileged headless service (root/SYSTEM); the tray is
+# per-user/unprivileged and needs pystray+Pillow (Windows/Linux) or rumps
+# (macOS) — none of those belong in the headless service binary, so they get
+# their own PyInstaller spec and their own dependency set.
+# ═══════════════════════════════════════════════════════════════════════════════
+if [[ "$SKIP_TRAY" != "1" ]]; then
+    [[ ! -f "$TRAY_SRC" ]] && die "cyedr_tray.py not found at $TRAY_SRC (set TRAY_SRC or SKIP_TRAY=1)"
+    cp "$TRAY_SRC" "$BUILD_DIR/cyedr_tray.py"
+
+    cat > "$BUILD_DIR/requirements-tray.txt" << 'EOF'
+pyinstaller>=6.0
+pystray>=0.19
+Pillow>=10.0
+EOF
+
+    cat > "$BUILD_DIR/cyedr_tray.spec" << 'SPEC'
+# -*- mode: python ; coding: utf-8 -*-
+a = Analysis(
+    ['cyedr_tray.py'],
+    pathex=[],
+    binaries=[],
+    datas=[],
+    hiddenimports=[
+        'pystray', 'pystray._base', 'PIL', 'PIL.Image', 'PIL.ImageDraw',
+        'tkinter', 'tkinter.simpledialog',
+    ],
+    hookspath=[],
+    runtime_hooks=[],
+    excludes=['matplotlib', 'numpy', 'scipy', 'test'],
+    noarchive=False,
+)
+pyz = PYZ(a.pure, a.zlib_data)
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name='cyedr-tray',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=True,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+SPEC
+
+    # ── Helper: build the tray via Docker, with GTK/AppIndicator for pystray's
+    # Linux backend (not present in the slim python image the agent build uses —
+    # a tray icon needs a desktop toolkit, the headless agent does not).
+    build_tray_in_docker() {
+        local platform="$1"; shift
+        local out_name="$1"; shift
+
+        info "Building $out_name  ($platform)..."
+        docker run --rm --platform "$platform" \
+            -v "$BUILD_DIR:/build" \
+            -w /build \
+            "python:3.12-slim" \
+            bash -c "
+                set -e
+                apt-get update -qq
+                apt-get install -y -qq --no-install-recommends \
+                    gcc python3-dev libgtk-3-dev gir1.2-appindicator3-0.1 \
+                    python3-gi python3-gi-cairo tk-dev 2>/dev/null || true
+                pip install -q --upgrade pip
+                pip install -q -r requirements-tray.txt
+                pyinstaller cyedr_tray.spec --clean --noconfirm -y
+                mv dist/cyedr-tray /build/$out_name
+            " && ok "$out_name built" || { warn "$out_name failed — Linux tray needs a desktop toolkit (GTK/AppIndicator), verify on a real desktop build host if this fails"; ERRORS=$((ERRORS+1)); }
+    }
+
+    build_tray_in_docker "linux/amd64" "cyedr-tray-linux-x86_64"
+    build_tray_in_docker "linux/arm64" "cyedr-tray-linux-aarch64"
+
+    # macOS tray (rumps) and Windows tray (pystray) both require native build
+    # hosts, same limitation as the agent binary above — no Docker cross-compile
+    # for a GUI toolkit. Use GitHub Actions macOS/Windows runners.
+    for macos_arch in "intel64" "arm64"; do
+        out="cyedr-tray-macos-${macos_arch}"
+        if [[ -f "$BUILD_DIR/$out" ]]; then
+            ok "$out (pre-built, copying)"
+        else
+            warn "$out skipped — macOS tray requires macOS build host + rumps (use GitHub Actions macOS runner)"
+            ERRORS=$((ERRORS+1))
+        fi
+    done
+    for win_arch in "x64" "arm64"; do
+        out="cyedr-tray-windows-${win_arch}.exe"
+        if [[ -f "$BUILD_DIR/$out" ]]; then
+            ok "$out (pre-built, copying)"
+        else
+            warn "$out skipped — Windows tray requires a Windows build host (use GitHub Actions windows runner)"
+            ERRORS=$((ERRORS+1))
+        fi
+    done
+
+    for bin in "cyedr-tray-linux-x86_64" "cyedr-tray-linux-aarch64" \
+               "cyedr-tray-macos-intel64" "cyedr-tray-macos-arm64" \
+               "cyedr-tray-windows-x64.exe" "cyedr-tray-windows-arm64.exe"; do
+        [[ -f "$BUILD_DIR/$bin" ]] && cp "$BUILD_DIR/$bin" "$DEST_DIR/$bin" && ok "Binary: $bin"
+    done
+else
+    warn "SKIP_TRAY=1 — system-tray binaries not built"
+fi
+
 # ── Linux DEB packages ────────────────────────────────────────────────────────
 build_deb() {
     local binary="$1"; local arch="$2"; local native_arch="$3"
@@ -213,6 +336,10 @@ POSTINST
     dpkg-deb --build "$deb_root" "${DEST_DIR}/${pkg}" 2>/dev/null && ok "$pkg" || \
         { warn "dpkg-deb failed for $pkg (dpkg-deb may not be installed)"; ERRORS=$((ERRORS+1)); }
 }
+
+if [[ "${SKIP_DEB_RPM:-0}" == "1" ]]; then
+    warn "SKIP_DEB_RPM=1 — DEB/RPM packaging skipped (not consumed by any install path; CI uses this to build only the raw agent/tray binaries the installer scripts actually download)"
+else
 
 # Build DEBs inside an amd64 container so dpkg-deb is available
 docker run --rm --platform linux/amd64 \
@@ -293,6 +420,8 @@ docker run --rm --platform linux/amd64 \
         fi
     " 2>/dev/null && ok "RPM packages built" || { warn "RPM build step had errors (fpm may not be available)"; ERRORS=$((ERRORS+1)); }
 
+fi   # SKIP_DEB_RPM
+
 # ── Copy binaries to output ────────────────────────────────────────────────────
 for bin in \
     "cyedr-agent-linux-x86_64" \
@@ -304,6 +433,7 @@ done
 chmod -R 644 "$DEST_DIR"/* 2>/dev/null || true
 chmod 755 "$DEST_DIR" "$DEST_DIR"/*.rpm "$DEST_DIR"/*.deb 2>/dev/null || true
 find "$DEST_DIR" -name "cyedr-agent-linux-*" -exec chmod 755 {} \; 2>/dev/null || true
+find "$DEST_DIR" -name "cyedr-tray-*" -exec chmod 755 {} \; 2>/dev/null || true
 chown -R www-data:www-data "$DEST_DIR" 2>/dev/null || true
 
 # ── Cleanup ────────────────────────────────────────────────────────────────────

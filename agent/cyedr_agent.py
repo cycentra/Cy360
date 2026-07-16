@@ -29,7 +29,7 @@ import tempfile
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Optional
@@ -45,6 +45,15 @@ try:
     import psutil
 except ImportError:
     psutil = None
+
+try:
+    # Verifies the tamper-protection admin password locally (bcrypt hash
+    # only — the plaintext is typed by the local user and never leaves this
+    # process). Already a transitive PyInstaller build dep via paramiko, see
+    # agent-packages/build-edr-packages.sh.
+    import bcrypt
+except ImportError:
+    bcrypt = None
 
 # ── Globals ────────────────────────────────────────────────────────────────────
 VERSION       = "1.0.0"
@@ -103,6 +112,38 @@ _CRON_DEEPSCAN   = "/etc/cron.d/cyedr-deepscan"
 _CRON_UPDATE     = "/etc/cron.d/cyedr-update"
 _PF_ANCHOR       = "/etc/pf.anchors/cyedr_policy"
 
+# ── System-tray local IPC ───────────────────────────────────────────────────────
+# The agent runs as a privileged headless service (root LaunchDaemon / SYSTEM
+# service) with no GUI session of its own. cyedr_tray.py is a separate,
+# unprivileged, per-user process that reaches the agent only through this
+# local channel — Unix domain socket on Linux/macOS, named pipe on Windows.
+_IPC_SOCKET_NAME = "agent.sock"
+_IPC_PIPE_NAME   = r"\\.\pipe\CyEDRAgent"
+
+
+def _ensure_ipc_token(cfg: "Config") -> str:
+    """Low-value shared secret so the IPC socket isn't wide open to literally
+    any local process — NOT the real security boundary (that's the admin
+    password verified in ResponseExecutor._verify_tamper_password). World-
+    readable by design: any locally logged-in user must be able to run the
+    tray and request a scan; only STOP is gated behind the password."""
+    try:
+        os.makedirs(cfg.ipc_dir, exist_ok=True)
+        os.chmod(cfg.ipc_dir, 0o755)
+        path = os.path.join(cfg.ipc_dir, "ipc.token")
+        if os.path.exists(path):
+            tok = open(path).read().strip()
+            if tok:
+                return tok
+        token = uuid.uuid4().hex + uuid.uuid4().hex
+        with open(path, "w") as f:
+            f.write(token)
+        os.chmod(path, 0o644)
+        return token
+    except Exception as e:
+        logger.warning("IPC token init failed: %s", e)
+        return ""
+
 # ── Configuration ──────────────────────────────────────────────────────────────
 class Config:
     def __init__(self, path: str):
@@ -117,6 +158,13 @@ class Config:
         self.hostname           = d.get("hostname", socket.gethostname())
         self.os_type            = d.get("os_type", OS_TYPE)
         self.edr_home           = d.get("edr_home", "/opt/cycentra/edr")
+        # Separate, world-traversable sibling directory for the tray IPC
+        # socket/token. EDR_HOME itself is chmod 750 root-only (installer:
+        # cyedr-install.sh) — config.json inside it holds the enrollment
+        # token — so the IPC surface a regular desktop user must reach can't
+        # live there without loosening that. See IPCListener in this file.
+        self.ipc_dir            = d.get("ipc_dir", os.path.join(
+            os.path.dirname(self.edr_home.rstrip("/")) or "/opt/cycentra", "edr-ipc"))
         self.poll_interval      = int(d.get("poll_interval", 60))
         self.heartbeat_interval = int(d.get("heartbeat_interval", 60))
         self.telemetry_batch    = int(d.get("telemetry_batch", 20))
@@ -1801,7 +1849,8 @@ class ResponseExecutor:
     def __init__(self, cfg: Config, http: "requests.Session | None" = None):
         self._cfg  = cfg
         self._http = http
-        self._policy_state_path = os.path.join(cfg.edr_home, "policy_state.json")
+        self._policy_state_path  = os.path.join(cfg.edr_home, "policy_state.json")
+        self._tamper_lockout_path = os.path.join(cfg.edr_home, "tamper_lockout.json")
         os.makedirs(cfg.quarantine_dir, exist_ok=True)
         self._probe_poller: "NetworkProbePoller | None" = None
         self._load_policy_state()
@@ -2184,6 +2233,7 @@ class ResponseExecutor:
             "update_policy":        self._apply_update_policy,
             "isolation_exceptions": self._apply_isolation_exceptions,
             "network_probe":        self._apply_network_probe_policy,
+            "tamper_protection":    self._apply_tamper_protection,
         }
 
         fn = _dispatch.get(policy_type)
@@ -2950,6 +3000,278 @@ class ResponseExecutor:
             self._probe_poller.join(timeout=5)
             logger.info("NetworkProbePoller stopped")
         self._probe_poller = None
+
+    # ── tamper_protection ─────────────────────────────────────────────────────
+    # Gates the system-tray app's Stop/Exit CyEDR action. Only password_hash
+    # (bcrypt) is ever stored here — see policy_engine.py POLICY_DEFAULTS and
+    # routes.py's _reconcile_tamper_password() for where the hash is produced
+    # server-side. Nothing here ever sees the plaintext admin password except
+    # what the local user types into the tray's password prompt at verify time.
+
+    def _apply_tamper_protection(self, cfg: dict) -> str:
+        password_set = cfg.get("password_set", False)
+        protect_stop = cfg.get("protect_stop", True)
+        return f"tamper_protection stored: password_set={password_set}, protect_stop={protect_stop}"
+
+    def _load_tamper_lockout(self) -> dict:
+        try:
+            if os.path.exists(self._tamper_lockout_path):
+                with open(self._tamper_lockout_path) as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {"failed_attempts": 0, "locked_until": ""}
+
+    def _save_tamper_lockout(self, state: dict):
+        try:
+            with open(self._tamper_lockout_path, "w") as f:
+                json.dump(state, f)
+        except Exception as e:
+            logger.warning("Tamper lockout state save failed: %s", e)
+
+    def _verify_tamper_password(self, password: str) -> tuple[bool, str]:
+        """Kept separate from tamper_lockout state so a fresh APPLY_POLICY
+        push (which overwrites cfg.policy_state['tamper_protection'] wholesale)
+        never resets an in-progress lockout."""
+        tp = self._cfg.policy_state.get("tamper_protection", {})
+        if not tp.get("password_set") or not tp.get("protect_stop", True):
+            return True, "no admin password configured"
+        if bcrypt is None:
+            return False, "bcrypt unavailable on this build — stop blocked for safety"
+
+        lockout = self._load_tamper_lockout()
+        locked_until = lockout.get("locked_until", "")
+        if locked_until:
+            try:
+                if datetime.fromisoformat(locked_until) > datetime.utcnow():
+                    return False, f"locked out until {locked_until} (too many failed attempts)"
+            except Exception:
+                pass
+
+        stored_hash = tp.get("password_hash", "")
+        ok = False
+        if stored_hash and password:
+            try:
+                ok = bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8"))
+            except Exception:
+                ok = False
+
+        if ok:
+            self._save_tamper_lockout({"failed_attempts": 0, "locked_until": ""})
+            return True, "password verified"
+
+        max_attempts     = tp.get("lockout_attempts", 5)
+        lockout_minutes  = tp.get("lockout_minutes", 15)
+        attempts = lockout.get("failed_attempts", 0) + 1
+        new_state = {"failed_attempts": attempts, "locked_until": ""}
+        if attempts >= max_attempts:
+            new_state["locked_until"] = (datetime.utcnow() + timedelta(minutes=lockout_minutes)).isoformat()
+        self._save_tamper_lockout(new_state)
+        return False, f"incorrect password (attempt {attempts}/{max_attempts})"
+
+
+# ── System-tray IPC listener ────────────────────────────────────────────────────
+class IPCListener(threading.Thread):
+    """Local control channel for the per-user system-tray app (cyedr_tray.py).
+
+    Protocol: one JSON object per connection, newline-terminated, request then
+    a single JSON response, then the connection closes. Requests:
+      {"op": "status", "token": "..."}
+      {"op": "scan",   "token": "...", "path": "/"}
+      {"op": "stop",   "token": "...", "password": "..."}
+
+    SCAN only requires the shared ipc_token (low-value, see _ensure_ipc_token) —
+    it's a read-mostly action. STOP additionally requires the admin password
+    set in Cy360 → EDR Policies → Tamper Protection, verified locally via
+    ResponseExecutor._verify_tamper_password(); the plaintext never reaches
+    the platform. Note this only gates the tray's own menu action — an OS
+    admin can always stop the underlying service directly (systemctl /
+    launchctl / sc), same limitation every EDR's tray-level tamper protection
+    has.
+    """
+
+    def __init__(self, cfg: Config, executor: ResponseExecutor,
+                 http: "requests.Session | None", ipc_token: str):
+        super().__init__(daemon=True, name="IPCListener")
+        self._cfg      = cfg
+        self._executor = executor
+        self._http     = http
+        self._token    = ipc_token
+
+    def run(self):
+        if not self._token:
+            logger.warning("IPCListener: no ipc token — tray control channel disabled")
+            return
+        if OS_TYPE == "WINDOWS":
+            self._run_windows_pipe()
+        else:
+            self._run_unix_socket()
+
+    # ── Linux / macOS ──
+    def _run_unix_socket(self):
+        os.makedirs(self._cfg.ipc_dir, exist_ok=True)
+        os.chmod(self._cfg.ipc_dir, 0o755)
+        sock_path = os.path.join(self._cfg.ipc_dir, _IPC_SOCKET_NAME)
+        try:
+            if os.path.exists(sock_path):
+                os.remove(sock_path)
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            srv.bind(sock_path)
+            os.chmod(sock_path, 0o666)  # any local user must be able to reach the tray, see class docstring
+            srv.listen(4)
+            srv.settimeout(1.0)
+        except Exception as e:
+            logger.error("IPCListener: failed to bind %s: %s", sock_path, e)
+            return
+        logger.info("IPCListener: listening on %s", sock_path)
+        while not _STOP_EVENT.is_set():
+            try:
+                conn, _ = srv.accept()
+            except socket.timeout:
+                continue
+            except Exception as e:
+                logger.warning("IPCListener accept error: %s", e)
+                continue
+            threading.Thread(target=self._handle_unix_conn, args=(conn,), daemon=True).start()
+        try:
+            srv.close()
+            os.remove(sock_path)
+        except Exception:
+            pass
+
+    def _handle_unix_conn(self, conn):
+        try:
+            conn.settimeout(10)
+            data = b""
+            while b"\n" not in data and len(data) < 65536:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            req  = json.loads(data.split(b"\n", 1)[0].decode("utf-8"))
+            resp = self._dispatch(req)
+        except Exception as e:
+            resp = {"ok": False, "error": str(e)}
+        try:
+            conn.sendall((json.dumps(resp) + "\n").encode("utf-8"))
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+    # ── Windows ──
+    def _run_windows_pipe(self):
+        try:
+            import win32pipe, win32file
+        except ImportError:
+            logger.error("IPCListener: pywin32 not available — tray IPC disabled on this build")
+            return
+        while not _STOP_EVENT.is_set():
+            try:
+                pipe = win32pipe.CreateNamedPipe(
+                    _IPC_PIPE_NAME,
+                    win32pipe.PIPE_ACCESS_DUPLEX,
+                    win32pipe.PIPE_TYPE_MESSAGE | win32pipe.PIPE_READMODE_MESSAGE | win32pipe.PIPE_WAIT,
+                    win32pipe.PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, None,
+                )
+                win32pipe.ConnectNamedPipe(pipe, None)
+                threading.Thread(target=self._handle_pipe_conn, args=(pipe, win32file), daemon=True).start()
+            except Exception as e:
+                if not _STOP_EVENT.is_set():
+                    logger.warning("IPCListener pipe error: %s", e)
+                time.sleep(1)
+
+    def _handle_pipe_conn(self, pipe, win32file):
+        try:
+            _, data = win32file.ReadFile(pipe, 65536)
+            req  = json.loads(data.decode("utf-8"))
+            resp = self._dispatch(req)
+        except Exception as e:
+            resp = {"ok": False, "error": str(e)}
+        try:
+            win32file.WriteFile(pipe, (json.dumps(resp) + "\n").encode("utf-8"))
+        except Exception:
+            pass
+        finally:
+            try:
+                win32file.CloseHandle(pipe)
+            except Exception:
+                pass
+
+    # ── Protocol ──
+    def _dispatch(self, req: dict) -> dict:
+        if req.get("token") != self._token:
+            return {"ok": False, "error": "unauthorized"}
+        op = req.get("op", "")
+
+        if op == "status":
+            tp = self._cfg.policy_state.get("tamper_protection", {})
+            return {
+                "ok": True, "running": True,
+                "hostname": self._cfg.hostname, "agent_id": self._cfg.agent_id,
+                "protected": bool(tp.get("password_set") and tp.get("protect_stop", True)),
+            }
+
+        if op == "scan":
+            threading.Thread(target=self._run_scan_async, args=(req.get("path", "/"),), daemon=True).start()
+            self._report_tamper_event("scan_requested", True, "triggered from system tray")
+            return {"ok": True, "status": "scan_started"}
+
+        if op == "stop":
+            allowed, detail = self._executor._verify_tamper_password(req.get("password", ""))
+            self._report_tamper_event("stop_authorized" if allowed else "stop_denied", allowed, detail)
+            if allowed:
+                threading.Thread(target=self._do_stop, daemon=True).start()
+                return {"ok": True, "status": "stopping"}
+            return {"ok": False, "error": detail}
+
+        return {"ok": False, "error": f"unknown op: {op}"}
+
+    def _run_scan_async(self, path: str):
+        cmd_id = f"tray-{uuid.uuid4().hex[:12]}"
+        try:
+            result = self._executor._run_scan({"scan_path": path})
+            if self._http and self._cfg.agent_id:
+                self._http.post(
+                    f"{self._cfg.platform_url}/api/edr/response/{self._cfg.agent_id}/commands/{cmd_id}/complete",
+                    json={"success": True, "result": result, "action": "RUN_SCAN"},
+                    timeout=30,
+                )
+        except Exception as e:
+            logger.warning("Tray on-demand scan failed: %s", e)
+
+    def _report_tamper_event(self, action: str, success: bool, detail: str):
+        if not self._http or not self._cfg.agent_id:
+            return
+        try:
+            self._http.post(
+                f"{self._cfg.platform_url}/api/edr/tamper-events",
+                json={"action": action, "success": success, "detail": detail},
+                timeout=10,
+            )
+        except Exception as e:
+            logger.debug("tamper-event report failed: %s", e)
+
+    def _do_stop(self):
+        """Stop the underlying service properly (systemctl/launchctl/sc), not
+        just exit this process — Restart=always in the systemd unit (and the
+        equivalent watchdog behavior on macOS/Windows) would otherwise bring
+        the agent straight back up within seconds. An explicit service-manager
+        stop is recorded as intentional and is not auto-restarted."""
+        logger.info("Tray-authorized stop — stopping CyEDR service")
+        time.sleep(0.5)  # let the IPC response reach the tray first
+        try:
+            if OS_TYPE == "LINUX":
+                subprocess.Popen(["systemctl", "stop", "cyedr-agent"])
+            elif OS_TYPE == "DARWIN":
+                subprocess.Popen(["launchctl", "bootout", "system/com.cycentra.edr"])
+            elif OS_TYPE == "WINDOWS":
+                subprocess.Popen(["sc", "stop", "CyEDRAgent"])
+        except Exception as e:
+            logger.error("Service stop command failed: %s", e)
+        global _RUNNING
+        _RUNNING = False
+        _STOP_EVENT.set()
 
 
 # ── Command poller ─────────────────────────────────────────────────────────────
@@ -4344,6 +4666,7 @@ def main():
     ioc      = IOCCache(cfg.ioc_cache)
     ev_queue = queue.Queue(maxsize=5000)
     executor = ResponseExecutor(cfg, http)
+    ipc_token = _ensure_ipc_token(cfg)
 
     # Build reader for this platform
     if OS_TYPE == "LINUX":
@@ -4362,6 +4685,7 @@ def main():
         InventoryReporter(http, cfg),
         FimMonitor(http, cfg),
         ScaScanner(http, cfg),
+        IPCListener(cfg, executor, http, ipc_token),
     ]
 
     for t in threads:

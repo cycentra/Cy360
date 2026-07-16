@@ -45,6 +45,12 @@ ASM_RULE_IDS       = set(range(200100, 200110))
 ITAM_VULN_RULE_IDS = {200200, 200201}
 ITAM_IOT_RULE_IDS  = {200202}
 ITAM_AI_RULE_IDS   = {200203}
+# CyEDR system-tray tamper-protection events — pushed by
+# blueprints/edr/routes.py's post_tamper_event() when the local tray app's
+# Stop/Exit CyEDR action is attempted. 100230=stop denied (wrong admin
+# password — the security-relevant one), 100231=stop authorized (correct
+# password, informational). Never loaded into Wazuh, recognised only here.
+TAMPER_RULE_IDS = {100230, 100231}
 
 # Min rule level to ingest — drop noisy debug/info events below this
 MIN_RULE_LEVEL = 3
@@ -165,6 +171,8 @@ def _classify_category(rule_id: int, groups: list) -> str:
         return 'asm'
     if rule_id in ITAM_AI_RULE_IDS:
         return 'system'
+    if rule_id in TAMPER_RULE_IDS:
+        return 'tamper'
     # Cloud integration sources — must be checked before generic 'authentication'
     # so that O365/Azure/AWS alert groups are not swallowed by the auth check.
     for grp in groups:

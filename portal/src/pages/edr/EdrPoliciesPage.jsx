@@ -29,6 +29,7 @@ const POLICY_TYPE_CFG = {
   update_policy:       { label:"Update Policy",        color:"#00e5a0", icon:"🔄",  desc:"Auto-update, channel (stable/beta/LTS), maintenance windows" },
   isolation_exceptions:{ label:"Isolation Exceptions", color:"#888",    icon:"🔓",  desc:"IPs and ports reachable when an endpoint is isolated" },
   network_probe:       { label:"Network Probe",        color:"#00d4ff", icon:"📡",  desc:"Designate this agent as a local network scanner — enables IoT, SNMP, and deep scan behind NAT/firewall" },
+  tamper_protection:   { label:"Tamper Protection",    color:"#ff5555", icon:"🔒",  desc:"Admin password gating the system-tray app's Stop/Exit CyEDR action" },
 };
 
 const AI_SENSITIVITY_LABELS = {
@@ -433,6 +434,89 @@ function NetworkProbeEditor({ config, onChange }) {
   );
 }
 
+function TamperProtectionEditor({ config, onChange }) {
+  const s = (k, v) => onChange({ ...config, [k]: v });
+  const [pwd1, setPwd1] = useState("");
+  const [pwd2, setPwd2] = useState("");
+  const mismatch = pwd1 && pwd2 && pwd1 !== pwd2;
+
+  useEffect(() => {
+    // Only ever stage a plaintext password in `config` once both fields
+    // agree — never send a half-typed password to the backend, and clear
+    // any staged password if the admin empties the fields again. The
+    // backend hashes this server-side and never stores/echoes the plaintext.
+    if (pwd1 && pwd2 && pwd1 === pwd2) {
+      if (config.password !== pwd1) s("password", pwd1);
+    } else if (config.password) {
+      const { password, ...rest } = config;
+      onChange(rest);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pwd1, pwd2]);
+
+  return (
+    <div>
+      <div style={{ background:"rgba(255,59,59,0.06)", border:"1px solid rgba(255,59,59,0.2)", borderRadius:8, padding:"10px 14px", marginBottom:16, fontSize:12, color:"#ff8080" }}>
+        This password gates the <strong>system-tray app's</strong> Stop/Exit CyEDR action on every endpoint this
+        policy is assigned to. It is stored as a one-way hash — CyCentra cannot recover it if lost; set a new one
+        to replace it. An OS administrator can always stop the underlying service directly
+        (systemctl / launchctl / sc) — this only stops a user from disabling protection through the tray icon.
+      </div>
+
+      <div style={{ fontSize:12, color:"#555", marginBottom:14, fontWeight:600, letterSpacing:1 }}>ADMIN PASSWORD</div>
+      <div style={{ marginBottom:14, fontSize:12, color: config.password_set ? "#00e5a0" : "#f5c518" }}>
+        {config.password_set ? "● A password is currently set" : "● No password set — Stop/Exit is currently unrestricted"}
+      </div>
+
+      <div style={{ marginBottom:14 }}>
+        <div style={{ fontSize:11, color:"#555", marginBottom:5 }}>
+          {config.password_set ? "New Password (leave blank to keep the current password)" : "Set Admin Password"}
+        </div>
+        <input
+          type="password" value={pwd1} onChange={e => setPwd1(e.target.value)}
+          placeholder="Enter admin password"
+          style={{
+            width:"100%", background:"rgba(255,255,255,0.05)", border:BORDER, borderRadius:6,
+            color:"#e8eaf0", padding:"7px 12px", fontSize:12, boxSizing:"border-box",
+          }}
+        />
+      </div>
+      <div style={{ marginBottom:8 }}>
+        <div style={{ fontSize:11, color:"#555", marginBottom:5 }}>Confirm Password</div>
+        <input
+          type="password" value={pwd2} onChange={e => setPwd2(e.target.value)}
+          placeholder="Re-enter admin password"
+          style={{
+            width:"100%", background:"rgba(255,255,255,0.05)", border: mismatch ? "1px solid #ff3b3b" : BORDER,
+            borderRadius:6, color:"#e8eaf0", padding:"7px 12px", fontSize:12, boxSizing:"border-box",
+          }}
+        />
+        {mismatch && <div style={{ fontSize:11, color:"#ff3b3b", marginTop:5 }}>Passwords do not match</div>}
+      </div>
+
+      <div style={{ fontSize:12, color:"#555", marginTop:20, marginBottom:14, fontWeight:600, letterSpacing:1 }}>PROTECTION SCOPE</div>
+      <Toggle
+        value={config.protect_stop !== false}
+        onChange={v => s("protect_stop", v)}
+        label="Require password to Stop/Exit via tray"
+        sublabel="If off, the tray's Stop/Exit action works without a password even when one is set"
+      />
+      <Toggle
+        value={config.protect_uninstall !== false}
+        onChange={v => s("protect_uninstall", v)}
+        label="Require password to uninstall CyEDR"
+        sublabel="Reserved for a future uninstaller password prompt"
+      />
+
+      <div style={{ marginTop:20, padding:"10px 14px", background:"rgba(255,255,255,0.03)", borderRadius:8, fontSize:11, color:"#555", lineHeight:1.6 }}>
+        <strong style={{ color:"#888" }}>Lockout:</strong> after {config.lockout_attempts ?? 5} incorrect attempts on one
+        endpoint, the tray blocks further attempts there for {config.lockout_minutes ?? 15} minutes. Every scan/stop
+        request and password outcome is recorded in the Tamper Log.
+      </div>
+    </div>
+  );
+}
+
 const EDITORS = {
   threat_prevention:    ThreatPreventionEditor,
   device_control:       DeviceControlEditor,
@@ -442,6 +526,7 @@ const EDITORS = {
   update_policy:        UpdatePolicyEditor,
   isolation_exceptions: IsolationExceptionsEditor,
   network_probe:        NetworkProbeEditor,
+  tamper_protection:    TamperProtectionEditor,
 };
 
 // ── Assign modal ──────────────────────────────────────────────────────────────

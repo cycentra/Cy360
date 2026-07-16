@@ -300,6 +300,88 @@ function CommandHistoryTab({ agentId }) {
   );
 }
 
+// ─── Tamper Log Tab ────────────────────────────────────────────────────────────
+// Audit trail of the local system-tray app's scan/stop requests and password
+// outcomes for this agent — see blueprints/edr/routes.py's tamper-events
+// routes. The password check itself happens locally on the endpoint
+// (cyedr_agent.py's IPCListener); this is the record of what it decided.
+
+function TamperLogTab({ agentId }) {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoad]  = useState(true);
+  const [error, setError]   = useState(null);
+  const intervalRef = useRef(null);
+
+  const fetch_ = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/edr/tamper-events?agent_id=${agentId}&limit=50`);
+      if (!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      setEvents(d.events || []);
+      setError(null);
+    } catch (e) {
+      setError(`Failed to load: ${e.message}`);
+    } finally {
+      setLoad(false);
+    }
+  }, [agentId]);
+
+  useEffect(() => {
+    fetch_();
+    intervalRef.current = setInterval(fetch_, 15000); // auto-refresh every 15s
+    return () => clearInterval(intervalRef.current);
+  }, [fetch_]);
+
+  if (loading) return <div style={{ color: "#555", fontSize: 12, padding: 20 }}>Loading tamper log…</div>;
+  if (error)   return <div style={{ color: "#ff7070", fontSize: 12, padding: 20 }}>{error}</div>;
+  if (!events.length) return (
+    <div style={{ color: "#555", fontSize: 12, padding: 24, textAlign: "center" }}>
+      No tray scan/stop activity recorded for this agent yet.
+    </div>
+  );
+
+  const ACTION_LABEL = {
+    scan_requested:   "On-Demand Scan Requested",
+    stop_requested:   "Stop/Exit Requested",
+    stop_denied:      "Stop/Exit Denied (wrong password)",
+    stop_authorized:  "Stop/Exit Authorized",
+  };
+  const ACTION_COLOR = {
+    scan_requested:  "#4d9eff",
+    stop_requested:  "#f5c518",
+    stop_denied:     "#ff3b3b",
+    stop_authorized: "#00e5a0",
+  };
+
+  return (
+    <div style={{ overflowY: "auto", maxHeight: 420 }}>
+      <div style={{ fontSize: 11, color: "#555", marginBottom: 8 }}>
+        Showing last {events.length} events · auto-refreshes every 15s
+      </div>
+      {events.map(ev => {
+        const c = ACTION_COLOR[ev.action] || "#888";
+        return (
+          <div key={ev.id} style={{
+            display: "flex", alignItems: "flex-start", gap: 10,
+            borderBottom: "1px solid rgba(255,255,255,0.05)", padding: "10px 0",
+          }}>
+            <span style={{
+              fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4,
+              background: `${c}22`, color: c, minWidth: 170, textAlign: "center", flexShrink: 0,
+            }}>{(ACTION_LABEL[ev.action] || ev.action).toUpperCase()}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {ev.detail && <div style={{ fontSize: 12, color: "#9aa0b0" }}>{ev.detail}</div>}
+            </div>
+            <span style={{ fontSize: 11, color: "#555", flexShrink: 0 }}>
+              {ev.created_at ? new Date(ev.created_at).toLocaleString() : ""}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Agent Detail Modal ───────────────────────────────────────────────────────
 
 function AgentDetailModal({ agent, onClose, onAction }) {
@@ -413,7 +495,7 @@ function AgentDetailModal({ agent, onClose, onAction }) {
           display: "flex", gap: 0,
           borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0,
         }}>
-          {[["overview", "Overview"], ["history", "Command History"]].map(([id, label]) => (
+          {[["overview", "Overview"], ["history", "Command History"], ["tamper", "Tamper Log"]].map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} style={{
               padding: "10px 20px", background: "none", border: "none",
               borderBottom: tab === id ? `2px solid ${ACCENT}` : "2px solid transparent",
@@ -489,6 +571,7 @@ function AgentDetailModal({ agent, onClose, onAction }) {
           )}
 
           {tab === "history" && <CommandHistoryTab agentId={agent.agent_id} />}
+          {tab === "tamper" && <TamperLogTab agentId={agent.agent_id} />}
         </div>
       </div>
     </div>

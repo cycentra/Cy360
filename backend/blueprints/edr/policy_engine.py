@@ -40,6 +40,7 @@ POLICY_TYPES = {
     "update_policy",
     "isolation_exceptions",
     "network_probe",
+    "tamper_protection",
 }
 
 # ── Default policy templates ──────────────────────────────────────────────────
@@ -140,6 +141,18 @@ POLICY_DEFAULTS: dict[str, dict] = {
         "snmp_community":          "public",
         "snmp_port":               161,
         "dns_monitor":             False,
+    },
+    "tamper_protection": {
+        # Gates the system-tray app's Stop/Exit CyEDR action behind an admin
+        # password. password_hash is a bcrypt hash ONLY — the plaintext is
+        # never stored, logged, or forwarded past the create/update route
+        # that sets it (see routes.py policy create/update handlers).
+        "password_set":            False,   # true once an admin has set a password
+        "password_hash":           "",      # bcrypt hash, agent verifies locally
+        "protect_stop":            True,    # require password to stop/exit the service via tray
+        "protect_uninstall":       True,    # require password to run the uninstaller
+        "lockout_attempts":        5,       # failed attempts before temporary lockout
+        "lockout_minutes":         15,
     },
 }
 

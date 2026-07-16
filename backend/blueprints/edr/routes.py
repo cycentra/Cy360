@@ -27,6 +27,7 @@ import logging
 from datetime import datetime, timezone
 from functools import wraps
 
+import bcrypt
 import psycopg2
 import psycopg2.extras
 from flask import Blueprint, jsonify, request, session, make_response, send_file
@@ -39,6 +40,7 @@ from .normalizer import normalise_telemetry
 from .response_orchestrator import (
     ensure_tables, queue_response_command, get_pending_commands,
     complete_command, auto_respond, update_agent_isolation, VALID_ACTIONS,
+    record_tamper_event, list_tamper_events,
 )
 from .confidence_matrix import HEURISTIC_TABLE
 
@@ -1190,6 +1192,86 @@ def command_complete(agent_id, cmd_id):
     return jsonify({"status": "recorded"})
 
 
+# ── Tamper-protection audit trail (system tray) ────────────────────────────────
+# The tray app never talks to the portal directly — it talks only to the
+# locally-running agent over a local IPC socket/pipe. The agent is the one
+# that reports each scan/stop request (and password check outcome) up here,
+# using the enrollment token it already holds. Verification of the admin
+# password itself happens locally in the agent (bcrypt against the hash
+# delivered via APPLY_POLICY) — nothing here ever sees the plaintext.
+
+@edr_bp.route("/tamper-events", methods=["OPTIONS"])
+def _opt_tamper_events():
+    return add_cors_headers(make_response("", 204))
+
+
+def _ingest_tamper_alert(agent_id: str, action: str, detail: str) -> None:
+    """A wrong-password Stop/Exit attempt from the tray is itself a security
+    signal (possible attempt to disable protection) — write it to `alerts`
+    the same way _ingest_yara_scan_result() does, so it's visible to SIEM
+    correlation / the threat hunter sweep, not just the tamper-events audit
+    view. Only stop_denied is alert-worthy; scan_requested / stop_authorized
+    are routine and stay in edr_tamper_events only."""
+    if action != "stop_denied":
+        return
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            cur.execute("SELECT hostname, agent_ip FROM edr_agents WHERE agent_id=%s", [agent_id])
+            ag = cur.fetchone() or {}
+            hostname = ag.get("hostname", agent_id)
+            agent_ip = ag.get("agent_ip", "")
+        now = datetime.now(timezone.utc)
+        wazuh_id = f"tamper-{agent_id}-{uuid.uuid4().hex[:8]}"
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO alerts
+                  (wazuh_id, timestamp, agent_id, agent_name, agent_ip,
+                   rule_id, rule_desc, rule_level, base_score, category, full_alert)
+                VALUES (%s,%s,%s,%s,%s,100230,%s,10,7.0,'tamper',%s)
+                ON CONFLICT DO NOTHING
+                """,
+                [
+                    wazuh_id, now, agent_id, hostname, agent_ip,
+                    "CyEDR tamper attempt: incorrect admin password on Stop/Exit",
+                    json.dumps({
+                        "rule": {"id": "100230", "level": 10,
+                                 "description": "CyEDR tamper attempt: incorrect admin password on Stop/Exit",
+                                 "groups": ["tamper", "cyedr"]},
+                        "agent": {"id": agent_id, "name": hostname},
+                        "data": {"source": "CyEDR_tray", "detail": detail},
+                    }),
+                ],
+            )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        _log.error("_ingest_tamper_alert failed for agent %s: %s", agent_id, exc)
+
+
+@edr_bp.route("/tamper-events", methods=["POST"])
+@require_agent_token
+def post_tamper_event(agent_id):
+    """Agent-initiated: records a tray scan/stop request or password outcome."""
+    body    = request.get_json(force=True, silent=True) or {}
+    action  = body.get("action", "")
+    success = bool(body.get("success", True))
+    detail  = str(body.get("detail", ""))[:500]
+    record_tamper_event(CYCENTRA_DB_URL, agent_id, action, success, detail)
+    _ingest_tamper_alert(agent_id, action, detail)
+    return jsonify({"status": "recorded"})
+
+
+@edr_bp.route("/tamper-events", methods=["GET"])
+@require_viewer
+def get_tamper_events():
+    """Portal-facing: audit view of tray scan/stop activity across the fleet."""
+    agent_id = request.args.get("agent_id")
+    limit    = min(int(request.args.get("limit", 200)), 500)
+    return jsonify({"events": list_tamper_events(CYCENTRA_DB_URL, agent_id, limit)})
+
+
 def _ingest_yara_scan_result(agent_id: str, cmd_id: str, result: dict | str) -> None:
     """
     Parse RUN_SCAN result from the agent and write YARA matches to:
@@ -1373,6 +1455,44 @@ from .policy_engine import (
 )
 
 
+_TAMPER_HASH_SENTINEL = "•STORED•"
+
+
+def _reconcile_tamper_password(existing_config: dict, incoming_config: dict) -> dict:
+    """Hash a freshly-submitted plaintext tamper_protection password
+    server-side (bcrypt, same pattern as blueprints/rbac/manager.py's local
+    account passwords). Never trust a client-supplied password_hash, and
+    never wipe an existing hash just because the admin edited other fields
+    without retyping the password — the UI only sends `password` when the
+    admin is actually setting a new one."""
+    if "tamper_protection" not in incoming_config:
+        return incoming_config
+    tp = dict(incoming_config.get("tamper_protection") or {})
+    existing_tp = (existing_config or {}).get("tamper_protection") or {}
+    new_password = (tp.pop("password", "") or "").strip()
+    tp.pop("password_hash", None)  # never accept a client-supplied hash
+    if new_password and new_password != _TAMPER_HASH_SENTINEL:
+        tp["password_hash"] = bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt(12)).decode("utf-8")
+        tp["password_set"] = True
+    else:
+        tp["password_hash"] = existing_tp.get("password_hash", "")
+        tp["password_set"] = existing_tp.get("password_set", False)
+    return {**incoming_config, "tamper_protection": tp}
+
+
+def _mask_tamper_secrets(pol: dict) -> dict:
+    """Never let a tamper_protection bcrypt hash reach the browser — same
+    STORED sentinel convention used by ITAM SSH/WinRM creds and the Threat
+    Intel API key. The real hash only ever leaves the server inside the
+    APPLY_POLICY command delivered to the agent over its enrollment-token-
+    authenticated channel."""
+    cfg = (pol or {}).get("config") or {}
+    tp = cfg.get("tamper_protection")
+    if isinstance(tp, dict) and tp.get("password_hash"):
+        pol = {**pol, "config": {**cfg, "tamper_protection": {**tp, "password_hash": _TAMPER_HASH_SENTINEL}}}
+    return pol
+
+
 def _init_policy_tables(app):
     with app.app_context():
         ensure_policy_tables(CYCENTRA_DB_URL)
@@ -1402,7 +1522,8 @@ for _pp in ("/policies", "/policies/<pol_id>", "/policies/<pol_id>/assign",
 @require_viewer
 def get_policies():
     ptype = request.args.get("type")
-    return jsonify({"policies": list_policies(CYCENTRA_DB_URL, ptype)})
+    pols = [_mask_tamper_secrets(p) for p in list_policies(CYCENTRA_DB_URL, ptype)]
+    return jsonify({"policies": pols})
 
 
 @edr_bp.route("/policies", methods=["POST"])
@@ -1413,7 +1534,7 @@ def post_policy():
     policy_types = body.get("policy_types")
     if policy_types is None and body.get("policy_type"):
         policy_types = [body["policy_type"]]  # legacy single-type callers
-    config      = body.get("config", {})
+    config      = _reconcile_tamper_password({}, body.get("config", {}))
     description = body.get("description", "")
     if not name:
         return jsonify({"error": "name required"}), 400
@@ -1421,7 +1542,7 @@ def post_policy():
         pol = create_policy(CYCENTRA_DB_URL, name, policy_types or [], config, description,
                             session.get("user_email", "system"))
         auth_event(session.get("user_email", ""), "edr_policy_create", f"Created policy: {name}")
-        return jsonify(pol), 201
+        return jsonify(_mask_tamper_secrets(pol)), 201
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
@@ -1432,17 +1553,22 @@ def get_policy_detail(pol_id):
     pol = get_policy(CYCENTRA_DB_URL, pol_id)
     if not pol:
         return jsonify({"error": "Policy not found"}), 404
-    return jsonify(pol)
+    return jsonify(_mask_tamper_secrets(pol))
 
 
 @edr_bp.route("/policies/<pol_id>", methods=["PUT"])
 @require_admin
 def put_policy(pol_id):
     body = request.get_json(force=True, silent=True) or {}
+    if "config" in body:
+        existing = get_policy(CYCENTRA_DB_URL, pol_id)
+        if not existing:
+            return jsonify({"error": "Policy not found"}), 404
+        body["config"] = _reconcile_tamper_password(existing.get("config") or {}, body["config"])
     try:
         pol = update_policy(CYCENTRA_DB_URL, pol_id, body)
         auth_event(session.get("user_email", ""), "edr_policy_update", f"Updated policy {pol_id}")
-        return jsonify(pol)
+        return jsonify(_mask_tamper_secrets(pol))
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
@@ -1476,7 +1602,7 @@ def assign_policy_route(pol_id):
 @edr_bp.route("/agents/<agent_id>/policies", methods=["GET"])
 @require_viewer
 def agent_policies(agent_id):
-    pols = get_agent_effective_policies(CYCENTRA_DB_URL, agent_id)
+    pols = [_mask_tamper_secrets(p) for p in get_agent_effective_policies(CYCENTRA_DB_URL, agent_id)]
     return jsonify({"policies": pols})
 
 
@@ -1751,7 +1877,7 @@ for _ap in ("/installer/agent-bundle", "/installer/sysmon-config",
             "/installer/yara-exe", "/installer/cysiem-script",
             "/installer/cysiem-msi", "/installer/unix", "/installer/win",
             "/installer/agent-py", "/installer/agent-script",
-            "/installer/agent-binary"):
+            "/installer/agent-binary", "/installer/tray-bundle"):
     edr_bp.add_url_rule(
         _ap,
         endpoint=f"opts_asset_{_ap.replace('/','_').replace('-','_')}",
@@ -1776,6 +1902,13 @@ def installer_agent_bundle():
         ("MACOS",  "intel64"): "cyedr-agent-macos-intel64",
         ("MACOS",  "arm64"):   "cyedr-agent-macos-arm64",
         ("MACOS",  "x86_64"):  "cyedr-agent-macos-intel64",
+        # Previously missing entirely — cyedr-install.ps1's MSI-first path
+        # masked this, but its own binary fallback 400'd every time it was
+        # actually needed. Now built for real by CI (build-edr-windows).
+        # arm64 intentionally left unmapped: no GitHub-hosted Windows arm64
+        # runner exists yet to build it — falls through to the 400 below with
+        # a clear message rather than silently serving a wrong-arch binary.
+        ("WINDOWS", "x64"):    "cyedr-agent-windows-x64.exe",
     }
     fname = _map.get((os_key, arch))
     if not fname:
@@ -1784,6 +1917,40 @@ def installer_agent_bundle():
     if not os.path.exists(fpath):
         return jsonify({
             "error": f"Agent binary not built for {os_key}/{arch}. Run agent-packages/build-edr-packages.sh"
+        }), 404
+    return send_file(fpath, as_attachment=True, download_name=fname,
+                     mimetype="application/octet-stream")
+
+
+@edr_bp.route("/installer/tray-bundle", methods=["GET"])
+def installer_tray_bundle():
+    """Serve arch-specific standalone CyEDR system-tray binary. Separate
+    binary from agent-bundle above — the tray runs per-user/unprivileged and
+    is built from its own PyInstaller spec (pystray/rumps deps kept out of
+    the headless service binary), see agent-packages/build-edr-packages.sh."""
+    err = _require_deploy_token()
+    if err:
+        return err
+    os_key = request.args.get("os", "LINUX").upper()
+    arch   = request.args.get("arch", "x86_64")
+    _map = {
+        ("LINUX",   "x86_64"):  "cyedr-tray-linux-x86_64",
+        ("LINUX",   "aarch64"): "cyedr-tray-linux-aarch64",
+        ("LINUX",   "amd64"):   "cyedr-tray-linux-x86_64",
+        ("LINUX",   "arm64"):   "cyedr-tray-linux-aarch64",
+        ("MACOS",   "intel64"): "cyedr-tray-macos-intel64",
+        ("MACOS",   "arm64"):   "cyedr-tray-macos-arm64",
+        ("MACOS",   "x86_64"):  "cyedr-tray-macos-intel64",
+        ("WINDOWS", "x64"):     "cyedr-tray-windows-x64.exe",
+        ("WINDOWS", "arm64"):   "cyedr-tray-windows-arm64.exe",
+    }
+    fname = _map.get((os_key, arch))
+    if not fname:
+        return jsonify({"error": f"Unsupported platform: {os_key}/{arch}"}), 400
+    fpath = os.path.join(_EDR_PKG_DIR, fname)
+    if not os.path.exists(fpath):
+        return jsonify({
+            "error": f"Tray binary not built for {os_key}/{arch}. Run agent-packages/build-edr-packages.sh"
         }), 404
     return send_file(fpath, as_attachment=True, download_name=fname,
                      mimetype="application/octet-stream")
