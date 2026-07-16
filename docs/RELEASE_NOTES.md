@@ -1,3 +1,11 @@
+## v1.0.230 -- 2026-07-16
+
+### New Features
+
+  - Add Host Security Profile enterprise EDR capabilities to CyEDR
+
+---
+
 ## v1.0.229 -- 2026-07-16
 
 ### Improvements
