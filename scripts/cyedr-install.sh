@@ -723,7 +723,13 @@ harden_permissions() {
 start_agent() {
     info "Starting CyEDR agent..."
     if [[ "$OS_KEY" == "LINUX" ]]; then
-        systemctl start cyedr-agent
+        # restart, not start: on a reinstall over an already-running agent, `start`
+        # is a systemd no-op on an active unit — daemon-reload picks up the new
+        # ExecStart (python3 mode, new binary, etc.) but the OLD process keeps
+        # running untouched until something actually restarts it. `restart`
+        # behaves identically to `start` when the unit isn't running yet, so this
+        # is safe for both fresh installs and reinstalls.
+        systemctl restart cyedr-agent
         sleep 2
         if systemctl is-active --quiet cyedr-agent; then
             ok "cyedr-agent is running"
