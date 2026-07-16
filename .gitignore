@@ -4,6 +4,8 @@ backend/__pycache__/
 backend/**/__pycache__/
 backend/**/*.pyc
 backend/**/*.pyo
+agent/__pycache__/
+agent/**/*.pyc
 backend/.env
 backend/flask.log
 backend/cron.log

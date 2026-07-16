@@ -139,6 +139,61 @@ def ensure_tables(db_url: str) -> None:
         match_count     INTEGER DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_edr_yara_active ON edr_custom_yara_rules(active, created_at DESC);
+
+    -- Host Security Profile enhancement (Phase 2) — File Integrity Monitoring.
+    -- edr_fim_baseline is the rolling "last known good" per (agent, path); the
+    -- ingest route diffs each incoming event's hash against it before updating.
+    CREATE TABLE IF NOT EXISTS edr_fim_baseline (
+        id              SERIAL PRIMARY KEY,
+        agent_id        TEXT NOT NULL REFERENCES edr_agents(agent_id),
+        path            TEXT NOT NULL,
+        sha256          TEXT,
+        size            BIGINT,
+        owner           TEXT,
+        permissions     TEXT,
+        modified_at     TIMESTAMPTZ,
+        last_baselined  TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(agent_id, path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_edr_fim_baseline_agent ON edr_fim_baseline(agent_id);
+
+    CREATE TABLE IF NOT EXISTS edr_fim_events (
+        id              TEXT PRIMARY KEY,
+        agent_id        TEXT NOT NULL REFERENCES edr_agents(agent_id),
+        event_type      TEXT NOT NULL,
+        path            TEXT NOT NULL,
+        old_path        TEXT,
+        old_sha256      TEXT,
+        new_sha256      TEXT,
+        size            BIGINT,
+        owner           TEXT,
+        permissions     TEXT,
+        username        TEXT,
+        severity        TEXT DEFAULT 'medium',
+        detected_at     TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_edr_fim_events_agent ON edr_fim_events(agent_id, detected_at DESC);
+
+    -- Host Security Profile enhancement (Phase 3) — SCA / CIS benchmark results.
+    -- One row per (agent, policy, check) — re-run overwrites in place so the
+    -- table always reflects the most recent scan, not a growing history.
+    CREATE TABLE IF NOT EXISTS edr_sca_results (
+        id              SERIAL PRIMARY KEY,
+        agent_id        TEXT NOT NULL REFERENCES edr_agents(agent_id),
+        policy_id       TEXT NOT NULL,
+        policy_name     TEXT,
+        check_id        TEXT NOT NULL,
+        title           TEXT,
+        description     TEXT,
+        rationale       TEXT,
+        remediation     TEXT,
+        result          TEXT NOT NULL,
+        severity        TEXT DEFAULT 'medium',
+        scanned_at      TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(agent_id, policy_id, check_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_edr_sca_agent  ON edr_sca_results(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_edr_sca_result ON edr_sca_results(agent_id, result);
     """
     # New columns added after initial table creation
     _arp_guard_alters = [

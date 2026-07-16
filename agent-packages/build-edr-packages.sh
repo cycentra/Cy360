@@ -49,6 +49,7 @@ cryptography>=41.0
 bcrypt>=4.0
 pywinrm>=0.4.3
 xmltodict>=0.13
+watchdog>=4.0
 EOF
 
 # ── PyInstaller spec (single-file, no console) ────────────────────────────────
@@ -69,6 +70,9 @@ a = Analysis(
         'bcrypt',
         'winrm', 'winrm.protocol', 'winrm.exceptions',
         'xmltodict',
+        'watchdog', 'watchdog.observers', 'watchdog.events',
+        'watchdog.observers.inotify', 'watchdog.observers.fsevents',
+        'watchdog.observers.read_directory_changes', 'watchdog.observers.winapi',
     ],
     hookspath=[],
     runtime_hooks=[],

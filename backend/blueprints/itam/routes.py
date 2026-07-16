@@ -178,6 +178,19 @@ def init_itam_tables(db_url: str) -> None:
             ("local_users",      "JSONB DEFAULT '[]'::jsonb"),
             ("listening_ports",  "JSONB DEFAULT '[]'::jsonb"),
             ("last_deep_scan",   "TIMESTAMPTZ"),
+            # Host Security Profile enhancement (Phase 0) — stable cross-reinstall
+            # identity shared with edr_agents.hardware_uuid, so EDR↔ITAM linkage
+            # survives IP changes (DHCP re-lease/roaming) instead of relying on
+            # the fragile ip_address match alone.
+            ("hardware_uuid",    "TEXT"),
+            # Host Security Profile enhancement (Phase 1) — CyEDR self-inventory
+            # fields beyond what agentless SSH/WinRM deep-scan already covers.
+            ("processes",          "JSONB DEFAULT '[]'::jsonb"),
+            ("drivers",             "JSONB DEFAULT '[]'::jsonb"),
+            ("local_groups",        "JSONB DEFAULT '[]'::jsonb"),
+            ("network_interfaces",  "JSONB DEFAULT '[]'::jsonb"),
+            ("certificates",        "JSONB DEFAULT '[]'::jsonb"),
+            ("cloud_metadata",      "JSONB DEFAULT '{}'::jsonb"),
         ]:
             cur.execute(
                 f"ALTER TABLE network_assets ADD COLUMN IF NOT EXISTS {col_name} {col_def};"
@@ -242,6 +255,7 @@ def init_itam_tables(db_url: str) -> None:
             "CREATE INDEX IF NOT EXISTS idx_network_assets_type ON network_assets(asset_type)",
             "CREATE INDEX IF NOT EXISTS idx_network_assets_edr ON network_assets(edr_agent_id)",
             "CREATE INDEX IF NOT EXISTS idx_network_assets_source ON network_assets(discovery_source)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_network_assets_hwuuid ON network_assets(hardware_uuid) WHERE hardware_uuid IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS idx_iot_devices_risk ON iot_devices(risk_score DESC)",
             "CREATE INDEX IF NOT EXISTS idx_shadow_ai_status ON shadow_ai_findings(status)",
             "CREATE INDEX IF NOT EXISTS idx_shadow_ai_tool ON shadow_ai_findings(ai_tool)",
@@ -2082,6 +2096,18 @@ def _crossref_agents_conn(conn) -> None:
                )
         """)
 
+        # Link EDR agents by hardware_uuid first — stable identity, survives the
+        # agent's IP changing between crossref cycles (roaming/DHCP re-lease).
+        # Only affects rows that already carry a hardware_uuid (set by the self-
+        # inventory ingest route or backfilled below), so this is additive to the
+        # IP-based match, not a replacement for assets that predate it.
+        cur.execute("""
+            UPDATE network_assets na
+            SET edr_agent_id = ea.agent_id
+            FROM edr_agents ea
+            WHERE na.hardware_uuid IS NOT NULL AND na.hardware_uuid = ea.hardware_uuid
+              AND na.edr_agent_id IS DISTINCT FROM ea.agent_id
+        """)
         # Link EDR agents by IP
         cur.execute("""
             UPDATE network_assets na
@@ -2102,7 +2128,7 @@ def _crossref_agents_conn(conn) -> None:
         cur.execute("""
             INSERT INTO network_assets
               (ip_address, hostname, asset_type, edr_agent_id, source, discovery_source,
-               vendor, os_fingerprint)
+               vendor, os_fingerprint, hardware_uuid)
             SELECT
               ea.agent_ip::inet,
               ea.hostname,
@@ -2121,7 +2147,8 @@ def _crossref_agents_conn(conn) -> None:
                 WHEN 'darwin'  THEN 'Apple'
                 ELSE NULL
               END,
-              ea.os_type
+              ea.os_type,
+              NULLIF(ea.hardware_uuid, '')
             FROM edr_agents ea
             WHERE ea.agent_ip IS NOT NULL AND ea.agent_ip <> ''
             ON CONFLICT (ip_address) DO UPDATE SET
@@ -2138,6 +2165,7 @@ def _crossref_agents_conn(conn) -> None:
               source           = CASE WHEN network_assets.source IN ('manual','')
                                       THEN 'edr_agent'
                                       ELSE network_assets.source END,
+              hardware_uuid    = COALESCE(EXCLUDED.hardware_uuid, network_assets.hardware_uuid),
               last_seen        = NOW()
         """)
         # Auto-populate SIEM hosts
@@ -2601,6 +2629,82 @@ def _ingest_snmp_result(asset_id: int, ip: str, result: dict):
         c.close()
 
 
+def _resolve_or_create_network_asset(conn, agent_id: str, hardware_uuid: str | None,
+                                      hostname: str) -> tuple[int | None, str]:
+    """
+    Resolve the network_assets row for a CyEDR agent self-reporting its own
+    inventory (Host Security Profile — Phase 1), creating one if none exists
+    yet. Unlike _crossref_agents_conn() (which runs periodically, on-demand
+    only), this must succeed synchronously on the agent's very first inventory
+    POST — enrollment does not guarantee a crossref cycle has run yet.
+
+    Match order: hardware_uuid (stable identity) → edr_agent_id (already
+    linked by a prior crossref) → create new, keyed by edr_agents.agent_ip
+    (network_assets.ip_address is NOT NULL + UNIQUE, so an IP is required).
+
+    Returns (asset_id, ip_address) — asset_id is None only if the agent has
+    no agent_ip on record yet (heartbeat hasn't run), which the caller should
+    treat as "try again next cycle", not an error.
+    """
+    with conn.cursor() as cur:
+        if hardware_uuid:
+            cur.execute(
+                "SELECT id, ip_address::text AS ip FROM network_assets "
+                "WHERE hardware_uuid=%s LIMIT 1", [hardware_uuid],
+            )
+            row = cur.fetchone()
+            if row:
+                return row["id"], row["ip"] or ""
+
+        cur.execute(
+            "SELECT id, ip_address::text AS ip FROM network_assets "
+            "WHERE edr_agent_id=%s LIMIT 1", [agent_id],
+        )
+        row = cur.fetchone()
+        if row:
+            if hardware_uuid:
+                cur.execute(
+                    "UPDATE network_assets SET hardware_uuid=%s WHERE id=%s",
+                    [hardware_uuid, row["id"]],
+                )
+                conn.commit()
+            return row["id"], row["ip"] or ""
+
+        cur.execute(
+            "SELECT agent_ip, os_type, hostname FROM edr_agents WHERE agent_id=%s",
+            [agent_id],
+        )
+        ea = cur.fetchone() or {}
+        ip = ea.get("agent_ip") or ""
+        if not ip:
+            return None, ""
+
+        os_type = (ea.get("os_type") or "").lower()
+        vendor  = {"linux": "Linux", "windows": "Microsoft", "darwin": "Apple"}.get(os_type)
+        asset_type = {"linux": "server", "windows": "workstation",
+                      "darwin": "workstation"}.get(os_type, "unknown")
+
+        cur.execute("""
+            INSERT INTO network_assets
+              (ip_address, hostname, asset_type, edr_agent_id, source,
+               discovery_source, vendor, os_fingerprint, hardware_uuid)
+            VALUES (%s,%s,%s,%s,'edr_agent','cyedr_self_inventory',%s,%s,%s)
+            ON CONFLICT (ip_address) DO UPDATE SET
+              edr_agent_id     = EXCLUDED.edr_agent_id,
+              hardware_uuid    = COALESCE(network_assets.hardware_uuid, EXCLUDED.hardware_uuid),
+              discovery_source = CASE WHEN network_assets.discovery_source IN ('manual','')
+                                      THEN 'cyedr_self_inventory'
+                                      ELSE network_assets.discovery_source END
+            RETURNING id
+        """, [
+            ip, hostname or ea.get("hostname") or "", asset_type, agent_id,
+            vendor, os_type, hardware_uuid,
+        ])
+        row = cur.fetchone()
+        conn.commit()
+        return (row["id"], ip) if row else (None, ip)
+
+
 def _ingest_deep_scan_result(asset_id: int, ip: str, result: dict):
     """Write SSH/WinRM deep scan result into network_assets + software_inventory.
     Called from probe_post_result (deep_scan job) or the local _do_scan() thread."""
@@ -2612,18 +2716,36 @@ def _ingest_deep_scan_result(asset_id: int, ip: str, result: dict):
         ensure_software_tables(c)
         if result.get("status") == "ok":
             hw = result.get("hardware", {})
+            # Extra self-inventory fields (processes/drivers/local_groups/
+            # network_interfaces/certificates/cloud_metadata) are only sent by
+            # CyEDR's InventoryReporter, not the agentless SSH/WinRM deep-scan
+            # path — COALESCE against a NULL param (not an empty-list literal)
+            # so a legacy agentless re-scan never wipes previously self-reported
+            # data for the same asset.
+            extra_keys = ("processes", "drivers", "local_groups",
+                          "network_interfaces", "certificates", "cloud_metadata")
+            extra_params = [
+                json.dumps(result[k]) if k in result else None
+                for k in extra_keys
+            ]
             with c.cursor() as cur:
                 cur.execute("""
                     UPDATE network_assets SET
-                        hostname        = COALESCE(NULLIF(%s,''), hostname),
-                        os_info         = %s,
-                        hardware_info   = %s::jsonb,
-                        services        = %s::jsonb,
-                        local_users     = %s::jsonb,
-                        listening_ports = %s::jsonb,
-                        last_deep_scan  = NOW(),
-                        scan_status     = 'ok',
-                        scan_error      = NULL
+                        hostname            = COALESCE(NULLIF(%s,''), hostname),
+                        os_info             = %s,
+                        hardware_info       = %s::jsonb,
+                        services            = %s::jsonb,
+                        local_users         = %s::jsonb,
+                        listening_ports     = %s::jsonb,
+                        processes           = COALESCE(%s::jsonb, processes),
+                        drivers             = COALESCE(%s::jsonb, drivers),
+                        local_groups        = COALESCE(%s::jsonb, local_groups),
+                        network_interfaces  = COALESCE(%s::jsonb, network_interfaces),
+                        certificates        = COALESCE(%s::jsonb, certificates),
+                        cloud_metadata      = COALESCE(%s::jsonb, cloud_metadata),
+                        last_deep_scan      = NOW(),
+                        scan_status         = 'ok',
+                        scan_error          = NULL
                     WHERE id = %s
                 """, [
                     result.get("hostname", ""),
@@ -2632,6 +2754,7 @@ def _ingest_deep_scan_result(asset_id: int, ip: str, result: dict):
                     json.dumps(result.get("services", [])),
                     json.dumps(result.get("local_users", [])),
                     json.dumps(result.get("listening_ports", [])),
+                    *extra_params,
                     asset_id,
                 ])
             c.commit()

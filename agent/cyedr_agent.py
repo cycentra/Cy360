@@ -48,7 +48,7 @@ except ImportError:
 
 # ── Globals ────────────────────────────────────────────────────────────────────
 VERSION       = "1.0.0"
-AGENT_VERSION = "1.0.224"           # bumped with every platform release; drives self-update
+AGENT_VERSION = "1.0.230"           # bumped with every platform release; drives self-update
 OS_TYPE       = platform.system().upper()   # LINUX, DARWIN, WINDOWS
 _RUNNING      = True
 _STOP_EVENT   = threading.Event()
@@ -959,6 +959,505 @@ def _collect_arp_neighbors() -> list[dict]:
     except Exception as e:
         logger.debug("arp collection error: %s", e)
     return neighbors
+
+
+# ── Self-inventory collectors (Host Security Profile — Asset Inventory) ────────
+# Each function is best-effort and platform-dispatched: it must never raise, and
+# returns an empty/partial result rather than aborting the whole snapshot if one
+# collection step fails (e.g. a locked-down host without lsmod/wmic access).
+# Output shapes intentionally mirror NetworkProbePoller._ssh_deep_scan()'s result
+# dict so the server can feed both through the same ITAM ingest/CVE-match path.
+
+_MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+
+
+def _local_run(cmd: str, timeout: int = 10) -> str:
+    """Run a local shell command, return stdout (empty string on any failure)."""
+    try:
+        out = subprocess.run(
+            cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=timeout,
+        )
+        return out.stdout.decode(errors="replace").strip()
+    except Exception:
+        return ""
+
+
+def _collect_macs() -> list[str]:
+    macs = []
+    if not psutil:
+        return macs
+    try:
+        for _iface, addrs in psutil.net_if_addrs().items():
+            for a in addrs:
+                if _MAC_RE.match(a.address or ""):
+                    macs.append(a.address.upper())
+    except Exception:
+        pass
+    return sorted(set(macs))
+
+
+def _collect_bios_info() -> dict:
+    bios: dict = {}
+    try:
+        system = platform.system()
+        if system == "Linux":
+            bios["vendor"]  = _local_run("cat /sys/class/dmi/id/bios_vendor 2>/dev/null")
+            bios["version"] = _local_run("cat /sys/class/dmi/id/bios_version 2>/dev/null")
+            bios["date"]    = _local_run("cat /sys/class/dmi/id/bios_date 2>/dev/null")
+        elif system == "Darwin":
+            bios["vendor"]  = "Apple"
+            bios["model"]   = _local_run("sysctl -n hw.model")
+            bios["version"] = _local_run("sysctl -n kern.osrelease")
+        elif system == "Windows":
+            raw = _local_run('wmic bios get manufacturer,smbiosbiosversion,releasedate /value')
+            for line in raw.splitlines():
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    if v.strip():
+                        bios[k.strip().lower()] = v.strip()
+    except Exception:
+        pass
+    return bios
+
+
+def _collect_hardware_info() -> dict:
+    hw: dict = {"macs": _collect_macs(), "bios": _collect_bios_info()}
+    try:
+        hw["cpu_model"] = platform.processor()
+        if psutil:
+            hw["cpu_count"] = psutil.cpu_count(logical=True)
+            try:
+                freq = psutil.cpu_freq()
+                if freq:
+                    hw["cpu_freq_mhz"] = round(freq.current)
+            except Exception:
+                pass
+            vm = psutil.virtual_memory()
+            hw["memory_total_bytes"]     = vm.total
+            hw["memory_available_bytes"] = vm.available
+            hw["memory_percent"]         = vm.percent
+            du = psutil.disk_usage("/")
+            hw["disk_total_bytes"] = du.total
+            hw["disk_used_bytes"]  = du.used
+    except Exception as exc:
+        logger.debug("Hardware inventory collection failed: %s", exc)
+    return hw
+
+
+def _collect_os_info() -> dict:
+    info = {
+        "platform":     platform.system(),
+        "release":      platform.release(),
+        "architecture": platform.machine(),
+        "kernel":       platform.uname().release,
+    }
+    try:
+        system = platform.system()
+        if system == "Linux":
+            raw = _local_run("cat /etc/os-release 2>/dev/null")
+            info["raw"] = raw
+            for line in raw.splitlines():
+                if line.startswith("PRETTY_NAME="):
+                    info["name"] = line.split("=", 1)[1].strip('"')
+            info["patch_level"] = _local_run("uname -v")
+        elif system == "Darwin":
+            info["name"]  = "macOS " + _local_run("sw_vers -productVersion")
+            info["build"] = _local_run("sw_vers -buildVersion")
+            info["raw"]   = _local_run("sw_vers")
+        elif system == "Windows":
+            raw = _local_run("wmic os get Caption,Version,BuildNumber /value")
+            info["raw"] = raw
+            for line in raw.splitlines():
+                if line.startswith("Caption="):
+                    info["name"] = line.split("=", 1)[1].strip()
+                elif line.startswith("BuildNumber="):
+                    info["build"] = line.split("=", 1)[1].strip()
+    except Exception as exc:
+        logger.debug("OS inventory collection failed: %s", exc)
+    return info
+
+
+def _collect_installed_software() -> list[dict]:
+    packages: list[dict] = []
+    try:
+        system = platform.system()
+        if system == "Linux":
+            raw = _local_run(
+                "dpkg-query -W -f='${Package}|${Version}|${Maintainer}\\n' 2>/dev/null"
+            )
+            if not raw:
+                raw = _local_run(
+                    "rpm -qa --queryformat '%{NAME}|%{VERSION}|%{VENDOR}|%{INSTALLTIME:date}\\n' 2>/dev/null"
+                )
+            for line in raw.splitlines():
+                p = line.split("|")
+                if p and p[0]:
+                    packages.append({
+                        "name":    p[0],
+                        "version": p[1] if len(p) > 1 else "",
+                        "vendor":  p[2] if len(p) > 2 else "",
+                        "install_date": p[3] if len(p) > 3 else "",
+                    })
+        elif system == "Darwin":
+            raw = _local_run("system_profiler SPApplicationsDataType -json 2>/dev/null", timeout=45)
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    for app in data.get("SPApplicationsDataType", [])[:500]:
+                        packages.append({
+                            "name":         app.get("_name", ""),
+                            "version":      app.get("version", ""),
+                            "vendor":       app.get("obtained_from", ""),
+                            "install_path": app.get("path", ""),
+                            "install_date": app.get("lastModified", ""),
+                        })
+                except Exception:
+                    pass
+            for line in _local_run("brew list --versions 2>/dev/null").splitlines():
+                p = line.split()
+                if len(p) >= 2:
+                    packages.append({"name": p[0], "version": p[1], "vendor": "Homebrew"})
+        elif system == "Windows":
+            raw = _local_run(
+                'powershell -NoProfile -Command '
+                '"Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*,'
+                'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* '
+                '-ErrorAction SilentlyContinue '
+                '| Where-Object DisplayName '
+                '| Select-Object DisplayName,DisplayVersion,Publisher,InstallDate,InstallLocation '
+                '| ConvertTo-Json -Compress"',
+                timeout=30,
+            )
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    if isinstance(data, dict):
+                        data = [data]
+                    for app in data[:500]:
+                        packages.append({
+                            "name":         app.get("DisplayName", "") or "",
+                            "version":      app.get("DisplayVersion", "") or "",
+                            "vendor":       app.get("Publisher", "") or "",
+                            "install_path": app.get("InstallLocation", "") or "",
+                            "install_date": app.get("InstallDate", "") or "",
+                        })
+                except Exception:
+                    pass
+    except Exception as exc:
+        logger.debug("Software inventory collection failed: %s", exc)
+    return packages[:1000]
+
+
+def _collect_running_services() -> list[dict]:
+    services: list[dict] = []
+    try:
+        system = platform.system()
+        if system == "Linux":
+            raw = _local_run(
+                "systemctl list-units --type=service --state=running "
+                "--no-pager --no-legend 2>/dev/null | head -200"
+            )
+            for line in raw.splitlines():
+                p = line.split()
+                if p:
+                    services.append({"name": p[0].replace(".service", ""), "state": "running"})
+        elif system == "Darwin":
+            for line in _local_run("launchctl list 2>/dev/null | tail -n +2 | head -200").splitlines():
+                p = line.split("\t")
+                if len(p) >= 3:
+                    services.append({"name": p[2], "state": "running" if p[0] != "-" else "stopped"})
+        elif system == "Windows":
+            raw = _local_run(
+                'powershell -NoProfile -Command '
+                '"Get-Service | Where-Object Status -eq \'Running\' '
+                '| Select-Object Name,Status | ConvertTo-Json -Compress"',
+                timeout=20,
+            )
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    if isinstance(data, dict):
+                        data = [data]
+                    for svc in data[:300]:
+                        services.append({"name": svc.get("Name", ""), "state": "running"})
+                except Exception:
+                    pass
+    except Exception as exc:
+        logger.debug("Service inventory collection failed: %s", exc)
+    return services
+
+
+def _collect_running_processes() -> list[dict]:
+    procs: list[dict] = []
+    if not psutil:
+        return procs
+    try:
+        for p in psutil.process_iter(["pid", "name", "exe", "username"]):
+            try:
+                info = p.info
+                procs.append({
+                    "pid":      info.get("pid"),
+                    "name":     info.get("name", "") or "",
+                    "exe":      info.get("exe", "") or "",
+                    "username": info.get("username", "") or "",
+                })
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+            if len(procs) >= 500:
+                break
+    except Exception as exc:
+        logger.debug("Process inventory collection failed: %s", exc)
+    return procs
+
+
+def _collect_installed_drivers() -> list[dict]:
+    drivers: list[dict] = []
+    try:
+        system = platform.system()
+        if system == "Linux":
+            for line in _local_run("lsmod 2>/dev/null | tail -n +2 | head -200").splitlines():
+                p = line.split()
+                if p:
+                    drivers.append({"name": p[0], "size": p[1] if len(p) > 1 else ""})
+        elif system == "Darwin":
+            for line in _local_run("kextstat 2>/dev/null | tail -n +2 | head -200").splitlines():
+                p = line.split()
+                if len(p) >= 6:
+                    drivers.append({"name": p[5]})
+        elif system == "Windows":
+            raw = _local_run(
+                'powershell -NoProfile -Command '
+                '"Get-CimInstance Win32_SystemDriver | Where-Object State -eq \'Running\' '
+                '| Select-Object Name,DisplayName,PathName | ConvertTo-Json -Compress"',
+                timeout=25,
+            )
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    if isinstance(data, dict):
+                        data = [data]
+                    for d in data[:300]:
+                        drivers.append({
+                            "name": d.get("DisplayName") or d.get("Name", "") or "",
+                            "path": d.get("PathName", "") or "",
+                        })
+                except Exception:
+                    pass
+    except Exception as exc:
+        logger.debug("Driver inventory collection failed: %s", exc)
+    return drivers
+
+
+def _collect_local_users() -> list[dict]:
+    users: list[dict] = []
+    try:
+        system = platform.system()
+        if system == "Linux":
+            raw = _local_run(
+                "getent passwd 2>/dev/null | "
+                "awk -F: '$3>=1000 && $3<65534{print $1\"|\"$3\"|\"$6\"|\"$7}'"
+            )
+            for line in raw.splitlines():
+                p = line.split("|")
+                if p and p[0]:
+                    users.append({
+                        "username": p[0], "uid": p[1] if len(p) > 1 else "",
+                        "home": p[2] if len(p) > 2 else "", "shell": p[3] if len(p) > 3 else "",
+                    })
+        elif system == "Darwin":
+            for line in _local_run("dscl . list /Users 2>/dev/null | grep -v '^_'").splitlines():
+                name = line.strip()
+                if name and name not in ("daemon", "nobody", "root"):
+                    users.append({"username": name})
+        elif system == "Windows":
+            raw = _local_run(
+                'powershell -NoProfile -Command '
+                '"Get-LocalUser | Select-Object Name,Enabled | ConvertTo-Json -Compress"',
+                timeout=15,
+            )
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    if isinstance(data, dict):
+                        data = [data]
+                    for u in data:
+                        users.append({"username": u.get("Name", ""), "enabled": u.get("Enabled")})
+                except Exception:
+                    pass
+    except Exception as exc:
+        logger.debug("User inventory collection failed: %s", exc)
+    return users
+
+
+def _collect_local_groups() -> list[dict]:
+    groups: list[dict] = []
+    try:
+        system = platform.system()
+        if system == "Linux":
+            raw = _local_run(
+                "getent group 2>/dev/null | awk -F: '$3>=1000 && $3<65534{print $1\"|\"$3}' | head -100"
+            )
+            for line in raw.splitlines():
+                p = line.split("|")
+                if p and p[0]:
+                    groups.append({"name": p[0], "gid": p[1] if len(p) > 1 else ""})
+        elif system == "Darwin":
+            for line in _local_run(
+                "dscl . list /Groups 2>/dev/null | grep -v '^_' | head -100"
+            ).splitlines():
+                name = line.strip()
+                if name:
+                    groups.append({"name": name})
+        elif system == "Windows":
+            raw = _local_run(
+                'powershell -NoProfile -Command '
+                '"Get-LocalGroup | Select-Object Name | ConvertTo-Json -Compress"',
+                timeout=15,
+            )
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    if isinstance(data, dict):
+                        data = [data]
+                    for g in data:
+                        groups.append({"name": g.get("Name", "")})
+                except Exception:
+                    pass
+    except Exception as exc:
+        logger.debug("Group inventory collection failed: %s", exc)
+    return groups
+
+
+def _collect_network_interfaces() -> list[dict]:
+    interfaces: list[dict] = []
+    if not psutil:
+        return interfaces
+    try:
+        stats = psutil.net_if_stats()
+        for iface, addrs in psutil.net_if_addrs().items():
+            entry = {"name": iface, "addresses": [], "mac": "", "is_up": False}
+            st = stats.get(iface)
+            if st:
+                entry["is_up"]      = bool(st.isup)
+                entry["speed_mbps"] = st.speed
+            for a in addrs:
+                if _MAC_RE.match(a.address or ""):
+                    entry["mac"] = a.address.upper()
+                elif a.address:
+                    entry["addresses"].append(a.address)
+            interfaces.append(entry)
+    except Exception as exc:
+        logger.debug("Network interface collection failed: %s", exc)
+    return interfaces
+
+
+def _collect_listening_ports() -> list[dict]:
+    ports: list[dict] = []
+    if not psutil:
+        return ports
+    try:
+        seen = set()
+        for c in psutil.net_connections(kind="inet"):
+            if c.status != psutil.CONN_LISTEN or not c.laddr:
+                continue
+            key = (c.laddr.port, c.type)
+            if key in seen:
+                continue
+            seen.add(key)
+            proc_name = ""
+            if c.pid:
+                try:
+                    proc_name = psutil.Process(c.pid).name()
+                except Exception:
+                    pass
+            ports.append({
+                "port":    c.laddr.port,
+                "proto":   "tcp" if c.type == socket.SOCK_STREAM else "udp",
+                "address": c.laddr.ip,
+                "process": proc_name,
+                "pid":     c.pid,
+            })
+    except Exception as exc:
+        logger.debug("Listening port collection failed: %s", exc)
+    return ports
+
+
+def _collect_certificates() -> list[dict]:
+    certs: list[dict] = []
+    try:
+        system = platform.system()
+        if system == "Linux":
+            raw = _local_run(
+                "for f in /etc/ssl/certs/*.pem; do "
+                "openssl x509 -noout -subject -enddate -in \"$f\" 2>/dev/null; done | head -400",
+                timeout=20,
+            )
+            subject = ""
+            for line in raw.splitlines():
+                if line.startswith("subject="):
+                    subject = line[len("subject="):].strip()
+                elif line.startswith("notAfter=") and subject:
+                    certs.append({"subject": subject, "expires": line[len("notAfter="):].strip()})
+                    subject = ""
+        elif system == "Darwin":
+            raw = _local_run(
+                "security find-certificate -a -c '' /Library/Keychains/System.keychain 2>/dev/null "
+                "| grep '\"labl\"' | head -200",
+                timeout=20,
+            )
+            for line in raw.splitlines():
+                if "=" in line:
+                    certs.append({"subject": line.split("=", 1)[1].strip().strip('"')})
+        elif system == "Windows":
+            raw = _local_run(
+                'powershell -NoProfile -Command '
+                '"Get-ChildItem Cert:\\LocalMachine\\My,Cert:\\LocalMachine\\Root '
+                '-ErrorAction SilentlyContinue '
+                '| Select-Object Subject,NotAfter | ConvertTo-Json -Compress"',
+                timeout=20,
+            )
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    if isinstance(data, dict):
+                        data = [data]
+                    for c in data[:300]:
+                        certs.append({"subject": c.get("Subject", ""), "expires": c.get("NotAfter", "")})
+                except Exception:
+                    pass
+    except Exception as exc:
+        logger.debug("Certificate inventory collection failed: %s", exc)
+    return certs[:400]
+
+
+def _collect_cloud_metadata() -> dict:
+    """Best-effort, short-timeout IMDS probe — fails fast on non-cloud hosts."""
+    try:
+        r = requests.get("http://169.254.169.254/latest/meta-data/instance-id", timeout=0.3)
+        if r.ok:
+            return {"provider": "aws", "instance_id": r.text}
+    except Exception:
+        pass
+    try:
+        r = requests.get(
+            "http://169.254.169.254/metadata/instance?api-version=2021-02-01",
+            headers={"Metadata": "true"}, timeout=0.3,
+        )
+        if r.ok:
+            return {"provider": "azure", "raw": r.json()}
+    except Exception:
+        pass
+    try:
+        r = requests.get(
+            "http://metadata.google.internal/computeMetadata/v1/instance/id",
+            headers={"Metadata-Flavor": "Google"}, timeout=0.3,
+        )
+        if r.ok:
+            return {"provider": "gcp", "instance_id": r.text}
+    except Exception:
+        pass
+    return {}
 
 
 def score_event(text: str, ioc: IOCCache, asset_type: str,
@@ -2650,6 +3149,579 @@ class IOCRefresher(threading.Thread):
             _STOP_EVENT.wait(self.INTERVAL)
 
 
+# ── Self-Inventory Reporter (Host Security Profile — Asset Inventory) ──────────
+class InventoryReporter(threading.Thread):
+    """
+    Periodically collects a full local CMDB snapshot of this host — hardware,
+    OS, installed software, running services/processes, drivers, users, groups,
+    network interfaces, listening ports, certificates, and cloud metadata — and
+    POSTs it to POST /api/edr/inventory.
+
+    The payload shape mirrors NetworkProbePoller._ssh_deep_scan()'s result dict
+    on purpose: the server ingests both self-reported and agentless-scanned
+    inventory through the same ITAM ingest/CVE-match path (_ingest_deep_scan_result),
+    so there is exactly one inventory + CVE pipeline, not two.
+    """
+
+    INTERVAL      = 21600  # 6 hours
+    STARTUP_DELAY = 30     # let enrollment/heartbeat settle before first collection
+
+    def __init__(self, http: requests.Session, cfg: Config):
+        super().__init__(daemon=True, name="InventoryReporter")
+        self._http = http
+        self._cfg  = cfg
+
+    def run(self):
+        _STOP_EVENT.wait(self.STARTUP_DELAY)
+        while not _STOP_EVENT.is_set():
+            try:
+                self._collect_and_send()
+            except Exception as exc:
+                logger.warning("InventoryReporter error: %s", exc)
+            _STOP_EVENT.wait(self.INTERVAL)
+
+    def _collect_and_send(self):
+        if not self._cfg.agent_id:
+            return
+        t0 = time.time()
+        payload = {
+            "hostname":            self._cfg.hostname,
+            "hardware_uuid":       self._cfg.hardware_uuid,
+            "os_info":             _collect_os_info(),
+            "hardware":            _collect_hardware_info(),
+            "packages":            _collect_installed_software(),
+            "services":            _collect_running_services(),
+            "processes":           _collect_running_processes(),
+            "drivers":             _collect_installed_drivers(),
+            "local_users":         _collect_local_users(),
+            "local_groups":        _collect_local_groups(),
+            "network_interfaces":  _collect_network_interfaces(),
+            "listening_ports":     _collect_listening_ports(),
+            "certificates":        _collect_certificates(),
+            "cloud_metadata":      _collect_cloud_metadata(),
+        }
+        try:
+            resp = self._http.post(
+                f"{self._cfg.platform_url}/api/edr/inventory",
+                json=payload, timeout=60,
+            )
+            if resp.ok:
+                logger.info(
+                    "Inventory reported in %.1fs: %d packages, %d processes, %d services",
+                    time.time() - t0, len(payload["packages"]),
+                    len(payload["processes"]), len(payload["services"]),
+                )
+            else:
+                logger.debug("Inventory report returned %s", resp.status_code)
+        except Exception as exc:
+            logger.debug("Inventory report failed: %s", exc)
+
+
+# ── File Integrity Monitoring (Host Security Profile — FIM, Phase 2) ───────────
+_DEFAULT_FIM_PATHS = {
+    "Linux": [
+        "/etc/passwd", "/etc/shadow", "/etc/sudoers", "/etc/hosts",
+        "/etc/ssh/sshd_config", "/etc/crontab", "/etc/cron.d", "/etc/cron.daily",
+        "/root/.ssh",
+    ],
+    "Darwin": [
+        "/etc/passwd", "/etc/sudoers", "/etc/hosts", "/etc/ssh/sshd_config",
+        "/private/etc/crontab", "/Library/LaunchDaemons", "/Library/LaunchAgents",
+    ],
+    "Windows": [
+        r"C:\Windows\System32\drivers\etc\hosts",
+        r"C:\Windows\System32\config",
+        r"C:\Windows\System32\Tasks",
+    ],
+}
+
+_FIM_CRITICAL_RE = re.compile(
+    r"(passwd|shadow|sudoers|sshd_config|authorized_keys|crontab|LaunchDaemons|"
+    r"drivers.etc.hosts|System32.config)",
+    re.IGNORECASE,
+)
+
+
+def _fim_hash_file(path: str, cap_bytes: int = 64 * 1024 * 1024) -> Optional[str]:
+    try:
+        if os.path.getsize(path) > cap_bytes:
+            return None
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return None
+
+
+def _fim_file_meta(path: str) -> dict:
+    meta = {"path": path, "size": None, "owner": "", "permissions": "", "sha256": None}
+    try:
+        st = os.stat(path)
+        meta["size"] = st.st_size
+        meta["permissions"] = oct(st.st_mode & 0o777)
+        if platform.system() != "Windows":
+            try:
+                import pwd
+                meta["owner"] = pwd.getpwuid(st.st_uid).pw_name
+            except Exception:
+                meta["owner"] = str(st.st_uid)
+        if os.path.isfile(path):
+            meta["sha256"] = _fim_hash_file(path)
+    except Exception:
+        pass
+    return meta
+
+
+class FimMonitor(threading.Thread):
+    """
+    File Integrity Monitoring — watches a default set of security-critical
+    paths per OS using the `watchdog` library (inotify on Linux, FSEvents on
+    macOS, ReadDirectoryChangesW on Windows — the exact platform primitives
+    the Host Security Profile spec calls for, via a well-tested cross-platform
+    wrapper instead of hand-rolled ctypes bindings for three separate OS APIs).
+
+    Diffing against the previously known hash happens server-side (see
+    POST /api/edr/fim/events in blueprints/edr/routes.py, which reads
+    edr_fim_baseline) — this thread only reports current on-disk facts (path,
+    hash, size, owner, permissions, event_type); it holds no local baseline.
+    """
+
+    FLUSH_INTERVAL    = 15     # seconds between batched event POSTs
+    BASELINE_INTERVAL = 86400  # 24h between full baseline snapshots
+    STARTUP_DELAY     = 45
+
+    def __init__(self, http: requests.Session, cfg: Config):
+        super().__init__(daemon=True, name="FimMonitor")
+        self._http  = http
+        self._cfg   = cfg
+        self._queue: dict = {}   # path -> latest pending event dict
+        self._lock  = threading.Lock()
+        self._last_baseline = 0.0
+        self._observer = None
+
+    def _on_event(self, event_type: str, path: str, old_path: Optional[str] = None):
+        with self._lock:
+            self._queue[path] = {"event_type": event_type, "path": path, "old_path": old_path}
+
+    def _build_observer(self, watch_paths: list):
+        from watchdog.observers import Observer
+        from watchdog.events import FileSystemEventHandler
+
+        outer = self
+
+        class _Handler(FileSystemEventHandler):
+            def __init__(self, only_file: Optional[str] = None):
+                self._only_file = only_file
+
+            def _allowed(self, path: str) -> bool:
+                return self._only_file is None or os.path.basename(path) == self._only_file
+
+            def on_created(self, event):
+                if not event.is_directory and self._allowed(event.src_path):
+                    outer._on_event("created", event.src_path)
+
+            def on_deleted(self, event):
+                if not event.is_directory and self._allowed(event.src_path):
+                    outer._on_event("deleted", event.src_path)
+
+            def on_modified(self, event):
+                if not event.is_directory and self._allowed(event.src_path):
+                    outer._on_event("modified", event.src_path)
+
+            def on_moved(self, event):
+                if not event.is_directory and self._allowed(event.dest_path):
+                    outer._on_event("renamed", event.dest_path, old_path=event.src_path)
+
+        observer = Observer()
+        for p in watch_paths:
+            if not os.path.exists(p):
+                continue
+            try:
+                if os.path.isdir(p):
+                    observer.schedule(_Handler(), p, recursive=True)
+                else:
+                    observer.schedule(
+                        _Handler(only_file=os.path.basename(p)),
+                        os.path.dirname(p) or ".", recursive=False,
+                    )
+            except Exception as exc:
+                logger.debug("FIM: could not watch %s: %s", p, exc)
+        return observer
+
+    def run(self):
+        try:
+            import watchdog  # noqa: F401 — availability probe, lazy import
+        except ImportError:
+            logger.warning("FIM disabled: watchdog not installed in this agent build")
+            return
+
+        watch_paths = _DEFAULT_FIM_PATHS.get(platform.system(), [])
+        try:
+            self._observer = self._build_observer(watch_paths)
+            self._observer.start()
+            logger.info("FimMonitor watching %d path(s)", len(watch_paths))
+        except Exception as exc:
+            logger.warning("FimMonitor failed to start: %s", exc)
+            return
+
+        _STOP_EVENT.wait(self.STARTUP_DELAY)
+        while not _STOP_EVENT.is_set():
+            if time.time() - self._last_baseline >= self.BASELINE_INTERVAL:
+                try:
+                    self._send_baseline(watch_paths)
+                except Exception as exc:
+                    logger.debug("FIM baseline send failed: %s", exc)
+                self._last_baseline = time.time()
+            try:
+                self._flush_events()
+            except Exception as exc:
+                logger.debug("FIM event flush failed: %s", exc)
+            _STOP_EVENT.wait(self.FLUSH_INTERVAL)
+
+        if self._observer:
+            self._observer.stop()
+
+    def _flush_events(self):
+        with self._lock:
+            if not self._queue:
+                return
+            pending = list(self._queue.values())
+            self._queue.clear()
+
+        events = []
+        for item in pending:
+            path = item["path"]
+            if item["event_type"] == "deleted":
+                meta = {"size": None, "owner": "", "permissions": "", "sha256": None}
+            else:
+                meta = _fim_file_meta(path)
+            events.append({
+                "event_type":  item["event_type"],
+                "path":        path,
+                "old_path":    item.get("old_path"),
+                "sha256":      meta["sha256"],
+                "size":        meta["size"],
+                "owner":       meta["owner"],
+                "permissions": meta["permissions"],
+                "critical":    bool(_FIM_CRITICAL_RE.search(path)),
+            })
+        if not events:
+            return
+        try:
+            resp = self._http.post(
+                f"{self._cfg.platform_url}/api/edr/fim/events",
+                json={"events": events}, timeout=30,
+            )
+            if resp.ok:
+                logger.info("FIM: reported %d event(s)", len(events))
+            else:
+                logger.debug("FIM event POST returned %s", resp.status_code)
+        except Exception as exc:
+            logger.debug("FIM event POST failed: %s", exc)
+
+    def _send_baseline(self, watch_paths: list):
+        entries = []
+        for root in watch_paths:
+            if not os.path.exists(root):
+                continue
+            if os.path.isfile(root):
+                entries.append(_fim_file_meta(root))
+                continue
+            count = 0
+            for dirpath, _dirs, files in os.walk(root):
+                for fname in files:
+                    if count >= 2000:
+                        break
+                    entries.append(_fim_file_meta(os.path.join(dirpath, fname)))
+                    count += 1
+                if count >= 2000:
+                    break
+        if not entries:
+            return
+        try:
+            resp = self._http.post(
+                f"{self._cfg.platform_url}/api/edr/fim/baseline",
+                json={"entries": entries}, timeout=60,
+            )
+            if resp.ok:
+                logger.info("FIM: baseline sent (%d files)", len(entries))
+            else:
+                logger.debug("FIM baseline POST returned %s", resp.status_code)
+        except Exception as exc:
+            logger.debug("FIM baseline POST failed: %s", exc)
+
+
+# ── SCA / CIS Benchmark Check Engine (Host Security Profile — SCA, Phase 3) ────
+# Policy-as-code: each check is {id, title, rationale, remediation, severity,
+# check} where `check` is a callable returning True (pass) / False (fail) /
+# None (not applicable on this host). Kept as embedded Python data rather than
+# parsed YAML files — same declarative shape the spec describes, without
+# bundling a YAML parser into a hardened security-agent binary. Swappable for
+# real YAML policy packs later without changing the ingest contract.
+
+def _sca_ps_bool(expr: str, timeout: int = 15) -> Optional[bool]:
+    out = _local_run(f'powershell -NoProfile -Command "{expr}"', timeout=timeout).strip().lower()
+    if out == "true":
+        return True
+    if out == "false":
+        return False
+    return None
+
+
+def _sca_ps_reg_dword(hive_path: str, name: str, timeout: int = 15) -> Optional[int]:
+    expr = (
+        f"(Get-ItemProperty -Path '{hive_path}' -Name '{name}' "
+        f"-ErrorAction SilentlyContinue).{name}"
+    )
+    out = _local_run(f'powershell -NoProfile -Command "{expr}"', timeout=timeout).strip()
+    try:
+        return int(out)
+    except Exception:
+        return None
+
+
+def _sca_sshd_config_value(key: str) -> str:
+    out = _local_run(f"sshd -T 2>/dev/null | grep -i '^{key} '")
+    parts = out.strip().split()
+    return parts[1].lower() if len(parts) >= 2 else ""
+
+
+def _sca_check_linux_firewall() -> Optional[bool]:
+    out = _local_run("ufw status 2>/dev/null; firewall-cmd --state 2>/dev/null").lower()
+    if "active" in out or "running" in out:
+        return True
+    if "inactive" in out or "not running" in out:
+        return False
+    return None
+
+
+def _sca_check_linux_selinux_apparmor() -> Optional[bool]:
+    se = _local_run("getenforce 2>/dev/null").strip().lower()
+    if se:
+        return se == "enforcing"
+    aa = _local_run("aa-status --enabled 2>/dev/null; echo $?").strip()
+    if aa:
+        return aa.splitlines()[-1].strip() == "0"
+    return None
+
+
+_SCA_CHECKS_LINUX = [
+    {"id": "CY-LNX-001", "title": "Host firewall active (ufw/firewalld)",
+     "rationale": "An active host firewall reduces exposure to network-based attacks.",
+     "remediation": "Enable ufw (`ufw enable`) or firewalld (`systemctl enable --now firewalld`).",
+     "severity": "high", "check": _sca_check_linux_firewall},
+    {"id": "CY-LNX-002", "title": "SSH PermitRootLogin disabled",
+     "rationale": "Direct root SSH login bypasses per-user audit trails and MFA.",
+     "remediation": "Set `PermitRootLogin no` in /etc/ssh/sshd_config and restart sshd.",
+     "severity": "high", "check": lambda: (
+         _sca_sshd_config_value("permitrootlogin") == "no"
+         if _sca_sshd_config_value("permitrootlogin") else None)},
+    {"id": "CY-LNX-003", "title": "SSH password authentication disabled",
+     "rationale": "Key-based auth resists credential-stuffing and brute-force attacks.",
+     "remediation": "Set `PasswordAuthentication no` in /etc/ssh/sshd_config and restart sshd.",
+     "severity": "medium", "check": lambda: (
+         _sca_sshd_config_value("passwordauthentication") == "no"
+         if _sca_sshd_config_value("passwordauthentication") else None)},
+    {"id": "CY-LNX-004", "title": "Password max age <= 90 days",
+     "rationale": "Bounded password lifetime limits the window a leaked credential stays valid.",
+     "remediation": "Set `PASS_MAX_DAYS 90` in /etc/login.defs.",
+     "severity": "low", "check": lambda: (
+         (lambda v: int(v) <= 90 if v.isdigit() else None)(
+             _local_run("grep -E '^PASS_MAX_DAYS' /etc/login.defs 2>/dev/null | awk '{print $2}'")))},
+    {"id": "CY-LNX-005", "title": "Kernel ASLR enabled",
+     "rationale": "Address space randomization raises the bar for memory-corruption exploits.",
+     "remediation": "Set `kernel.randomize_va_space=2` via sysctl.",
+     "severity": "medium", "check": lambda: (
+         _local_run("sysctl -n kernel.randomize_va_space 2>/dev/null").strip() == "2")},
+    {"id": "CY-LNX-006", "title": "IPv4 forwarding disabled",
+     "rationale": "A workstation/server that isn't a router shouldn't forward packets between interfaces.",
+     "remediation": "Set `net.ipv4.ip_forward=0` via sysctl unless this host is an intended gateway.",
+     "severity": "low", "check": lambda: (
+         _local_run("sysctl -n net.ipv4.ip_forward 2>/dev/null").strip() == "0")},
+    {"id": "CY-LNX-007", "title": "Mandatory access control enforcing (SELinux/AppArmor)",
+     "rationale": "MAC confines compromised processes even after code execution.",
+     "remediation": "Set SELinux to Enforcing or ensure AppArmor profiles are enabled.",
+     "severity": "medium", "check": _sca_check_linux_selinux_apparmor},
+    {"id": "CY-LNX-008", "title": "auditd running",
+     "rationale": "System call auditing is required for incident forensics.",
+     "remediation": "`systemctl enable --now auditd`.",
+     "severity": "medium", "check": lambda: (
+         _local_run("systemctl is-active auditd 2>/dev/null").strip() == "active")},
+    {"id": "CY-LNX-009", "title": "Cron restricted to authorized users",
+     "rationale": "Unrestricted cron access is a common persistence mechanism.",
+     "remediation": "Create /etc/cron.allow listing only authorized users.",
+     "severity": "low", "check": lambda: os.path.isfile("/etc/cron.allow") or None},
+    {"id": "CY-LNX-010", "title": "/etc/passwd not world-writable",
+     "rationale": "A world-writable passwd file allows any local user to escalate privileges.",
+     "remediation": "`chmod 644 /etc/passwd`.",
+     "severity": "critical", "check": lambda: (
+         (lambda m: (m & 0o022) == 0)(os.stat("/etc/passwd").st_mode & 0o777)
+         if os.path.exists("/etc/passwd") else None)},
+]
+
+_SCA_CHECKS_DARWIN = [
+    {"id": "CY-MAC-001", "title": "Gatekeeper enabled",
+     "rationale": "Gatekeeper blocks execution of unsigned/unnotarized applications.",
+     "remediation": "`sudo spctl --master-enable`.",
+     "severity": "high", "check": lambda: (
+         "enabled" in _local_run("spctl --status 2>&1").lower())},
+    {"id": "CY-MAC-002", "title": "Application firewall enabled",
+     "rationale": "The application firewall blocks unsolicited inbound connections.",
+     "remediation": "System Settings → Network → Firewall → On, or `socketfilterfw --setglobalstate on`.",
+     "severity": "high", "check": lambda: (
+         (lambda v: v != "0" if v else None)(
+             _local_run("defaults read /Library/Preferences/com.apple.alf globalstate 2>/dev/null").strip()))},
+    {"id": "CY-MAC-003", "title": "FileVault disk encryption enabled",
+     "rationale": "Full-disk encryption protects data at rest if the device is lost or stolen.",
+     "remediation": "`sudo fdesetup enable`.",
+     "severity": "critical", "check": lambda: (
+         "filevault is on" in _local_run("fdesetup status 2>&1").lower())},
+    {"id": "CY-MAC-004", "title": "System Integrity Protection enabled",
+     "rationale": "SIP prevents modification of protected system files even by root.",
+     "remediation": "Re-enable via Recovery Mode: `csrutil enable`.",
+     "severity": "critical", "check": lambda: (
+         "enabled" in _local_run("csrutil status 2>&1").lower())},
+    {"id": "CY-MAC-005", "title": "Remote Login (SSH) disabled unless required",
+     "rationale": "Remote Login exposes an SSH attack surface if not intentionally required.",
+     "remediation": "`sudo systemsetup -setremotelogin off` if SSH access isn't needed on this host.",
+     "severity": "low", "check": lambda: (
+         "off" in _local_run("systemsetup -getremotelogin 2>&1").lower())},
+]
+
+_SCA_CHECKS_WINDOWS = [
+    {"id": "CY-WIN-001", "title": "Windows Firewall enabled (all profiles)",
+     "rationale": "A disabled firewall profile removes host-level network filtering.",
+     "remediation": "Enable all profiles: `Set-NetFirewallProfile -All -Enabled True`.",
+     "severity": "high", "check": lambda: _sca_ps_bool(
+         "(Get-NetFirewallProfile).Enabled -notcontains $false")},
+    {"id": "CY-WIN-002", "title": "Microsoft Defender real-time protection enabled",
+     "rationale": "Real-time protection is the primary on-access malware defense layer.",
+     "remediation": "`Set-MpPreference -DisableRealtimeMonitoring $false`.",
+     "severity": "critical", "check": lambda: _sca_ps_bool(
+         "(Get-MpComputerStatus).RealTimeProtectionEnabled")},
+    {"id": "CY-WIN-003", "title": "BitLocker enabled on system drive",
+     "rationale": "Full-disk encryption protects data at rest if the device is lost or stolen.",
+     "remediation": "`Enable-BitLocker -MountPoint $env:SystemDrive`.",
+     "severity": "critical", "check": lambda: _sca_ps_bool(
+         "(Get-BitLockerVolume -MountPoint $env:SystemDrive).ProtectionStatus -eq 'On'")},
+    {"id": "CY-WIN-004", "title": "LSA Protection (RunAsPPL) enabled",
+     "rationale": "LSA Protection blocks unsigned code from injecting into lsass.exe, a common "
+                  "credential-theft technique.",
+     "remediation": "Set `HKLM\\SYSTEM\\CurrentControlSet\\Control\\Lsa\\RunAsPPL` = 1 (DWORD) and reboot.",
+     "severity": "high", "check": lambda: (
+         (lambda v: v == 1 if v is not None else None)(
+             _sca_ps_reg_dword(r"HKLM:\SYSTEM\CurrentControlSet\Control\Lsa", "RunAsPPL")))},
+    {"id": "CY-WIN-005", "title": "PowerShell Script Block Logging enabled",
+     "rationale": "Script block logging is essential for detecting obfuscated PowerShell attacks.",
+     "remediation": "Enable via Group Policy: Administrative Templates → Windows PowerShell → "
+                     "Turn on PowerShell Script Block Logging.",
+     "severity": "medium", "check": lambda: (
+         (lambda v: v == 1 if v is not None else None)(
+             _sca_ps_reg_dword(
+                 r"HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging",
+                 "EnableScriptBlockLogging")))},
+    {"id": "CY-WIN-006", "title": "SMBv1 disabled",
+     "rationale": "SMBv1 is legacy and was the vector for WannaCry/NotPetya (EternalBlue).",
+     "remediation": "`Disable-WindowsOptionalFeature -Online -FeatureName smb1protocol`.",
+     "severity": "critical", "check": lambda: _sca_ps_bool(
+         "(Get-SmbServerConfiguration).EnableSMB1Protocol -eq $false")},
+    {"id": "CY-WIN-007", "title": "Credential Guard running",
+     "rationale": "Credential Guard isolates LSA secrets in a VBS-protected container, blocking "
+                  "pass-the-hash/pass-the-ticket even after admin-level compromise.",
+     "remediation": "Enable via Group Policy or `DG_Readiness_Tool.ps1 -Enable`.",
+     "severity": "medium", "check": lambda: _sca_ps_bool(
+         "(Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\\Microsoft\\Windows\\DeviceGuard "
+         "-ErrorAction SilentlyContinue).SecurityServicesRunning -contains 1")},
+    {"id": "CY-WIN-008", "title": "RDP requires Network Level Authentication",
+     "rationale": "NLA requires authentication before a full RDP session is established, reducing "
+                  "pre-auth attack surface.",
+     "remediation": "Set `UserAuthentication` = 1 (DWORD) under the RDP-Tcp WinStations key.",
+     "severity": "high", "check": lambda: (
+         (lambda v: v == 1 if v is not None else None)(
+             _sca_ps_reg_dword(
+                 r"HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp",
+                 "UserAuthentication")))},
+]
+
+_SCA_CHECKS = {"Linux": _SCA_CHECKS_LINUX, "Darwin": _SCA_CHECKS_DARWIN, "Windows": _SCA_CHECKS_WINDOWS}
+_SCA_POLICY_META = {
+    "Linux":   ("CY-CIS-LINUX",   "CyCentra Baseline Hardening — Linux"),
+    "Darwin":  ("CY-CIS-MACOS",   "CyCentra Baseline Hardening — macOS"),
+    "Windows": ("CY-CIS-WINDOWS", "CyCentra Baseline Hardening — Windows"),
+}
+
+
+def _run_sca_checks() -> list:
+    checks = _SCA_CHECKS.get(platform.system(), [])
+    results = []
+    for c in checks:
+        try:
+            outcome = c["check"]()
+        except Exception as exc:
+            logger.debug("SCA check %s errored: %s", c["id"], exc)
+            outcome = None
+        result = "not_applicable" if outcome is None else ("passed" if outcome else "failed")
+        results.append({
+            "check_id":    c["id"],
+            "title":       c["title"],
+            "description": c.get("description", c["title"]),
+            "rationale":   c.get("rationale", ""),
+            "remediation": c.get("remediation", ""),
+            "severity":    c.get("severity", "medium"),
+            "result":      result,
+        })
+    return results
+
+
+class ScaScanner(threading.Thread):
+    """
+    Security Configuration Assessment — runs the bundled CIS-style hardening
+    checks locally every INTERVAL and reports pass/fail/not_applicable results.
+    A re-scan overwrites the server's edr_sca_results in place (see
+    POST /api/edr/sca/results) — the table always reflects the latest scan.
+    """
+
+    INTERVAL      = 21600  # 6h — same cadence as InventoryReporter
+    STARTUP_DELAY = 60
+
+    def __init__(self, http: requests.Session, cfg: Config):
+        super().__init__(daemon=True, name="ScaScanner")
+        self._http = http
+        self._cfg  = cfg
+
+    def run(self):
+        _STOP_EVENT.wait(self.STARTUP_DELAY)
+        while not _STOP_EVENT.is_set():
+            try:
+                self._scan_and_send()
+            except Exception as exc:
+                logger.warning("ScaScanner error: %s", exc)
+            _STOP_EVENT.wait(self.INTERVAL)
+
+    def _scan_and_send(self):
+        if not self._cfg.agent_id:
+            return
+        results = _run_sca_checks()
+        if not results:
+            return
+        policy_id, policy_name = _SCA_POLICY_META.get(
+            platform.system(), ("CY-CIS-GENERIC", "CyCentra Baseline Hardening"))
+        payload = {"policy_id": policy_id, "policy_name": policy_name, "checks": results}
+        try:
+            resp = self._http.post(
+                f"{self._cfg.platform_url}/api/edr/sca/results", json=payload, timeout=30,
+            )
+            if resp.ok:
+                passed = sum(1 for r in results if r["result"] == "passed")
+                logger.info("SCA scan reported: %d/%d checks passed", passed, len(results))
+            else:
+                logger.debug("SCA report returned %s", resp.status_code)
+        except Exception as exc:
+            logger.debug("SCA report failed: %s", exc)
+
+
 # ── Network Probe Poller ───────────────────────────────────────────────────────
 class NetworkProbePoller(threading.Thread):
     """
@@ -3287,6 +4359,9 @@ def main():
         CommandPoller(http, cfg, executor),
         Heartbeat(http, cfg),
         IOCRefresher(ioc, http, cfg.platform_url, cfg.edr_home, cfg.agent_id),
+        InventoryReporter(http, cfg),
+        FimMonitor(http, cfg),
+        ScaScanner(http, cfg),
     ]
 
     for t in threads:

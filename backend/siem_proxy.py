@@ -901,6 +901,26 @@ def _iso(val):
     return val.isoformat() if val and hasattr(val, "isoformat") else None
 
 
+def _resolve_edr_agent_id(cur, agent_id: str):
+    """
+    Resolve the agent_id in a /hosts/<agent_id>/* URL to the corresponding
+    edr_agents.agent_id, whether the URL id is already an EDR agent's own UUID
+    or a Wazuh/SIEM-style id linked via network_assets (Phase 0 crossref).
+    Returns None if this host has no EDR agent at all (Wazuh-only/unlinked) —
+    callers use that to fall back to the legacy Wazuh/alerts-table path.
+    """
+    cur.execute("SELECT 1 FROM edr_agents WHERE agent_id = %s", [agent_id])
+    if cur.fetchone():
+        return agent_id
+    cur.execute(
+        "SELECT edr_agent_id FROM network_assets "
+        "WHERE siem_agent_id = %s AND edr_agent_id IS NOT NULL LIMIT 1",
+        [agent_id],
+    )
+    row = cur.fetchone()
+    return row["edr_agent_id"] if row else None
+
+
 def _inject_case_fields(incidents: list) -> None:
     """Overwrite case_opened_at (and related case columns) in a list of incident
     dicts with values read directly from psycopg2 — the authoritative source.
@@ -1068,6 +1088,85 @@ def _sync_hosts_list(status_filter, sort_by, page, per_page):
         conn.close()
 
 
+def _edr_native_host_overlay(cur, edr_agent_id: str) -> dict:
+    """
+    Build a Host Security Profile overlay purely from EDR-native tables
+    (edr_detections, edr_fim_events, edr_sca_results, and ITAM's
+    software_inventory via network_assets). Used both to enrich a host that
+    already has a host_posture_cache row (whose Wazuh-derived SCA/vuln/MITRE
+    fields may be stale or entirely absent) and to build a full response for
+    EDR-only hosts that have no host_posture_cache row at all (see
+    _sync_host_detail's fallback branch below).
+    """
+    overlay = {
+        "mitre_breakdown": [], "mitre_techniques": [],
+        "sca": None, "vuln_counts": None, "fim_events": 0, "malware_detections": 0,
+        "compliance_score": None,
+    }
+
+    cur.execute("""
+        SELECT mitre_id, mitre_tactic, COUNT(*) AS cnt
+        FROM edr_detections
+        WHERE agent_id = %s AND mitre_id IS NOT NULL AND mitre_id <> ''
+          AND detected_at > NOW() - INTERVAL '30 days'
+        GROUP BY mitre_id, mitre_tactic ORDER BY cnt DESC LIMIT 15
+    """, [edr_agent_id])
+    rows = cur.fetchall()
+    overlay["mitre_breakdown"] = [
+        {"mitre_id": r["mitre_id"], "tactic": r["mitre_tactic"], "count": int(r["cnt"])}
+        for r in rows
+    ]
+    overlay["mitre_techniques"] = sorted({r["mitre_id"] for r in rows})
+
+    cur.execute(
+        "SELECT COUNT(*) AS n FROM edr_fim_events WHERE agent_id = %s "
+        "AND detected_at > NOW() - INTERVAL '30 days'",
+        [edr_agent_id],
+    )
+    overlay["fim_events"] = cur.fetchone()["n"]
+
+    cur.execute(
+        "SELECT COUNT(*) AS n FROM edr_detections WHERE agent_id = %s "
+        "AND event_category = 'malware' AND detected_at > NOW() - INTERVAL '30 days'",
+        [edr_agent_id],
+    )
+    overlay["malware_detections"] = cur.fetchone()["n"]
+
+    cur.execute("""
+        SELECT COUNT(*) FILTER (WHERE result = 'passed') AS passed,
+               COUNT(*) FILTER (WHERE result = 'failed') AS failed,
+               COUNT(*) AS total
+        FROM edr_sca_results WHERE agent_id = %s
+    """, [edr_agent_id])
+    sca_row = cur.fetchone()
+    if sca_row and sca_row["total"]:
+        _pass, _fail, _tot = int(sca_row["passed"] or 0), int(sca_row["failed"] or 0), int(sca_row["total"] or 0)
+        _scored = _pass + _fail
+        overlay["sca"] = {
+            "passed": _pass, "failed": _fail, "total": _tot,
+            "score": round(_pass / _scored * 100, 1) if _scored else None,
+        }
+        overlay["compliance_score"] = overlay["sca"]["score"]
+
+    cur.execute("SELECT id FROM network_assets WHERE edr_agent_id = %s LIMIT 1", [edr_agent_id])
+    na = cur.fetchone()
+    if na:
+        cur.execute("""
+            SELECT elem->>'severity' AS severity, COUNT(*) AS cnt
+            FROM software_inventory si, jsonb_array_elements(si.cves) elem
+            WHERE si.asset_id = %s
+            GROUP BY elem->>'severity'
+        """, [na["id"]])
+        counts = {r["severity"]: int(r["cnt"]) for r in cur.fetchall()}
+        if counts:
+            overlay["vuln_counts"] = {
+                "critical": counts.get("critical", 0), "high": counts.get("high", 0),
+                "medium": counts.get("medium", 0), "low": counts.get("low", 0),
+            }
+
+    return overlay
+
+
 def _sync_host_detail(agent_id):
     import psycopg2.extras
     conn = _corr_conn()
@@ -1075,8 +1174,34 @@ def _sync_host_detail(agent_id):
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT * FROM host_posture_cache WHERE agent_id = %s", [agent_id])
             host = cur.fetchone()
-            if not host:
+
+            edr_agent_id = _resolve_edr_agent_id(cur, agent_id)
+            overlay = _edr_native_host_overlay(cur, edr_agent_id) if edr_agent_id else None
+
+            if not host and not edr_agent_id:
                 return None
+            if not host:
+                # EDR-only host with no Wazuh/alerts-derived posture-cache row yet
+                # (e.g. never had a host-refresh cycle run) — build a minimal
+                # response from edr_agents instead of 404ing the whole panel.
+                cur.execute("""
+                    SELECT agent_id, hostname, os_type, agent_ip, status, version, last_seen
+                    FROM edr_agents WHERE agent_id = %s
+                """, [edr_agent_id])
+                ea = cur.fetchone() or {}
+                host = {
+                    "agent_id": ea.get("agent_id", agent_id), "agent_name": ea.get("hostname"),
+                    "agent_ip": ea.get("agent_ip"), "os_platform": ea.get("os_type"),
+                    "os_version": None, "wazuh_status": ea.get("status"),
+                    "last_keepalive": ea.get("last_seen"), "asset_tier": None,
+                    "posture_score": None, "posture_grade": None, "score_breakdown": {},
+                    "computed_at": None,
+                    "sca_passed": None, "sca_failed": None, "sca_total": None, "sca_score": None,
+                    "vuln_critical": None, "vuln_high": None, "vuln_medium": None, "vuln_low": None,
+                    "vuln_score": None, "siem_risk": None,
+                    "fim_event_count": 0, "malware_count": 0, "incident_count": 0,
+                    "mitre_techniques": [], "compliance_score": None,
+                }
 
             cur.execute("""
                 SELECT category, COUNT(*) AS cnt, MAX(timestamp) AS last_seen,
@@ -1133,6 +1258,59 @@ def _sync_host_detail(agent_id):
                 "timestamp": _iso(r["timestamp"]),
             } for r in cur.fetchall()]
 
+            # EDR-native SCA failures take priority over the (likely empty, for
+            # EDR-only hosts) Wazuh-shaped alerts query above.
+            if overlay is not None:
+                cur.execute("""
+                    SELECT title, result, rationale, policy_id, scanned_at
+                    FROM edr_sca_results WHERE agent_id = %s AND result = 'failed'
+                    ORDER BY scanned_at DESC LIMIT 20
+                """, [edr_agent_id])
+                edr_sca_failures = [{
+                    "title": r["title"], "result": r["result"], "rationale": r["rationale"],
+                    "policy_id": r["policy_id"], "timestamp": _iso(r["scanned_at"]),
+                } for r in cur.fetchall()]
+                if edr_sca_failures:
+                    sca_failures = edr_sca_failures
+
+            # ── Blend EDR-native overlay into the Wazuh/alerts-shaped fields ──
+            if overlay and overlay["mitre_breakdown"]:
+                combined = {}
+                for m in mitre_breakdown + overlay["mitre_breakdown"]:
+                    key = (m["mitre_id"], m["tactic"])
+                    combined[key] = combined.get(key, 0) + m["count"]
+                mitre_breakdown = sorted(
+                    ({"mitre_id": k[0], "tactic": k[1], "count": v} for k, v in combined.items()),
+                    key=lambda m: -m["count"],
+                )[:15]
+            mitre_techniques = sorted(set((host["mitre_techniques"] or []) +
+                                          (overlay["mitre_techniques"] if overlay else [])))
+
+            if overlay and overlay["sca"]:
+                sca_block = {**overlay["sca"], "recent_failures": sca_failures}
+            else:
+                sca_block = {
+                    "passed": host["sca_passed"], "failed": host["sca_failed"],
+                    "total": host["sca_total"], "score": _f(host["sca_score"]),
+                    "recent_failures": sca_failures,
+                }
+
+            if overlay and overlay["vuln_counts"]:
+                vuln_block = {**overlay["vuln_counts"], "score": _f(host["vuln_score"])}
+            else:
+                vuln_block = {
+                    "critical": host["vuln_critical"], "high": host["vuln_high"],
+                    "medium": host["vuln_medium"], "low": host["vuln_low"],
+                    "score": _f(host["vuln_score"]),
+                }
+
+            fim_events = (overlay["fim_events"] if overlay and overlay["fim_events"]
+                          else host["fim_event_count"])
+            malware_detections = (overlay["malware_detections"] if overlay and overlay["malware_detections"]
+                                   else host["malware_count"])
+            compliance_score = (overlay["compliance_score"] if (overlay and overlay["compliance_score"] is not None)
+                                 else _f(host["compliance_score"]))
+
             return {
                 "agent_id": host["agent_id"], "agent_name": host["agent_name"],
                 "agent_ip": host["agent_ip"], "os_platform": host["os_platform"],
@@ -1144,35 +1322,95 @@ def _sync_host_detail(agent_id):
                     "breakdown": host["score_breakdown"] or {},
                     "computed_at": _iso(host["computed_at"]),
                 },
-                "sca": {
-                    "passed": host["sca_passed"], "failed": host["sca_failed"],
-                    "total": host["sca_total"], "score": _f(host["sca_score"]),
-                    "recent_failures": sca_failures,
-                },
-                "vulnerabilities": {
-                    "critical": host["vuln_critical"], "high": host["vuln_high"],
-                    "medium": host["vuln_medium"], "low": host["vuln_low"],
-                    "score": _f(host["vuln_score"]),
-                },
+                "sca": sca_block,
+                "vulnerabilities": vuln_block,
                 "siem": {
                     "risk_score": _f(host["siem_risk"]),
-                    "fim_events": host["fim_event_count"],
-                    "malware_detections": host["malware_count"],
+                    "fim_events": fim_events,
+                    "malware_detections": malware_detections,
                     "active_incidents": active_incidents,
                     "incident_count": host["incident_count"],
                 },
                 "mitre": {
-                    "techniques": host["mitre_techniques"] or [],
+                    "techniques": mitre_techniques,
                     "breakdown": mitre_breakdown,
                 },
                 "compliance": {
-                    "score": _f(host["compliance_score"]),
+                    "score": compliance_score,
                     "sca_failures": len(sca_failures),
                 },
                 "alerts_by_category": alerts_by_category,
+                "source": "edr_native" if overlay else "wazuh",
             }
     finally:
         conn.close()
+
+
+def _edr_native_alerts(cur, edr_agent_id: str, category: str, page: int, per_page: int, offset: int):
+    """
+    EDR-native source for the FIM and Malware tabs — edr_fim_events (Phase 2)
+    and edr_detections (Phase 5 malware rollup) respectively. Column aliases
+    exactly match _sync_host_alerts()'s legacy-path SELECT so both paths feed
+    the same row-mapping code below. Returns None (not an empty result) if the
+    EDR-native table has zero rows for this agent, so the caller can fall back
+    to the legacy alerts-table path instead of showing a false "no events".
+    """
+    if category == "fim":
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM edr_fim_events WHERE agent_id = %s", [edr_agent_id]
+        )
+        if cur.fetchone()["n"] == 0:
+            return None
+        cur.execute("""
+            SELECT id, detected_at AS timestamp, NULL::int AS rule_id,
+                   (INITCAP(event_type) || ': ' || path) AS rule_desc,
+                   CASE severity WHEN 'critical' THEN 15 WHEN 'high' THEN 12
+                                 WHEN 'medium' THEN 7 ELSE 3 END AS rule_level,
+                   'fim' AS category, NULL::text AS mitre_id, NULL::text AS mitre_tactic,
+                   NULL::numeric AS base_score, NULL::text AS src_ip,
+                   owner AS username, path AS file_path, NULL::text AS incident_id,
+                   CASE WHEN old_sha256 IS NOT NULL OR new_sha256 IS NOT NULL
+                        THEN 'sha256: ' || COALESCE(old_sha256, '—') || ' -> ' || COALESCE(new_sha256, '—')
+                        ELSE NULL END AS full_log,
+                   event_type AS rule_description
+            FROM edr_fim_events
+            WHERE agent_id = %s
+            ORDER BY detected_at DESC LIMIT %s OFFSET %s
+        """, [edr_agent_id, per_page, offset])
+        rows = cur.fetchall()
+        cur.execute("SELECT COUNT(*) AS n FROM edr_fim_events WHERE agent_id = %s", [edr_agent_id])
+        total = cur.fetchone()["n"]
+        return rows, total
+
+    if category == "malware":
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM edr_detections WHERE agent_id = %s AND event_category = 'malware'",
+            [edr_agent_id],
+        )
+        if cur.fetchone()["n"] == 0:
+            return None
+        cur.execute("""
+            SELECT id, detected_at AS timestamp, rule_id, rule_desc,
+                   CASE severity WHEN 'critical' THEN 15 WHEN 'high' THEN 12
+                                 WHEN 'medium' THEN 7 ELSE 3 END AS rule_level,
+                   'malware' AS category, mitre_id, mitre_tactic,
+                   score AS base_score, src_ip, username, file_path,
+                   case_id AS incident_id,
+                   command_line AS full_log,
+                   process_name AS rule_description
+            FROM edr_detections
+            WHERE agent_id = %s AND event_category = 'malware'
+            ORDER BY detected_at DESC LIMIT %s OFFSET %s
+        """, [edr_agent_id, per_page, offset])
+        rows = cur.fetchall()
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM edr_detections WHERE agent_id = %s AND event_category = 'malware'",
+            [edr_agent_id],
+        )
+        total = cur.fetchone()["n"]
+        return rows, total
+
+    return None
 
 
 def _sync_host_alerts(agent_id, category, page, per_page):
@@ -1181,6 +1419,28 @@ def _sync_host_alerts(agent_id, category, page, per_page):
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             offset = (page - 1) * per_page
+
+            if category in ("fim", "malware"):
+                edr_agent_id = _resolve_edr_agent_id(cur, agent_id)
+                edr_result = _edr_native_alerts(cur, edr_agent_id, category, page, per_page, offset) \
+                    if edr_agent_id else None
+                if edr_result is not None:
+                    rows, total = edr_result
+                    return {
+                        "alerts": [{
+                            "id": r["id"], "timestamp": _iso(r["timestamp"]),
+                            "rule_id": r["rule_id"], "rule_desc": r["rule_desc"],
+                            "rule_level": r["rule_level"], "category": r["category"],
+                            "mitre_id": r["mitre_id"], "mitre_tactic": r["mitre_tactic"],
+                            "base_score": _f(r["base_score"]), "src_ip": r["src_ip"],
+                            "username": r["username"], "file_path": r["file_path"],
+                            "incident_id": r["incident_id"],
+                            "full_log": r.get("full_log"),
+                            "rule_description": r.get("rule_description"),
+                        } for r in rows],
+                        "total": total, "page": page, "per_page": per_page,
+                        "source": "edr_native",
+                    }
 
             # Malware alerts are stored as category='system' with rootcheck/virustotal
             # rule groups — query by JSONB group membership instead of category label.
@@ -2019,12 +2279,139 @@ def siem_host_detail(agent_id):
         return jsonify({"error": str(exc)}), 500
 
 
+def _edr_itam_inventory(agent_id: str, pkg_limit: int) -> dict | None:
+    """
+    EDR/ITAM-first inventory lookup for the Host Security Profile Inventory tab.
+
+    CyEDR's InventoryReporter (agent-side) self-reports into ITAM's
+    network_assets/software_inventory tables (see POST /api/edr/inventory in
+    blueprints/edr/routes.py) — this reads that data back out in the exact
+    response shape HostDetailPanel.jsx's InventoryTab already expects, so the
+    tab works without any Wazuh dependency. `agent_id` may be either an EDR
+    agent's own UUID or a Wazuh/SIEM-style agent_id — network_assets carries
+    both edr_agent_id and siem_agent_id (linked via _crossref_agents_conn),
+    so either one resolves to the same row.
+
+    Returns None if no linked network_assets row exists yet (e.g. the agent
+    hasn't completed its first inventory cycle) — caller falls back to the
+    legacy Wazuh/posture-cache path.
+    """
+    import psycopg2.extras
+    try:
+        conn = _corr_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, hostname, ip_address::text AS ip, os_info, hardware_info,
+                       last_deep_scan, edr_agent_id, siem_agent_id,
+                       software_count, vuln_count, highest_cve_severity
+                FROM network_assets
+                WHERE edr_agent_id = %s OR siem_agent_id = %s
+                LIMIT 1
+            """, [agent_id, agent_id])
+            na = cur.fetchone()
+            if not na:
+                conn.close()
+                return None
+
+            ea = {}
+            if na["edr_agent_id"]:
+                cur.execute("""
+                    SELECT agent_id, hostname, os_type, agent_ip, status, version,
+                           enrolled_at, last_seen
+                    FROM edr_agents WHERE agent_id = %s
+                """, [na["edr_agent_id"]])
+                ea = cur.fetchone() or {}
+
+            cur.execute("""
+                SELECT name, version, vendor, package_manager, architecture,
+                       cve_count, highest_severity
+                FROM software_inventory WHERE asset_id = %s
+                ORDER BY cve_count DESC, name ASC
+                LIMIT %s
+            """, [na["id"], pkg_limit])
+            pkgs = cur.fetchall() or []
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM software_inventory WHERE asset_id = %s", [na["id"]]
+            )
+            pkg_total = (cur.fetchone() or {}).get("n", 0)
+        conn.close()
+    except Exception as exc:
+        _logger.debug("EDR/ITAM inventory lookup failed for %s: %s", agent_id, exc)
+        return None
+
+    os_info = na["os_info"] or {}
+    hw      = na["hardware_info"] or {}
+
+    return {
+        "agent": {
+            "id":             na["edr_agent_id"] or agent_id,
+            "name":           ea.get("hostname") or na["hostname"],
+            "ip":             na["ip"] or ea.get("agent_ip"),
+            "status":         ea.get("status") or ("active" if na["last_deep_scan"] else "unknown"),
+            "os_platform":    ea.get("os_type") or os_info.get("platform"),
+            "os_version":     os_info.get("release") or os_info.get("name"),
+            "version":        ea.get("version"),
+            "date_add":       _iso(ea.get("enrolled_at")),
+            "last_keepalive": _iso(ea.get("last_seen")) or _iso(na["last_deep_scan"]),
+            "hostname":       na["hostname"] or ea.get("hostname"),
+        },
+        "os": {
+            "hostname":       na["hostname"],
+            "architecture":   os_info.get("architecture"),
+            "kernel_release": os_info.get("kernel"),
+            "sysname":        os_info.get("platform"),
+            "os_name":        os_info.get("name"),
+            "os_codename":    None,
+            "os_major":       None,
+            "os_minor":       None,
+            "scan_time":      _iso(na["last_deep_scan"]),
+        },
+        "hardware": {
+            "cpu_name":  hw.get("cpu_model"),
+            "cpu_cores": hw.get("cpu_count"),
+            "cpu_mhz":   hw.get("cpu_freq_mhz"),
+            "ram_total": (hw["memory_total_bytes"] // 1024) if hw.get("memory_total_bytes") else None,
+            "ram_free":  (hw["memory_available_bytes"] // 1024) if hw.get("memory_available_bytes") else None,
+            "ram_usage": hw.get("memory_percent"),
+        },
+        "packages": [{
+            "name":              p["name"],
+            "version":           p["version"],
+            "description":       None,
+            "architecture":      p["architecture"],
+            "size":              None,
+            "section":           None,
+            "vendor":            p["vendor"],
+            "format":            p["package_manager"],
+            "install_time":      None,
+            "cve_count":         p["cve_count"],
+            "highest_severity":  p["highest_severity"],
+        } for p in pkgs],
+        "packages_total": pkg_total,
+        "source": "edr_itam",
+        "vuln_summary": {
+            "count":             na["vuln_count"],
+            "highest_severity":  na["highest_cve_severity"],
+        },
+    }
+
+
 @siem_bp.route("/hosts/<agent_id>/inventory", methods=["GET"])
 @require_siem_auth
 def siem_host_inventory(agent_id):
     """System inventory: agent identity, hardware, OS details, and installed packages."""
     import base64 as _b64i
     import psycopg2.extras
+
+    pkg_limit_arg = request.args.get("pkg_limit", "100")
+    try:
+        pkg_limit = min(500, max(5, int(pkg_limit_arg)))
+    except ValueError:
+        pkg_limit = 100
+
+    edr_result = _edr_itam_inventory(agent_id, pkg_limit)
+    if edr_result is not None:
+        return jsonify(edr_result)
 
     def _wz_get(token, path, params=None):
         try:
@@ -2135,11 +2522,7 @@ def siem_host_inventory(agent_id):
             }
 
     # Installed packages — top 100 by size (largest = most significant)
-    pkg_req_params = request.args.get("pkg_limit", "100")
-    try:
-        pkg_limit = min(500, max(5, int(pkg_req_params)))
-    except ValueError:
-        pkg_limit = 100
+    # pkg_limit already computed above (shared with the EDR/ITAM path)
     pkg_data = _wz_get(token, f"/syscollector/{agent_id}/packages", {
         "limit": pkg_limit, "sort": "-size",
     })
@@ -2161,14 +2544,91 @@ def siem_host_inventory(agent_id):
     return jsonify(result)
 
 
+def _edr_itam_vulnerabilities(agent_id: str, page: int, per_page: int, severity: str):
+    """
+    EDR/ITAM-native vulnerability data (Host Security Profile — Vulnerabilities,
+    Phase 4), sourced from ITAM's software_inventory.cves — already NVD/KEV
+    CVE-matched (blueprints/itam/software_inventory.py: enrich_asset_cves()),
+    populated for free once CyEDR's InventoryReporter starts reporting
+    software (Phase 1). No network scanning required — inventory-based
+    detection, per the spec this feature was built against.
+
+    Returns None if no linked network_assets row / no CVE data exists yet, so
+    the caller falls back to the legacy Wazuh-vulnerability-detector path.
+    """
+    import psycopg2.extras
+    offset = (page - 1) * per_page
+    sev_lower = (severity or "").strip().lower()
+    conn = _corr_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id FROM network_assets
+                WHERE edr_agent_id = %s OR siem_agent_id = %s
+                LIMIT 1
+            """, [agent_id, agent_id])
+            na = cur.fetchone()
+            if not na:
+                return None
+            asset_id = na["id"]
+
+            sev_clause = "AND (elem->>'severity') = %s" if sev_lower else ""
+            params = [asset_id] + ([sev_lower] if sev_lower else [])
+
+            cur.execute(f"""
+                SELECT COUNT(*) AS n
+                FROM software_inventory si, jsonb_array_elements(si.cves) elem
+                WHERE si.asset_id = %s AND si.cve_count > 0 {sev_clause}
+            """, params)
+            total = cur.fetchone()["n"]
+            if total == 0:
+                return None
+
+            cur.execute(f"""
+                SELECT si.name, si.version, si.architecture, si.last_scanned,
+                       elem->>'cve_id' AS cve, elem->>'severity' AS severity,
+                       (elem->>'score')::numeric AS cvss, elem->>'description' AS description
+                FROM software_inventory si, jsonb_array_elements(si.cves) elem
+                WHERE si.asset_id = %s AND si.cve_count > 0 {sev_clause}
+                ORDER BY (elem->>'score')::numeric DESC NULLS LAST
+                LIMIT %s OFFSET %s
+            """, params + [per_page, offset])
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    vulns = [{
+        "cve":          r["cve"],
+        "severity":     r["severity"],
+        "cvss":         _f(r["cvss"]),
+        "name":         r["name"],
+        "version":      r["version"],
+        "architecture": r["architecture"],
+        "title":        r["description"],
+        "condition":    r["description"],
+        "status":       None,
+        "references":   None,
+        "published":    None,
+        "detected_at":  _iso(r["last_scanned"]),
+    } for r in rows]
+
+    return {
+        "vulnerabilities": vulns,
+        "total": total,
+        "page": page, "per_page": per_page,
+        "source": "edr_itam",
+    }
+
+
 @siem_bp.route("/hosts/<agent_id>/vulnerabilities", methods=["GET"])
 @require_siem_auth
 def siem_host_vulnerabilities(agent_id):
     """Return CVE data for a host.
 
-    Primary source: correlation DB (full_alert JSONB), populated by cysiem-to-redis
-    from Wazuh vulnerability-detector events.  This works regardless of Wazuh API
-    version — the /vulnerability/{id} endpoint was removed in Wazuh 4.8+.
+    EDR/ITAM-native path (software_inventory.cves) is tried first; falls back
+    to the legacy correlation DB path (full_alert JSONB, populated by
+    cysiem-to-redis from Wazuh vulnerability-detector events) if this host has
+    no linked network_assets row or no CVE data yet.
     """
     import psycopg2.extras
     try:
@@ -2178,6 +2638,13 @@ def siem_host_vulnerabilities(agent_id):
         offset   = (page - 1) * per_page
     except ValueError:
         page, per_page, offset, severity = 1, 100, 0, ""
+
+    try:
+        edr_itam_result = _edr_itam_vulnerabilities(agent_id, page, per_page, severity)
+        if edr_itam_result is not None:
+            return jsonify(edr_itam_result)
+    except Exception as exc:
+        _logger.debug("EDR/ITAM vulnerability lookup failed for %s: %s", agent_id, exc)
 
     try:
         conn = _corr_conn()
@@ -2355,10 +2822,89 @@ def _sca_from_alerts_db(agent_id, result_filter, page, per_page, offset):
                         "source": "alerts_db", "error": str(exc)})
 
 
+def _edr_sca(edr_agent_id: str, result_filter: str, page: int, per_page: int, offset: int):
+    """
+    EDR-native SCA/CIS data (Host Security Profile — SCA, Phase 3), sourced
+    from edr_sca_results (populated by the agent's ScaScanner thread — see
+    POST /api/edr/sca/results). Returns None if this agent has no SCA rows
+    yet, so the caller falls back to the legacy Wazuh/alerts_db path.
+
+    The frontend's filter buttons send result="not applicable" (a literal
+    space, matching Wazuh's own convention) while this table stores
+    "not_applicable" (underscore) — normalise both directions at the edges.
+    """
+    import psycopg2.extras
+    norm_filter = (result_filter or "").replace(" ", "_")
+    conn = _corr_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            result_clause = "AND result = %s" if norm_filter and norm_filter != "all" else ""
+            params = [edr_agent_id] + ([norm_filter] if (norm_filter and norm_filter != "all") else [])
+
+            cur.execute(f"SELECT COUNT(*) AS n FROM edr_sca_results WHERE agent_id = %s {result_clause}", params)
+            total = cur.fetchone()["n"]
+            if total == 0:
+                return None
+
+            cur.execute(f"""
+                SELECT check_id, title, result, rationale, remediation, description, policy_id
+                FROM edr_sca_results
+                WHERE agent_id = %s {result_clause}
+                ORDER BY
+                    CASE result WHEN 'failed' THEN 1 WHEN 'passed' THEN 2 ELSE 3 END,
+                    CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2
+                                  WHEN 'medium' THEN 3 ELSE 4 END,
+                    check_id
+                LIMIT %s OFFSET %s
+            """, params + [per_page, offset])
+            rows = cur.fetchall()
+
+            cur.execute("""
+                SELECT policy_id, policy_name,
+                       COUNT(*) FILTER (WHERE result = 'passed') AS passed,
+                       COUNT(*) FILTER (WHERE result = 'failed') AS failed,
+                       COUNT(*) FILTER (WHERE result = 'not_applicable') AS na
+                FROM edr_sca_results WHERE agent_id = %s
+                GROUP BY policy_id, policy_name
+            """, [edr_agent_id])
+            policy_rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    policies = []
+    for p in policy_rows:
+        _pass, _fail, _na = int(p["passed"] or 0), int(p["failed"] or 0), int(p["na"] or 0)
+        _tot = _pass + _fail
+        policies.append({
+            "policy_id": p["policy_id"], "name": p["policy_name"] or p["policy_id"],
+            "pass": _pass, "fail": _fail, "error": _na,
+            "score": round(_pass / _tot * 100) if _tot else 0,
+        })
+
+    checks = [{
+        "id":          r["check_id"],
+        "title":       r["title"],
+        "result":      "not applicable" if r["result"] == "not_applicable" else r["result"],
+        "rationale":   r["rationale"],
+        "remediation": r["remediation"],
+        "description": r["description"],
+        "policy_id":   r["policy_id"],
+    } for r in rows]
+
+    return {
+        "policies": policies,
+        "policy_id": policies[0]["policy_id"] if policies else None,
+        "checks": checks, "total": total,
+        "page": page, "per_page": per_page,
+        "source": "edr_native",
+    }
+
+
 @siem_bp.route("/hosts/<agent_id>/sca", methods=["GET"])
 @require_siem_auth
 def siem_host_sca(agent_id):
     import base64 as _b64i
+    import psycopg2.extras
     policy_id     = request.args.get("policy_id", "")
     result_filter = request.args.get("result", "")
     try:
@@ -2368,8 +2914,24 @@ def siem_host_sca(agent_id):
     except ValueError:
         page, per_page, offset = 1, 100, 0
 
+    try:
+        _conn = _corr_conn()
+        with _conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as _cur:
+            _edr_agent_id = _resolve_edr_agent_id(_cur, agent_id)
+        _conn.close()
+        if _edr_agent_id:
+            _edr_result = _edr_sca(_edr_agent_id, result_filter, page, per_page, offset)
+            if _edr_result is not None:
+                return jsonify(_edr_result)
+    except Exception as exc:
+        _logger.debug("EDR-native SCA lookup failed for %s: %s", agent_id, exc)
+
     if not WAZUH_API_PASS:
-        return jsonify({"error": "Wazuh API credentials not configured"}), 503
+        # No Wazuh configured and no EDR-native SCA data either — fall back to
+        # the alerts_db-shaped path rather than a hard 503 (this previously
+        # 503'd outright even though _sca_from_alerts_db exists precisely for
+        # agents without live Wazuh access).
+        return _sca_from_alerts_db(agent_id, result_filter, page, per_page, offset)
     try:
         creds = _b64i.b64encode(f"{WAZUH_API_USER}:{WAZUH_API_PASS}".encode()).decode()
         token_resp = _req.get(

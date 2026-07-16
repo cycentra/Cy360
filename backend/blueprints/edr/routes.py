@@ -546,6 +546,299 @@ def ingest_telemetry(agent_id):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# SELF-INVENTORY INGEST (Host Security Profile — Asset Inventory, Phase 1)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@edr_bp.route("/inventory", methods=["OPTIONS"])
+def _opt_inventory():
+    return add_cors_headers(make_response("", 204))
+
+
+@edr_bp.route("/inventory", methods=["POST"])
+@require_agent_token
+def ingest_inventory(agent_id):
+    """
+    Agent-facing: receive a full self-inventory snapshot from CyEDR's
+    InventoryReporter thread (hardware, OS, software, services, processes,
+    drivers, users, groups, network interfaces, listening ports, certificates,
+    cloud metadata).
+
+    Deliberately reuses ITAM's existing deep-scan ingest/CVE-match pipeline
+    (_ingest_deep_scan_result) instead of a parallel inventory store, so
+    self-reported and agentless-scanned inventory land in the same
+    network_assets/software_inventory tables and get the same NVD/KEV CVE
+    enrichment for free.
+
+    Body: { hostname, hardware_uuid, os_info, hardware, packages, services,
+            processes, drivers, local_users, local_groups,
+            network_interfaces, listening_ports, certificates, cloud_metadata }
+    """
+    import threading
+
+    body          = request.get_json(force=True, silent=True) or {}
+    hostname      = (body.get("hostname") or "").strip()
+    hardware_uuid = (body.get("hardware_uuid") or "").strip() or None
+
+    result = {
+        "status":             "ok",
+        "hostname":           hostname,
+        "os_info":            body.get("os_info", {}),
+        "hardware":           body.get("hardware", {}),
+        "packages":           body.get("packages", []),
+        "services":           body.get("services", []),
+        "local_users":        body.get("local_users", []),
+        "listening_ports":    body.get("listening_ports", []),
+        "processes":          body.get("processes", []),
+        "drivers":            body.get("drivers", []),
+        "local_groups":       body.get("local_groups", []),
+        "network_interfaces": body.get("network_interfaces", []),
+        "certificates":       body.get("certificates", []),
+        "cloud_metadata":     body.get("cloud_metadata", {}),
+    }
+
+    try:
+        from blueprints.itam.routes import (
+            _resolve_or_create_network_asset, _ingest_deep_scan_result, _crossref_agents,
+        )
+        conn = _db()
+        asset_id, ip = _resolve_or_create_network_asset(conn, agent_id, hardware_uuid, hostname)
+        conn.close()
+    except Exception as exc:
+        _log.error("ingest_inventory asset resolution error for %s: %s", agent_id, exc)
+        return jsonify({"error": "Database error"}), 500
+
+    if not asset_id:
+        # Agent's IP isn't on record yet (heartbeat hasn't landed) — not an
+        # error, the agent's next 6h cycle (or the next heartbeat) resolves it.
+        return jsonify({"status": "deferred", "reason": "agent_ip not yet known"}), 202
+
+    try:
+        _ingest_deep_scan_result(asset_id, ip, result)
+        threading.Thread(target=_crossref_agents, daemon=True).start()
+    except Exception as exc:
+        _log.error("ingest_inventory error for agent %s: %s", agent_id, exc)
+        return jsonify({"error": "inventory ingest failed"}), 500
+
+    return jsonify({"status": "ok", "asset_id": asset_id})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FILE INTEGRITY MONITORING INGEST (Host Security Profile — FIM, Phase 2)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@edr_bp.route("/fim/events", methods=["OPTIONS"])
+def _opt_fim_events():
+    return add_cors_headers(make_response("", 204))
+
+
+@edr_bp.route("/fim/events", methods=["POST"])
+@require_agent_token
+def ingest_fim_events(agent_id):
+    """
+    Agent-facing: receive a batch of FIM change events from FimMonitor.
+
+    The agent reports current on-disk facts only (path, hash, size, owner,
+    permissions, event_type) — it holds no local baseline. This route does the
+    actual diff: it looks up the previous hash in edr_fim_baseline, decides
+    severity from (change vs. create vs. delete) x (critical-path flag), writes
+    the event to edr_fim_events, then rolls edr_fim_baseline forward to the new
+    state (or deletes the baseline row on a delete event).
+
+    Body: { events: [{event_type, path, old_path?, sha256, size, owner,
+                       permissions, critical}, ...] }
+    """
+    body   = request.get_json(force=True, silent=True) or {}
+    events = body.get("events", [])
+    if not events:
+        return jsonify({"ingested": 0})
+
+    ingested = 0
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            for ev in events:
+                path = (ev.get("path") or "").strip()
+                if not path:
+                    continue
+                event_type = ev.get("event_type", "modified")
+                new_sha    = ev.get("sha256")
+                critical   = bool(ev.get("critical"))
+
+                cur.execute(
+                    "SELECT sha256 FROM edr_fim_baseline WHERE agent_id=%s AND path=%s",
+                    [agent_id, path],
+                )
+                base = cur.fetchone()
+                old_sha = base["sha256"] if base else None
+
+                if event_type == "deleted":
+                    severity = "high" if critical else "medium"
+                elif old_sha and new_sha and old_sha != new_sha:
+                    severity = "critical" if critical else "medium"
+                elif event_type == "created":
+                    severity = "medium" if critical else "low"
+                else:
+                    severity = "high" if critical else "low"
+
+                cur.execute(
+                    """
+                    INSERT INTO edr_fim_events
+                      (id, agent_id, event_type, path, old_path, old_sha256, new_sha256,
+                       size, owner, permissions, severity)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    [
+                        str(uuid.uuid4()), agent_id, event_type, path, ev.get("old_path"),
+                        old_sha, new_sha, ev.get("size"), ev.get("owner"),
+                        ev.get("permissions"), severity,
+                    ],
+                )
+
+                if event_type == "deleted":
+                    cur.execute(
+                        "DELETE FROM edr_fim_baseline WHERE agent_id=%s AND path=%s",
+                        [agent_id, path],
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO edr_fim_baseline
+                          (agent_id, path, sha256, size, owner, permissions, modified_at, last_baselined)
+                        VALUES (%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                        ON CONFLICT (agent_id, path) DO UPDATE SET
+                          sha256 = EXCLUDED.sha256, size = EXCLUDED.size,
+                          owner = EXCLUDED.owner, permissions = EXCLUDED.permissions,
+                          modified_at = NOW(), last_baselined = NOW()
+                        """,
+                        [agent_id, path, new_sha, ev.get("size"), ev.get("owner"), ev.get("permissions")],
+                    )
+                ingested += 1
+        conn.commit()
+        conn.close()
+    except psycopg2.Error as exc:
+        _log.error("ingest_fim_events DB error for %s: %s", agent_id, exc)
+        return jsonify({"error": "Database error"}), 500
+
+    return jsonify({"ingested": ingested})
+
+
+@edr_bp.route("/fim/baseline", methods=["OPTIONS"])
+def _opt_fim_baseline():
+    return add_cors_headers(make_response("", 204))
+
+
+@edr_bp.route("/fim/baseline", methods=["POST"])
+@require_agent_token
+def ingest_fim_baseline(agent_id):
+    """
+    Agent-facing: receive a full nightly baseline snapshot from FimMonitor
+    (path/hash/size/owner/permissions for every file under the watched paths).
+    Pure upsert into edr_fim_baseline — does not write edr_fim_events (a
+    baseline refresh is not itself a change event).
+
+    Body: { entries: [{path, sha256, size, owner, permissions}, ...] }
+    """
+    body    = request.get_json(force=True, silent=True) or {}
+    entries = body.get("entries", [])
+    if not entries:
+        return jsonify({"ingested": 0})
+
+    ingested = 0
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            for e in entries:
+                path = (e.get("path") or "").strip()
+                if not path:
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO edr_fim_baseline
+                      (agent_id, path, sha256, size, owner, permissions, modified_at, last_baselined)
+                    VALUES (%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                    ON CONFLICT (agent_id, path) DO UPDATE SET
+                      sha256 = EXCLUDED.sha256, size = EXCLUDED.size,
+                      owner = EXCLUDED.owner, permissions = EXCLUDED.permissions,
+                      last_baselined = NOW()
+                    """,
+                    [agent_id, path, e.get("sha256"), e.get("size"), e.get("owner"), e.get("permissions")],
+                )
+                ingested += 1
+        conn.commit()
+        conn.close()
+    except psycopg2.Error as exc:
+        _log.error("ingest_fim_baseline DB error for %s: %s", agent_id, exc)
+        return jsonify({"error": "Database error"}), 500
+
+    return jsonify({"ingested": ingested})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SCA / CIS BENCHMARK INGEST (Host Security Profile — SCA, Phase 3)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@edr_bp.route("/sca/results", methods=["OPTIONS"])
+def _opt_sca_results():
+    return add_cors_headers(make_response("", 204))
+
+
+@edr_bp.route("/sca/results", methods=["POST"])
+@require_agent_token
+def ingest_sca_results(agent_id):
+    """
+    Agent-facing: receive a full SCA/CIS-benchmark scan result from ScaScanner.
+    Upserts into edr_sca_results, keyed (agent_id, policy_id, check_id) — a
+    re-scan overwrites in place, so the table always reflects the latest run.
+
+    Body: { policy_id, policy_name, checks: [{check_id, title, description,
+                                               rationale, remediation, result,
+                                               severity}, ...] }
+    """
+    body        = request.get_json(force=True, silent=True) or {}
+    policy_id   = (body.get("policy_id") or "").strip()
+    policy_name = (body.get("policy_name") or "").strip()
+    checks      = body.get("checks", [])
+    if not policy_id or not checks:
+        return jsonify({"ingested": 0})
+
+    ingested = 0
+    try:
+        conn = _db()
+        with conn.cursor() as cur:
+            for c in checks:
+                check_id = (c.get("check_id") or "").strip()
+                if not check_id:
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO edr_sca_results
+                      (agent_id, policy_id, policy_name, check_id, title, description,
+                       rationale, remediation, result, severity, scanned_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
+                    ON CONFLICT (agent_id, policy_id, check_id) DO UPDATE SET
+                      title = EXCLUDED.title, description = EXCLUDED.description,
+                      rationale = EXCLUDED.rationale, remediation = EXCLUDED.remediation,
+                      result = EXCLUDED.result, severity = EXCLUDED.severity,
+                      scanned_at = NOW()
+                    """,
+                    [
+                        agent_id, policy_id, policy_name, check_id,
+                        c.get("title"), c.get("description"), c.get("rationale"),
+                        c.get("remediation"), c.get("result", "not_applicable"),
+                        c.get("severity", "medium"),
+                    ],
+                )
+                ingested += 1
+        conn.commit()
+        conn.close()
+    except psycopg2.Error as exc:
+        _log.error("ingest_sca_results DB error for %s: %s", agent_id, exc)
+        return jsonify({"error": "Database error"}), 500
+
+    return jsonify({"ingested": ingested, "policy_id": policy_id})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # DETECTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
