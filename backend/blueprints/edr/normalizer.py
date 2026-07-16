@@ -18,7 +18,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from .confidence_matrix import compute_score, HEURISTIC_TABLE
+from .confidence_matrix import compute_score, HEURISTIC_TABLE, AGENT_TRIGGER_ALIASES
 
 # ── MITRE ATT&CK lookup (supplement confidence_matrix mappings) ───────────────
 # Maps EDR event categories to default MITRE technique when no trigger fires
@@ -69,8 +69,14 @@ def normalise_telemetry(envelope: dict[str, Any]) -> Optional[dict[str, Any]]:
         return None
 
     event_category = envelope.get("event_category", "PROCESS").upper()
-    triggers       = envelope.get("triggers", [])       # list[str] heuristic keys
-    ti_match       = bool(envelope.get("ti_match", False))
+    # Agent sends the fired-heuristics list under "triggered_heuristics"
+    # (agent/cyedr_agent.py build_envelope()) — "triggers" is kept as a
+    # fallback for any future/alternate envelope producer.
+    raw_triggers   = envelope.get("triggered_heuristics") or envelope.get("triggers") or []
+    # Translate the agent's own trigger vocabulary onto the canonical
+    # HEURISTIC_TABLE keys scoring/response/case logic expect.
+    triggers       = [AGENT_TRIGGER_ALIASES.get(t, t) for t in raw_triggers]
+    ti_match       = bool(envelope.get("ti_match", False)) or ("threat_intel_match" in raw_triggers)
     asset_type     = envelope.get("asset_type", "unknown")
     hostname       = envelope.get("hostname", endpoint_uuid[:12])
     agent_ip       = envelope.get("agent_ip", "")

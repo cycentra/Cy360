@@ -91,7 +91,7 @@ HEURISTIC_TABLE: dict[str, dict[str, Any]] = {
     "living_off_land": {
         "weight": 20,
         "mitre": ("T1218", "Defense Evasion"),
-        "rule_id": 100306,
+        "rule_id": 100325,
         "desc": "LOLBin abuse — trusted system binary used maliciously",
     },
     "first_time_execution": {
@@ -136,6 +136,71 @@ HEURISTIC_TABLE: dict[str, dict[str, Any]] = {
         "rule_id": 100317,
         "desc": "Token impersonation or privilege escalation via token theft",
     },
+
+    # ── Entries below map 1:1 onto agent/cyedr_agent.py's HEURISTIC_TRIGGERS ──
+    # names that have no equivalent among the conceptual entries above (see
+    # AGENT_TRIGGER_ALIASES for the ones that DO reuse an entry above).
+    "process_hollowing": {
+        "weight": 40,
+        "mitre": ("T1055.012", "Defense Evasion"),
+        "rule_id": 100318,
+        "desc": "Process hollowing — legitimate process image replaced in memory",
+    },
+    "process_tampering": {
+        "weight": 38,
+        "mitre": ("T1055", "Defense Evasion"),
+        "rule_id": 100319,
+        "desc": "Running process tampered with (handle/memory manipulation)",
+    },
+    "macro_execution": {
+        "weight": 25,
+        "mitre": ("T1204.002", "Execution"),
+        "rule_id": 100320,
+        "desc": "Office macro execution detected",
+    },
+    "script_from_browser": {
+        "weight": 30,
+        "mitre": ("T1189", "Initial Access"),
+        "rule_id": 100321,
+        "desc": "Script interpreter spawned from a browser process",
+    },
+    "outbound_unusual_port": {
+        "weight": 15,
+        "mitre": ("T1571", "Command and Control"),
+        "rule_id": 100322,
+        "desc": "Outbound connection on a non-standard port",
+    },
+    "dns_tunneling": {
+        "weight": 30,
+        "mitre": ("T1572", "Command and Control"),
+        "rule_id": 100323,
+        "desc": "DNS query pattern consistent with tunneling",
+    },
+    "password_spray": {
+        "weight": 25,
+        "mitre": ("T1110.003", "Credential Access"),
+        "rule_id": 100324,
+        "desc": "Password spray pattern detected across multiple accounts",
+    },
+}
+
+# ── Agent → canonical trigger name aliases ─────────────────────────────────────
+# agent/cyedr_agent.py's HEURISTIC_TRIGGERS vocabulary was written independently
+# of the table above and only 3 names happen to coincide (memory_injection,
+# lsass_access, credential_dump). Every other agent-side trigger name is
+# translated here to the canonical HEURISTIC_TABLE key before scoring, so that
+# downstream consumers (response_orchestrator.py, ueba.py, cases/service.py)
+# keep matching against the canonical names they already expect.
+AGENT_TRIGGER_ALIASES: dict[str, str] = {
+    "unsigned_binary_temp":    "unsigned_temp_exec",
+    "unusual_parent_process":  "process_lineage_anomaly",
+    "lolbas_execution":        "living_off_land",
+    "encoded_command":         "script_obfuscation",
+    "wmi_execution":           "lateral_movement",
+    "c2_pattern":              "c2_beacon",
+    "tor_exit_node":           "network_ioc_match",
+    "new_service":             "persistence_mechanism",
+    "startup_persistence":     "persistence_mechanism",
 }
 
 # Threat intelligence hit bonus (MISP / TI cache confirmed match)
