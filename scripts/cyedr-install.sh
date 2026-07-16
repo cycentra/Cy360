@@ -310,6 +310,24 @@ deploy_agent() {
                         fi
                         ok "Python dependencies installed"
                     fi
+
+                    # watchdog is optional (File Integrity Monitoring only) — best-effort,
+                    # never blocks agent setup. No apt/dnf/yum system package is reliably
+                    # available across distros for it, so pip is the only path attempted.
+                    if ! env HOME="$_root_home" "$PYTHON_BIN" -c "import watchdog" 2>/dev/null; then
+                        if "$PYTHON_BIN" -m pip install --help 2>&1 | grep -q 'break-system-packages'; then
+                            env HOME="$_root_home" "$PYTHON_BIN" -m pip install --quiet \
+                                --break-system-packages watchdog 2>/dev/null || true
+                        else
+                            env HOME="$_root_home" "$PYTHON_BIN" -m pip install --quiet watchdog 2>/dev/null || true
+                        fi
+                    fi
+                    if env HOME="$_root_home" "$PYTHON_BIN" -c "import watchdog" 2>/dev/null; then
+                        ok "watchdog installed (File Integrity Monitoring enabled)"
+                    else
+                        warn "watchdog could not be installed — File Integrity Monitoring will be disabled on this host"
+                    fi
+
                     PYTHON_MODE=true
                     ok "Agent script installed (Python mode: $PYTHON_BIN)"
                 else
