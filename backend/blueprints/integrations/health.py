@@ -270,7 +270,11 @@ def check_wazuh() -> dict:
     name        = "wazuh"
     display     = "Wazuh SIEM"
 
-    if not wazuh_pass:
+    # cycentra-setup.sh always writes a non-empty CHANGE_ME_* placeholder into
+    # WAZUH_API_PASSWORD when no external Wazuh Manager is configured (it never
+    # installs Wazuh itself) — so an empty-string check alone doesn't catch the
+    # common case; treat any unfilled placeholder the same as "not configured".
+    if not wazuh_pass or wazuh_pass.startswith("CHANGE_ME"):
         return {"name": name, "display": display, "status": "skipped",
                 "error": "Wazuh Manager is not configured (WAZUH_API_PASSWORD unset)",
                 "ingest_gap": None}
