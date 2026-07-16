@@ -119,7 +119,7 @@ function StatCard({ label, value, accent, sub }) {
         fontFamily: "'Space Mono',monospace", lineHeight: 1 }}>{value}</div>
       <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, letterSpacing: "1.5px",
         marginTop: 5, textTransform: "uppercase" }}>{label}</div>
-      {sub && <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, marginTop: 2 }}>{sub}</div>}
+      {sub && <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -221,7 +221,7 @@ function ASMPostureWidget({ score, grade, domain, lastScan }) {
             fontFamily: "monospace", marginBottom: 2 }}>{domain}</div>
         )}
         {lastScan && (
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>
             Last scan: {lastScan}
           </div>
         )}
@@ -238,9 +238,9 @@ function ASMPostureWidget({ score, grade, domain, lastScan }) {
           ["F",  "< 35",  "#ff3b3b"],
         ].map(([g, range, c]) => (
           <div key={g} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ color: grade === g ? c : "rgba(255,255,255,0.15)", fontSize: 10,
+            <span style={{ color: grade === g ? c : "rgba(255,255,255,0.45)", fontSize: 10,
               fontFamily: "monospace", fontWeight: grade === g ? 700 : 400, width: 16 }}>{g}</span>
-            <span style={{ color: grade === g ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.12)",
+            <span style={{ color: grade === g ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.45)",
               fontSize: 9, fontFamily: "monospace" }}>{range}</span>
           </div>
         ))}
@@ -449,7 +449,7 @@ function WebSecurityWidget({ asset }) {
       {/* Port badges — same style as DashboardPage PORT EXPOSURE section */}
       {ports.length > 0 && (
         <div style={{ marginBottom: 10 }}>
-          <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace",
             letterSpacing: "1px", marginBottom: 5 }}>OPEN PORTS</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
             {ports.slice(0, 6).map(p => (
@@ -1163,7 +1163,7 @@ export function GuestScanPage() {
           <div style={{ marginBottom: 18 }}>
             <label style={{ color: "rgba(255,255,255,0.5)", fontSize: 10, letterSpacing: "1.5px",
               textTransform: "uppercase", fontFamily: "monospace", display: "block", marginBottom: 8 }}>
-              Notify Email <span style={{ color: "rgba(255,255,255,0.2)", fontWeight: 400 }}>(optional)</span>
+              Notify Email <span style={{ color: "rgba(255,255,255,0.45)", fontWeight: 400 }}>(optional)</span>
             </label>
             <input type="email" value={email} onChange={e => setEmail(e.target.value)}
               placeholder="you@company.com" disabled={scanState === "running"}
@@ -1192,7 +1192,7 @@ export function GuestScanPage() {
                     borderRadius: 4,
                     background: t.active ? `${t.color}12` : "rgba(255,255,255,0.02)",
                     opacity: t.active ? 1 : 0.5, cursor: t.active ? "default" : "not-allowed" }}>
-                  <div style={{ color: t.active ? t.color : "rgba(255,255,255,0.25)", fontSize: 9,
+                  <div style={{ color: t.active ? t.color : "rgba(255,255,255,0.45)", fontSize: 9,
                     fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", marginBottom: 2 }}>{t.badge}</div>
                   <div style={{ color: t.active ? t.color : "rgba(255,255,255,0.4)", fontSize: 13, fontWeight: 700 }}>{t.label}</div>
                 </div>
@@ -1228,14 +1228,14 @@ export function GuestScanPage() {
                   ].map((cell, ci) => (
                     <div key={ci} style={{ textAlign: "center", fontSize: 11 }}>
                       {cell.val === true  && <span style={{ color: cell.color }}>✓</span>}
-                      {cell.val === false && <span style={{ color: "rgba(255,255,255,0.1)" }}>–</span>}
+                      {cell.val === false && <span style={{ color: "rgba(255,255,255,0.45)" }}>–</span>}
                       {typeof cell.val === "string" && <span style={{ color: cell.color, fontSize: 9, fontFamily: "monospace" }}>{cell.val}</span>}
                     </div>
                   ))}
                 </div>
               ))}
             </div>
-            <div style={{ marginTop: 8, color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", textAlign: "right" }}>
+            <div style={{ marginTop: 8, color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", textAlign: "right" }}>
               Passive &nbsp;·&nbsp; Standard &nbsp;·&nbsp; Deep
             </div>
           </div>
@@ -1322,9 +1322,9 @@ export function GuestScanPage() {
                 borderRadius: 2, transition: "width 1s ease" }}/>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5 }}>
-              <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>0%</span>
-              <span style={{ color: progress > 0 ? "#00e5a0" : "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>{Math.round(progress)}%</span>
-              <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>100%</span>
+              <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>0%</span>
+              <span style={{ color: progress > 0 ? "#00e5a0" : "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>{Math.round(progress)}%</span>
+              <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>100%</span>
             </div>
 
             {lastLog && (
@@ -1356,7 +1356,7 @@ export function GuestScanPage() {
                       {active && <div style={{ width: 5, height: 5, borderRadius: "50%", background: "#00e5a0" }}/>}
                     </div>
                     <span style={{ fontSize: 11, fontFamily: "monospace",
-                      color: done ? "rgba(255,255,255,0.7)" : active ? "#00e5a0" : "rgba(255,255,255,0.25)" }}>
+                      color: done ? "rgba(255,255,255,0.7)" : active ? "#00e5a0" : "rgba(255,255,255,0.45)" }}>
                       {m}
                     </span>
                   </div>

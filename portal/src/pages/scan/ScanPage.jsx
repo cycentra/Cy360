@@ -119,7 +119,7 @@ function ScanTierMatrix({ selected, onSelect, disabled }) {
             }}>
             <div style={{ color: selected === t.id ? t.color : "rgba(255,255,255,0.35)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", marginBottom: 2 }}>{t.badge}</div>
             <div style={{ color: selected === t.id ? t.color : "rgba(255,255,255,0.6)", fontSize: 13, fontWeight: 700 }}>{t.label}</div>
-            <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", marginTop: 2 }}>{t.time}</div>
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", marginTop: 2 }}>{t.time}</div>
           </button>
         ))}
       </div>
@@ -138,10 +138,10 @@ function ScanTierMatrix({ selected, onSelect, disabled }) {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5px 10px" }}>
               {tier.features.map((f, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ color: f.included ? tier.color : "rgba(255,255,255,0.12)", fontSize: 11, flexShrink: 0 }}>
+                  <span style={{ color: f.included ? tier.color : "rgba(255,255,255,0.45)", fontSize: 11, flexShrink: 0 }}>
                     {f.included ? "✓" : "–"}
                   </span>
-                  <span style={{ color: f.included ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.2)", fontSize: 11 }}>{f.label}</span>
+                  <span style={{ color: f.included ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.45)", fontSize: 11 }}>{f.label}</span>
                 </div>
               ))}
             </div>
@@ -277,7 +277,7 @@ function CTEMSyncPanel({ domain, scanType, includeSubdomains, user }) {
             <div style={{ color: enabled ? "#00e5a0" : "rgba(255,255,255,0.5)", fontSize: 12, fontWeight: 700, letterSpacing: "0.5px" }}>
               Continuous Sync {loading ? <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontWeight: 400 }}> checking...</span> : null}
             </div>
-            <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", marginTop: 1 }}>
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", marginTop: 1 }}>
               CTEM Refresh Interval — min. 1 hour
             </div>
           </div>
@@ -317,7 +317,7 @@ function CTEMSyncPanel({ domain, scanType, includeSubdomains, user }) {
           </div>
           {nextRunLabel && (
             <div style={{ gridColumn: "1 / -1", borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: 8 }}>
-              <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace" }}>NEXT RUN: </span>
+              <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>NEXT RUN: </span>
               <span style={{ color: "rgba(0,229,160,0.6)", fontSize: 10, fontFamily: "monospace" }}>{nextRunLabel}</span>
             </div>
           )}
@@ -363,7 +363,7 @@ function CTEMSyncPanel({ domain, scanType, includeSubdomains, user }) {
       </div>
 
       {!domain && (
-        <div style={{ marginTop: 8, color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+        <div style={{ marginTop: 8, color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>
           Enter a domain above to configure Continuous Sync.
         </div>
       )}
@@ -534,7 +534,7 @@ export function ScanPage({ user, onScanComplete }) {
                   <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
                 </svg>
                 <span style={{ color: "#00e5a0", fontSize: 14, fontFamily: "monospace", fontWeight: 600 }}>{domain}</span>
-                <span style={{ marginLeft: "auto", color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>YOUR DOMAIN</span>
+                <span style={{ marginLeft: "auto", color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>YOUR DOMAIN</span>
               </div>
             </div>
 
@@ -578,7 +578,7 @@ export function ScanPage({ user, onScanComplete }) {
 
             {/* CLI */}
             <div style={{ marginTop: 14, background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 4, padding: "10px 14px" }}>
-              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", marginBottom: 4 }}>CLI EQUIVALENT</div>
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", marginBottom: 4 }}>CLI EQUIVALENT</div>
               <code style={{ color: "#00e5a0", fontSize: 11 }}>python3 cycentra_scan.py {domain} {user?.id || "<uid>"} {scanType}</code>
             </div>
           </div>
@@ -618,9 +618,9 @@ export function ScanPage({ user, onScanComplete }) {
               <div style={{ height: "100%", width: `${progress}%`, background: scanState === "error" ? "#ff3b3b" : tierDef.color, borderRadius: 2, transition: "width 1s ease" }}/>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5 }}>
-              <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>0%</span>
-              <span style={{ color: progress > 0 ? tierDef.color : "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>{Math.round(progress)}%</span>
-              <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>100%</span>
+              <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>0%</span>
+              <span style={{ color: progress > 0 ? tierDef.color : "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>{Math.round(progress)}%</span>
+              <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>100%</span>
             </div>
 
             {lastLog && (
@@ -644,7 +644,7 @@ export function ScanPage({ user, onScanComplete }) {
                       {done   && <span style={{ fontSize: 7, color: "#0d0f14", fontWeight: 900 }}>✓</span>}
                       {active && <div style={{ width: 5, height: 5, borderRadius: "50%", background: tierDef.color, animation: "pulse 1s infinite" }}/>}
                     </div>
-                    <span style={{ fontSize: 11, fontFamily: "monospace", color: done ? "rgba(255,255,255,0.7)" : active ? tierDef.color : "rgba(255,255,255,0.25)" }}>{m}</span>
+                    <span style={{ fontSize: 11, fontFamily: "monospace", color: done ? "rgba(255,255,255,0.7)" : active ? tierDef.color : "rgba(255,255,255,0.45)" }}>{m}</span>
                   </div>
                 );
               })}
@@ -658,7 +658,7 @@ export function ScanPage({ user, onScanComplete }) {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>PDF Reports</span>
-            <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>— last 6 generated</span>
+            <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>— last 6 generated</span>
           </div>
           <button onClick={fetchReports} disabled={reportsLoading}
             style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.65)", borderRadius: 3, padding: "4px 10px", fontSize: 10, fontFamily: "monospace", cursor: "pointer", opacity: reportsLoading ? 0.5 : 1 }}>
@@ -668,9 +668,9 @@ export function ScanPage({ user, onScanComplete }) {
 
         <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, overflow: "hidden" }}>
           {reportsLoading ? (
-            <div style={{ padding: "20px 16px", color: "rgba(255,255,255,0.2)", fontFamily: "monospace", fontSize: 12 }}>Loading reports…</div>
+            <div style={{ padding: "20px 16px", color: "rgba(255,255,255,0.45)", fontFamily: "monospace", fontSize: 12 }}>Loading reports…</div>
           ) : reports.length === 0 ? (
-            <div style={{ padding: "20px 16px", color: "rgba(255,255,255,0.2)", fontFamily: "monospace", fontSize: 12 }}>
+            <div style={{ padding: "20px 16px", color: "rgba(255,255,255,0.45)", fontFamily: "monospace", fontSize: 12 }}>
               No PDF reports found. Run a scan to generate Executive &amp; Technical reports.
             </div>
           ) : (

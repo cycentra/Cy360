@@ -105,7 +105,7 @@ def _upsert_status(name: str, display_name: str, status: str,
     prev = cur.fetchone() or {}
 
     last_ok_val = now if status == "ok" else (prev.get("last_ok") if prev else None)
-    consec = 0 if status == "ok" else (int(prev.get("consecutive_failures") or 0) + 1)
+    consec = 0 if status in ("ok", "skipped") else (int(prev.get("consecutive_failures") or 0) + 1)
 
     cur.execute(
         """
@@ -261,12 +261,19 @@ def _last_alert_age_minutes(rule_groups_filter: Optional[list] = None) -> Option
 # ── Per-integration check functions ──────────────────────────────────────────
 
 def check_wazuh() -> dict:
-    """Check Wazuh manager API + alert ingest gap."""
+    """Check Wazuh manager API + alert ingest gap (only if an external Wazuh
+    Manager has been configured — cycentra-setup.sh no longer installs Wazuh
+    itself, it's a BYO-external connector, same as CyMind/CySOAR being optional)."""
     wazuh_api   = os.environ.get("WAZUH_API_URL", "https://127.0.0.1:55000")
     wazuh_user  = os.environ.get("WAZUH_API_USER", "wazuh-wui")
     wazuh_pass  = os.environ.get("WAZUH_API_PASSWORD", "")
     name        = "wazuh"
     display     = "Wazuh SIEM"
+
+    if not wazuh_pass:
+        return {"name": name, "display": display, "status": "skipped",
+                "error": "Wazuh Manager is not configured (WAZUH_API_PASSWORD unset)",
+                "ingest_gap": None}
 
     # Step 1: API reachability
     try:
@@ -532,16 +539,20 @@ def run_all_checks() -> list:
         error   = c.get("error")
         gap     = c.get("ingest_gap")
 
-        if status == "skipped":
-            results.append({**c, "skipped": True})
-            continue
-
+        # Persist "skipped" too (not just ok/down/degraded) — otherwise a stale
+        # "down" row from before an integration was disabled/unconfigured would
+        # keep showing on the Integration Health page forever, since GET reads
+        # straight from this table and never re-runs the checks itself.
         state = _upsert_status(name, display, status, error, gap, c.get("metadata"))
 
         if status in ("down", "degraded"):
             _raise_integration_incident(name, display, status, error or "", gap)
-        elif status == "ok" and state.get("incident_id"):
+        elif status in ("ok", "skipped") and state.get("incident_id"):
             _resolve_integration_incident(name, display)
+
+        if status == "skipped":
+            results.append({**c, "skipped": True})
+            continue
 
         results.append({**c, "skipped": False,
                         "consecutive_failures": state.get("consecutive_failures", 0)})

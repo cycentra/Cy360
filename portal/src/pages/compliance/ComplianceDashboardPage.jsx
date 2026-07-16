@@ -91,7 +91,7 @@ function PieChart({ data, size = 130 }) {
         <circle cx={size/2} cy={size/2} r={size/2 - 4}
           fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.06)" strokeWidth={1}/>
         <text x={size/2} y={size/2 + 4} textAnchor="middle"
-          fill="rgba(255,255,255,0.25)" fontSize={9} fontFamily="monospace">no data</text>
+          fill="rgba(255,255,255,0.45)" fontSize={9} fontFamily="monospace">no data</text>
       </svg>
     );
   }
@@ -120,7 +120,7 @@ function BarChart({ data, height = 100 }) {
   // data = [{date, total, critical, high, medium, low}]
   if (!data || !data.length) return (
     <div style={{ height, display: "flex", alignItems: "center",
-      color: "rgba(255,255,255,0.15)", fontFamily: "monospace", fontSize: 10 }}>
+      color: "rgba(255,255,255,0.45)", fontFamily: "monospace", fontSize: 10 }}>
       No alert data yet — run compliance enrichment to populate.
     </div>
   );
@@ -138,7 +138,7 @@ function BarChart({ data, height = 100 }) {
             <div style={{ width: "100%", height: barH, background: color,
               borderRadius: "2px 2px 0 0", opacity: 0.8, minHeight: 2 }} />
             {data.length <= 10 && (
-              <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 7,
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 7,
                 fontFamily: "monospace", whiteSpace: "nowrap" }}>{date}</div>
             )}
           </div>
@@ -155,7 +155,7 @@ function LineChart({ history, height = 90, enabledFws }) {
     : (history || []);
   if (!filtered.length) return (
     <div style={{ height, display: "flex", alignItems: "center",
-      color: "rgba(255,255,255,0.15)", fontFamily: "monospace", fontSize: 10 }}>
+      color: "rgba(255,255,255,0.45)", fontFamily: "monospace", fontSize: 10 }}>
       No score history yet — scores are saved each time you refresh framework scores.
     </div>
   );
@@ -224,7 +224,7 @@ function LineChart({ history, height = 90, enabledFws }) {
         {lines}
       </svg>
       {hasSingle && (
-        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 8,
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 8,
           fontFamily: "monospace", marginTop: 4 }}>
           Dashed = 1 snapshot · Solid = trend · Frameworks at the same score are offset ±2px for visibility · Click ↻ Refresh Scores after each assessment to grow trend history
         </div>
@@ -261,7 +261,7 @@ function FwScoreBar({ fw, onClick }) {
           {score}%
         </span>
         <span title={`${qAns} questionnaire questions answered out of ${qTotal} total. Open Assessment to answer questions and raise this score.`}
-          style={{ color: qAns > 0 ? C.muted : "rgba(255,255,255,0.25)", fontSize: 9,
+          style={{ color: qAns > 0 ? C.muted : "rgba(255,255,255,0.45)", fontSize: 9,
           fontFamily: "monospace", width: 60 }}>
           {qAns}/{qTotal} ans
         </span>
@@ -594,7 +594,7 @@ export function ComplianceDashboardPage({ setActiveTab }) {
                     transition: "all 0.15s",
                     background: on ? `${meta.color}22` : "rgba(255,255,255,0.03)",
                     border: `1px solid ${on ? meta.color : "rgba(255,255,255,0.1)"}`,
-                    color: on ? meta.color : "rgba(255,255,255,0.2)",
+                    color: on ? meta.color : "rgba(255,255,255,0.45)",
                   }}>
                   {meta.label}
                 </button>
@@ -629,7 +629,7 @@ export function ComplianceDashboardPage({ setActiveTab }) {
                 );
               })}
               {scores.length === 0 && (
-                <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 11, fontFamily: "monospace" }}>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace" }}>
                   No frameworks selected. Use the chips above to show frameworks.
                 </div>
               )}
@@ -644,7 +644,7 @@ export function ComplianceDashboardPage({ setActiveTab }) {
                 />
               ))}
               {scores.length === 0 && (
-                <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 11, fontFamily: "monospace" }}>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace" }}>
                   {allScores.length === 0
                     ? "No scores yet. Click ↻ Refresh Scores to compute."
                     : "No frameworks selected. Use the chips above to show frameworks."}
@@ -789,7 +789,7 @@ export function ComplianceDashboardPage({ setActiveTab }) {
             <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-between",
               height: 90, paddingBottom: 0 }}>
               {[100, 75, 50, 25, 0].map(v => (
-                <span key={v} style={{ color: "rgba(255,255,255,0.15)", fontSize: 8,
+                <span key={v} style={{ color: "rgba(255,255,255,0.45)", fontSize: 8,
                   fontFamily: "monospace", lineHeight: 1 }}>{v}</span>
               ))}
             </div>
@@ -832,7 +832,7 @@ export function ComplianceDashboardPage({ setActiveTab }) {
                   </div>
                   <span style={{ color: C.muted, fontSize: 9, fontFamily: "monospace",
                     whiteSpace: "nowrap" }}>{inc.alert_count} alerts</span>
-                  <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9,
+                  <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9,
                     fontFamily: "monospace", whiteSpace: "nowrap" }}>{inc.status}</span>
                 </div>
               );
@@ -895,7 +895,7 @@ export function ComplianceDashboardPage({ setActiveTab }) {
               </div>
             </div>
           ) : (
-            <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 10,
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10,
               fontFamily: "monospace" }}>
               No risks in register. Use Auto Populate on the Risk Heatmap page.
             </div>
@@ -943,7 +943,7 @@ export function ComplianceDashboardPage({ setActiveTab }) {
               })}
             </div>
           ) : (
-            <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 10,
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10,
               fontFamily: "monospace" }}>
               No questionnaire data. Complete assessments to populate.
             </div>

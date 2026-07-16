@@ -193,12 +193,12 @@ export function WorldMapWidget({ assets }) {
           <div style={{ color:"rgba(255,255,255,0.45)", fontSize:11, marginTop:2 }}>
             {assets.length} total assets
             {mappedTotal > 0 && <span style={{ color:"rgba(0,229,160,0.7)", marginLeft:6 }}>· {mappedTotal} mapped across {dots.length} location{dots.length !== 1 ? "s" : ""}</span>}
-            {assets.length > mappedTotal && mappedTotal > 0 && <span style={{ color:"rgba(255,255,255,0.28)", marginLeft:6 }}>· {assets.length - mappedTotal} no resolvable IP</span>}
-            {loading && <span style={{ color:"rgba(255,255,255,0.2)", marginLeft:8, fontFamily:"monospace", fontSize:10 }}>resolving…</span>}
+            {assets.length > mappedTotal && mappedTotal > 0 && <span style={{ color:"rgba(255,255,255,0.45)", marginLeft:6 }}>· {assets.length - mappedTotal} no resolvable IP</span>}
+            {loading && <span style={{ color:"rgba(255,255,255,0.45)", marginLeft:8, fontFamily:"monospace", fontSize:10 }}>resolving…</span>}
           </div>
         </div>
         <button onClick={fetchGeo} disabled={loading}
-          style={{ background:"none", border:"1px solid rgba(255,255,255,0.09)", color:"rgba(255,255,255,0.28)", borderRadius:4, padding:"4px 10px", fontFamily:"monospace", fontSize:10, cursor:"pointer" }}>
+          style={{ background:"none", border:"1px solid rgba(255,255,255,0.09)", color:"rgba(255,255,255,0.45)", borderRadius:4, padding:"4px 10px", fontFamily:"monospace", fontSize:10, cursor:"pointer" }}>
           ↺ Refresh
         </button>
       </div>
@@ -302,7 +302,7 @@ export function WorldMapWidget({ assets }) {
           {/* Empty state */}
           {!loading && dots.length === 0 && (
             <text x={W/2} y={VB_Y + VB_H/2} textAnchor="middle"
-              fill="rgba(255,255,255,0.14)" fontSize={12} fontFamily="monospace">
+              fill="rgba(255,255,255,0.45)" fontSize={12} fontFamily="monospace">
               No resolved IPs — scan assets to populate map
             </text>
           )}
@@ -318,11 +318,11 @@ export function WorldMapWidget({ assets }) {
           <div key={r} style={{ display:"flex", alignItems:"center", gap:5 }}>
             <span style={{ width:7, height:7, borderRadius:"50%", background:riskColor(r), display:"inline-block",
               boxShadow:`0 0 5px ${riskColor(r)}66` }}/>
-            <span style={{ color:"rgba(255,255,255,0.28)", fontSize:10, fontFamily:"monospace", textTransform:"uppercase", letterSpacing:"0.8px" }}>{r}</span>
+            <span style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", textTransform:"uppercase", letterSpacing:"0.8px" }}>{r}</span>
           </div>
         ))}
         {assets.length > mappedTotal && (
-          <div style={{ marginLeft:"auto", color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace" }}>
+          <div style={{ marginLeft:"auto", color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace" }}>
             {assets.length - mappedTotal} asset{assets.length - mappedTotal !== 1 ? "s" : ""} without resolvable IP
           </div>
         )}

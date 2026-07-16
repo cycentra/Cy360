@@ -123,7 +123,7 @@ function O365ConfigModal({ item, onClose, onSaved }) {
             <div style={{ marginBottom:14 }}>
               <label style={lbl}>Client Secret</label>
               <input type="password" value={clientSecret} onChange={e => setClientSecret(e.target.value)} placeholder={hasExistingSecret ? "Leave blank to keep existing secret" : "Enter client secret"} required={!hasExistingSecret} style={inp} autoComplete="new-password" />
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
                 {hasExistingSecret ? "Secret already configured — leave blank to keep unchanged" : "Write-only — never returned by the API"}
               </div>
             </div>
@@ -132,7 +132,7 @@ function O365ConfigModal({ item, onClose, onSaved }) {
               <select value={apiType} onChange={e => setApiType(e.target.value)} style={{ ...inp, cursor:"pointer" }}>
                 {O365_API_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
               </select>
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
                 commercial — standard Microsoft 365 · gcc / gcc-high — US government plans
               </div>
             </div>
@@ -276,12 +276,12 @@ function GitHubConfigModal({ item, onClose, onSaved }) {
             <div style={{ marginBottom:14 }}>
               <label style={lbl}>Organisation Name</label>
               <input value={orgName} onChange={e => setOrgName(e.target.value)} placeholder="your-github-org" required style={inp} />
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>The GitHub organisation slug (as it appears in github.com/&lt;org&gt;)</div>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>The GitHub organisation slug (as it appears in github.com/&lt;org&gt;)</div>
             </div>
             <div>
               <label style={lbl}>Personal Access Token (PAT)</label>
               <input type="password" value={apiToken} onChange={e => setApiToken(e.target.value)} placeholder={hasExistingToken ? "Leave blank to keep existing token" : "ghp_xxxxxxxxxxxx"} required={!hasExistingToken} style={inp} autoComplete="new-password" />
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
                 {hasExistingToken ? "Token already configured — leave blank to keep unchanged" : "Requires read:audit_log scope. Write-only — never returned by the API."}
               </div>
             </div>
@@ -299,7 +299,7 @@ function GitHubConfigModal({ item, onClose, onSaved }) {
               <select value={timeDelay} onChange={e => setTimeDelay(e.target.value)} style={{ ...inp, cursor:"pointer" }}>
                 {GH_INTERVALS.map(i => <option key={i} value={i}>{i}</option>)}
               </select>
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>Scan delay behind current time</div>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>Scan delay behind current time</div>
             </div>
           </div>
 
@@ -313,7 +313,7 @@ function GitHubConfigModal({ item, onClose, onSaved }) {
           <div style={{ marginBottom:20 }}>
             <label style={lbl}>Max API Response Size</label>
             <input value={curlMaxSize} onChange={e => setCurlMaxSize(e.target.value)} placeholder="1M" style={inp} />
-            <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>Units: b/B · k/K · m/M · g/G (e.g. 1M, 512K)</div>
+            <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>Units: b/B · k/K · m/M · g/G (e.g. 1M, 512K)</div>
           </div>
 
           <div style={{ display:"flex", flexDirection:"column", gap:10, marginBottom:24 }}>
@@ -473,7 +473,7 @@ function GCloudConfigModal({ item, onClose }) {
               ) : hasExistingCreds ? (
                 <div><div style={{ fontSize:22, marginBottom:6 }}>🔑</div><div style={{ color:"rgba(255,255,255,0.6)", fontSize:12 }}>Credentials already configured</div><div style={{ color:"rgba(255,255,255,0.3)", fontSize:10, marginTop:4 }}>Click or drag a new JSON key to replace</div></div>
               ) : (
-                <div><div style={{ fontSize:28, marginBottom:8 }}>📂</div><div style={{ color:"rgba(255,255,255,0.6)", fontSize:13 }}>Drag &amp; Drop or <span style={{ color:GCP_BLUE }}>Browse</span></div><div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, marginTop:6 }}>GCP Service Account JSON key file</div></div>
+                <div><div style={{ fontSize:28, marginBottom:8 }}>📂</div><div style={{ color:"rgba(255,255,255,0.6)", fontSize:13 }}>Drag &amp; Drop or <span style={{ color:GCP_BLUE }}>Browse</span></div><div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, marginTop:6 }}>GCP Service Account JSON key file</div></div>
               )}
             </div>
             {!credentialsJson && !hasExistingCreds && <div style={{ color:"rgba(255,59,59,0.7)", fontSize:10, fontFamily:"monospace", marginTop:8 }}>⚠ A service account JSON key is required for initial setup</div>}
@@ -486,7 +486,7 @@ function GCloudConfigModal({ item, onClose }) {
           <div style={{ marginBottom:14 }}>
             <label style={lbl}>Pub/Sub Subscription Name</label>
             <input value={subscriptionName} onChange={e => setSubscriptionName(e.target.value)} placeholder="projects/my-project/subscriptions/wazuh-sub" required style={inp} />
-            <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>Full path: <code>projects/&lt;PROJECT&gt;/subscriptions/&lt;NAME&gt;</code></div>
+            <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>Full path: <code>projects/&lt;PROJECT&gt;/subscriptions/&lt;NAME&gt;</code></div>
           </div>
 
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:20 }}>
@@ -714,7 +714,7 @@ function CatalogItemFormModal({ initial, onClose, onSaved }) {
             <div>
               <label style={lbl}>ID <span style={{ color:"rgba(255,59,59,0.7)" }}>*</span></label>
               <input value={form.id} onChange={e => set("id", e.target.value)} placeholder="my-custom-integration" required disabled={isEdit} style={{ ...inp, opacity: isEdit ? 0.5 : 1 }} />
-              {!isEdit && <div style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace", marginTop:4 }}>lowercase, hyphens only</div>}
+              {!isEdit && <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginTop:4 }}>lowercase, hyphens only</div>}
             </div>
             <div>
               <label style={lbl}>Name <span style={{ color:"rgba(255,59,59,0.7)" }}>*</span></label>
@@ -771,12 +771,12 @@ function CatalogItemFormModal({ initial, onClose, onSaved }) {
             <div>
               <label style={lbl}>Required Modules</label>
               <input value={form.modules_required} onChange={e => set("modules_required", e.target.value)} placeholder="CySIEM, CySOAR" style={inp} />
-              <div style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace", marginTop:4 }}>comma-separated</div>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginTop:4 }}>comma-separated</div>
             </div>
             <div>
               <label style={lbl}>Tags</label>
               <input value={form.tags} onChange={e => set("tags", e.target.value)} placeholder="cloud, azure, audit" style={inp} />
-              <div style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace", marginTop:4 }}>comma-separated</div>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginTop:4 }}>comma-separated</div>
             </div>
           </div>
 
@@ -803,7 +803,7 @@ function CatalogItemFormModal({ initial, onClose, onSaved }) {
               <div style={row}>
                 <label style={lbl}>Automation Steps</label>
                 <textarea value={form.steps} onChange={e => set("steps", e.target.value)} rows={5} placeholder={"Step 1 description\nStep 2 description\nStep 3 description"} style={{ ...inp, resize:"vertical" }} />
-                <div style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace", marginTop:4 }}>one step per line</div>
+                <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginTop:4 }}>one step per line</div>
               </div>
             </>
           )}
@@ -951,7 +951,7 @@ function ReviewQueueSection({ onApprove, onReject }) {
               style={{ width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:4, padding:"9px 12px", color:"white", fontSize:13, fontFamily:"monospace", outline:"none", resize:"vertical", boxSizing:"border-box" }} />
             <div style={{ display:"flex", gap:10, marginTop:14 }}>
               <button onClick={handleReject} disabled={!rejectReason.trim()}
-                style={{ flex:1, background:rejectReason.trim()?"rgba(255,59,59,0.15)":"rgba(255,255,255,0.04)", color:rejectReason.trim()?"rgba(255,80,80,0.9)":"rgba(255,255,255,0.25)", border:`1px solid ${rejectReason.trim()?"rgba(255,59,59,0.35)":"rgba(255,255,255,0.08)"}`, borderRadius:4, padding:"10px", fontFamily:"monospace", fontSize:11, fontWeight:700, cursor:rejectReason.trim()?"pointer":"not-allowed", letterSpacing:"1px", textTransform:"uppercase" }}>
+                style={{ flex:1, background:rejectReason.trim()?"rgba(255,59,59,0.15)":"rgba(255,255,255,0.04)", color:rejectReason.trim()?"rgba(255,80,80,0.9)":"rgba(255,255,255,0.45)", border:`1px solid ${rejectReason.trim()?"rgba(255,59,59,0.35)":"rgba(255,255,255,0.08)"}`, borderRadius:4, padding:"10px", fontFamily:"monospace", fontSize:11, fontWeight:700, cursor:rejectReason.trim()?"pointer":"not-allowed", letterSpacing:"1px", textTransform:"uppercase" }}>
                 Confirm Rejection
               </button>
               <button onClick={() => setRejectTarget(null)} style={{ padding:"10px 16px", background:"transparent", color:"rgba(255,255,255,0.35)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:4, fontFamily:"monospace", fontSize:11, cursor:"pointer" }}>
@@ -1039,7 +1039,7 @@ function MarketplaceCard({ item, isInstalled, isConfigured, isAdmin, pulling, on
         ))}
       </div>
 
-      <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginBottom:14 }}>{item.estimated_time}</div>
+      <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginBottom:14 }}>{item.estimated_time}</div>
 
       {/* Actions */}
       {/* Non-approved custom items: show pending notice instead of action buttons */}
@@ -1056,7 +1056,7 @@ function MarketplaceCard({ item, isInstalled, isConfigured, isAdmin, pulling, on
                 onClick={() => isAdmin && onConfigure(item)}
                 disabled={!isAdmin}
                 title={!isAdmin ? "Admin access required" : "Configure this integration"}
-                style={{ flex:1, background:isAdmin?item.color:"rgba(255,255,255,0.05)", color:isAdmin?"#0d0f14":"rgba(255,255,255,0.25)", border:"none", borderRadius:4, padding:"9px 12px", fontFamily:"monospace", fontSize:11, fontWeight:700, cursor:isAdmin?"pointer":"not-allowed", letterSpacing:"1px", textTransform:"uppercase" }}>
+                style={{ flex:1, background:isAdmin?item.color:"rgba(255,255,255,0.05)", color:isAdmin?"#0d0f14":"rgba(255,255,255,0.45)", border:"none", borderRadius:4, padding:"9px 12px", fontFamily:"monospace", fontSize:11, fontWeight:700, cursor:isAdmin?"pointer":"not-allowed", letterSpacing:"1px", textTransform:"uppercase" }}>
                 {isAdmin ? "Configure" : "🔒 Configure"}
               </button>
             ) : (
@@ -1081,7 +1081,7 @@ function MarketplaceCard({ item, isInstalled, isConfigured, isAdmin, pulling, on
               onClick={() => isAdmin && onPull(item)}
               disabled={!isAdmin || isPulling}
               title={!isAdmin ? "Admin access required to pull integrations" : `Pull ${item.name} from cloud`}
-              style={{ flex:1, background:isAdmin?(isPulling?"rgba(0,229,160,0.15)":"rgba(0,229,160,0.1)"):"rgba(255,255,255,0.03)", color:isAdmin?(isPulling?"rgba(0,229,160,0.5)":"#00e5a0"):"rgba(255,255,255,0.2)", border:`1px solid ${isAdmin?"rgba(0,229,160,0.25)":"rgba(255,255,255,0.07)"}`, borderRadius:4, padding:"9px 12px", fontFamily:"monospace", fontSize:11, fontWeight:700, cursor:isAdmin&&!isPulling?"pointer":"not-allowed", letterSpacing:"1px", textTransform:"uppercase" }}>
+              style={{ flex:1, background:isAdmin?(isPulling?"rgba(0,229,160,0.15)":"rgba(0,229,160,0.1)"):"rgba(255,255,255,0.03)", color:isAdmin?(isPulling?"rgba(0,229,160,0.5)":"#00e5a0"):"rgba(255,255,255,0.45)", border:`1px solid ${isAdmin?"rgba(0,229,160,0.25)":"rgba(255,255,255,0.07)"}`, borderRadius:4, padding:"9px 12px", fontFamily:"monospace", fontSize:11, fontWeight:700, cursor:isAdmin&&!isPulling?"pointer":"not-allowed", letterSpacing:"1px", textTransform:"uppercase" }}>
               {isPulling ? "Pulling…" : isAdmin ? "↓ Pull" : "🔒 Pull"}
             </button>
             <button
@@ -1183,7 +1183,7 @@ function AddonInstallFlow({ mod, onInstall, onCancel }) {
             <div key={f.key} style={{ marginBottom: 14 }}>
               <label style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", display: "block", marginBottom: 6 }}>{f.label}</label>
               <input type={f.type || "text"} value={config[f.key] || ""} onChange={e => update(f.key, e.target.value)} style={inpStyle} />
-              {f.help && <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, marginTop: 4 }}>{f.help}</div>}
+              {f.help && <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, marginTop: 4 }}>{f.help}</div>}
             </div>
           ))}
           {(mod.configFields || []).length === 0 && (
@@ -1686,7 +1686,7 @@ export function MarketplacePage({ user, installedModules = {}, onInstall, onUnin
 
       {/* ── Empty search state ── */}
       {!catalogLoading && !catalogError && filtered.length === 0 && search && (
-        <div style={{ textAlign:"center", padding:"48px 0", color:"rgba(255,255,255,0.25)", fontFamily:"monospace", fontSize:13 }}>
+        <div style={{ textAlign:"center", padding:"48px 0", color:"rgba(255,255,255,0.45)", fontFamily:"monospace", fontSize:13 }}>
           No items match "{search}"
         </div>
       )}

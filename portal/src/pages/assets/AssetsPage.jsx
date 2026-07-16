@@ -162,7 +162,7 @@ function AssetStatusPanel({ asset, status, onClose, onStatusChange }) {
               </div>
             </div>
           ) : (
-            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11,
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11,
               fontFamily: "monospace" }}>No transitions available.</div>
           )
         )}
@@ -374,7 +374,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                     border: "1px solid rgba(0,229,160,0.15)", fontSize: 10, fontFamily: "monospace",
                     padding: "2px 8px", borderRadius: 2 }}>{s}</span>
                 ))}
-                {a.subdomains.length > 20 && <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>+{a.subdomains.length - 20} more</span>}
+                {a.subdomains.length > 20 && <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>+{a.subdomains.length - 20} more</span>}
               </div>
             </div>
           )}
@@ -409,14 +409,14 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                         )}
                       </div>
                       <div style={{ flexShrink: 0, textAlign: "right" }}>
-                        {v.module && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>{typeof v.module === "string" ? v.module : String(v.module)}</div>}
+                        {v.module && <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>{typeof v.module === "string" ? v.module : String(v.module)}</div>}
                         {v.cvss   && <div style={{ color: "rgba(255,140,0,0.6)", fontSize: 10, fontFamily: "monospace", fontWeight: 700, marginTop: 1 }}>CVSS {v.cvss}</div>}
                       </div>
-                      <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, flexShrink: 0 }}>↗</span>
+                      <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, flexShrink: 0 }}>↗</span>
                     </div>
                   );
                 })}
-                {vulns.length > 10 && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>+{vulns.length - 10} more findings</div>}
+                {vulns.length > 10 && <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>+{vulns.length - 10} more findings</div>}
               </div>
             </div>
           )}
@@ -430,7 +430,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
                 {[{label:"Protocol",val:a.ssl_detail.protocol},{label:"Cipher",val:a.ssl_detail.cipher},{label:"Expiry",val:a.ssl_detail.cert_expiry},{label:"Days Left",val:a.cert_days!=null?`${a.cert_days}d`:null}].filter(r=>r.val).map((r,i)=>(
                   <div key={i}>
-                    <div style={{color:"rgba(255,255,255,0.25)",fontSize:9,fontFamily:"monospace"}}>{r.label}</div>
+                    <div style={{color:"rgba(255,255,255,0.45)",fontSize:9,fontFamily:"monospace"}}>{r.label}</div>
                     <div style={{color:"rgba(176,110,255,0.8)",fontSize:10,fontFamily:"monospace"}}>{r.val}</div>
                   </div>
                 ))}
@@ -485,7 +485,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                       </div>
                     );
                   })}
-                  {a.exposed_paths.length > 5 && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>+{a.exposed_paths.length - 5} more</div>}
+                  {a.exposed_paths.length > 5 && <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>+{a.exposed_paths.length - 5} more</div>}
                 </div>
               )}
             </div>
@@ -500,7 +500,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                   {typeof ep === "string" ? ep : (ep.url || ep.path || ep.endpoint || String(ep))}
                 </div>
               ))}
-              {a.api_endpoints.length > 6 && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>+{a.api_endpoints.length - 6} more</div>}
+              {a.api_endpoints.length > 6 && <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>+{a.api_endpoints.length - 6} more</div>}
             </div>
           )}
 
@@ -580,7 +580,7 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
               <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 9, fontFamily: "monospace", fontWeight: 700, letterSpacing: "1px", marginBottom: 6 }}>WHOIS</div>
               {Object.entries(a.whois_full).filter(([,v]) => v).slice(0, 6).map(([k, v], i) => (
                 <div key={i} style={{ display: "flex", gap: 8, marginBottom: 2 }}>
-                  <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", minWidth: 100 }}>{k.replace(/_/g, " ")}</span>
+                  <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", minWidth: 100 }}>{k.replace(/_/g, " ")}</span>
                   <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>{String(v)}</span>
                 </div>
               ))}
@@ -654,10 +654,10 @@ function AssetDrawer({ asset, status, onClose, onStatusChange }) {
                     <div key={i} style={{ borderLeft: `2px solid ${tc.color}40`, paddingLeft: 10 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                         <span style={{ color: fc.color, fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>{fc.label}</span>
-                        <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9 }}>→</span>
+                        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9 }}>→</span>
                         <span style={{ color: tc.color, fontSize: 9, fontFamily: "monospace", fontWeight: 700 }}>{tc.label}</span>
                         {e.actor && <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace" }}>• {e.actor}</span>}
-                        {e.created_at && <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", marginLeft: "auto" }}>{new Date(e.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>}
+                        {e.created_at && <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", marginLeft: "auto" }}>{new Date(e.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>}
                       </div>
                       {e.comment && <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, marginTop: 3, lineHeight: 1.4 }}>{e.comment}</div>}
                     </div>
@@ -898,7 +898,7 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
         })()}
 
         {sortedAssets.length === 0 && (
-          <div style={{ padding: "32px 20px", textAlign: "center", color: "rgba(255,255,255,0.2)", fontFamily: "monospace" }}>
+          <div style={{ padding: "32px 20px", textAlign: "center", color: "rgba(255,255,255,0.45)", fontFamily: "monospace" }}>
             {discoveryFilter ? `No ${discoveryFilter} assets in this scan` : "No assets — import a scan or launch a new one"}
           </div>
         )}
@@ -937,14 +937,14 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
               <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                 {(a.ports || []).slice(0, 4).map(p => <span key={p} style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace" }}>:{p}</span>)}
                 {(a.ports?.length || 0) > 4 && <span style={{ color: "rgba(0,229,160,0.4)", fontSize: 10, fontFamily: "monospace" }}>+{a.ports.length - 4}</span>}
-                {(!a.ports || a.ports.length === 0) && <span style={{ color: "rgba(255,255,255,0.2)", fontFamily: "monospace", fontSize: 11 }}>—</span>}
+                {(!a.ports || a.ports.length === 0) && <span style={{ color: "rgba(255,255,255,0.45)", fontFamily: "monospace", fontSize: 11 }}>—</span>}
               </div>
-              <span style={{ color: (a.vulnerabilities?.length || 0) > 0 ? "#ff3b3b" : "rgba(255,255,255,0.25)", fontFamily: "monospace", fontSize: 12, fontWeight: (a.vulnerabilities?.length || 0) > 0 ? 700 : 400 }}>
+              <span style={{ color: (a.vulnerabilities?.length || 0) > 0 ? "#ff3b3b" : "rgba(255,255,255,0.45)", fontFamily: "monospace", fontSize: 12, fontWeight: (a.vulnerabilities?.length || 0) > 0 ? 700 : 400 }}>
                 {(a.vulnerabilities?.length || 0) > 0 ? `▲ ${a.vulnerabilities.length}` : "—"}
               </span>
 
               <StatusBadge status={curStat} />
-              <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, textAlign: "center" }}>↗</span>
+              <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, textAlign: "center" }}>↗</span>
             </div>
           );
         })}
@@ -960,14 +960,14 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
             <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
               <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}
                 style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
-                  color: currentPage === 1 ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.5)",
+                  color: currentPage === 1 ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.5)",
                   padding: "3px 10px", borderRadius: 3, cursor: currentPage === 1 ? "default" : "pointer",
                   fontSize: 11, fontFamily: "monospace" }}>‹ Prev</button>
               {Array.from({ length: totalPages }, (_, i) => i + 1)
                 .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
                 .reduce((acc, p, idx, arr) => { if (idx > 0 && p - arr[idx - 1] > 1) acc.push("…"); acc.push(p); return acc; }, [])
                 .map((p, i) => typeof p === "string" ? (
-                  <span key={`ell-${i}`} style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, padding: "0 2px" }}>…</span>
+                  <span key={`ell-${i}`} style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, padding: "0 2px" }}>…</span>
                 ) : (
                   <button key={p} onClick={() => setCurrentPage(p)}
                     style={{ background: p === currentPage ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.04)",
@@ -978,7 +978,7 @@ export function AssetsPage({ assets, setSelectedAsset, setShowImport }) {
                 ))}
               <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}
                 style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
-                  color: currentPage === totalPages ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.5)",
+                  color: currentPage === totalPages ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.5)",
                   padding: "3px 10px", borderRadius: 3, cursor: currentPage === totalPages ? "default" : "pointer",
                   fontSize: 11, fontFamily: "monospace" }}>Next ›</button>
             </div>

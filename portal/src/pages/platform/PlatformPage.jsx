@@ -22,7 +22,7 @@ function StatusPill({ status, tier }) {
     installing: { color:"#f5c518", label:"INSTALLING"    },
     failed:     { color:"#ff3b3b", label:"FAILED"        },
     stopped:    { color:"rgba(255,255,255,0.3)", label:"STOPPED" },
-  }[status] || { color:"rgba(255,255,255,0.2)", label:"NOT INSTALLED" };
+  }[status] || { color:"rgba(255,255,255,0.45)", label:"NOT INSTALLED" };
   return (
     <span style={{ background:`${cfg.color}15`, color:cfg.color, border:`1px solid ${cfg.color}30`, fontSize:9, fontFamily:"monospace", padding:"3px 10px", borderRadius:2, fontWeight:700, letterSpacing:"1px", display:"flex", alignItems:"center", gap:5 }}>
       {status === "running" && <span style={{ width:5, height:5, borderRadius:"50%", background:cfg.color, animation:"pulse 2s infinite" }}/>}
@@ -120,7 +120,7 @@ function InstallForm({ mod, onInstall, onCancel }) {
           <label style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", letterSpacing:"1px", textTransform:"uppercase", display:"block", marginBottom:6 }}>{f.label}</label>
           <input type={f.type || "text"} value={config[f.key] || ""} onChange={e => update(f.key, e.target.value)}
             style={{ width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)", color:"white", padding:"10px 14px", borderRadius:4, fontSize:13, fontFamily:"monospace", outline:"none", boxSizing:"border-box" }}/>
-          {f.help && <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, marginTop:4 }}>{f.help}</div>}
+          {f.help && <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, marginTop:4 }}>{f.help}</div>}
         </div>
       ))}
       <div style={{ display:"flex", gap:10, marginTop:20 }}>
@@ -356,7 +356,7 @@ export function PlatformPage({ installedModules, onInstall, onUninstall }) {
                   </div>
                   <div style={{ display:"flex", gap:8, alignItems:"center" }}>
                     <span style={{ color:"rgba(255,255,255,0.3)", fontSize:11, fontFamily:"monospace" }}>SSO: {mod.ssoProtocol}</span>
-                    <span style={{ color:"rgba(255,255,255,0.15)", fontSize:11 }}>·</span>
+                    <span style={{ color:"rgba(255,255,255,0.45)", fontSize:11 }}>·</span>
                     <a href={mod.docsUrl} onClick={e => { e.preventDefault(); window.location.href = mod.docsUrl; }} style={{ color:"rgba(255,255,255,0.35)", fontSize:11, textDecoration:"none" }}>Docs ↗</a>
                   </div>
                 </div>
@@ -390,7 +390,7 @@ export function PlatformPage({ installedModules, onInstall, onUninstall }) {
                     <div style={{ display:"flex", gap:16, marginBottom:14 }}>
                       {[{ label:"RAM", val:`${mod.ram_gb} GB` },{ label:"Disk", val:`${mod.disk_gb} GB` },{ label:"Time", val:mod.install_time }].map(r => (
                         <div key={r.label}>
-                          <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", letterSpacing:"1px" }}>{r.label}</div>
+                          <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", letterSpacing:"1px" }}>{r.label}</div>
                           <div style={{ color:"rgba(255,255,255,0.6)", fontSize:12, fontFamily:"monospace" }}>{r.val}</div>
                         </div>
                       ))}

@@ -155,7 +155,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                       </div>
                     ))}
                     {asset.exposed_paths.length > 15 && (
-                      <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>+{asset.exposed_paths.length - 15} more paths</div>
+                      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>+{asset.exposed_paths.length - 15} more paths</div>
                     )}
                   </div>
                 </Section>
@@ -279,13 +279,13 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                     {asset.dns_unregistered.slice(0, 10).map((t, i) => (
                       <div key={i} style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace", padding: "2px 0" }}>{t}</div>
                     ))}
-                    {asset.dns_unregistered.length > 10 && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>+{asset.dns_unregistered.length - 10} more</div>}
+                    {asset.dns_unregistered.length > 10 && <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>+{asset.dns_unregistered.length - 10} more</div>}
                   </div>
                 </Section>
               )}
 
               {!asset.dns_records && !asset.dns_ips?.length && (
-                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>No DNS data available for this asset.</div>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>No DNS data available for this asset.</div>
               )}
               <StatusButtons asset={asset} onStatusChange={onStatusChange} onClose={onClose}/>
             </div>
@@ -317,7 +317,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                   )}
                 </Section>
               ) : (
-                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>No SSL certificate data available.</div>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>No SSL certificate data available.</div>
               )}
 
               {/* PQC */}
@@ -397,7 +397,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                   )}
                 </>
               ) : (
-                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>No cloud infrastructure data available.</div>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>No cloud infrastructure data available.</div>
               )}
               <StatusButtons asset={asset} onStatusChange={onStatusChange} onClose={onClose}/>
             </div>
@@ -426,7 +426,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                   )}
                 </Section>
               ) : (
-                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>No WHOIS data available.</div>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>No WHOIS data available.</div>
               )}
               {asset.whois_history?.length > 0 && (
                 <Section title="WHOIS History" accent="#4d9eff">
@@ -490,7 +490,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
               )}
 
               {!asset.osint_data?.misp?.length && !asset.osint_data?.cves?.length && !asset.osint_data?.shodan?.length && (
-                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>No OSINT data available. Run a scan with OSINT module enabled.</div>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>No OSINT data available. Run a scan with OSINT module enabled.</div>
               )}
               <StatusButtons asset={asset} onStatusChange={onStatusChange} onClose={onClose}/>
             </div>
@@ -551,7 +551,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                   )}
                 </>
               ) : (
-                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>No social engineering data. Run a deep scan to enable this module.</div>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>No social engineering data. Run a deep scan to enable this module.</div>
               )}
               <StatusButtons asset={asset} onStatusChange={onStatusChange} onClose={onClose}/>
             </div>
@@ -603,11 +603,11 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                     </Section>
                   )}
                   {!asset.mobile_api.api_findings?.length && !asset.mobile_api.apk_secrets?.length && (
-                    <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>No mobile/API findings for this asset.</div>
+                    <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>No mobile/API findings for this asset.</div>
                   )}
                 </>
               ) : (
-                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>No mobile/API data. Run a deep scan to enable this module.</div>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>No mobile/API data. Run a deep scan to enable this module.</div>
               )}
               <StatusButtons asset={asset} onStatusChange={onStatusChange} onClose={onClose}/>
             </div>
@@ -636,7 +636,7 @@ export function AssetModal({ asset, onClose, onStatusChange }) {
                   })}
                 </Section>
               ) : (
-                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>
                   {asset.supply_chain ? "No supply chain risks found." : "No supply chain data. Run a scan with this module enabled."}
                 </div>
               )}
@@ -673,7 +673,7 @@ function VulnList({ vulns, expanded = false }) {
               <div style={{ color: "#00e5a0", fontSize: 11 }}>✓ {v.recommendation}</div>
             )}
             <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
-              {v.module && <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>Module: {v.module}</span>}
+              {v.module && <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>Module: {v.module}</span>}
               {v.epss   && <span style={{ color: "rgba(255,140,0,0.5)", fontSize: 10, fontFamily: "monospace" }}>EPSS {v.epss_pct ?? Math.round(v.epss * 100)}%</span>}
             </div>
           </div>

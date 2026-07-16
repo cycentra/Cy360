@@ -38,7 +38,7 @@ function TrendArrow({ trend }) {
     rising:   { sym: "↑", color: "#ff3b3b" },
     stable:   { sym: "→", color: "rgba(255,255,255,0.3)" },
     falling:  { sym: "↓", color: "#00e5a0" },
-  }[trend] || { sym: "—", color: "rgba(255,255,255,0.2)" };
+  }[trend] || { sym: "—", color: "rgba(255,255,255,0.45)" };
   return <span style={{ color: cfg.color, fontSize: 14 }}>{cfg.sym}</span>;
 }
 
@@ -111,7 +111,7 @@ function RiskDistHistogram({ scores }) {
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
         {[0, 25, 50, 75, 100].map(v => (
-          <span key={v} style={{ color: "rgba(255,255,255,0.2)", fontSize: 8, fontFamily: "monospace" }}>{v}</span>
+          <span key={v} style={{ color: "rgba(255,255,255,0.45)", fontSize: 8, fontFamily: "monospace" }}>{v}</span>
         ))}
       </div>
     </div>
@@ -149,7 +149,7 @@ function EntityTypeSplit({ scores }) {
                 fontWeight: 700 }}>{r.count}</span>
               <span style={{ color: "rgba(255,255,255,0.65)", fontSize: 11,
                 fontFamily: "monospace", marginLeft: 6 }}>{r.label}</span>
-              <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9,
+              <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9,
                 fontFamily: "monospace", marginLeft: 4 }}>{r.pct}%</span>
             </div>
           </div>
@@ -257,7 +257,7 @@ export function SiemRiskScoresPage() {
         {loading ? (
           <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 13, padding: "40px 0" }}>Loading risk scores…</div>
         ) : scores.length === 0 ? (
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 13, padding: "40px 0", textAlign: "center" }}>
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 13, padding: "40px 0", textAlign: "center" }}>
             No entities match this filter. Risk scores populate as alerts are processed.
           </div>
         ) : (
@@ -325,7 +325,7 @@ export function SiemRiskScoresPage() {
                       <BreakdownRow label="UEBA Anomalies"    value={bk.ueba_anomalies ?? 0}    max={25} color="#f5c518" />
                       <BreakdownRow label="TI IOC Hits"       value={bk.misp_ioc_hits ?? 0}     max={10} color="#b06eff" />
                       {entity.last_calculated && (
-                        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10,
+                        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10,
                           fontFamily: "monospace", marginTop: 8 }}>
                           Last calculated: {new Date(entity.last_calculated).toLocaleString()}
                         </div>

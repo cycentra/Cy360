@@ -221,7 +221,7 @@ export function SensorDeploymentTab() {
             <div key={title} style={{ background: "rgba(255,107,107,0.03)", border: "1px solid rgba(255,107,107,0.1)", borderRadius: 4, padding: "12px 14px" }}>
               <div style={{ color, fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", marginBottom: 8 }}>{title}</div>
               {lines.map((line, i) => (
-                <pre key={i} style={{ background: line.startsWith("#") ? "transparent" : "rgba(0,0,0,0.3)", borderRadius: line.startsWith("#") ? 0 : 3, padding: line.startsWith("#") ? "2px 0" : "5px 10px", fontFamily: "monospace", fontSize: 10, color: line.startsWith("#") ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.65)", margin: "0 0 3px 0", overflowX: "auto" }}>{line || " "}</pre>
+                <pre key={i} style={{ background: line.startsWith("#") ? "transparent" : "rgba(0,0,0,0.3)", borderRadius: line.startsWith("#") ? 0 : 3, padding: line.startsWith("#") ? "2px 0" : "5px 10px", fontFamily: "monospace", fontSize: 10, color: line.startsWith("#") ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.65)", margin: "0 0 3px 0", overflowX: "auto" }}>{line || " "}</pre>
               ))}
             </div>
           ))}
@@ -253,7 +253,7 @@ export function SensorDeploymentTab() {
       <div style={{ ...CARD }}>
         <div style={{ ...LABEL, marginBottom: 12 }}>Agent Packages on Server</div>
         {loading ? (
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>Loading…</div>
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace" }}>Loading…</div>
         ) : pkgList.length === 0 ? (
           <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.7 }}>
             No packages found at <code style={{ color: "rgba(0,229,160,0.5)" }}>/var/lib/cycentra-agent-packages/</code>.<br/>
@@ -261,7 +261,7 @@ export function SensorDeploymentTab() {
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 120px", gap: 8, color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", letterSpacing: "0.5px", textTransform: "uppercase", paddingBottom: 6, borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 120px", gap: 8, color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", letterSpacing: "0.5px", textTransform: "uppercase", paddingBottom: 6, borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
               <span>Package</span><span>Size</span><span>Modified</span>
             </div>
             {displayGroups.map(({ version: ver, pkgs }) => (
@@ -313,7 +313,7 @@ export function SensorDeploymentTab() {
             )}
           </div>
         )}
-        <div style={{ marginTop: 12, color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", lineHeight: 1.7 }}>
+        <div style={{ marginTop: 12, color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", lineHeight: 1.7 }}>
           Packages served from <code style={{ color: "rgba(0,229,160,0.4)" }}>{serverUrl}/agent-packages/</code> via HTTPS.
         </div>
       </div>

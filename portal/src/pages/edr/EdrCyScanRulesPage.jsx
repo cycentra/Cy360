@@ -47,7 +47,7 @@ function KpiCard({ label, value, accent = T.accent, sub }) {
       <div style={{ color: T.muted, fontSize: 10, letterSpacing: "1.5px", marginTop: 5, textTransform: "uppercase" }}>
         {label}
       </div>
-      {sub && <div style={{ color: "rgba(255,255,255,0.22)", fontSize: 10, marginTop: 2 }}>{sub}</div>}
+      {sub && <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -542,7 +542,7 @@ export function CyScanRulesContent() {
                   <td style={{ padding: "10px 10px", color: T.muted, fontSize: 11 }}>
                     {rule.last_deployed
                       ? new Date(rule.last_deployed).toLocaleString()
-                      : <span style={{ color: "rgba(255,255,255,0.2)" }}>Not yet deployed</span>}
+                      : <span style={{ color: "rgba(255,255,255,0.45)" }}>Not yet deployed</span>}
                   </td>
                   <td style={{ padding: "10px 10px" }}>
                     <span style={{ color: T.muted, fontSize: 11 }}>View →</span>

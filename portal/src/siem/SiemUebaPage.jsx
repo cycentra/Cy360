@@ -159,7 +159,7 @@ function HoursGrid({ hours = [] }) {
             background: hourSet.has(h) ? "#00e5a0" : "rgba(255,255,255,0.06)" }} />
       ))}
       <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "space-between",
-        color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", marginTop: 2 }}>
+        color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", marginTop: 2 }}>
         <span>00</span><span>06</span><span>12</span><span>18</span><span>23</span>
       </div>
     </div>
@@ -385,7 +385,7 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
 
         {/* Expand chevron */}
         {hasContext && (
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, flexShrink: 0,
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, flexShrink: 0,
             alignSelf: "center" }}>
             {expanded ? "▾" : "▸"}
           </div>
@@ -584,7 +584,7 @@ function UserProfile({ username, integrations, anomalyStatuses, onStatusChange }
           <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace",
             letterSpacing: "1px", marginBottom: 8 }}>TYPICAL WORKING HOURS</div>
           {baseline ? <HoursGrid hours={baseline.typical_hours || []} /> : (
-            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12 }}>No baseline yet</div>
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12 }}>No baseline yet</div>
           )}
         </div>
         <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)",
@@ -606,7 +606,7 @@ function UserProfile({ username, integrations, anomalyStatuses, onStatusChange }
               ))}
             </div>
           ) : (
-            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12 }}>
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12 }}>
               Building baseline… check back in 30 days.
             </div>
           )}
@@ -653,7 +653,7 @@ function UserProfile({ username, integrations, anomalyStatuses, onStatusChange }
         </div>
 
         {anomalies.length === 0 ? (
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 13, padding: "20px 0" }}>
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 13, padding: "20px 0" }}>
             No anomalies detected for this user.
           </div>
         ) : (
@@ -714,7 +714,7 @@ function UserGroup({ title, icon, color, users, selected, onSelect, defaultOpen 
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <CategoryBadge category={u.category} small />
                   {u.avg_daily_events > 0 && (
-                    <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9,
+                    <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9,
                       fontFamily: "monospace" }}>
                       ~{Math.round(u.avg_daily_events)} evt/day
                     </span>
@@ -951,7 +951,7 @@ export function SiemUebaPage() {
                   Loading users…
                 </div>
               ) : filtered.length === 0 ? (
-                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, padding: "20px 0" }}>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, padding: "20px 0" }}>
                   {search ? "No users match your search." : "No UEBA baselines yet."}
                 </div>
               ) : useGrouped ? (
@@ -1010,7 +1010,7 @@ export function SiemUebaPage() {
           {/* ── Right: profile panel ── */}
           <div>
             {!selected ? (
-              <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 13, padding: "40px 0",
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 13, padding: "40px 0",
                 textAlign: "center" }}>
                 <div style={{ fontSize: 32, marginBottom: 12 }}>👤</div>
                 Select a user from the list to view their UEBA profile, behavioural baseline,

@@ -302,7 +302,7 @@ function SigmaTab({ notify }) {
                     <td style={{ padding: "8px 10px" }}><Badge label={r.level} color={levelColor[r.level] || T.muted} /></td>
                     <td style={{ padding: "8px 10px", fontSize: 10 }}>
                       {(r.mitre_techniques || []).length === 0 ? (
-                        <span style={{ color: "rgba(255,255,255,0.2)" }}>signature-only</span>
+                        <span style={{ color: "rgba(255,255,255,0.45)" }}>signature-only</span>
                       ) : (
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                           {r.mitre_techniques.map(t => (

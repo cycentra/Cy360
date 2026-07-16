@@ -108,7 +108,7 @@ function PredictionChart({ actual, predictions, horizon, fwColor }) {
           <line x1={PAD.left} y1={scY(y)} x2={W - PAD.right} y2={scY(y)}
             stroke="rgba(255,255,255,0.05)" strokeWidth={1} />
           <text x={PAD.left - 4} y={scY(y) + 3} textAnchor="end"
-            fill="rgba(255,255,255,0.2)" fontSize={9} fontFamily="monospace">{y}</text>
+            fill="rgba(255,255,255,0.45)" fontSize={9} fontFamily="monospace">{y}</text>
         </g>
       ))}
 
@@ -138,11 +138,11 @@ function PredictionChart({ actual, predictions, horizon, fwColor }) {
 
       {/* "NOW" label */}
       <text x={scX(lastPt.days)} y={H - 4} textAnchor="middle"
-        fill="rgba(255,255,255,0.25)" fontSize={8} fontFamily="monospace">now</text>
+        fill="rgba(255,255,255,0.45)" fontSize={8} fontFamily="monospace">now</text>
 
       {/* Horizon label */}
       <text x={scX(futureX)} y={H - 4} textAnchor="middle"
-        fill="rgba(255,255,255,0.25)" fontSize={8} fontFamily="monospace">+{horizon}d</text>
+        fill="rgba(255,255,255,0.45)" fontSize={8} fontFamily="monospace">+{horizon}d</text>
     </svg>
   );
 }
@@ -158,7 +158,7 @@ function PortfolioSummary({ portfolio }) {
           { label: "Improving", value: count_improving, color: C.accent },
           { label: "Declining", value: count_declining, color: C.red },
           { label: "Stable",    value: count_stable,    color: C.muted },
-          { label: "No Data",   value: count_no_data,   color: "rgba(255,255,255,0.2)" },
+          { label: "No Data",   value: count_no_data,   color: "rgba(255,255,255,0.45)" },
         ].map(({ label, value, color }) => (
           <div key={label} style={{ textAlign: "center", minWidth: 70 }}>
             <div style={{ fontSize: 22, fontWeight: 700, color, fontFamily: "monospace" }}>{value ?? 0}</div>
@@ -190,7 +190,7 @@ function PortfolioSummary({ portfolio }) {
                 </span>
               </>
             ) : (
-              <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 11 }}>warming up</span>
+              <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 11 }}>warming up</span>
             )}
           </div>
         ))}

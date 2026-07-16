@@ -64,7 +64,7 @@ const _OUTCOME_STYLE = {
   false_positive: { bg: "rgba(255,107,107,0.12)", color: "#ff6b6b", border: "rgba(255,107,107,0.3)" },
   resolved:       { bg: "rgba(0,229,160,0.12)",   color: "#00e5a0", border: "rgba(0,229,160,0.3)"   },
 };
-const _TH = { color: "rgba(255,255,255,0.28)", fontSize: 9, fontFamily: "monospace", letterSpacing: "0.8px" };
+const _TH = { color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", letterSpacing: "0.8px" };
 
 function AiPatternTable() {
   const [data,     setData]     = useState(null);
@@ -109,7 +109,7 @@ function AiPatternTable() {
               onMouseEnter={e => { if (!isExp) e.currentTarget.style.background = "rgba(255,255,255,0.02)"; }}
               onMouseLeave={e => { if (!isExp) e.currentTarget.style.background = "transparent"; }}
             >
-              <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>{p.id}</span>
+              <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>{p.id}</span>
               <span style={{ color: "#4d9eff", fontSize: 10, fontFamily: "monospace" }}>{p.source_incident_id}</span>
               <div>
                 <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 10, fontFamily: "monospace" }}>{tech}</div>
@@ -120,28 +120,28 @@ function AiPatternTable() {
               <span style={{ color: "#4d9eff", fontSize: 10, fontFamily: "monospace" }}>{conf}</span>
               <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 10, fontFamily: "monospace" }}>{agent}</span>
-                {user && <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 9, fontFamily: "monospace", marginLeft: 6 }}>{user}</span>}
+                {user && <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", marginLeft: 6 }}>{user}</span>}
               </div>
-              <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 9, fontFamily: "monospace" }}>{date}</span>
+              <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>{date}</span>
             </div>
 
             {isExp && (
               <div style={{ background: "rgba(0,0,0,0.18)", borderLeft: `3px solid ${pred.color || "#a0aabb"}`, margin: "0 0 2px 36px", padding: "10px 14px", borderRadius: "0 3px 3px 0" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7, flexWrap: "wrap" }}>
                   <span style={{ background: `${pred.color}22`, color: pred.color, border: `1px solid ${pred.color}44`, borderRadius: 3, padding: "2px 8px", fontSize: 9, fontFamily: "monospace", letterSpacing: "0.5px", textTransform: "uppercase" }}>{pred.label}</span>
-                  {p.fp_probability != null && <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 9, fontFamily: "monospace" }}>FP score: {p.fp_probability.toFixed(1)}</span>}
-                  {p.false_positive_reason && <span style={{ color: "rgba(255,255,255,0.22)", fontSize: 9, fontFamily: "monospace", fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 340 }}>{p.false_positive_reason}</span>}
+                  {p.fp_probability != null && <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>FP score: {p.fp_probability.toFixed(1)}</span>}
+                  {p.false_positive_reason && <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 340 }}>{p.false_positive_reason}</span>}
                 </div>
                 <div style={{ color: "rgba(255,255,255,0.68)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.65, marginBottom: 6 }}>{pred.text}</div>
                 {(p.rule_ids || []).length > 0 && (
                   <div style={{ marginTop: 5 }}>
-                    <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 9, fontFamily: "monospace" }}>RULES FIRED: </span>
+                    <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>RULES FIRED: </span>
                     {p.rule_ids.slice(0, 6).map(r => <span key={r} style={{ color: "rgba(255,255,255,0.5)", fontSize: 9, fontFamily: "monospace", marginRight: 6 }}>{r}</span>)}
                   </div>
                 )}
                 {(p.src_ips || []).length > 0 && (
                   <div style={{ marginTop: 3 }}>
-                    <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 9, fontFamily: "monospace" }}>SRC IPs: </span>
+                    <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>SRC IPs: </span>
                     {p.src_ips.slice(0, 3).map(ip => <span key={ip} style={{ color: "rgba(255,159,67,0.8)", fontSize: 9, fontFamily: "monospace", marginRight: 6 }}>{ip}</span>)}
                   </div>
                 )}
@@ -153,11 +153,11 @@ function AiPatternTable() {
 
       {data.pages > 1 && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10, padding: "6px 0" }}>
-          <span style={{ color: "rgba(255,255,255,0.28)", fontSize: 10, fontFamily: "monospace" }}>{data.total} patterns · page {data.page} / {data.pages}</span>
+          <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>{data.total} patterns · page {data.page} / {data.pages}</span>
           <div style={{ display: "flex", gap: 5 }}>
             {[["‹ prev", () => setPage(p => Math.max(1, p - 1)), page === 1],
               ["next ›", () => setPage(p => Math.min(data.pages, p + 1)), page === data.pages]].map(([lbl, fn, dis]) => (
-              <button key={lbl} onClick={fn} disabled={dis} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", color: dis ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.55)", borderRadius: 3, padding: "3px 10px", fontSize: 10, fontFamily: "monospace", cursor: dis ? "default" : "pointer" }}>{lbl}</button>
+              <button key={lbl} onClick={fn} disabled={dis} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", color: dis ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.55)", borderRadius: 3, padding: "3px 10px", fontSize: 10, fontFamily: "monospace", cursor: dis ? "default" : "pointer" }}>{lbl}</button>
             ))}
           </div>
         </div>
@@ -460,7 +460,7 @@ function UpdatesTab() {
           <span style={{ color: "#00e5a0", fontFamily: "monospace", fontSize: 22, fontWeight: 700 }}>
             {versionData?.version || "—"}
           </span>
-          <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>
+          <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace" }}>
             CyCentra 360
           </span>
           {isUpToDate && (
@@ -538,7 +538,7 @@ function UpdatesTab() {
         {/* Live log */}
         {updateLog.length > 0 && (
           <div ref={logRef} style={{ marginTop: 16, background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 4, padding: "12px 14px", maxHeight: 280, overflowY: "auto", fontFamily: "monospace", fontSize: 11, lineHeight: 1.7 }}>
-            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, letterSpacing: "1px", marginBottom: 8 }}>
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, letterSpacing: "1px", marginBottom: 8 }}>
               {logRunning ? `● LIVE — ${upgrading ? "UPGRADE" : "UPDATE"}` : "● FINISHED"}
             </div>
             {updateLog.map((line, i) => (
@@ -600,7 +600,7 @@ function UpdatesTab() {
                 return (
                   <span key={ph} title={PHASE_INFO[ph]?.desc} style={{
                     background: active ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.03)",
-                    color: active ? "#00e5a0" : "rgba(255,255,255,0.2)",
+                    color: active ? "#00e5a0" : "rgba(255,255,255,0.45)",
                     border: `1px solid ${active ? "rgba(0,229,160,0.3)" : "rgba(255,255,255,0.07)"}`,
                     borderRadius: 3, padding: "2px 8px", fontSize: 9, fontFamily: "monospace", letterSpacing: "0.5px", cursor: "default",
                   }}>{PHASE_INFO[ph]?.short ?? ph.toUpperCase()}</span>
@@ -613,8 +613,8 @@ function UpdatesTab() {
                 const info   = PHASE_INFO[ph];
                 return (
                   <div key={ph} style={{ display: "flex", alignItems: "flex-start", gap: 6, padding: "5px 8px", background: "rgba(255,255,255,0.015)", borderRadius: 3, border: `1px solid ${active ? "rgba(0,229,160,0.1)" : "rgba(255,255,255,0.04)"}` }}>
-                    <span style={{ color: active ? "#00e5a0" : "rgba(255,255,255,0.18)", fontSize: 9, fontFamily: "monospace", fontWeight: 700, flexShrink: 0, paddingTop: 1 }}>{info?.short}</span>
-                    <span style={{ color: active ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", lineHeight: 1.4 }}>{info?.desc}</span>
+                    <span style={{ color: active ? "#00e5a0" : "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", fontWeight: 700, flexShrink: 0, paddingTop: 1 }}>{info?.short}</span>
+                    <span style={{ color: active ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", lineHeight: 1.4 }}>{info?.desc}</span>
                   </div>
                 );
               })}
@@ -625,7 +625,7 @@ function UpdatesTab() {
           <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 14 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: showPatterns ? 4 : 0 }}>
               <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", letterSpacing: "0.8px" }}>
-                PATTERN MEMORY  <span style={{ color: "rgba(255,255,255,0.22)" }}>· click a row to see prediction</span>
+                PATTERN MEMORY  <span style={{ color: "rgba(255,255,255,0.45)" }}>· click a row to see prediction</span>
               </span>
               <button
                 onClick={() => setShowPatterns(v => !v)}
@@ -649,7 +649,7 @@ const _SENSITIVE_RE = /(PASSWORD|SECRET|API_KEY|TOKEN|PRIVATE_KEY|CREDENTIAL)/i;
 function EnvVarRow({ v, onChange }) {
   const [reveal, setReveal] = useState(false);
   if (v.comment || !v.key) {
-    return <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace", padding: "2px 0" }}>{v.line}</div>;
+    return <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace", padding: "2px 0" }}>{v.line}</div>;
   }
   const isServerProtected = v.value === "••••••••";
   const isSensitive       = _SENSITIVE_RE.test(v.key);
@@ -657,7 +657,7 @@ function EnvVarRow({ v, onChange }) {
     <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 8, alignItems: "center", padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
       <span style={{ color: isSensitive ? "rgba(255,200,100,0.7)" : "rgba(255,255,255,0.55)", fontSize: 12, fontFamily: "monospace", wordBreak: "break-all" }}>{v.key}</span>
       {isServerProtected ? (
-        <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>•••••••• (protected)</span>
+        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>•••••••• (protected)</span>
       ) : isSensitive ? (
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <input
@@ -721,7 +721,7 @@ function EnvEditor({ target }) {
   };
 
   if (loading) return <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>;
-  if (!exists)  return <div style={{ color: "rgba(255,255,255,0.2)", fontFamily: "monospace", fontSize: 12 }}>No env file found for this module on the server.</div>;
+  if (!exists)  return <div style={{ color: "rgba(255,255,255,0.45)", fontFamily: "monospace", fontSize: 12 }}>No env file found for this module on the server.</div>;
 
   return (
     <div>
@@ -758,7 +758,7 @@ function EnvConfigTab() {
           <button key={t.id} onClick={() => setActiveEnv(t.id)}
             style={{ width: "100%", textAlign: "left", background: activeEnv === t.id ? "rgba(0,229,160,0.08)" : "transparent", color: activeEnv === t.id ? "#00e5a0" : "rgba(255,255,255,0.45)", border: "none", borderLeft: activeEnv === t.id ? "2px solid #00e5a0" : "2px solid transparent", padding: "10px 12px", cursor: "pointer", marginBottom: 2, borderRadius: "0 4px 4px 0" }}>
             <div style={{ fontSize: 12, fontWeight: activeEnv === t.id ? 700 : 400, fontFamily: "monospace" }}>{t.label}</div>
-            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.2)", marginTop: 2, lineHeight: 1.4 }}>{t.desc}</div>
+            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", marginTop: 2, lineHeight: 1.4 }}>{t.desc}</div>
           </button>
         ))}
       </div>
@@ -1110,7 +1110,7 @@ function UserManagementTab() {
         </div>
 
         {filtered.length === 0 ? (
-          <div style={{ padding: "24px 16px", color: "rgba(255,255,255,0.2)", fontFamily: "monospace", fontSize: 12 }}>
+          <div style={{ padding: "24px 16px", color: "rgba(255,255,255,0.45)", fontFamily: "monospace", fontSize: 12 }}>
             {filter === "all" ? "No users yet. Add one below." : `No ${filter} users.`}
           </div>
         ) : filtered.map(([email, entry]) => {
@@ -1128,7 +1128,7 @@ function UserManagementTab() {
               <div style={{ display: "grid", gridTemplateColumns: "120px minmax(0,1fr) 58px 90px 110px 175px", gap: 0, padding: "10px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", alignItems: "center", background: rowBg }}>
                 {/* Name */}
                 <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 6 }} title={displayName}>
-                  {displayName || <span style={{ color: "rgba(255,255,255,0.2)" }}>—</span>}
+                  {displayName || <span style={{ color: "rgba(255,255,255,0.45)" }}>—</span>}
                 </span>
                 {/* Email */}
                 <span style={{ color: "rgba(255,255,255,0.75)", fontSize: 11, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 10 }} title={email}>{email}</span>
@@ -1323,7 +1323,7 @@ function PagePermissionEditor({ pages, onChange, readOnly = false }) {
     <div>
       {Object.entries(grouped).map(([section, sectionPages]) => (
         <div key={section} style={{ marginBottom: 14 }}>
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1.5px", marginBottom: 6 }}>
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1.5px", marginBottom: 6 }}>
             {section}
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -1490,7 +1490,7 @@ function RoleManagementSection() {
         <div style={{ color: "rgba(0,229,160,0.9)", fontSize: 10, letterSpacing: "1.5px", textTransform: "uppercase", fontFamily: "monospace", fontWeight: 700 }}>
           Roles &amp; Page Access
         </div>
-        <span style={{ color: "rgba(255,255,255,0.25)", fontFamily: "monospace", fontSize: 11, flex: 1 }}>
+        <span style={{ color: "rgba(255,255,255,0.45)", fontFamily: "monospace", fontSize: 11, flex: 1 }}>
           Define which pages each role can access. Hidden pages are completely invisible to the role.
         </span>
         {!showCreate && !editRole && (
@@ -1516,7 +1516,7 @@ function RoleManagementSection() {
         </div>
 
         {roles.length === 0 ? (
-          <div style={{ padding: "20px 16px", color: "rgba(255,255,255,0.2)", fontFamily: "monospace", fontSize: 12 }}>No roles found.</div>
+          <div style={{ padding: "20px 16px", color: "rgba(255,255,255,0.45)", fontFamily: "monospace", fontSize: 12 }}>No roles found.</div>
         ) : roles.map(role => (
           <div key={role.role_name} style={{
             display: "grid", gridTemplateColumns: "130px minmax(0,1fr) 90px 100px 170px",
@@ -1902,7 +1902,7 @@ async with sse_client("${status?.public_url || status?.endpoint || "<MCP_ENDPOIN
       </div>
 
       {/* Notes */}
-      <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.2)", lineHeight: 1.8 }}>
+      <div style={{ fontSize: 10, fontFamily: "monospace", color: "rgba(255,255,255,0.45)", lineHeight: 1.8 }}>
         ℹ️ The MCP bridge starts automatically when the <code>mcp[cli]</code> package is installed with the engine.
         Changes to MCP_ENABLED take effect after restarting the <code>cysiemstack-engine</code> service.
         Set <code>MCP_ENABLED=false</code> in <code>/opt/cycentra/cysiemstack.env</code> to disable without uninstalling.
@@ -2122,7 +2122,7 @@ function CyMindIntegrationTab() {
         <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 10, fontFamily: "monospace" }}>MCP Bridge:</span>
           {mcpStatus === null ? (
-            <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>checking…</span>
+            <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>checking…</span>
           ) : (
             <>
               <span style={{
@@ -2130,7 +2130,7 @@ function CyMindIntegrationTab() {
                 background: mcpStatus.enabled ? "rgba(0,229,160,0.08)" : "rgba(255,255,255,0.03)",
                 border: `1px solid ${mcpStatus.enabled ? "rgba(0,229,160,0.25)" : "rgba(255,255,255,0.08)"}`,
                 borderRadius: 3, padding: "2px 8px",
-                color: mcpStatus.enabled ? "#00e5a0" : "rgba(255,255,255,0.25)",
+                color: mcpStatus.enabled ? "#00e5a0" : "rgba(255,255,255,0.45)",
                 fontSize: 10, fontFamily: "monospace", fontWeight: 700,
               }}>
                 <span style={{ width: 5, height: 5, borderRadius: "50%", background: "currentColor" }} />
@@ -2357,14 +2357,14 @@ function CyMindIntegrationTab() {
 
         {/* Keys table */}
         {mcpKeysLoading ? (
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>Loading…</div>
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace" }}>Loading…</div>
         ) : mcpKeys.length === 0 ? (
           <div style={{ color: "rgba(255,255,255,0.42)", fontSize: 11, fontFamily: "monospace" }}>No 3rd-party keys yet.</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {/* Header row */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 2fr 80px", gap: 8,
-              color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace",
+              color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace",
               letterSpacing: "0.5px", textTransform: "uppercase", paddingBottom: 4,
               borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
               <span>Name</span><span>Created</span><span>Key (masked)</span><span></span>
@@ -2560,7 +2560,7 @@ function SchedulerTask({ taskId, task, onChange, baseDomain, timezone, noHeader 
                 value={task.retain_count ?? 14}
                 onChange={e => onChange(taskId, "retain_count", Math.max(1, parseInt(e.target.value) || 14))}
                 style={{ ...INPUT, width: 90, padding: "6px 10px" }}/>
-              <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, marginTop: 3 }}>archives</div>
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, marginTop: 3 }}>archives</div>
             </div>
             <div>
               <div style={{ ...LABEL, marginBottom: 4 }}>Delete After</div>
@@ -2569,7 +2569,7 @@ function SchedulerTask({ taskId, task, onChange, baseDomain, timezone, noHeader 
                 value={task.retain_days ?? 30}
                 onChange={e => onChange(taskId, "retain_days", Math.max(1, parseInt(e.target.value) || 30))}
                 style={{ ...INPUT, width: 90, padding: "6px 10px" }}/>
-              <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, marginTop: 3 }}>days</div>
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, marginTop: 3 }}>days</div>
             </div>
           </>
         )}
@@ -2583,7 +2583,7 @@ function SchedulerTask({ taskId, task, onChange, baseDomain, timezone, noHeader 
                 <span style={{ background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.25)", borderRadius: 4, color: "#00e5a0", fontFamily: "monospace", fontSize: 12, padding: "6px 12px", letterSpacing: "0.5px" }}>
                   {baseDomain || "BASE_DOMAIN not set"}
                 </span>
-                <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>from /opt/cycentra/.env</span>
+                <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>from /opt/cycentra/.env</span>
               </div>
             </div>
             <div>
@@ -2630,10 +2630,10 @@ function SchedulerTask({ taskId, task, onChange, baseDomain, timezone, noHeader 
             </div>
           )}
           {logLines && logLines.length === 0 && (
-            <div style={{ color: "rgba(255,255,255,0.2)" }}>No output yet — job has not run since log was created.</div>
+            <div style={{ color: "rgba(255,255,255,0.45)" }}>No output yet — job has not run since log was created.</div>
           )}
           {logError && (
-            <div style={{ color: "rgba(255,255,255,0.2)" }}>Log file not readable.</div>
+            <div style={{ color: "rgba(255,255,255,0.45)" }}>Log file not readable.</div>
           )}
         </div>
       )}
@@ -2716,7 +2716,7 @@ function SchedulerTab() {
           style={{ ...INPUT, flex: 1, maxWidth: 320, padding: "6px 10px" }}>
           {tzOptions.map(tz => <option key={tz} value={tz}>{tz}</option>)}
         </select>
-        <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>
+        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>
           Hour/minute values you enter are in this timezone · backend converts to UTC for cron
         </span>
       </div>
@@ -2741,7 +2741,7 @@ function SchedulerTab() {
           style={{ ...BTN(), opacity: saving ? 0.5 : 1 }}>
           {saving ? "Saving…" : "Save Schedules"}
         </button>
-        <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>
+        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>
           Writes to /opt/cycentra/schedules.json · applies to server crontab
         </span>
       </div>
@@ -2848,7 +2848,7 @@ function BackupTab() {
           ))}
         </div>
         <div style={{ marginTop: 12, borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: 10,
-          color: "rgba(255,255,255,0.2)", fontSize: 11, lineHeight: 1.7 }}>
+          color: "rgba(255,255,255,0.45)", fontSize: 11, lineHeight: 1.7 }}>
           <strong style={{ color: "rgba(255,255,255,0.62)" }}>Not backed up:</strong>{" "}
           Docker images · log files · Python source code (all re-deployable via <code style={{ fontFamily: "monospace" }}>cycentra-setup.sh</code>).
           <br/>
@@ -2870,7 +2870,7 @@ function BackupTab() {
         {loading ? (
           <div style={{ color: "rgba(255,255,255,0.3)", fontFamily: "monospace", fontSize: 12 }}>Loading…</div>
         ) : backups.length === 0 ? (
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace", padding: "8px 0" }}>
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace", padding: "8px 0" }}>
             No backups yet — click "Create Backup Now" or enable the Automated Backup task in the Scheduler tab.
           </div>
         ) : (
@@ -3064,7 +3064,7 @@ function ThreatIntelTab() {
             </div>
           ))}
         </div>
-        <div style={{ fontSize: 10, color: "rgba(255,255,255,0.25)", marginTop: 10 }}>
+        <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", marginTop: 10 }}>
           Add API keys in CyTIM admin UI → Sources tab, then restart CyTIM containers.
         </div>
       </div>
@@ -3072,7 +3072,7 @@ function ThreatIntelTab() {
       <button onClick={handleSave} disabled={saving} style={{ ...BTN(), marginTop: 8 }}>
         {saving ? "Saving…" : saved ? "✓ Saved" : "Save TI Settings"}
       </button>
-      <div style={{ fontSize: 11, color: "rgba(255,255,255,0.25)", marginTop: 10 }}>
+      <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", marginTop: 10 }}>
         Changes take effect on the next incident enrichment cycle (no restart required).
         The correlation engine reloads settings per-enrichment.
       </div>
@@ -3257,7 +3257,7 @@ function CompGRCSettingsTab() {
         {/* Admin key — only needed for collection management (create sub-collections by framework) */}
         <div style={{ marginBottom: 16 }}>
           <div style={LABEL}>CyMind Admin API Key</div>
-          <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", marginBottom: 6 }}>
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", marginBottom: 6 }}>
             Required for collection management (create per-framework policy sub-collections).
             The standard CyMind key handles document upload — this is only needed for admin-level operations.
           </div>
@@ -3688,7 +3688,7 @@ function ServerStatusTab() {
               <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: i < data.top_processes.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
                 <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, fontFamily: "monospace", maxWidth: "55%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {p.name}
-                  <span style={{ color: "rgba(255,255,255,0.2)", marginLeft: 8 }}>pid {p.pid}</span>
+                  <span style={{ color: "rgba(255,255,255,0.45)", marginLeft: 8 }}>pid {p.pid}</span>
                 </span>
                 <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace" }}>
                   CPU {p.cpu_percent?.toFixed(1)}% · MEM {p.mem_percent?.toFixed(1)}%
@@ -3710,7 +3710,7 @@ function AssetMgmtSettingsTab() {
   const CARD  = { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "20px 24px", marginBottom: 20 };
   const LABEL = { color: "rgba(255,255,255,0.62)", fontSize: 10, letterSpacing: "1.5px", fontFamily: "monospace", textTransform: "uppercase", marginBottom: 8 };
   const INPUT = { background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 4, color: "rgba(255,255,255,0.8)", fontFamily: "monospace", fontSize: 12, padding: "8px 12px", width: "100%", boxSizing: "border-box", outline: "none" };
-  const HINT  = { color: "rgba(255,255,255,0.2)", fontSize: 10, marginTop: 4, fontFamily: "monospace" };
+  const HINT  = { color: "rgba(255,255,255,0.45)", fontSize: 10, marginTop: 4, fontFamily: "monospace" };
 
   // Scan settings
   const [subnet,     setSubnet]     = useState("");
@@ -3837,7 +3837,7 @@ function AssetMgmtSettingsTab() {
       </div>
 
       {loading ? (
-        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace", padding: 20 }}>Loading…</div>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace", padding: 20 }}>Loading…</div>
       ) : (<>
 
         {/* ── Section 1: Scan Settings ── */}
@@ -4087,7 +4087,7 @@ export function SystemSettingsPage() {
 
         {/* Left: module selector */}
         <div style={{ width: 210, flexShrink: 0 }}>
-          <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace",
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace",
             letterSpacing: "1.5px", textTransform: "uppercase", marginBottom: 10 }}>Module</div>
           {MODULES.map(m => (
             <button key={m.id} onClick={() => {

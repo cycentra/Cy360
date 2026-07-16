@@ -28,7 +28,7 @@ export function Sidebar({ activeTab, setActiveTab, installedModules, data, scanT
           return (
           <div key={sec.section} style={{ marginBottom: 20 }}>
             <div style={{
-              color: "rgba(255,255,255,0.2)", fontSize: 9,
+              color: "rgba(255,255,255,0.45)", fontSize: 9,
               fontFamily: "monospace", letterSpacing: "1.8px", fontWeight: 700,
               padding: "0 10px", marginBottom: 4,
             }}>
@@ -104,18 +104,18 @@ export function Sidebar({ activeTab, setActiveTab, installedModules, data, scanT
       <div style={{ padding: "12px 16px", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
         {data ? (
           <div>
-            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 3 }}>
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 3 }}>
               LAST SCAN
             </div>
             <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>
               {data.meta?.domain}
             </div>
-            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, marginTop: 2 }}>
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, marginTop: 2 }}>
               {scanTime}
             </div>
           </div>
         ) : (
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>
             No scan loaded
           </div>
         )}

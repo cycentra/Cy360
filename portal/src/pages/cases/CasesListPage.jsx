@@ -725,12 +725,12 @@ export default function CasesListPage({ onOpenCase }) {
                 <div style={{ display: "flex", gap: 4 }}>
                   <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
                     style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`,
-                      color: page === 1 ? "rgba(255,255,255,0.15)" : C.muted,
+                      color: page === 1 ? "rgba(255,255,255,0.45)" : C.muted,
                       padding: "3px 10px", borderRadius: 3, cursor: page === 1 ? "default" : "pointer",
                       fontFamily: "monospace", fontSize: 11 }}>‹ Prev</button>
                   <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
                     style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`,
-                      color: page === totalPages ? "rgba(255,255,255,0.15)" : C.muted,
+                      color: page === totalPages ? "rgba(255,255,255,0.45)" : C.muted,
                       padding: "3px 10px", borderRadius: 3, cursor: page === totalPages ? "default" : "pointer",
                       fontFamily: "monospace", fontSize: 11 }}>Next ›</button>
                 </div>

@@ -218,7 +218,7 @@ function O365ConfigModal({ uc, onClose }) {
             <div style={{ marginBottom:14 }}>
               <label style={labelStyle}>Client Secret</label>
               <input type="password" value={clientSecret} onChange={e => setClientSecret(e.target.value)} placeholder={hasExistingSecret ? "Leave blank to keep existing secret" : "Enter client secret"} required={!hasExistingSecret} style={inputStyle} autoComplete="new-password" />
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
                 {hasExistingSecret ? "Secret already configured — leave blank to keep it unchanged" : "Secret is write-only — never returned by the API"}
               </div>
             </div>
@@ -227,7 +227,7 @@ function O365ConfigModal({ uc, onClose }) {
               <select value={apiType} onChange={e => setApiType(e.target.value)} style={{ ...inputStyle, cursor:"pointer" }}>
                 {O365_API_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
               </select>
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
                 commercial — standard Microsoft 365 · gcc / gcc-high — US government plans
               </div>
             </div>
@@ -470,7 +470,7 @@ function GCloudConfigModal({ uc, onClose }) {
                 <div>
                   <div style={{ fontSize:28, marginBottom:8 }}>📂</div>
                   <div style={{ color:"rgba(255,255,255,0.6)", fontSize:13 }}>Drag &amp; Drop or <span style={{ color:GCP_BLUE }}>Browse</span></div>
-                  <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, marginTop:6 }}>GCP Service Account JSON key file</div>
+                  <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, marginTop:6 }}>GCP Service Account JSON key file</div>
                 </div>
               )}
             </div>
@@ -494,7 +494,7 @@ function GCloudConfigModal({ uc, onClose }) {
             <label style={labelStyle}>Pub/Sub Subscription Name</label>
             <input value={subscriptionName} onChange={e => setSubscriptionName(e.target.value)}
               placeholder="projects/my-project/subscriptions/wazuh-sub" required style={inputStyle} />
-            <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
+            <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginTop:5 }}>
               Full subscription path: <code>projects/&lt;PROJECT&gt;/subscriptions/&lt;NAME&gt;</code>
             </div>
           </div>

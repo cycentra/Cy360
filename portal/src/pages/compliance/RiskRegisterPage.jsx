@@ -216,7 +216,7 @@ function RiskForm({ initial, onSave, onCancel }) {
               onChange={e => set(key, +e.target.value)}
               style={{ width: "100%", accentColor: color }} />
             <div style={{ display: "flex", justifyContent: "space-between",
-              fontSize: 9, color: "rgba(255,255,255,0.25)", fontFamily: "monospace" }}>
+              fontSize: 9, color: "rgba(255,255,255,0.45)", fontFamily: "monospace" }}>
               <span>1 Very Low</span><span>5 Very High</span>
             </div>
           </div>
@@ -835,7 +835,7 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
               <div style={{ fontFamily: "monospace", fontSize: 9, letterSpacing: "1.5px",
                 color: C.muted, textTransform: "uppercase", marginBottom: 16 }}>RISK HEATMAP</div>
               <Heatmap grid={filteredGrid} onCellClick={setCellRisks} />
-              <div style={{ marginTop: 10, fontSize: 10, color: "rgba(255,255,255,0.25)",
+              <div style={{ marginTop: 10, fontSize: 10, color: "rgba(255,255,255,0.45)",
                 fontFamily: "monospace" }}>Click a cell to see risks at that position</div>
             </div>
 
@@ -1041,7 +1041,7 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
             {/* Score ↔ Severity reference table */}
             <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 14 }}>
               <div style={{ fontFamily: "monospace", fontSize: 9, letterSpacing: "1px",
-                color: "rgba(255,255,255,0.25)", textTransform: "uppercase", marginBottom: 10 }}>
+                color: "rgba(255,255,255,0.45)", textTransform: "uppercase", marginBottom: 10 }}>
                 SCORE → SEVERITY REFERENCE (Score = Likelihood 1–5 × Impact 1–5)
               </div>
               <div style={{ display: "flex", gap: 10 }}>
@@ -1068,7 +1068,7 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontFamily: "monospace", fontSize: 9, letterSpacing: "1px",
                 color: C.muted, textTransform: "uppercase" }}>SEVERITY BREAKDOWN</div>
-              <div style={{ fontSize: 9, color: "rgba(255,255,255,0.25)", fontFamily: "monospace" }}>
+              <div style={{ fontSize: 9, color: "rgba(255,255,255,0.45)", fontFamily: "monospace" }}>
                 open + mitigated risks only
               </div>
             </div>
@@ -1088,7 +1088,7 @@ export function RiskRegisterPage({ initialView = "heatmap" }) {
                 </div>
               ))}
             </div>
-            <div style={{ fontSize: 9, color: "rgba(255,255,255,0.25)", fontFamily: "monospace",
+            <div style={{ fontSize: 9, color: "rgba(255,255,255,0.45)", fontFamily: "monospace",
               padding: "8px 10px", background: "rgba(255,255,255,0.02)", borderRadius: 4,
               borderLeft: `2px solid rgba(255,255,255,0.08)` }}>
               ℹ️ Why these counts differ from the Heatmap: the Heatmap includes risks with status

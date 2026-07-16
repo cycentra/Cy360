@@ -142,7 +142,7 @@ function StatCard({ label, value, accent, sub, onClick }) {
         <AnimCounter value={value}/>
       </div>
       <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, letterSpacing:"1.5px", marginTop:5, textTransform:"uppercase" }}>{label}</div>
-      {sub && <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, marginTop:2 }}>{sub}</div>}
+      {sub && <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, marginTop:2 }}>{sub}</div>}
     </div>
   );
 }
@@ -320,11 +320,11 @@ function IncidentStateWidget({ onViewAll }) {
       </div>
 
       {loading && (
-        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace",
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace",
           padding: "10px 0" }}>Loading…</div>
       )}
       {!loading && offline && (
-        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace",
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace",
           padding: "10px 0" }}>CySIEM engine offline</div>
       )}
       {!loading && !offline && counts && (
@@ -342,7 +342,7 @@ function IncidentStateWidget({ onViewAll }) {
                     borderRadius: 2, transition: "width 0.6s ease",
                     minWidth: val > 0 ? 4 : 0 }} />
                 </div>
-                <div style={{ width: 28, color: val > 0 ? color : "rgba(255,255,255,0.2)",
+                <div style={{ width: 28, color: val > 0 ? color : "rgba(255,255,255,0.45)",
                   fontSize: 12, fontFamily: "monospace", fontWeight: 700,
                   textAlign: "right", flexShrink: 0 }}>
                   {val}
@@ -414,15 +414,15 @@ function HighConfidenceWidget({ onViewAll }) {
       </div>
 
       {loading && (
-        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace",
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace",
           padding: "10px 0" }}>Loading…</div>
       )}
       {!loading && offline && (
-        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace",
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace",
           padding: "10px 0" }}>CySIEM engine offline</div>
       )}
       {!loading && !offline && rows.length === 0 && (
-        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace",
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace",
           padding: "10px 0" }}>No high-confidence incidents — AI analysis still running or no active incidents.</div>
       )}
       {!loading && !offline && rows.length > 0 && (
@@ -505,13 +505,13 @@ function SoarActivityWidget() {
           <span title={dotTitle} style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%",
             background: dotColor, marginLeft: 8, verticalAlign: "middle" }} />
         </div>
-        <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>Last 24h</span>
+        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>Last 24h</span>
       </div>
       {loading ? (
-        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace",
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace",
           padding: "10px 0" }}>Loading…</div>
       ) : !data ? (
-        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace",
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace",
           padding: "10px 0" }}>CySOAR status unavailable</div>
       ) : (
         <div style={{ display: "flex", gap: 16 }}>
@@ -532,7 +532,7 @@ function SoarActivityWidget() {
         </div>
       )}
       {!data?.running && !loading && (
-        <div style={{ marginTop: 10, color: "rgba(255,255,255,0.25)", fontSize: 10,
+        <div style={{ marginTop: 10, color: "rgba(255,255,255,0.45)", fontSize: 10,
           fontFamily: "monospace" }}>
           {data?.installed
             ? "CySOAR installed but not running — start it from Extensions"
@@ -640,7 +640,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
             {/* PQC status if available */}
             {primaryAsset?.pqc_data && (
               <div style={{ marginTop:6, padding:"5px 0", borderTop:"1px solid rgba(255,255,255,0.06)" }}>
-                <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:4 }}>POST-QUANTUM CRYPTO</div>
+                <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginBottom:4 }}>POST-QUANTUM CRYPTO</div>
                 <div style={{ color:primaryAsset.pqc_data?.supported?"#00e5a0":"#ff8c00", fontSize:11, fontFamily:"monospace" }}>
                   {primaryAsset.pqc_data?.supported?"✓ PQC Ready":"⚠ Not PQC Ready"}
                   {primaryAsset.pqc_data?.algorithm && ` · ${primaryAsset.pqc_data.algorithm}`}
@@ -662,7 +662,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
             {/* Cloud bucket summary if available */}
             {primaryAsset?.cloud_data?.bucket_summary && (
               <div style={{ marginTop:4, padding:"5px 0", borderTop:"1px solid rgba(255,255,255,0.06)" }}>
-                <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:4 }}>CLOUD BUCKETS</div>
+                <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginBottom:4 }}>CLOUD BUCKETS</div>
                 {["public","private","total"].map(k => primaryAsset.cloud_data.bucket_summary[k] != null && (
                   <div key={k} style={{ display:"flex", justifyContent:"space-between", padding:"2px 0" }}>
                     <span style={{ color:"rgba(255,255,255,0.35)", fontSize:10 }}>{k.charAt(0).toUpperCase()+k.slice(1)}</span>
@@ -675,7 +675,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
             )}
           </div>
           <div style={{ marginTop:14 }}>
-            <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginBottom:6 }}>PORT EXPOSURE</div>
+            <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginBottom:6 }}>PORT EXPOSURE</div>
             <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
               {[...new Set(assets.flatMap(a=>a.ports||[]))].slice(0,12).map(p=>(
                 <span key={p} style={{ background:"rgba(77,158,255,0.1)", color:"#4d9eff", border:"1px solid rgba(77,158,255,0.2)", padding:"2px 8px", borderRadius:2, fontSize:10, fontFamily:"monospace" }}>:{p}</span>
@@ -707,7 +707,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
             const expColor = daysLeft < 30 ? "#ff3b3b" : daysLeft < 90 ? "#ff8c00" : "#00e5a0";
             return (
               <div style={{ marginBottom:12 }}>
-                <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:4 }}>DOMAIN EXPIRY</div>
+                <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginBottom:4 }}>DOMAIN EXPIRY</div>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                   <span style={{ color:"rgba(255,255,255,0.45)", fontSize:11 }}>
                     {primaryAsset.whois_full.registrar || "Unknown registrar"}
@@ -719,18 +719,18 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
                 <div style={{ height:3, background:"rgba(255,255,255,0.07)", borderRadius:2, marginTop:4 }}>
                   <div style={{ height:"100%", width:`${Math.min(100,Math.max(0,(daysLeft/365)*100))}%`, background:expColor, borderRadius:2 }}/>
                 </div>
-                <div style={{ color:"rgba(255,255,255,0.25)", fontSize:10, fontFamily:"monospace", marginTop:3 }}>
+                <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginTop:3 }}>
                   Expires {primaryAsset.whois_full.expiration_date?.slice(0,10)}
                 </div>
               </div>
             );
           })() : (
-            <div style={{ color:"rgba(255,255,255,0.15)", fontSize:10, fontFamily:"monospace", marginBottom:12 }}>No WHOIS data available</div>
+            <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", marginBottom:12 }}>No WHOIS data available</div>
           )}
           {/* WHOIS registrant / name servers if available */}
           {primaryAsset?.whois_full?.name_servers?.length > 0 && (
             <div style={{ marginBottom:12, padding:"6px 0", borderTop:"1px solid rgba(255,255,255,0.06)" }}>
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:4 }}>NAME SERVERS</div>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginBottom:4 }}>NAME SERVERS</div>
               {primaryAsset.whois_full.name_servers.slice(0,3).map((ns, i) => (
                 <div key={i} style={{ color:"rgba(255,255,255,0.4)", fontSize:10, fontFamily:"monospace", padding:"1px 0" }}>{ns}</div>
               ))}
@@ -739,7 +739,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
           {/* IP Geo / ASN table */}
           {primaryAsset?.dns_ips?.length > 0 ? (
             <div style={{ borderTop:"1px solid rgba(255,255,255,0.06)", paddingTop:10 }}>
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>IP GEO / ASN</div>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>IP GEO / ASN</div>
               {primaryAsset.dns_ips.slice(0,6).map((ipObj, i) => (
                 <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"4px 0", borderBottom:"1px solid rgba(255,255,255,0.04)" }}>
                   <span style={{ color:"#4d9eff", fontFamily:"monospace", fontSize:10 }}>{ipObj.ip}</span>
@@ -747,11 +747,11 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
                 </div>
               ))}
               {primaryAsset.dns_ips.length > 6 && (
-                <div style={{ color:"rgba(255,255,255,0.2)", fontSize:9, fontFamily:"monospace", marginTop:4 }}>+{primaryAsset.dns_ips.length-6} more IPs</div>
+                <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginTop:4 }}>+{primaryAsset.dns_ips.length-6} more IPs</div>
               )}
             </div>
           ) : (
-            <div style={{ color:"rgba(255,255,255,0.15)", fontSize:10, fontFamily:"monospace", borderTop:"1px solid rgba(255,255,255,0.06)", paddingTop:10 }}>No IP geo data available</div>
+            <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", borderTop:"1px solid rgba(255,255,255,0.06)", paddingTop:10 }}>No IP geo data available</div>
           )}
         </ASMWidget>
 
@@ -778,7 +778,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
               )}
             </div>
           ) : (
-            <div style={{ color:"rgba(255,255,255,0.25)", fontSize:12, fontFamily:"monospace", padding:"16px 0" }}>
+            <div style={{ color:"rgba(255,255,255,0.45)", fontSize:12, fontFamily:"monospace", padding:"16px 0" }}>
               No email security data in scan.<br/>Run a scan with the Email Security module enabled.
             </div>
           )}
@@ -809,7 +809,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
             })}
             {webVulns.length === 0 && <div style={{ color:"rgba(0,229,160,0.5)", fontSize:11, fontFamily:"monospace" }}>✓ No web vulnerabilities</div>}
             {webVulns.length > 6 && (
-              <div style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace" }}>+{webVulns.length-6} more — see Vulnerability Explorer</div>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace" }}>+{webVulns.length-6} more — see Vulnerability Explorer</div>
             )}
           </div>
         </ASMWidget>
@@ -821,7 +821,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
         <ASMWidget title="Security Headers" accent="#ff8c00">
           {primaryAsset?.http_analysis?.http_headers?.length > 0 ? (
             <div>
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>MISSING SECURITY HEADERS</div>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>MISSING SECURITY HEADERS</div>
               {primaryAsset.http_analysis.http_headers.map((h, i) => (
                 <div key={i} style={{ display:"flex", gap:6, alignItems:"center", padding:"3px 0", borderBottom:"1px solid rgba(255,255,255,0.04)" }}>
                   <span style={{ color:"#ff3b3b", fontSize:10, flexShrink:0 }}>✗</span>
@@ -832,7 +832,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
               ))}
               {primaryAsset.http_analysis.header_detail && Object.keys(primaryAsset.http_analysis.header_detail).length > 0 && (
                 <div style={{ marginTop:10 }}>
-                  <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:5 }}>PRESENT HEADERS</div>
+                  <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginBottom:5 }}>PRESENT HEADERS</div>
                   {Object.entries(primaryAsset.http_analysis.header_detail).map(([k]) => (
                     <div key={k} style={{ display:"flex", gap:6, alignItems:"center", padding:"3px 0", borderBottom:"1px solid rgba(255,255,255,0.04)" }}>
                       <span style={{ color:"#00e5a0", fontSize:10, flexShrink:0 }}>✓</span>
@@ -857,7 +857,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
                     <div style={{ height:3, background:"rgba(255,255,255,0.07)", borderRadius:2, marginTop:5 }}>
                       <div style={{ height:"100%", width:`${score}%`, background:scoreColor, borderRadius:2 }}/>
                     </div>
-                    <div style={{ color:"rgba(255,255,255,0.2)", fontSize:9, fontFamily:"monospace", marginTop:3 }}>
+                    <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginTop:3 }}>
                       {present} present · {missing} missing
                     </div>
                   </div>
@@ -865,7 +865,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
               })()}
             </div>
           ) : (
-            <div style={{ color:"rgba(255,255,255,0.25)", fontSize:12, fontFamily:"monospace", padding:"16px 0" }}>
+            <div style={{ color:"rgba(255,255,255,0.45)", fontSize:12, fontFamily:"monospace", padding:"16px 0" }}>
               No HTTP header data in scan.<br/>Run a scan with the Web Security module enabled.
             </div>
           )}
@@ -883,7 +883,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
               </div>
               {supply.risks?.length > 0 && (
                 <div>
-                  <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>TOP RISKY LIBRARIES</div>
+                  <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>TOP RISKY LIBRARIES</div>
                   <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
                     {supply.risks.slice(0,4).map((r,i) => {
                       const sc = RISK_CONFIG[r.severity?.toLowerCase()] || RISK_CONFIG.low;
@@ -895,20 +895,20 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
                             </span>
                             <span style={{ color:sc.color, fontSize:9, fontFamily:"monospace", fontWeight:700, flexShrink:0 }}>{r.severity}</span>
                           </div>
-                          {r.osv_id && <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginTop:2 }}>{r.osv_id}</div>}
+                          {r.osv_id && <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginTop:2 }}>{r.osv_id}</div>}
                           {r.cve_ids?.length > 0 && <div style={{ color:"rgba(245,197,24,0.5)", fontSize:9, fontFamily:"monospace", marginTop:1 }}>{r.cve_ids.slice(0,2).join(", ")}</div>}
                         </div>
                       );
                     })}
                     {supply.risks.length > 4 && (
-                      <div style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace", paddingTop:2 }}>+{supply.risks.length-4} more — see Inventory</div>
+                      <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace", paddingTop:2 }}>+{supply.risks.length-4} more — see Inventory</div>
                     )}
                   </div>
                 </div>
               )}
             </div>
           ) : (
-            <div style={{ color:"rgba(255,255,255,0.25)", fontSize:12, fontFamily:"monospace", padding:"16px 0" }}>No supply chain data.</div>
+            <div style={{ color:"rgba(255,255,255,0.45)", fontSize:12, fontFamily:"monospace", padding:"16px 0" }}>No supply chain data.</div>
           )}
           <div style={{ marginTop:10, background:"rgba(245,197,24,0.05)", border:"1px solid rgba(245,197,24,0.12)", borderRadius:3, padding:"8px 12px" }}>
             <div style={{ color:"rgba(255,255,255,0.3)", fontSize:10, fontFamily:"monospace", lineHeight:1.7 }}>
@@ -930,7 +930,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
           {/* Dark web breach detail */}
           {brand.hibp?.length > 0 && (
             <div style={{ marginBottom:10 }}>
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>BREACH HISTORY (HaveIBeenPwned)</div>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>BREACH HISTORY (HaveIBeenPwned)</div>
               {brand.hibp.slice(0,3).map((b,i) => (
                 <div key={i} style={{ padding:"4px 0", borderBottom:"1px solid rgba(255,255,255,0.04)" }}>
                   <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
@@ -946,24 +946,24 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
                   )}
                 </div>
               ))}
-              {brand.hibp.length > 3 && <div style={{ color:"rgba(255,255,255,0.2)", fontSize:9, fontFamily:"monospace", marginTop:4 }}>+{brand.hibp.length-3} more breaches</div>}
+              {brand.hibp.length > 3 && <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginTop:4 }}>+{brand.hibp.length-3} more breaches</div>}
             </div>
           )}
           {/* Social engineering summary */}
           {social && (social.emails.length > 0 || social.linkedin.length > 0) && (
             <div style={{ marginBottom:8 }}>
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>SOCIAL ENGINEERING EXPOSURE</div>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>SOCIAL ENGINEERING EXPOSURE</div>
               {social.emails.slice(0,2).map((em,i) => (
                 <div key={i} style={{ display:"flex", gap:6, alignItems:"center", padding:"3px 0" }}>
                   <span style={{ color:"#ff8c00", fontSize:10 }}>@</span>
                   <span style={{ color:"rgba(255,255,255,0.5)", fontSize:11, fontFamily:"monospace" }}>
                     {em.email || em}
-                    {em.position && <span style={{ color:"rgba(255,255,255,0.25)", marginLeft:4 }}>· {em.position}</span>}
+                    {em.position && <span style={{ color:"rgba(255,255,255,0.45)", marginLeft:4 }}>· {em.position}</span>}
                   </span>
                 </div>
               ))}
               {social.emails.length > 2 && (
-                <div style={{ color:"rgba(255,255,255,0.2)", fontSize:9, fontFamily:"monospace" }}>+{social.emails.length-2} more exposed emails</div>
+                <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace" }}>+{social.emails.length-2} more exposed emails</div>
               )}
               {social.risk_assessment && (
                 <div style={{ marginTop:4, color: social.risk_assessment.level==="High"?"#ff3b3b":social.risk_assessment.level==="Medium"?"#ff8c00":"#00e5a0",
@@ -975,7 +975,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
           )}
           {brand.typos>0 && (
             <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:4 }}>REGISTERED TYPOSQUATS</div>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginBottom:4 }}>REGISTERED TYPOSQUATS</div>
               {assets.filter(a=>a.type?.includes("Typosquat")).slice(0,3).map(a=>(
                 <div key={a.id} style={{ display:"flex", gap:8, alignItems:"center" }}>
                   <span style={{ color:"#ff3b3b", fontSize:10 }}>⚠</span>
@@ -987,7 +987,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
           {/* Mobile / API exposure block */}
           {primaryAsset?.mobile_api?.api_findings?.length > 0 && (
             <div style={{ marginTop:10, padding:"8px 0", borderTop:"1px solid rgba(255,255,255,0.06)" }}>
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>MOBILE / API EXPOSURE</div>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>MOBILE / API EXPOSURE</div>
               <div style={{ display:"flex", justifyContent:"space-between", padding:"3px 0" }}>
                 <span style={{ color:"rgba(255,255,255,0.45)", fontSize:11 }}>Exposed API Endpoints</span>
                 <span style={{ color:"#ff8c00", fontFamily:"monospace", fontSize:12, fontWeight:700 }}>{primaryAsset.mobile_api.api_findings.length}</span>
@@ -1004,7 +1004,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
                 </div>
               ))}
               {primaryAsset.mobile_api.api_findings.length > 2 && (
-                <div style={{ color:"rgba(255,255,255,0.2)", fontSize:9, fontFamily:"monospace", marginTop:2 }}>
+                <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginTop:2 }}>
                   +{primaryAsset.mobile_api.api_findings.length-2} more endpoints
                 </div>
               )}
@@ -1013,7 +1013,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
           {/* Shodan exposed services */}
           {osint.shodan?.length > 0 && (
             <div style={{ marginTop:8, padding:"8px 0", borderTop:"1px solid rgba(255,255,255,0.06)" }}>
-              <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>SHODAN EXPOSED SERVICES</div>
+              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace", marginBottom:6 }}>SHODAN EXPOSED SERVICES</div>
               {osint.shodan.slice(0,3).map((s, i) => (
                 <div key={i} style={{ display:"flex", gap:8, alignItems:"center", padding:"2px 0" }}>
                   {s.port && <span style={{ color:"#4d9eff", fontFamily:"monospace", fontSize:10 }}>:{s.port}</span>}
@@ -1063,7 +1063,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
         </div>
 
         {assets.length===0 ? (
-          <div style={{ color:"rgba(255,255,255,0.2)", fontSize:13, textAlign:"center", padding:"20px 0" }}>
+          <div style={{ color:"rgba(255,255,255,0.45)", fontSize:13, textAlign:"center", padding:"20px 0" }}>
             No scan data. <button onClick={()=>setShowImport(true)} style={{ background:"none", border:"none", color:"#00e5a0", cursor:"pointer", fontSize:13 }}>Import a scan</button> or <button onClick={()=>setActiveTab("scan")} style={{ background:"none", border:"none", color:"#00e5a0", cursor:"pointer", fontSize:13 }}>start a new scan</button>.
           </div>
         ) : critHighVulns.length===0 ? (
@@ -1085,12 +1085,12 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
                   <div style={{ flexShrink:0, textAlign:"right" }}>
                     <div style={{ color:cfg.color, fontSize:11, fontFamily:"monospace", fontWeight:700 }}>{v.asset}</div>
                     <div style={{ display:"flex", gap:6, justifyContent:"flex-end", marginTop:2 }}>
-                      {v.module && <span style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace" }}>{v.module}</span>}
+                      {v.module && <span style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace" }}>{v.module}</span>}
                       {v.cvss   && <span style={{ color:"rgba(255,140,0,0.6)", fontSize:10, fontFamily:"monospace" }}>CVSS {v.cvss}</span>}
                       {v.epss != null && v.epss > 0 && <span style={{ color:"rgba(255,100,100,0.6)", fontSize:10, fontFamily:"monospace" }}>EPSS {(v.epss*100).toFixed(1)}%</span>}
                     </div>
                   </div>
-                  <span style={{ color:"rgba(255,255,255,0.2)", fontSize:11 }}>↗</span>
+                  <span style={{ color:"rgba(255,255,255,0.45)", fontSize:11 }}>↗</span>
                 </div>
               );
             })}

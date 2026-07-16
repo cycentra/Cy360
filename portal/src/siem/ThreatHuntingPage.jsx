@@ -68,7 +68,7 @@ function KpiCard({ label, value, accent = "#00e5a0", sub, icon }) {
       <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 10, letterSpacing: "1.5px", marginTop: 5, textTransform: "uppercase" }}>
         {label}
       </div>
-      {sub && <div style={{ color: "rgba(255,255,255,0.22)", fontSize: 10, marginTop: 2 }}>{sub}</div>}
+      {sub && <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -120,7 +120,7 @@ function StatusBadge({ status }) {
 }
 
 function MitreTags({ tags = [] }) {
-  if (!tags || tags.length === 0) return <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>—</span>;
+  if (!tags || tags.length === 0) return <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>—</span>;
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
       {tags.slice(0, 4).map(t => (
@@ -131,7 +131,7 @@ function MitreTags({ tags = [] }) {
         }}>{t}</span>
       ))}
       {tags.length > 4 && (
-        <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>+{tags.length - 4}</span>
+        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>+{tags.length - 4}</span>
       )}
     </div>
   );
@@ -156,9 +156,9 @@ function FindingCountBadge({ count }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function HuntRulesTable({ rules, loading }) {
-  if (loading) return <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>;
+  if (loading) return <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>;
   if (!rules || rules.length === 0) {
-    return <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace", padding: "10px 0" }}>No hunt rules loaded</div>;
+    return <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace", padding: "10px 0" }}>No hunt rules loaded</div>;
   }
 
   const COL_WIDTHS = "50px 1fr 90px 1fr 70px 90px";
@@ -171,7 +171,7 @@ function HuntRulesTable({ rules, loading }) {
         borderBottom: "1px solid rgba(255,255,255,0.06)",
       }}>
         {["Rule ID", "Name", "Severity", "MITRE", "Window", "Open"].map(h => (
-          <span key={h} style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", textTransform: "uppercase", letterSpacing: "1px" }}>{h}</span>
+          <span key={h} style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", textTransform: "uppercase", letterSpacing: "1px" }}>{h}</span>
         ))}
       </div>
       <div style={{ maxHeight: 320, overflowY: "auto" }}>
@@ -190,7 +190,7 @@ function HuntRulesTable({ rules, loading }) {
                 {rule.name || "Unnamed Rule"}
               </div>
               {rule.description && (
-                <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {rule.description}
                 </div>
               )}
@@ -246,7 +246,7 @@ function AiAnalysisPanel({ analysis, analyzing, onAnalyze }) {
       {!analysis && !analyzing && (
         <div style={{
           flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-          color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace",
+          color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace",
           textAlign: "center", padding: "20px 0",
         }}>
           Run analysis to get CyMind AI insights<br />on current threat hunt findings
@@ -277,7 +277,7 @@ function AiAnalysisPanel({ analysis, analyzing, onAnalyze }) {
           }}>
             {analysis.analysis}
           </pre>
-          <div style={{ marginTop: 8, color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>
+          <div style={{ marginTop: 8, color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>
             Model: {analysis.model || "—"} · Rules analyzed: {analysis.rules_analyzed ?? "—"} · Findings: {analysis.findings_analyzed ?? "—"}
           </div>
         </div>
@@ -293,7 +293,7 @@ function AiAnalysisPanel({ analysis, analyzing, onAnalyze }) {
 function HuntFindingsTable({ findings, loading, onViewIncidents }) {
   const [expandedId, setExpandedId] = useState(null);
 
-  if (loading) return <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>;
+  if (loading) return <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>;
   if (!findings || findings.length === 0) {
     return (
       <div style={{ textAlign: "center", padding: "20px 0" }}>
@@ -315,7 +315,7 @@ function HuntFindingsTable({ findings, loading, onViewIncidents }) {
         borderBottom: "1px solid rgba(255,255,255,0.06)",
       }}>
         {["Incident ID", "Rule", "Entity", "Severity", "MITRE", "First Seen", "Status"].map(h => (
-          <span key={h} style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", textTransform: "uppercase", letterSpacing: "1px" }}>{h}</span>
+          <span key={h} style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", textTransform: "uppercase", letterSpacing: "1px" }}>{h}</span>
         ))}
       </div>
       <div style={{ maxHeight: 380, overflowY: "auto" }}>
@@ -361,7 +361,7 @@ function HuntFindingsTable({ findings, loading, onViewIncidents }) {
                   background: "rgba(0,0,0,0.25)", borderBottom: "1px solid rgba(255,255,255,0.04)",
                   padding: "10px 16px",
                 }}>
-                  <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 6 }}>AI SUMMARY</div>
+                  <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 6 }}>AI SUMMARY</div>
                   <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.6 }}>
                     {f.llm_summary}
                   </div>
@@ -489,7 +489,7 @@ export function ThreatHuntingPage({ setActiveTab }) {
             <strong style={{ color: "rgba(255,255,255,0.75)" }}>Endpoint Defence → CyScan Rules</strong>.
           </div>
           {lastRefresh && (
-            <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>
+            <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>
               Updated {lastRefresh.toLocaleTimeString()}
             </span>
           )}
@@ -580,7 +580,7 @@ export function ThreatHuntingPage({ setActiveTab }) {
       </div>
 
       {/* ── Footer ── */}
-      <div style={{ padding: "10px 0", color: "rgba(255,255,255,0.15)", fontSize: 9, fontFamily: "monospace", textAlign: "center" }}>
+      <div style={{ padding: "10px 0", color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", textAlign: "center" }}>
         Hunt engine refreshes every 60 s · Proactive rules run every 6 h · On-demand via CyMind AI
       </div>
     </div>

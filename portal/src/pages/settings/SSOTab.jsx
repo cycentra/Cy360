@@ -281,7 +281,7 @@ function SSOProviderCard({ onStatusMsg }) {
             placeholder={`${window.location.origin}/api/sso/callback`}
             readOnly={provider === "cycentra360"}
             style={{ ...INPUT, ...(provider === "cycentra360" ? { opacity: 0.6, cursor: "default" } : {}) }} />
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", marginTop: 4 }}>
             {provider === "cycentra360"
               ? "Fixed to the portal's SSO callback — already registered in the CyCentra 360 OIDC provider."
               : "Edit if your IdP requires a custom callback URL. Register this exact value as an authorised redirect URI in your IdP application settings."

@@ -110,7 +110,7 @@ function LineGraph({ scans, selectedScanId, onScanSelect }) {
             <line x1={PAD.left} y1={t.y} x2={W - PAD.right} y2={t.y}
               stroke="rgba(255,255,255,0.05)" strokeWidth="1" strokeDasharray="3 4"/>
             <text x={PAD.left - 5} y={t.y + 4} textAnchor="end"
-              fill="rgba(255,255,255,0.22)" fontSize="9" fontFamily="monospace">{t.lbl}</text>
+              fill="rgba(255,255,255,0.45)" fontSize="9" fontFamily="monospace">{t.lbl}</text>
           </g>
         ))}
 
@@ -178,7 +178,7 @@ function LineGraph({ scans, selectedScanId, onScanSelect }) {
         {/* X-axis date labels */}
         {pts.map((s, i) => (
           <text key={s.scan_id || i} x={xOf(i)} y={H - 4} textAnchor="middle"
-            fill={s.scan_id === selectedScanId ? "#00e5a0" : "rgba(255,255,255,0.2)"}
+            fill={s.scan_id === selectedScanId ? "#00e5a0" : "rgba(255,255,255,0.45)"}
             fontSize="9" fontFamily="monospace">
             {fmtShort(s.last_scan)}
           </text>
@@ -256,7 +256,7 @@ function BarChart({ scans, selectedScanId, onScanSelect }) {
       <div style={{ display: "flex", gap: 5, marginTop: 5 }}>
         {pts.map(s => (
           <div key={s.scan_id} style={{ flex: 1, textAlign: "center",
-            color: s.scan_id === selectedScanId ? "#00e5a0" : "rgba(255,255,255,0.18)",
+            color: s.scan_id === selectedScanId ? "#00e5a0" : "rgba(255,255,255,0.45)",
             fontSize: 8, fontFamily: "monospace" }}>
             {fmtShort(s.last_scan)}
           </div>
@@ -388,7 +388,7 @@ export function ScanHistoryPage({ scanHistory, selectedScanId, onScanSelect, his
                   {i === 0 && !isSelected && <span style={{ marginLeft: 8, color: "#4d9eff", fontSize: 9 }}>LATEST</span>}
                   {isSelected && <span style={{ marginLeft: 8, color: "#00e5a0", fontSize: 9 }}>● ACTIVE</span>}
                 </div>
-                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", marginTop: 2 }}>{s.scan_id}</div>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", marginTop: 2 }}>{s.scan_id}</div>
                 <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, marginTop: 2 }}>{s.domain}</div>
               </div>
 
@@ -402,14 +402,14 @@ export function ScanHistoryPage({ scanHistory, selectedScanId, onScanSelect, his
 
               <div style={{ textAlign: "right", color: "rgba(255,255,255,0.55)", fontSize: 12, fontFamily: "monospace" }}>{s.subdomains || 0}</div>
 
-              <div style={{ textAlign: "right", color: crit > 0 ? "#ff3b3b" : "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace", fontWeight: crit > 0 ? 700 : 400 }}>
+              <div style={{ textAlign: "right", color: crit > 0 ? "#ff3b3b" : "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace", fontWeight: crit > 0 ? 700 : 400 }}>
                 {crit > 0 ? `▲ ${crit}` : "—"}
               </div>
 
               <div style={{ textAlign: "right" }}>
                 {isSelected
                   ? <span style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace" }}>● Loaded</span>
-                  : <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>Load ↗</span>}
+                  : <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>Load ↗</span>}
               </div>
             </div>
           );

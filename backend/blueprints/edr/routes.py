@@ -447,13 +447,10 @@ def agent_heartbeat(agent_id):
         except Exception as exc:
             _log.debug("ITAM ARP ingest skipped: %s", exc)
 
-    # Read current platform version — agents self-update if their version differs
-    _agent_ver = ""
-    try:
-        from pathlib import Path as _Path
-        _agent_ver = _Path("/opt/cycentra/version").read_text().strip().lstrip("v")
-    except Exception:
-        pass
+    # CyEDR agent script's own version — NOT the platform release version
+    # (see _get_deployed_agent_version() docstring for why those must not
+    # be compared against each other).
+    _agent_ver = _get_deployed_agent_version()
 
     return jsonify({
         "status":            "ok",
@@ -1406,6 +1403,44 @@ def installer_commands():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _EDR_PKG_DIR = "/var/lib/cycentra-agent-packages/edr"
+
+_AGENT_SCRIPT_CANDIDATES = [
+    os.path.join(_EDR_PKG_DIR, "cyedr_agent.py"),
+    os.path.join(os.path.dirname(__file__), "../../..", "agent", "cyedr_agent.py"),
+]
+
+
+def _resolve_agent_script_path() -> str | None:
+    for fpath in _AGENT_SCRIPT_CANDIDATES:
+        fpath = os.path.realpath(fpath)
+        if os.path.exists(fpath):
+            return fpath
+    return None
+
+
+def _get_deployed_agent_version() -> str:
+    """
+    The CyEDR agent script's OWN version (AGENT_VERSION in cyedr_agent.py),
+    parsed from the exact file /installer/agent-script serves — NOT the
+    overall platform release version (/opt/cycentra/version). Those are
+    different numbering schemes: platform version bumps on every release,
+    AGENT_VERSION only bumps when the agent script itself changes. Comparing
+    a running agent's AGENT_VERSION against the platform version meant every
+    agent saw a "new version" on every unrelated platform release, downloaded
+    the byte-identical script (still declaring the old AGENT_VERSION), and
+    restarted — forever, in a ~10s self-update loop that never let telemetry
+    threads accumulate anything before the process exited again.
+    """
+    fpath = _resolve_agent_script_path()
+    if not fpath:
+        return ""
+    try:
+        text = open(fpath, "r").read()
+        m = re.search(r'^AGENT_VERSION\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
+
 
 # Deployment-token auth (for installer scripts; no session needed)
 def _require_deploy_token():

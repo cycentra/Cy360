@@ -350,7 +350,7 @@ export function LoginPage() {
             </form>
           )}
 
-          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 20, marginTop: 24, color: "rgba(255,255,255,0.2)", fontSize: 11, textAlign: "center", lineHeight: 1.6 }}>
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 20, marginTop: 24, color: "rgba(255,255,255,0.45)", fontSize: 11, textAlign: "center", lineHeight: 1.6 }}>
             Single sign-on gateway · one login for the entire platform
           </div>
           </>

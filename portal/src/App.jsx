@@ -46,7 +46,7 @@ export default function App() {
           <polygon points="12,6 18,10 18,14 12,18 6,14 6,10" fill="rgba(0,229,160,0.12)" stroke="#00e5a0" strokeWidth="0.75"/>
           <circle cx="12" cy="12" r="2" fill="#00e5a0"/>
         </svg>
-        <div style={{ color:"rgba(255,255,255,0.25)", fontSize:11, fontFamily:"monospace", letterSpacing:"1.5px" }}>LOADING</div>
+        <div style={{ color:"rgba(255,255,255,0.45)", fontSize:11, fontFamily:"monospace", letterSpacing:"1.5px" }}>LOADING</div>
       </div>
     </div>
   );

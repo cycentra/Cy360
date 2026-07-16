@@ -58,7 +58,7 @@ export function ScanHistoryDropdown({ scanHistory, selectedScanId, onSelect, his
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 60px 60px 60px", padding: "6px 14px", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
               {["Date / Domain", "Type", "Findings", "Subdomains"].map(h => (
-                <span key={h} style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", textTransform: "uppercase", letterSpacing: "1px" }}>{h}</span>
+                <span key={h} style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", textTransform: "uppercase", letterSpacing: "1px" }}>{h}</span>
               ))}
             </div>
             <div style={{ maxHeight: 400, overflowY: "auto" }}>
@@ -105,7 +105,7 @@ export function ScanHistoryDropdown({ scanHistory, selectedScanId, onSelect, his
                 );
               })}
             </div>
-            <div style={{ padding: "8px 14px", borderTop: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>
+            <div style={{ padding: "8px 14px", borderTop: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>
               Click any row to load that scan's results
             </div>
           </div>

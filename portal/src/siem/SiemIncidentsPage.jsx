@@ -37,7 +37,7 @@ function StatBadge({ status }) {
 function LiveDot({ connected }) {
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 5,
-      color: connected ? "#00e5a0" : "rgba(255,255,255,0.25)", fontSize: 10,
+      color: connected ? "#00e5a0" : "rgba(255,255,255,0.45)", fontSize: 10,
       fontFamily: "monospace" }}>
       <span style={{ width: 6, height: 6, borderRadius: "50%",
         background: connected ? "#00e5a0" : "rgba(255,255,255,0.2)",
@@ -198,7 +198,7 @@ function EvidenceCollectionPanel({ evidenceLog, coverage, collectedAt }) {
 
   if (items.length === 0) {
     return (
-      <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace",
+      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace",
         padding: "12px 0" }}>
         Evidence collection has not run yet or produced no items.
       </div>
@@ -232,7 +232,7 @@ function EvidenceCollectionPanel({ evidenceLog, coverage, collectedAt }) {
           </div>
         </div>
         {collectedAt && (
-          <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10,
+          <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10,
             fontFamily: "monospace", flexShrink: 0 }}>
             {fmtTs(collectedAt)}
           </span>
@@ -255,7 +255,7 @@ function EvidenceCollectionPanel({ evidenceLog, coverage, collectedAt }) {
                   cursor: hasData ? "pointer" : "default" }}>
                 <span style={{ width: 7, height: 7, borderRadius: "50%",
                   background: cfg.color, flexShrink: 0 }} />
-                <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9,
+                <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9,
                   fontFamily: "monospace", flexShrink: 0 }}>
                   {item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : "—"}
                 </span>
@@ -786,7 +786,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
               breakdown: inc.confidence_breakdown || {},
             }} />
             {inc.confidence_computed_at && (
-              <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace",
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace",
                 marginTop: 4, marginBottom: 8 }}>
                 Computed {fmtTs(inc.confidence_computed_at)}
               </div>
@@ -1000,7 +1000,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
                         <div style={{ height: "100%", width: `${conf}%`,
                           background: verdictColor, borderRadius: 3, transition: "width 0.4s" }} />
                       </div>
-                      <div style={{ fontSize: 9, color: "rgba(255,255,255,0.22)", marginTop: 3 }}>
+                      <div style={{ fontSize: 9, color: "rgba(255,255,255,0.45)", marginTop: 3 }}>
                         {conf >= 60 ? "Strong TI signal — treat as confirmed threat"
                           : conf >= 30 ? "Moderate TI signal — investigate further"
                           : conf > 0  ? "Weak TI signal — may be noise"
@@ -1084,7 +1084,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
                       ))}
                     </div>
                     {ti.checked_at && (
-                      <span style={{ fontSize: 9, color: "rgba(255,255,255,0.2)", fontFamily: "monospace" }}>
+                      <span style={{ fontSize: 9, color: "rgba(255,255,255,0.45)", fontFamily: "monospace" }}>
                         Checked {new Date(ti.checked_at).toLocaleString()}
                       </span>
                     )}
@@ -1285,7 +1285,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
                 })}
               </div>
               {inc.hypothesis_generated_at && (
-                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace",
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace",
                   marginTop: 4, marginBottom: 8 }}>
                   Generated {fmtTs(inc.hypothesis_generated_at)}
                 </div>
@@ -1355,7 +1355,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
                   </span>
                 )}
                 {soarStatus == null && (
-                  <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+                  <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>
                     Checking CySOAR status…
                   </span>
                 )}
@@ -1432,7 +1432,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
                               paddingBottom: i < items.length - 1 ? 10 : 0,
                               borderBottom: i < items.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none" }}>
                               <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
-                                <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10,
+                                <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10,
                                   fontFamily: "monospace", flexShrink: 0 }}>{i + 1}.</span>
                                 <span style={{ color: "white", fontSize: 12, fontWeight: 600 }}>
                                   {item.action}
@@ -1501,7 +1501,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
                                     HTTP {entry.http_status}
                                   </span>
                                 )}
-                                <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, marginLeft: "auto" }}>
+                                <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, marginLeft: "auto" }}>
                                   {entry.timestamp ? new Date(entry.timestamp).toLocaleString() : ""}
                                 </span>
                               </div>
@@ -1571,7 +1571,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
                           {p.outcome || "—"}
                         </span>
                         {p.confidence_at_resolution != null && (
-                          <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 9,
+                          <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9,
                             fontFamily: "monospace" }}>
                             {Math.round(p.confidence_at_resolution * 100)}% conf at close
                           </span>
@@ -1680,7 +1680,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
             {auditLoading && <div style={{ padding: "12px 16px", color: "rgba(255,255,255,0.3)",
               fontSize: 11, fontFamily: "monospace" }}>Loading…</div>}
             {!auditLoading && auditLog.length === 0 && (
-              <div style={{ padding: "12px 16px", color: "rgba(255,255,255,0.2)",
+              <div style={{ padding: "12px 16px", color: "rgba(255,255,255,0.45)",
                 fontSize: 11, fontFamily: "monospace" }}>No audit entries yet.</div>
             )}
             {auditLog.map((entry, i) => {
@@ -1709,7 +1709,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
                         fontSize: 10, fontFamily: "monospace" }}>
                         {isSystem ? "⚙ system" : `👤 ${entry.actor}`}
                       </span>
-                      <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, marginLeft: "auto" }}>
+                      <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, marginLeft: "auto" }}>
                         {entry.created_at ? new Date(entry.created_at).toLocaleString() : ""}
                       </span>
                     </div>
@@ -1853,7 +1853,7 @@ function IncidentDonut({ data, title, activeId, onSegmentClick }) {
       borderRadius: 6, padding: "14px 16px" }}>
       <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace",
         letterSpacing: "1.5px", marginBottom: 8 }}>{title}</div>
-      <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, padding: "30px 0",
+      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, padding: "30px 0",
         textAlign: "center" }}>No data</div>
     </div>
   );
@@ -1920,7 +1920,7 @@ function IncidentDonut({ data, title, activeId, onSegmentClick }) {
               <span style={{ color: arc.color, fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>
                 {arc.count}
               </span>
-              <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace",
+              <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace",
                 minWidth: 28, textAlign: "right" }}>{arc.pct}%</span>
             </div>
           ))}
@@ -1951,7 +1951,7 @@ function IncidentCategoryBar({ incidents }) {
       borderRadius: 6, padding: "14px 16px" }}>
       <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 9, fontFamily: "monospace",
         letterSpacing: "1.5px", marginBottom: 8 }}>CATEGORY DISTRIBUTION</div>
-      <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, padding: "30px 0", textAlign: "center" }}>
+      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, padding: "30px 0", textAlign: "center" }}>
         No categories
       </div>
     </div>
@@ -2042,7 +2042,7 @@ function IncidentTrendLine({ incidents }) {
         </button>
       </div>
       {open && !hasData ? (
-        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, padding: "20px 0", textAlign: "center" }}>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, padding: "20px 0", textAlign: "center" }}>
           No incidents recorded in this period
         </div>
       ) : open ? (
@@ -2053,7 +2053,7 @@ function IncidentTrendLine({ incidents }) {
               <g key={f}>
                 <line x1={P.l} y1={y} x2={W - P.r} y2={y} stroke="rgba(255,255,255,0.05)"
                   strokeWidth="1" strokeDasharray="3 4"/>
-                <text x={P.l - 4} y={y + 3} textAnchor="end" fill="rgba(255,255,255,0.2)"
+                <text x={P.l - 4} y={y + 3} textAnchor="end" fill="rgba(255,255,255,0.45)"
                   fontSize="7" fontFamily="monospace">{lbl}</text>
               </g>
             );
@@ -2072,7 +2072,7 @@ function IncidentTrendLine({ incidents }) {
                 onMouseLeave={() => setTooltip(null)}/>
               {i % 2 === 0 && (
                 <text x={xOf(i)} y={H - 2} textAnchor="middle"
-                  fill="rgba(255,255,255,0.18)" fontSize="7" fontFamily="monospace">
+                  fill="rgba(255,255,255,0.45)" fontSize="7" fontFamily="monospace">
                   {p.d.toLocaleDateString("en-US", { month: "numeric", day: "numeric" })}
                 </text>
               )}
@@ -2177,7 +2177,7 @@ function SeverityTrendPanel({ incidents }) {
             })}
             {[0, maxCount].map((v, i) => {
               const y = yScale(v);
-              return <text key={i} x={PAD.l - 4} y={y + 4} textAnchor="end" fill="rgba(255,255,255,0.25)" fontSize="9" fontFamily="monospace">{v}</text>;
+              return <text key={i} x={PAD.l - 4} y={y + 4} textAnchor="end" fill="rgba(255,255,255,0.45)" fontSize="9" fontFamily="monospace">{v}</text>;
             })}
             {buckets.map((b, i) => spikeDays[i] && (
               <line key={`spike-${i}`} x1={xScale(i)} x2={xScale(i)} y1={PAD.t} y2={H - PAD.b}
@@ -2191,7 +2191,7 @@ function SeverityTrendPanel({ incidents }) {
               <circle key={`dot-${i}`} cx={xScale(i)} cy={yScale(b.critical)} r="3" fill="#ff3b3b"/>
             ))}
             {labelIdx.map(i => (
-              <text key={i} x={xScale(i)} y={H - 4} textAnchor="middle" fill="rgba(255,255,255,0.2)" fontSize="8" fontFamily="monospace">
+              <text key={i} x={xScale(i)} y={H - 4} textAnchor="middle" fill="rgba(255,255,255,0.45)" fontSize="8" fontFamily="monospace">
                 {buckets[i].day.slice(5)}
               </text>
             ))}
@@ -2602,7 +2602,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
             </div>
 
             {fpPatterns.length === 0 ? (
-              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 12, fontFamily: "monospace",
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace",
                 padding: "20px 0", textAlign: "center" }}>
                 No learned patterns yet. Close incidents as False Positive to start building the pattern memory.
               </div>
@@ -2677,7 +2677,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
             Loading incidents…
           </div>
         ) : sortedIncidents.length === 0 ? (
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 13, padding: "40px 0", textAlign: "center" }}>
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 13, padding: "40px 0", textAlign: "center" }}>
             No incidents match the current filters.
           </div>
         ) : (
@@ -2762,7 +2762,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
                 <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
                   color: "rgba(255,255,255,0.7)", fontSize: 12 }}
                   title={(inc.affected_agent_names || []).join(", ") || undefined}>
-                  {(inc.affected_agent_names || []).join(", ") || <span style={{ color: "rgba(255,255,255,0.25)" }}>—</span>}
+                  {(inc.affected_agent_names || []).join(", ") || <span style={{ color: "rgba(255,255,255,0.45)" }}>—</span>}
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
                   {(inc.categories || []).slice(0, 2).map(cat => (
@@ -2934,7 +2934,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
                         {label} {rs?.toFixed(1)}
                       </span>
                     );
-                  })() : <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 11 }}>—</span>}
+                  })() : <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 11 }}>—</span>}
                 </div>
                 {/* FP PROB */}
                 <div style={{ display: "flex", alignItems: "center" }}>
@@ -2945,7 +2945,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
                           fontSize: 11, fontFamily: "monospace", fontWeight: 600 }}>
                         {inc.fp_probability?.toFixed(0)}%
                       </span>
-                    : <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 11 }}>—</span>}
+                    : <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 11 }}>—</span>}
                 </div>
                 <div style={{ color: "rgba(255,255,255,0.62)", fontSize: 10, fontFamily: "monospace" }}>
                   {fmtTs(inc.last_seen)}
@@ -2964,7 +2964,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
                 <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                   <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}
                     style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
-                      color: currentPage === 1 ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.5)",
+                      color: currentPage === 1 ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.5)",
                       padding: "3px 10px", borderRadius: 3,
                       cursor: currentPage === 1 ? "default" : "pointer",
                       fontSize: 11, fontFamily: "monospace" }}>‹ Prev</button>
@@ -2976,7 +2976,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
                       return acc;
                     }, [])
                     .map((p, i) => typeof p === "string" ? (
-                      <span key={`ell-${i}`} style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, padding: "0 2px" }}>…</span>
+                      <span key={`ell-${i}`} style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, padding: "0 2px" }}>…</span>
                     ) : (
                       <button key={p} onClick={() => setCurrentPage(p)}
                         style={{ background: p === currentPage ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.04)",
@@ -2987,7 +2987,7 @@ export function SiemIncidentsPage({ onOpenCase } = {}) {
                     ))}
                   <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}
                     style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
-                      color: currentPage === totalPages ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.5)",
+                      color: currentPage === totalPages ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.5)",
                       padding: "3px 10px", borderRadius: 3,
                       cursor: currentPage === totalPages ? "default" : "pointer",
                       fontSize: 11, fontFamily: "monospace" }}>Next ›</button>

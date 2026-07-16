@@ -161,7 +161,7 @@ function GuidancePanel() {
                 "Business_Continuity_DR_Plan_v2.3_2026.pdf",
               ].map(ex => (
                 <div key={ex} style={{ color: C.muted, fontSize: 9, fontFamily: "monospace" }}>
-                  <span style={{ color: "rgba(255,255,255,0.25)", marginRight: 8 }}>→</span>
+                  <span style={{ color: "rgba(255,255,255,0.45)", marginRight: 8 }}>→</span>
                   {ex}
                 </div>
               ))}

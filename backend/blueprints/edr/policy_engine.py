@@ -226,6 +226,30 @@ def ensure_policy_tables(db_url: str) -> None:
         _log.warning("EDR policy table init failed (non-fatal): %s", exc)
 
 
+def seed_default_policies_if_empty(db_url: str, created_by: str = "system") -> None:
+    """First-run convenience: give every policy-type tab non-empty content out of
+    the box instead of all 8 filter tabs showing 'No policies yet' on a fresh
+    install. No-op once any policy exists (checked before every insert)."""
+    conn = _db(db_url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM edr_policies")
+            if cur.fetchone()["n"] > 0:
+                return
+    except Exception as exc:
+        _log.warning("EDR default policy seed check failed (non-fatal): %s", exc)
+        return
+    finally:
+        conn.close()
+    for t in sorted(POLICY_TYPES):
+        label = t.replace("_", " ").title()
+        try:
+            create_policy(db_url, f"Default {label}", [t], {},
+                          f"Built-in default {label.lower()} policy", created_by)
+        except Exception as exc:
+            _log.warning("EDR default policy seed failed for %s (non-fatal): %s", t, exc)
+
+
 # ── Policy CRUD ───────────────────────────────────────────────────────────────
 
 def create_policy(db_url: str, name: str, policy_types: list[str], config: dict,

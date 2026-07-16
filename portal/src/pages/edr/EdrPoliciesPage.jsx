@@ -875,7 +875,9 @@ export default function EdrPoliciesPage() {
         <div style={{ textAlign:"center", color:"#555", padding:40 }}>Loading policies…</div>
       ) : filtered.length === 0 ? (
         <div style={{ textAlign:"center", color:"#555", padding:60, fontSize:13 }}>
-          No policies yet. Create one above to control endpoint behaviour.
+          {filterType
+            ? `No ${POLICY_TYPE_CFG[filterType]?.label || filterType} policies yet. Create one above and select this type to see it here.`
+            : "No policies yet. Create one above to control endpoint behaviour."}
         </div>
       ) : (
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>

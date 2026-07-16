@@ -52,7 +52,7 @@ export function LicenseBanner() {
           Upload a renewed license via SSH:&nbsp;
           <span style={{ color: "#00e5a0" }}>scp *.lic root@server:/opt/cycentra/cycentra.lic</span>
         </div>
-        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>
           Services remain running. Only portal access is locked. Contact cycentra.com to renew.
         </div>
       </div>

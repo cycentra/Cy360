@@ -123,7 +123,7 @@ function AddonInstallFlow({ mod, onInstall, onCancel }) {
             <div key={f.key} style={{ marginBottom: 14 }}>
               <label style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", letterSpacing: "1px", textTransform: "uppercase", display: "block", marginBottom: 6 }}>{f.label}</label>
               <input type={f.type || "text"} value={config[f.key] || ""} onChange={e => update(f.key, e.target.value)} style={inpStyle} />
-              {f.help && <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, marginTop: 4 }}>{f.help}</div>}
+              {f.help && <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, marginTop: 4 }}>{f.help}</div>}
             </div>
           ))}
           {(mod.configFields || []).length === 0 && (
@@ -455,9 +455,9 @@ function CyMindSection() {
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
         <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace" }}>MCP Bridge:</span>
         {mcpStatus === null ? (
-          <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>checking…</span>
+          <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>checking…</span>
         ) : (
-          <span style={{ background: mcpStatus.enabled ? "rgba(0,229,160,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${mcpStatus.enabled ? "rgba(0,229,160,0.25)" : "rgba(255,255,255,0.08)"}`, borderRadius: 3, padding: "2px 8px", color: mcpStatus.enabled ? "#00e5a0" : "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>
+          <span style={{ background: mcpStatus.enabled ? "rgba(0,229,160,0.08)" : "rgba(255,255,255,0.03)", border: `1px solid ${mcpStatus.enabled ? "rgba(0,229,160,0.25)" : "rgba(255,255,255,0.08)"}`, borderRadius: 3, padding: "2px 8px", color: mcpStatus.enabled ? "#00e5a0" : "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", fontWeight: 700 }}>
             {mcpStatus.enabled ? "ENABLED" : "DISABLED"}
           </span>
         )}
@@ -627,7 +627,7 @@ function McpApiKeysSection() {
       </div>
       {mcpKeysEp && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 4, padding: "8px 12px" }}>
-          <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>ENDPOINT:</span>
+          <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>ENDPOINT:</span>
           <code style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace", flex: 1, wordBreak: "break-all" }}>{mcpKeysEp}</code>
         </div>
       )}
@@ -648,9 +648,9 @@ function McpApiKeysSection() {
         </div>
       )}
       {mcpKeysLoading ? (
-        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>Loading keys…</div>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace" }}>Loading keys…</div>
       ) : mcpKeys.length === 0 ? (
-        <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>No API keys generated yet.</div>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace" }}>No API keys generated yet.</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {mcpKeys.map(k => (
@@ -658,7 +658,7 @@ function McpApiKeysSection() {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 12, fontFamily: "monospace", fontWeight: 700 }}>{k.name}</div>
                 {k.description && <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", marginTop: 1 }}>{k.description}</div>}
-                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", marginTop: 1 }}>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", marginTop: 1 }}>
                   Created {k.created_at ? new Date(k.created_at).toLocaleDateString() : "—"}
                   {k.last_used ? ` · Last used ${new Date(k.last_used).toLocaleDateString()}` : ""}
                 </div>

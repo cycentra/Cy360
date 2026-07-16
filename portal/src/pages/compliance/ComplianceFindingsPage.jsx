@@ -424,7 +424,7 @@ function FindingsTab() {
                 color: C.muted, fontFamily: "monospace", fontSize: 12 }}>
                 No findings match the selected filters.
                 {status === "open" && total === 0 && (
-                  <div style={{ marginTop: 8, color: "rgba(255,255,255,0.25)", fontSize: 11 }}>
+                  <div style={{ marginTop: 8, color: "rgba(255,255,255,0.45)", fontSize: 11 }}>
                     Click "Auto-Generate from Alerts" to create findings from enriched alerts.
                   </div>
                 )}
@@ -477,7 +477,7 @@ function FindingsTab() {
                       </div>
                     )}
                     {f.last_seen_at && (
-                      <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9,
+                      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9,
                         fontFamily: "monospace", marginTop: 2 }}>
                         Last seen: {fmtTs(f.last_seen_at)}
                       </div>
@@ -490,7 +490,7 @@ function FindingsTab() {
                       <span style={{ color: C.orange, fontSize: 12,
                         fontFamily: "monospace", fontWeight: 700 }}>{f.alert_count}</span>
                     ) : (
-                      <span style={{ color: "rgba(255,255,255,0.15)", fontSize: 10,
+                      <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10,
                         fontFamily: "monospace" }}>—</span>
                     )}
                   </td>

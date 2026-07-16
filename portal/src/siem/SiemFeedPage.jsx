@@ -58,7 +58,7 @@ export function SiemFeedPage({ data }) {
 
       {alerts.length === 0 && (
         <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, padding: "48px 24px", textAlign: "center" }}>
-          <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 13, fontFamily: "monospace" }}>
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 13, fontFamily: "monospace" }}>
             No alerts — run a scan to populate the alert feed.
           </div>
         </div>
@@ -126,10 +126,10 @@ export function SiemFeedPage({ data }) {
 
                 {/* Timestamp + chevron */}
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, flexShrink: 0 }}>
-                  <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>
+                  <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>
                     {fmtDate(a.timestamp || a.discovered_at)}
                   </span>
-                  <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9 }}>{isOpen ? "▲" : "▼"}</span>
+                  <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9 }}>{isOpen ? "▲" : "▼"}</span>
                 </div>
               </div>
 

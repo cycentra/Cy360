@@ -44,7 +44,7 @@ const STATUS_COLORS = {
   partial:      C.orange,
   gap:          C.red,
   breach:       C.red,
-  not_assessed: "rgba(255,255,255,0.2)",
+  not_assessed: "rgba(255,255,255,0.45)",
 };
 const STATUS_LABELS = {
   compliant:    "Compliant",
@@ -123,7 +123,7 @@ function ControlsList({ framework }) {
           Loading controls…
         </div>
       ) : filtered.length === 0 ? (
-        <div style={{ color: "rgba(255,255,255,0.15)", fontFamily: "monospace", fontSize: 11,
+        <div style={{ color: "rgba(255,255,255,0.45)", fontFamily: "monospace", fontSize: 11,
           padding: 20 }}>
           {controls.length === 0
             ? "No controls found. Complete the questionnaire to populate this view."
@@ -287,12 +287,12 @@ function QuestionRow({ q, response, onSave, onReset, saving, resetting }) {
                 onClick={e => { e.stopPropagation(); onReset(q.question_id); }}
                 disabled={resetting}
                 title="Clear this answer"
-                style={{ background: "none", border: "none", color: "rgba(255,255,255,0.2)",
+                style={{ background: "none", border: "none", color: "rgba(255,255,255,0.45)",
                   cursor: "pointer", fontSize: 12, padding: "2px 4px", lineHeight: 1,
                   flexShrink: 0, marginTop: 1,
                   transition: "color 0.15s" }}
                 onMouseEnter={e => (e.currentTarget.style.color = C.red)}
-                onMouseLeave={e => (e.currentTarget.style.color = "rgba(255,255,255,0.2)")}>
+                onMouseLeave={e => (e.currentTarget.style.color = "rgba(255,255,255,0.45)")}>
                 {resetting ? "…" : "✕"}
               </button>
             )}
@@ -903,8 +903,8 @@ const SOA_STATUS_COLORS = {
   partial:      C.orange,
   gap:          C.red,
   breach:       C.red,
-  excluded:     "rgba(255,255,255,0.2)",
-  not_assessed: "rgba(255,255,255,0.15)",
+  excluded:     "rgba(255,255,255,0.45)",
+  not_assessed: "rgba(255,255,255,0.45)",
 };
 
 const SOA_STATUS_LABELS = {
@@ -1514,7 +1514,7 @@ export function ComplianceAssessmentPage() {
 
           {/* ── Global reset ────────────────────────────────────────────── */}
           <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 8, marginTop: 4 }}>
-            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 7, fontFamily: "monospace",
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 7, fontFamily: "monospace",
               textTransform: "uppercase", letterSpacing: "1px", marginBottom: 6 }}>
               Danger zone
             </div>

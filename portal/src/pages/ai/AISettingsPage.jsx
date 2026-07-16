@@ -168,7 +168,7 @@ export function AISettingsPage({ aiConfig, onSave, embedded = false }) {
                   style={{ width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(168,85,247,0.25)", color:"white", padding:"9px 12px", borderRadius:4, fontSize:12, fontFamily:"monospace", outline:"none", boxSizing:"border-box" }}/>
               </div>
             ))}
-            <div style={{ color:"rgba(255,255,255,0.2)", fontSize:10, fontFamily:"monospace" }}>
+            <div style={{ color:"rgba(255,255,255,0.45)", fontSize:10, fontFamily:"monospace" }}>
               {cymindMemory.baseUrl && cymindMemory.apiKey
                 ? <span style={{ color:"#a855f7" }}>✓ Configured — incidents will be indexed automatically</span>
                 : cymindMemory.baseUrl
@@ -195,7 +195,7 @@ export function AISettingsPage({ aiConfig, onSave, embedded = false }) {
               <textarea value={prompts[activePromptTab] || ""} onChange={e => updatePrompt(activePromptTab, e.target.value)}
                 style={{ width:"100%", height:280, background:"transparent", border:"none", color:"rgba(255,255,255,0.7)", fontFamily:"monospace", fontSize:11, lineHeight:1.6, outline:"none", resize:"vertical", boxSizing:"border-box" }}/>
               <button onClick={() => resetPrompt(activePromptTab)}
-                style={{ background:"transparent", color:"rgba(255,255,255,0.25)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:3, padding:"4px 12px", fontFamily:"monospace", fontSize:10, cursor:"pointer", marginTop:8 }}>
+                style={{ background:"transparent", color:"rgba(255,255,255,0.45)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:3, padding:"4px 12px", fontFamily:"monospace", fontSize:10, cursor:"pointer", marginTop:8 }}>
                 Reset to default
               </button>
             </div>

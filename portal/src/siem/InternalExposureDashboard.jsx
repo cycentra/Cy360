@@ -163,7 +163,7 @@ function KpiCard({ label, value, accent = "#00e5a0", sub, icon }) {
       <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 10, letterSpacing: "1.5px", marginTop: 5, textTransform: "uppercase" }}>
         {label}
       </div>
-      {sub && <div style={{ color: "rgba(255,255,255,0.22)", fontSize: 10, marginTop: 2 }}>{sub}</div>}
+      {sub && <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -202,7 +202,7 @@ function Panel({ title, accent = "#00e5a0", badge, onViewAll, children, style = 
 
 function OfflineMsg({ label = "CySIEM engine offline" }) {
   return (
-    <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace", padding: "10px 0" }}>
+    <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace", padding: "10px 0" }}>
       {label}
     </div>
   );
@@ -227,7 +227,7 @@ function IncidentStatePanel({ statusCounts, total, loading, offline, onViewAll }
   return (
     <Panel title="Incident State Overview" accent="#4d9eff"
       badge={total > 0 ? `${total} TOTAL` : null} onViewAll={onViewAll}>
-      {loading  && <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>}
+      {loading  && <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>}
       {!loading && offline  && <OfflineMsg />}
       {!loading && !offline && statusCounts && (
         <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
@@ -240,7 +240,7 @@ function IncidentStatePanel({ statusCounts, total, loading, offline, onViewAll }
                 <div style={{ flex: 1, height: 12, background: "rgba(255,255,255,0.05)", borderRadius: 2, overflow: "hidden" }}>
                   <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 2, transition: "width 0.6s ease", minWidth: val > 0 ? 4 : 0 }} />
                 </div>
-                <div style={{ width: 28, color: val > 0 ? color : "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace", fontWeight: 700, textAlign: "right", flexShrink: 0 }}>
+                <div style={{ width: 28, color: val > 0 ? color : "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace", fontWeight: 700, textAlign: "right", flexShrink: 0 }}>
                   {val}
                 </div>
               </div>
@@ -296,7 +296,7 @@ function SeverityDonut({ incidents, severityCounts, totalOpen }) {
             <div style={{ width: 8, height: 8, borderRadius: "50%", background: colors[i], flexShrink: 0 }}/>
             <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, width: 64 }}>{k.charAt(0).toUpperCase() + k.slice(1)}</span>
             <span style={{ color: colors[i], fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{counts[k]}</span>
-            <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>
+            <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>
               ({total > 1 ? Math.round((counts[k] / totalIncidents) * 100) : 0}%)
             </span>
           </div>
@@ -331,7 +331,7 @@ function CategoryHistogram({ incidents }) {
   const maxVal = sorted.length ? sorted[0][1] : 1;
 
   if (!sorted.length) {
-    return <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>No category data yet</div>;
+    return <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace" }}>No category data yet</div>;
   }
 
   return (
@@ -415,7 +415,7 @@ function IncidentTrendChartSeverity({ incidents }) {
         {/* Y-axis labels */}
         {[0, maxCount].map((v, i) => {
           const y = yScale(v);
-          return <text key={i} x={PAD.l - 4} y={y + 4} textAnchor="end" fill="rgba(255,255,255,0.25)" fontSize="8" fontFamily="monospace">{v}</text>;
+          return <text key={i} x={PAD.l - 4} y={y + 4} textAnchor="end" fill="rgba(255,255,255,0.45)" fontSize="8" fontFamily="monospace">{v}</text>;
         })}
         {/* Spike vertical lines */}
         {buckets.map((b, i) => spikeDays[i] && (
@@ -433,7 +433,7 @@ function IncidentTrendChartSeverity({ incidents }) {
         ))}
         {/* X-axis date labels */}
         {labelIdx.map(i => (
-          <text key={i} x={xScale(i)} y={H - 4} textAnchor="middle" fill="rgba(255,255,255,0.2)" fontSize="7" fontFamily="monospace">
+          <text key={i} x={xScale(i)} y={H - 4} textAnchor="middle" fill="rgba(255,255,255,0.45)" fontSize="7" fontFamily="monospace">
             {buckets[i].day.slice(5)}
           </text>
         ))}
@@ -447,7 +447,7 @@ function IncidentTrendChartSeverity({ incidents }) {
             ■ {k.charAt(0).toUpperCase() + k.slice(1)} {sevTotals[k]}
           </span>
         ))}
-        <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", marginLeft: "auto" }}>
+        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", marginLeft: "auto" }}>
           {grandTotal} total
         </span>
       </div>
@@ -498,12 +498,12 @@ function EntityRiskHistogram({ riskScores }) {
       </div>
       <div style={{ display: "flex", gap: 4 }}>
         {buckets.map((b, i) => (
-          <div key={i} style={{ flex: 1, color: "rgba(255,255,255,0.18)", fontSize: 7, fontFamily: "monospace", textAlign: "center" }}>
+          <div key={i} style={{ flex: 1, color: "rgba(255,255,255,0.45)", fontSize: 7, fontFamily: "monospace", textAlign: "center" }}>
             {i * 10}
           </div>
         ))}
       </div>
-      <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace", marginTop: 4, textAlign: "center" }}>
+      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", marginTop: 4, textAlign: "center" }}>
         Risk Score Distribution (0–100)
       </div>
     </div>
@@ -573,7 +573,7 @@ function UebaAnomalyChart({ uebaUsers, totalUebaAlerts = 0 }) {
   return (
     <div>
       <div style={{ marginBottom: 10, display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <span style={{ color: "rgba(255,255,255,0.25)", fontSize: 10, fontFamily: "monospace" }}>
+        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>
           {withAnomaly} of {uebaUsers.length} entities with active anomalies
         </span>
       </div>
@@ -644,7 +644,7 @@ function AiDispositionWidget({ incidents, stats, caseMetrics }) {
       {/* Stacked bar: AI vs Manual */}
       {totalClosed > 0 && (
         <div style={{ marginBottom: 16 }}>
-          <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", marginBottom: 5 }}>CLOSURE BREAKDOWN</div>
+          <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", marginBottom: 5 }}>CLOSURE BREAKDOWN</div>
           <div style={{ height: 14, borderRadius: 3, overflow: "hidden", display: "flex", gap: 1 }}>
             <div style={{ width: `${aiPct}%`, background: "#00e5a0", transition: "width 0.7s ease" }} title={`AI: ${aiCount}`}/>
             <div style={{ flex: 1, background: "#4d9eff", opacity: 0.6 }} title={`Manual: ${manualTotalCount}`}/>
@@ -665,13 +665,13 @@ function AiDispositionWidget({ incidents, stats, caseMetrics }) {
                 <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace" }}>{label}</span>
                 <div style={{ display: "flex", gap: 8 }}>
                   <span style={{ color, fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{value}</span>
-                  <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>({pct}%)</span>
+                  <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>({pct}%)</span>
                 </div>
               </div>
               <div style={{ height: 4, background: "rgba(255,255,255,0.05)", borderRadius: 2 }}>
                 <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 2, transition: "width 0.5s ease", opacity: 0.75 }} />
               </div>
-              <div style={{ color: "rgba(255,255,255,0.18)", fontSize: 9, fontFamily: "monospace", marginTop: 2 }}>{sub}</div>
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", marginTop: 2 }}>{sub}</div>
             </div>
           </div>
         ))}
@@ -711,7 +711,7 @@ function KillChainFunnel({ incidents, killChainCounts }) {
             <div style={{ flex: 1, height: 8, background: "rgba(255,255,255,0.05)", borderRadius: 2, overflow: "hidden" }}>
               <div style={{ width: `${barPct}%`, height: "100%", background: KC_COLORS[i], borderRadius: 2, transition: "width 0.5s ease", minWidth: cnt > 0 ? 3 : 0 }} />
             </div>
-            <div style={{ width: 20, color: cnt > 0 ? KC_COLORS[i] : "rgba(255,255,255,0.15)", fontSize: 11, fontFamily: "monospace", fontWeight: 700, textAlign: "right", flexShrink: 0 }}>
+            <div style={{ width: 20, color: cnt > 0 ? KC_COLORS[i] : "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace", fontWeight: 700, textAlign: "right", flexShrink: 0 }}>
               {cnt}
             </div>
           </div>
@@ -735,7 +735,7 @@ function entityRiskLevel(score) {
 function TopRiskyEntities({ riskScores, onView }) {
   const top = riskScores.slice(0, 8);
   if (!top.length) {
-    return <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>No entity risk data yet</div>;
+    return <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace" }}>No entity risk data yet</div>;
   }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -749,7 +749,7 @@ function TopRiskyEntities({ riskScores, onView }) {
               borderLeft: `2px solid ${lvl.color}`, cursor: onView ? "pointer" : "default" }}
             onClick={() => onView && onView(e)}
           >
-            <div style={{ width: 18, color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace", textAlign: "right", flexShrink: 0 }}>{i + 1}</div>
+            <div style={{ width: 18, color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", textAlign: "right", flexShrink: 0 }}>{i + 1}</div>
             <div style={{ fontSize: 13 }}>{e.entity_type === "user" ? "👤" : "🖥️"}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 11, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -765,7 +765,7 @@ function TopRiskyEntities({ riskScores, onView }) {
             </div>
             {e.trend === "rising"  && <span style={{ color: "#ff3b3b", fontSize: 12 }}>↑</span>}
             {e.trend === "falling" && <span style={{ color: "#00e5a0", fontSize: 12 }}>↓</span>}
-            {e.trend === "stable"  && <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 12 }}>→</span>}
+            {e.trend === "stable"  && <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 12 }}>→</span>}
           </div>
         );
       })}
@@ -827,7 +827,7 @@ function EntityTypeDonut({ riskScores }) {
                 {(meta.label || type).charAt(0).toUpperCase() + (meta.label || type).slice(1)}
               </span>
               <span style={{ color, fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{cnt}</span>
-              <span style={{ color: "rgba(255,255,255,0.18)", fontSize: 9, fontFamily: "monospace" }}>
+              <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>
                 ({Math.round((cnt / totalEnt) * 100)}%)
               </span>
             </div>
@@ -932,7 +932,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
             CySIEM correlation engine · UEBA behavioral analytics · Entity risk intelligence
           </p>
           {lastRefresh && (
-            <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 10, fontFamily: "monospace" }}>
+            <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace" }}>
               Updated {lastRefresh.toLocaleTimeString()}
             </span>
           )}
@@ -1021,7 +1021,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
             {/* Status mini-bar */}
             {statusEntries.length > 0 && (
               <div style={{ flex: 1, minWidth: 160, display: "flex", flexDirection: "column", justifyContent: "center", gap: 4 }}>
-                <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 8, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 2 }}>BY STATUS</div>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 8, fontFamily: "monospace", letterSpacing: "1px", marginBottom: 2 }}>BY STATUS</div>
                 {statusEntries.map(([st, cnt]) => (
                   <div key={st} style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <div style={{ flex: 1, height: 4, background: "rgba(255,255,255,0.05)", borderRadius: 2, overflow: "hidden" }}>
@@ -1029,7 +1029,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
                         background: STATUS_COLOR[st] || "#888", borderRadius: 2 }} />
                     </div>
                     <span style={{ color: STATUS_COLOR[st] || "#888", fontSize: 8, fontFamily: "monospace", minWidth: 20, textAlign: "right" }}>{cnt}</span>
-                    <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 8, fontFamily: "monospace", minWidth: 64 }}>{st.toUpperCase()}</span>
+                    <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 8, fontFamily: "monospace", minWidth: 64 }}>{st.toUpperCase()}</span>
                   </div>
                 ))}
               </div>
@@ -1037,7 +1037,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
 
             {/* Source split + note */}
             <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: 6, minWidth: 140 }}>
-              <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 8, fontFamily: "monospace", letterSpacing: "1px" }}>SOURCE</div>
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 8, fontFamily: "monospace", letterSpacing: "1px" }}>SOURCE</div>
               <div style={{ display: "flex", gap: 12 }}>
                 <div style={{ textAlign: "center" }}>
                   <div style={{ color: "#ff8c00", fontSize: 16, fontWeight: 700, fontFamily: "monospace" }}>{asm_vs_siem.asm || 0}</div>
@@ -1073,13 +1073,13 @@ export function InternalExposureDashboard({ setActiveTab }) {
         />
 
         <Panel title="Severity Distribution" accent="#ff3b3b">
-          {loading  ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
+          {loading  ? <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
           : offline ? <OfflineMsg />
           : <SeverityDonut incidents={incidents} severityCounts={stats?.severity_counts_open} totalOpen={openInc} />}
         </Panel>
 
         <Panel title="Incident Categories" accent="#b06eff">
-          {loading  ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
+          {loading  ? <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
           : offline ? <OfflineMsg />
           : <CategoryHistogram incidents={incidents} />}
         </Panel>
@@ -1090,12 +1090,12 @@ export function InternalExposureDashboard({ setActiveTab }) {
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
 
         <Panel title="30-Day Incident Trend by Severity" accent="#00e5a0">
-          {loading  ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
+          {loading  ? <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
           : offline ? <OfflineMsg />
           : (
             <>
               <IncidentTrendChartSeverity incidents={incidents} />
-              <div style={{ marginTop: 8, color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>
+              <div style={{ marginTop: 8, color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>
                 Each point = incident first seen on that day
               </div>
             </>
@@ -1103,16 +1103,16 @@ export function InternalExposureDashboard({ setActiveTab }) {
         </Panel>
 
         <Panel title="Entity Risk Distribution" accent="#ff8c00">
-          {loading  ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
+          {loading  ? <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
           : offline ? <OfflineMsg />
-          : riskScores.length === 0 ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>No entity risk data</div>
+          : riskScores.length === 0 ? <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace" }}>No entity risk data</div>
           : <EntityRiskHistogram riskScores={riskScores} />}
         </Panel>
 
         <Panel title="Entity Type Breakdown" accent="#4d9eff">
-          {loading  ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
+          {loading  ? <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
           : offline ? <OfflineMsg />
-          : riskScores.length === 0 ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace" }}>No entity data</div>
+          : riskScores.length === 0 ? <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace" }}>No entity data</div>
           : <EntityTypeDonut riskScores={riskScores} />}
         </Panel>
 
@@ -1124,7 +1124,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
         <Panel title="AI Disposition — Auto-Closed vs Manual"
           accent="#00e5a0"
           badge={aiAutoClose > 0 ? `${aiAutoClose} AI RESOLVED` : null}>
-          {loading  ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
+          {loading  ? <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
           : offline ? <OfflineMsg />
           : <AiDispositionWidget incidents={incidents} stats={stats} caseMetrics={caseMetrics} />}
         </Panel>
@@ -1132,7 +1132,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
         <Panel title="UEBA Anomaly Distribution"
           accent="#b06eff"
           onViewAll={() => setActiveTab?.("siem-ueba")}>
-          {loading  ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
+          {loading  ? <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
           : offline ? <OfflineMsg />
           : <UebaAnomalyChart uebaUsers={uebaUsers} totalUebaAlerts={stats?.ueba_alerts || stats?.total_ueba_alerts || 0} />}
         </Panel>
@@ -1143,7 +1143,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 14, marginBottom: 14 }}>
 
         <Panel title="Kill Chain Stage Distribution" accent="#ff3b3b">
-          {loading  ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
+          {loading  ? <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
           : offline ? <OfflineMsg />
           : <KillChainFunnel incidents={incidents} killChainCounts={stats?.kill_chain_counts} />}
         </Panel>
@@ -1151,7 +1151,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
         <Panel title="Top Risky Entities"
           accent="#ff8c00"
           onViewAll={() => setActiveTab?.("siem-risk")}>
-          {loading  ? <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
+          {loading  ? <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, fontFamily: "monospace" }}>Loading…</div>
           : offline ? <OfflineMsg />
           : <TopRiskyEntities riskScores={riskScores} onView={() => setActiveTab?.("siem-risk")} />}
         </Panel>
@@ -1167,7 +1167,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
           onViewAll={() => setActiveTab?.("threat-hunting")}
         >
           {!huntSummary ? (
-            <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 11, fontFamily: "monospace", padding: "8px 0" }}>
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace", padding: "8px 0" }}>
               {loading ? "Loading…" : "Hunt engine offline"}
             </div>
           ) : (
@@ -1188,7 +1188,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
                 </div>
               ))}
               <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", justifyContent: "center", gap: 4 }}>
-                <div style={{ color: "rgba(255,255,255,0.2)", fontSize: 9, fontFamily: "monospace" }}>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>
                   {huntSummary.rules_total ?? "—"} rules loaded · runs every 6h
                 </div>
                 {huntSummary.top_rules?.slice(0, 2).map(r => (
@@ -1203,7 +1203,7 @@ export function InternalExposureDashboard({ setActiveTab }) {
       </div>
 
       {/* ── Footer note ── */}
-      <div style={{ padding: "10px 0", color: "rgba(255,255,255,0.15)", fontSize: 9, fontFamily: "monospace", textAlign: "center" }}>
+      <div style={{ padding: "10px 0", color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", textAlign: "center" }}>
         Dashboard refreshes every 60 s · Data sourced from CySIEM Correlation Engine · UEBA Baseline Engine · Entity Risk Scorer
       </div>
     </div>

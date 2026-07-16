@@ -231,7 +231,7 @@ export function ComplianceLiveAlertsPage() {
                 {/* Severity + level */}
                 <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
                   <SevBadge sev={a.severity} />
-                  <div style={{ color: "rgba(255,255,255,0.25)", fontSize: 9, fontFamily: "monospace", marginTop: 3 }}>
+                  <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace", marginTop: 3 }}>
                     Lvl {a.rule_level} · Score {a.base_score.toFixed(1)}
                   </div>
                 </td>
@@ -261,21 +261,21 @@ export function ComplianceLiveAlertsPage() {
                       {(a.compliance_frameworks || []).map(fw => <FrameworkBadge key={fw} fw={fw} />)}
                     </div>
                   ) : (
-                    <span style={{ color: "rgba(255,255,255,0.15)", fontSize: 9, fontFamily: "monospace" }}>no mapping</span>
+                    <span style={{ color: "rgba(255,255,255,0.45)", fontSize: 9, fontFamily: "monospace" }}>no mapping</span>
                   )}
                   <ControlBadges controls={a.controls} />
                 </td>
                 {/* Agent */}
                 <td style={{ padding: "10px 14px", color: C.muted, fontSize: 10, fontFamily: "monospace" }}>
                   {a.agent_name || "—"}
-                  {a.agent_ip && <div style={{ fontSize: 9, color: "rgba(255,255,255,0.2)" }}>{a.agent_ip}</div>}
+                  {a.agent_ip && <div style={{ fontSize: 9, color: "rgba(255,255,255,0.45)" }}>{a.agent_ip}</div>}
                 </td>
                 {/* Incident link */}
                 <td style={{ padding: "10px 14px", fontSize: 10, fontFamily: "monospace" }}>
                   {a.incident_id ? (
                     <span style={{ color: C.orange }}>{a.incident_id}</span>
                   ) : (
-                    <span style={{ color: "rgba(255,255,255,0.15)" }}>—</span>
+                    <span style={{ color: "rgba(255,255,255,0.45)" }}>—</span>
                   )}
                 </td>
                 {/* Time */}

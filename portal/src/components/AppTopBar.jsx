@@ -40,9 +40,9 @@ export function AppTopBar({ user, data, scanHistory, selectedScanId, onScanSelec
           <div style={{ width:28, height:28, borderRadius:"50%", background:"rgba(0,229,160,0.12)", border:"1.5px solid rgba(0,229,160,0.3)", display:"flex", alignItems:"center", justifyContent:"center", color:"#00e5a0", fontFamily:"monospace", fontSize:10, fontWeight:700 }}>{user.avatar}</div>
           <div style={{ lineHeight:1.3 }}>
             <div style={{ color:"rgba(255,255,255,0.75)", fontSize:12, fontWeight:600 }}>{user.name}</div>
-            <div style={{ color:"rgba(255,255,255,0.25)", fontSize:9, fontFamily:"monospace" }}>{user.provider?.toUpperCase()} SSO</div>
+            <div style={{ color:"rgba(255,255,255,0.45)", fontSize:9, fontFamily:"monospace" }}>{user.provider?.toUpperCase()} SSO</div>
           </div>
-          <button onClick={handleLogout} style={{ background:"transparent", color:"rgba(255,255,255,0.25)", border:"none", padding:"4px 6px", borderRadius:3, fontSize:10, fontFamily:"monospace", cursor:"pointer" }} title="Sign out">
+          <button onClick={handleLogout} style={{ background:"transparent", color:"rgba(255,255,255,0.45)", border:"none", padding:"4px 6px", borderRadius:3, fontSize:10, fontFamily:"monospace", cursor:"pointer" }} title="Sign out">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
           </button>
         </div>

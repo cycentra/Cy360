@@ -211,7 +211,7 @@ function SummaryCharts({ hosts, posture, riskScores }) {
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
               {[0, 25, 50, 75, 100].map(v => (
-                <span key={v} style={{ color: "rgba(255,255,255,0.2)", fontSize: 8,
+                <span key={v} style={{ color: "rgba(255,255,255,0.45)", fontSize: 8,
                   fontFamily: "monospace" }}>{v}</span>
               ))}
             </div>
