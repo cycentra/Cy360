@@ -1,3 +1,11 @@
+## v1.0.231 -- 2026-07-16
+
+### Improvements
+
+  - Install watchdog in cyedr-install.sh's Python-mode fallback
+
+---
+
 ## v1.0.230 -- 2026-07-16
 
 ### New Features
