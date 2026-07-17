@@ -245,7 +245,7 @@ SPEC
                 # must not block the build.
                 apt-get install -y -qq --no-install-recommends \
                     libgtk-3-dev gir1.2-appindicator3-0.1 python3-gi python3-gi-cairo \
-                    2>/dev/null || warn "GTK/AppIndicator packages unavailable on this base image — pystray will still bundle, but verify tray runtime on a real Linux desktop"
+                    2>/dev/null || echo 'WARN: GTK/AppIndicator packages unavailable on this base image — pystray will still bundle, but verify tray runtime on a real Linux desktop'
                 pip install -q --upgrade pip
                 pip install -q -r requirements-tray.txt
                 pyinstaller cyedr_tray.spec --clean --noconfirm -y
