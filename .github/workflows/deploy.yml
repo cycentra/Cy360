@@ -103,12 +103,19 @@ jobs:
           if-no-files-found: warn
 
   build-and-publish:
-    # Linux EDR binaries are built inline below (same job, same runner — no
-    # artifact hand-off, so they can never be blocked by Actions storage
-    # quota). Only macOS/Windows need needs: — they run on different runner
-    # OSes and must cross the artifact boundary; timeout-minutes on those
-    # jobs (above) bounds how long this can possibly wait on them.
-    needs: [build-edr-macos, build-edr-windows]
+    # Deliberately NOT `needs: [build-edr-macos, build-edr-windows]`.
+    # timeout-minutes on those jobs only bounds their EXECUTION time — a job
+    # stuck in GitHub's own "queued" state (no runner allocated yet) never
+    # starts the timeout clock at all. That's exactly how v1.0.233's release
+    # hung for 18 hours (macos-13 queued, never scheduled, needs: waited
+    # forever). Linux EDR binaries are built inline below (same job, no
+    # artifact hand-off, immune to both the runner-queue and Actions-storage-
+    # quota failure modes) so the release never depends on macOS/Windows
+    # completing at all. The download-artifact step further down is
+    # best-effort (continue-on-error, tolerates zero files found): if
+    # macOS/Windows happen to finish before this job reaches that step,
+    # their binaries get bundled too; if not, this release just ships
+    # without them and the next one picks them up — never blocks either way.
     runs-on: ubuntu-latest
     permissions:
       contents: write
