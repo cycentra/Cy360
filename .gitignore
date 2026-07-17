@@ -29,6 +29,12 @@ portal/.env
 *.bak
 *.backup-*
 
+# Generated / temporary output
+*.log
+coverage/
+*.sqlite
+*.db
+
 # Secrets
 /opt/
 *.pem
@@ -42,6 +48,8 @@ git-push.sh
 tools/cycentra_license_private.pem
 tools/cycentra_signing.pem
 tools/*.lic
-	# Ignore docs folder
-	docs/
+
+# Ignore docs folder
+docs/
+
 tests/unit/__pycache__/

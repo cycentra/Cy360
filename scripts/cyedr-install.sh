@@ -6,7 +6,7 @@
 #   Linux  — auditd + CyEDR audit rules, YARA, CyEDR Python bridge daemon (systemd)
 #   macOS  — YARA, CyEDR Python bridge daemon (LaunchDaemon), oslog subscription
 #
-# CySIEM (Wazuh) is optional. Use --with-cysiem to auto-install, or
+# CySIEM is optional. Use --with-cysiem to auto-install, or
 # --no-cysiem to skip the prompt, or answer the interactive question.
 #
 # A system-tray/menu-bar icon (cyedr-tray) is installed by default on
@@ -24,7 +24,7 @@
 #     --platform URL         CyCentra 360 platform URL (required)
 #     --asset-type TYPE      Asset type: workstation|server|database|domain_controller|
 #                            api_gateway|jump_server (default: workstation)
-#     --with-cysiem          Also install CySIEM (Wazuh) agent
+#     --with-cysiem          Also install CySIEM agent
 #     --no-cysiem            Skip CySIEM installation without prompting
 #     --with-tray            Install the system-tray app even on non-workstation asset types
 #     --no-tray              Skip installing the system-tray app
@@ -769,17 +769,17 @@ PYINLINE
     ok "Enrolled — Agent ID: $AGENT_ID"
 }
 
-# ── CySIEM (Wazuh) optional installation ──────────────────────────────────────
+# ── CySIEM optional installation ────────────────────────────────────────────
 maybe_install_cysiem() {
     if [[ "$WITH_CYSIEM" == "no" ]]; then
-        info "CySIEM (Wazuh) installation skipped."
+        info "CySIEM installation skipped."
         return
     fi
 
     if [[ "$WITH_CYSIEM" != "yes" ]]; then
         echo ""
         echo -e "${YEL}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "${YEL} OPTIONAL: CySIEM Agent (Wazuh-based log collection)   ${NC}"
+        echo -e "${YEL} OPTIONAL: CySIEM Agent (log collection)               ${NC}"
         echo -e "${YEL}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo ""
         echo "  CySIEM provides:"
@@ -799,7 +799,7 @@ maybe_install_cysiem() {
         WITH_CYSIEM="yes"
     fi
 
-    info "Installing CySIEM (Wazuh) agent..."
+    info "Installing CySIEM agent..."
     local INSTALLER_URL="$PLATFORM_URL/api/edr/installer/cysiem-script"
     local TMP_INSTALLER="/tmp/cy360-agent-install.sh"
 
@@ -813,7 +813,7 @@ maybe_install_cysiem() {
         warn "CySIEM installer returned non-zero exit code — check $TMP_INSTALLER output"
 
     rm -f "$TMP_INSTALLER"
-    ok "CySIEM (Wazuh) agent installed"
+    ok "CySIEM agent installed"
 }
 
 # ── Lock down file permissions ─────────────────────────────────────────────────

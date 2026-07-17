@@ -9,7 +9,7 @@
      • YARA for on-demand file scanning
      • PowerShell Script Block Logging
      • CyEDR Python bridge daemon (Windows service via NSSM or sc.exe)
-     • Optional: CySIEM (Wazuh) agent
+     • Optional: CySIEM agent
 
 .PARAMETER Token
     Deployment token (required)
@@ -22,7 +22,7 @@
     Default: workstation
 
 .PARAMETER WithCySIEM
-    Switch: also install the CySIEM (Wazuh) agent without prompting
+    Switch: also install the CySIEM agent without prompting
 
 .PARAMETER NoCySIEM
     Switch: skip CySIEM installation without prompting
@@ -478,17 +478,17 @@ function Set-AntiTamper {
     Write-CyOk "Anti-tamper ACLs applied"
 }
 
-# ── Optional CySIEM (Wazuh) installation ──────────────────────────────────────
+# ── Optional CySIEM installation ─────────────────────────────────────────────
 function Maybe-InstallCySIEM {
     if ($NoCySIEM -or ($Silent -and -not $WithCySIEM)) {
-        Write-CyInfo "CySIEM (Wazuh) installation skipped."
+        Write-CyInfo "CySIEM installation skipped."
         return
     }
 
     if (-not $WithCySIEM) {
         Write-Host ""
         Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Yellow
-        Write-Host " OPTIONAL: CySIEM Agent (Wazuh-based log collection)   " -ForegroundColor Yellow
+        Write-Host " OPTIONAL: CySIEM Agent (log collection)               " -ForegroundColor Yellow
         Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Yellow
         Write-Host ""
         Write-Host "  CySIEM adds: Security event log, Windows Defender, FIM"
@@ -505,12 +505,12 @@ function Maybe-InstallCySIEM {
     $installerPath = "$env:TEMP\cy360-agent.msi"
     try {
         Download-File -Url "$Platform/api/edr/installer/cysiem-msi" -Dest $installerPath
-        Write-CyInfo "Installing CySIEM (Wazuh) agent — this may take a few minutes..."
+        Write-CyInfo "Installing CySIEM agent — this may take a few minutes..."
         Start-Process -FilePath "msiexec.exe" `
             -ArgumentList "/i `"$installerPath`" /qn WAZUH_MANAGER_IP=`"$(([System.Uri]$Platform).Host)`"" `
             -Wait -NoNewWindow
         Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
-        Write-CyOk "CySIEM (Wazuh) agent installed"
+        Write-CyOk "CySIEM agent installed"
     } catch {
         Write-CyWarn "CySIEM installer failed: $_"
     }
