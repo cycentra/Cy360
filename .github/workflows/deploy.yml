@@ -13,43 +13,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── CyEDR agent + system-tray binaries ─────────────────────────────────────
-  # Built here on every release so customers only ever need the install link
-  # from the Cy360 portal — no separate manual build step. Previously these
-  # binaries had to be built by hand on the server (agent-packages/
-  # build-edr-packages.sh); build-and-publish now depends on these jobs and
-  # bundles their output the same way it already bundles cy360-agent-*.
-  # Each job is continue-on-error so a transient build issue on one platform
-  # never blocks the whole release — cycentra-setup.sh's staging step (see
-  # below) tolerates whichever binaries did make it into the bundle.
-  build-edr-linux:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - name: Build CyEDR agent + tray (Linux x86_64, aarch64)
-        run: |
-          mkdir -p "$(pwd)/edr-out"
-          sudo SKIP_WIN=1 SKIP_DEB_RPM=1 \
-            DEST_DIR="$(pwd)/edr-out" \
-            AGENT_SRC="$(pwd)/agent/cyedr_agent.py" \
-            TRAY_SRC="$(pwd)/agent/cyedr_tray.py" \
-            bash agent-packages/build-edr-packages.sh 0.0.0 || true
-          # build-edr-packages.sh exits 1 on the expected macOS-stub warnings
-          # (this job only builds Linux) — verify the binaries we actually
-          # need are present rather than trusting the script's exit code.
-          test -f edr-out/cyedr-agent-linux-x86_64
-          test -f edr-out/cyedr-agent-linux-aarch64
-          test -f edr-out/cyedr-tray-linux-x86_64
-          test -f edr-out/cyedr-tray-linux-aarch64
-      - uses: actions/upload-artifact@v4
-        with:
-          name: edr-bin-linux
-          path: edr-out/*
-          retention-days: 5
-          if-no-files-found: warn
-
+  # ── CyEDR agent + system-tray binaries (macOS / Windows) ────────────────────
+  # Built here — separate runner OS, so they genuinely need the artifact
+  # upload/download hand-off into build-and-publish below. Linux does NOT use
+  # this pattern (see the inline build step in build-and-publish) specifically
+  # because that hand-off goes through GitHub's Actions artifact storage,
+  # which has a repo-wide quota that (as of 2026-07-17) is wedged for hours
+  # after this repo accumulated ~11GB of dead per-tag pip caches — see
+  # git history around here for the cleanup. `timeout-minutes` below is the
+  # safety net: if these ever get artifact-store-quota-blocked or stuck
+  # queued again, build-and-publish is only delayed by the timeout, not
+  # blocked indefinitely — Linux still ships every time regardless of these.
+  # continue-on-error means a failure here never fails the overall release;
+  # cycentra-setup.sh's staging step already tolerates missing platforms.
   build-edr-macos:
     strategy:
       fail-fast: false
@@ -61,6 +37,7 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     continue-on-error: true
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -94,6 +71,7 @@ jobs:
   build-edr-windows:
     runs-on: windows-latest
     continue-on-error: true
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -125,7 +103,12 @@ jobs:
           if-no-files-found: warn
 
   build-and-publish:
-    needs: [build-edr-linux, build-edr-macos, build-edr-windows]
+    # Linux EDR binaries are built inline below (same job, same runner — no
+    # artifact hand-off, so they can never be blocked by Actions storage
+    # quota). Only macOS/Windows need needs: — they run on different runner
+    # OSes and must cross the artifact boundary; timeout-minutes on those
+    # jobs (above) bounds how long this can possibly wait on them.
+    needs: [build-edr-macos, build-edr-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -189,7 +172,33 @@ jobs:
           # shebang when the backend executes it directly (no 'bash' prefix needed).
           # The SHC binary (cycentra-setup-bin) is included only in the bundle tarball.
 
-      - name: Download CyEDR agent + tray binaries
+      # ── CyEDR agent + tray binaries (Linux) ──────────────────────────────
+      # Built directly in this job — not a separate job + artifact upload —
+      # so Linux binaries ship every release regardless of Actions artifact
+      # storage quota state (see build-edr-macos's comment above for why
+      # that quota matters here). docker/setup-qemu-action is needed for the
+      # aarch64 cross-build; ubuntu-latest already has Docker + amd64 native.
+      - uses: docker/setup-qemu-action@v3
+
+      - name: Build CyEDR agent + tray (Linux x86_64, aarch64)
+        run: |
+          mkdir -p edr-bin
+          sudo SKIP_WIN=1 SKIP_DEB_RPM=1 \
+            DEST_DIR="$(pwd)/edr-bin" \
+            AGENT_SRC="$(pwd)/agent/cyedr_agent.py" \
+            TRAY_SRC="$(pwd)/agent/cyedr_tray.py" \
+            bash agent-packages/build-edr-packages.sh 0.0.0 || true
+          # build-edr-packages.sh exits 1 on the expected macOS-stub warnings
+          # (this only builds Linux) — verify the binaries actually needed
+          # are present rather than trusting the script's exit code, but
+          # never fail the release over it (warn + continue, same tolerance
+          # as the macOS/Windows download step below).
+          for f in cyedr-agent-linux-x86_64 cyedr-agent-linux-aarch64 \
+                   cyedr-tray-linux-x86_64 cyedr-tray-linux-aarch64; do
+            [[ -f "edr-bin/$f" ]] && echo "OK: $f" || echo "::warning::Linux EDR binary missing: $f"
+          done
+
+      - name: Download CyEDR agent + tray binaries (macOS / Windows)
         uses: actions/download-artifact@v4
         continue-on-error: true   # a platform build failing must never block the whole release
         with:
@@ -241,8 +250,9 @@ jobs:
             echo "Agent packages bundled: $(ls cycentra-release/agent-packages/ | wc -l | tr -d ' ') files"
           fi
 
-          # Include the CyEDR agent + tray binaries built by build-edr-linux/macos/windows
-          # above (edr-bin/ from the download-artifact step). setup.sh stages these into
+          # Include the CyEDR agent + tray binaries: Linux built inline above,
+          # macOS/Windows downloaded from build-edr-macos/build-edr-windows —
+          # both land in edr-bin/. setup.sh stages these into
           # /var/lib/cycentra-agent-packages/edr/ automatically — this is what makes the
           # portal's install-link/copy-paste flow work with no manual build step for
           # customers or for devops on every release.
