@@ -1737,13 +1737,17 @@ def installer_commands():
         )
 
     def _ps1(arch, siem=False):
+        # arch is accepted for call-site symmetry with _msi()/_pkg() but not
+        # passed through: cyedr-install.ps1's param() block has no -Arch
+        # switch, it self-detects via $env:PROCESSOR_ARCHITECTURE ($EdrArch)
+        # the same way cyedr-install.sh self-detects via `uname -m`.
         sf = " -WithCySIEM" if siem else ""
         return (
             f'[Net.ServicePointManager]::SecurityProtocol="Tls12"; '
             f'$t="{token}"; $p="{base}"; '
             f'iwr "$p/api/edr/installer/win" -UseBasicParsing | '
             f'iex; '
-            f'cyedr-install.ps1 -Token $t -Platform $p -Arch {arch}{sf}'
+            f'cyedr-install.ps1 -Token $t -Platform $p{sf}'
         )
 
     def _msi(arch, siem=False):

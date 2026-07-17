@@ -2,8 +2,11 @@
  * pages/edr/EdrAgentInstallerPage.jsx
  * CyEDR Agent Deployment & Enrollment Console
  *
- * Lets admins generate deployment tokens, select target OS + architecture,
- * copy the correct arch-specific install command, and manage self-enrollment.
+ * Lets admins generate deployment tokens, select target OS, and copy a
+ * one-line install command that auto-detects CPU architecture on the
+ * endpoint. Native packages (DEB/RPM/PKG/MSI) are arch-specific by nature
+ * of the OS package manager, so they live under an optional Advanced
+ * section for anyone who explicitly needs a package file instead.
  */
 import React, { useEffect, useState, useCallback } from "react";
 import { WindowsLogo, AppleLogo, LinuxLogo, CyCentraEDRBadge } from "../../components/OsLogo.jsx";
@@ -14,11 +17,19 @@ const BORDER  = "1px solid rgba(255,255,255,0.07)";
 const ACCENT  = "#00e5a0";
 
 // ── OS configuration with official logo components ─────────────────────────
+// scriptMethod/scriptArch: the one-line installer is architecture-transparent
+// (cyedr-install.sh / cyedr-install.ps1 both self-detect CPU arch on the
+// endpoint), so any arch bucket returns the same command — scriptArch just
+// picks which bucket to read it from. archs/archLabels are only used by the
+// Advanced (native package) section below, since DEB/RPM/PKG/MSI are
+// genuinely arch-specific artifacts.
 const OS_CFG = {
   windows: {
     label:  "Windows",
     color:  "#00a4ef",
     Logo:   () => <WindowsLogo size={20} />,
+    scriptMethod: "powershell",
+    scriptArch:   "x64",
     archs:  ["x64", "arm64"],
     archLabels: { x64: "x64 (Intel/AMD)", arm64: "ARM64 (Qualcomm/Surface)" },
   },
@@ -26,6 +37,8 @@ const OS_CFG = {
     label:  "Linux",
     color:  "#fcc624",
     Logo:   () => <LinuxLogo size={20} />,
+    scriptMethod: "bash",
+    scriptArch:   "amd64",
     archs:  ["amd64", "arm64", "x86_64-rpm", "aarch64-rpm"],
     archLabels: {
       "amd64":       "amd64 DEB (Ubuntu/Debian)",
@@ -38,6 +51,8 @@ const OS_CFG = {
     label:  "macOS",
     color:  "#b0b8c8",
     Logo:   () => <AppleLogo size={20} color="#b0b8c8" />,
+    scriptMethod: "bash",
+    scriptArch:   "intel",
     archs:  ["intel", "apple_silicon"],
     archLabels: { intel: "Intel (x86_64)", apple_silicon: "Apple Silicon (M1/M2/M3)" },
   },
@@ -250,7 +265,8 @@ export default function EdrAgentInstallerPage() {
   const [showCreate,   setShowCreate]   = useState(false);
   const [selectedOs,   setSelectedOs]   = useState("linux");
   const [selectedArch, setSelectedArch] = useState("amd64");
-  const [selectedCmd,  setSelectedCmd]  = useState("bash");
+  const [selectedCmd,  setSelectedCmd]  = useState("deb");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [activeToken,  setActiveToken]  = useState(null);
   const [cmds,         setCmds]         = useState(null);
   const [error,        setError]        = useState("");
@@ -282,11 +298,15 @@ export default function EdrAgentInstallerPage() {
     }
   }, []);
 
-  // When OS changes, reset arch to its first available option
+  // When OS changes, reset the advanced arch/method pickers to their first
+  // available option (the quick self-detecting command needs no reset).
   const handleOsChange = (os) => {
     setSelectedOs(os);
-    setSelectedArch(OS_CFG[os].archs[0]);
-    setSelectedCmd(Object.keys(cmds?.[os]?.[OS_CFG[os].archs[0]] || {})[0] || "bash");
+    const firstArch = OS_CFG[os].archs[0];
+    setSelectedArch(firstArch);
+    const pkgMethod = Object.keys(cmds?.[os]?.[firstArch] || {})
+      .find(k => !k.includes("+siem") && k !== OS_CFG[os].scriptMethod);
+    setSelectedCmd(pkgMethod || "");
   };
 
   const handleRevoke = async (tokId) => {
@@ -301,8 +321,10 @@ export default function EdrAgentInstallerPage() {
 
   const activeTokens = tokens.filter(t => !t.revoked && (!t.expires_at || new Date(t.expires_at) > new Date()));
   const osCfg        = OS_CFG[selectedOs];
-  const archCmds     = cmds?.[selectedOs]?.[selectedArch] || {};
-  const displayCmd   = archCmds[selectedCmd] || "";
+  const quickCmd      = cmds?.[selectedOs]?.[osCfg.scriptArch]?.[osCfg.scriptMethod] || "";
+  const archCmds       = cmds?.[selectedOs]?.[selectedArch] || {};
+  const pkgMethods     = Object.keys(archCmds).filter(k => !k.includes("+siem") && k !== osCfg.scriptMethod);
+  const displayCmd     = archCmds[selectedCmd] || "";
 
   return (
     <div style={{ padding:"28px 32px", minHeight:"100vh", background:BG }}>
@@ -322,7 +344,7 @@ export default function EdrAgentInstallerPage() {
               Agent Deployment
             </h1>
             <div style={{ fontSize:11, color:"#555", marginTop:3 }}>
-              Generate tokens · Select platform + architecture · Deploy
+              Generate tokens · Select platform · Deploy (auto-detects architecture)
             </div>
           </div>
         </div>
@@ -386,51 +408,69 @@ export default function EdrAgentInstallerPage() {
           </div>
         </div>
 
-        {/* Architecture selector */}
-        <div style={{ marginBottom:16 }}>
-          <div style={{ fontSize:10, color:"#555", marginBottom:8, letterSpacing:1 }}>
-            ARCHITECTURE — <span style={{ color: osCfg.color }}>{osCfg.label}</span>
-          </div>
-          <ArchSelector
-            archs={osCfg.archs}
-            archLabels={osCfg.archLabels}
-            selected={selectedArch}
-            onChange={arch => {
-              setSelectedArch(arch);
-              setSelectedCmd(Object.keys(cmds?.[selectedOs]?.[arch] || {})[0] || "bash");
-            }}
-            color={osCfg.color}
-          />
-        </div>
-
-        {/* Install command */}
+        {/* Install command — one line, auto-detects CPU architecture on the endpoint */}
         {cmds && activeToken ? (
           <>
-            {/* Method tabs */}
-            <div style={{ display:"flex", gap:6, marginBottom:10 }}>
-              {Object.keys(archCmds).filter(k => !k.includes("+siem")).map(method => (
-                <button key={method} onClick={() => setSelectedCmd(method)} style={{
-                  border: `1px solid ${selectedCmd===method ? ACCENT : "#333"}44`,
-                  borderRadius: 5,
-                  background: selectedCmd===method ? `${ACCENT}22` : "transparent",
-                  color: selectedCmd===method ? ACCENT : "#555",
-                  padding: "4px 12px", fontSize: 11, cursor: "pointer",
-                }}>{method}</button>
-              ))}
+            <div style={{ fontSize:10, color:"#555", marginBottom:8, letterSpacing:1 }}>
+              INSTALL COMMAND — <span style={{ color: osCfg.color }}>{osCfg.label}</span>, auto-detects architecture
             </div>
-            {displayCmd && (
-              <CopyBox
-                value={displayCmd}
-                label={`${osCfg.label} ${osCfg.archLabels[selectedArch]} — ${selectedCmd}`}
-              />
+            {quickCmd && (
+              <CopyBox value={quickCmd} label={`${osCfg.label} — ${osCfg.scriptMethod}`} />
             )}
-            <div style={{ fontSize:11, color:"#444", marginTop:8 }}>
+            <div style={{ fontSize:11, color:"#444", marginTop:8, marginBottom:16 }}>
               Platform URL: <code style={{ color:"#7090b0", fontFamily:"monospace" }}>{cmds.collector_url}</code>
             </div>
+
+            {/* Advanced: native package installers (arch-specific by nature) */}
+            <button onClick={() => setShowAdvanced(v => !v)} style={{
+              border:"none", background:"transparent", color:"#666", fontSize:11,
+              cursor:"pointer", padding:0, display:"flex", alignItems:"center", gap:5,
+            }}>
+              {showAdvanced ? "▾" : "▸"} Advanced: native package (DEB / RPM / PKG / MSI)
+            </button>
+
+            {showAdvanced && (
+              <div style={{ marginTop:14, paddingTop:14, borderTop:"1px solid rgba(255,255,255,0.06)" }}>
+                <div style={{ fontSize:10, color:"#555", marginBottom:8, letterSpacing:1 }}>
+                  ARCHITECTURE — <span style={{ color: osCfg.color }}>{osCfg.label}</span>
+                </div>
+                <ArchSelector
+                  archs={osCfg.archs}
+                  archLabels={osCfg.archLabels}
+                  selected={selectedArch}
+                  onChange={arch => {
+                    setSelectedArch(arch);
+                    const pkgMethod = Object.keys(cmds?.[selectedOs]?.[arch] || {})
+                      .find(k => !k.includes("+siem") && k !== osCfg.scriptMethod);
+                    setSelectedCmd(pkgMethod || "");
+                  }}
+                  color={osCfg.color}
+                />
+                {pkgMethods.length > 1 && (
+                  <div style={{ display:"flex", gap:6, marginBottom:10 }}>
+                    {pkgMethods.map(method => (
+                      <button key={method} onClick={() => setSelectedCmd(method)} style={{
+                        border: `1px solid ${selectedCmd===method ? ACCENT : "#333"}44`,
+                        borderRadius: 5,
+                        background: selectedCmd===method ? `${ACCENT}22` : "transparent",
+                        color: selectedCmd===method ? ACCENT : "#555",
+                        padding: "4px 12px", fontSize: 11, cursor: "pointer",
+                      }}>{method}</button>
+                    ))}
+                  </div>
+                )}
+                {displayCmd && (
+                  <CopyBox
+                    value={displayCmd}
+                    label={`${osCfg.label} ${osCfg.archLabels[selectedArch]} — ${selectedCmd}`}
+                  />
+                )}
+              </div>
+            )}
           </>
         ) : (
           <div style={{ fontSize:12, color:"#444", padding:"12px 0" }}>
-            Select a deployment token above to generate the install command for your target platform and architecture.
+            Select a deployment token above to generate the install command for your target platform.
           </div>
         )}
       </div>

@@ -129,6 +129,7 @@ build_in_docker() {
         "$image" \
         bash -c "
             set -e
+            apt-get update -qq && apt-get install -y -qq --no-install-recommends binutils 2>/dev/null || true
             pip install -q --upgrade pip
             pip install -q -r requirements.txt $extra_pkgs
             pyinstaller cyedr_agent.spec --clean --noconfirm -y
@@ -232,7 +233,7 @@ SPEC
                 set -e
                 apt-get update -qq
                 apt-get install -y -qq --no-install-recommends \
-                    gcc python3-dev libgtk-3-dev gir1.2-appindicator3-0.1 \
+                    binutils gcc python3-dev libgtk-3-dev gir1.2-appindicator3-0.1 \
                     python3-gi python3-gi-cairo tk-dev 2>/dev/null || true
                 pip install -q --upgrade pip
                 pip install -q -r requirements-tray.txt
