@@ -1,3 +1,18 @@
+## v1.0.236 -- 2026-07-17
+
+### Bug Fixes
+
+  - Fix tray build: host-only warn() called from inside Docker container
+  - Fix Linux CyEDR/tray binary build: PyInstaller API + apt-get masking
+
+### Improvements
+
+  - force quota check
+  - Fully decouple build-and-publish from macOS/Windows job completion
+  - Decouple Linux EDR binary build from Actions artifact quota
+
+---
+
 ## v1.0.235 -- 2026-07-17
 
 ### Bug Fixes
