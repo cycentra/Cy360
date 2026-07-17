@@ -88,7 +88,7 @@ a = Analysis(
     excludes=['tkinter', 'matplotlib', 'numpy', 'scipy', 'PIL', 'test'],
     noarchive=False,
 )
-pyz = PYZ(a.pure, a.zlib_data)
+pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
@@ -195,7 +195,7 @@ a = Analysis(
     excludes=['matplotlib', 'numpy', 'scipy', 'test'],
     noarchive=False,
 )
-pyz = PYZ(a.pure, a.zlib_data)
+pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
@@ -232,9 +232,20 @@ SPEC
             bash -c "
                 set -e
                 apt-get update -qq
+                # binutils is REQUIRED (pyinstaller needs objdump) — installed on
+                # its own so a missing/renamed GTK package below can never take
+                # it down too (a single apt-get install with one bad package name
+                # fails the whole command, and that used to be silently masked by
+                # a single '|| true' covering everything, including binutils).
+                apt-get install -y -qq --no-install-recommends binutils gcc python3-dev tk-dev
+                # GTK/AppIndicator are best-effort — package names vary across
+                # Debian/Ubuntu base image versions; pystray can still be
+                # analysed/bundled by PyInstaller without them (they're only
+                # needed at runtime on a real Linux desktop), so a failure here
+                # must not block the build.
                 apt-get install -y -qq --no-install-recommends \
-                    binutils gcc python3-dev libgtk-3-dev gir1.2-appindicator3-0.1 \
-                    python3-gi python3-gi-cairo tk-dev 2>/dev/null || true
+                    libgtk-3-dev gir1.2-appindicator3-0.1 python3-gi python3-gi-cairo \
+                    2>/dev/null || warn "GTK/AppIndicator packages unavailable on this base image — pystray will still bundle, but verify tray runtime on a real Linux desktop"
                 pip install -q --upgrade pip
                 pip install -q -r requirements-tray.txt
                 pyinstaller cyedr_tray.spec --clean --noconfirm -y
