@@ -120,6 +120,15 @@ _PF_ANCHOR       = "/etc/pf.anchors/cyedr_policy"
 _IPC_SOCKET_NAME = "agent.sock"
 _IPC_PIPE_NAME   = r"\\.\pipe\CyEDRAgent"
 
+# Shown to the local admin (agent log) after a tray-authorized stop — a
+# stopped agent has no running process left to serve a "start" IPC command,
+# so recovery is deliberately local-admin-only. See IPCListener._do_stop().
+_RECOVERY_CMDS = {
+    "LINUX":   "sudo systemctl start cyedr-agent",
+    "DARWIN":  "sudo launchctl bootstrap system /Library/LaunchDaemons/com.cycentra.edr.plist",
+    "WINDOWS": "sc start CyEDRAgent  (run from an elevated/Administrator prompt)",
+}
+
 
 def _ensure_ipc_token(cfg: "Config") -> str:
     """Low-value shared secret so the IPC socket isn't wide open to literally
@@ -3254,11 +3263,23 @@ class IPCListener(threading.Thread):
 
     def _do_stop(self):
         """Stop the underlying service properly (systemctl/launchctl/sc), not
-        just exit this process — Restart=always in the systemd unit (and the
-        equivalent watchdog behavior on macOS/Windows) would otherwise bring
-        the agent straight back up within seconds. An explicit service-manager
-        stop is recorded as intentional and is not auto-restarted."""
-        logger.info("Tray-authorized stop — stopping CyEDR service")
+        just exit this process — Restart=always in the systemd unit would
+        otherwise bring the agent straight back up within seconds. This is a
+        deliberate, hard stop: once stopped, restarting requires local admin
+        access to this machine (see _RECOVERY_CMDS) — nothing in the tray can
+        undo it, by design, or the password gate on this action would be
+        meaningless. Writes a marker file so cyedr-watchdog.timer (Linux)
+        knows this downtime was authorized and must not auto-revert it."""
+        recovery = _RECOVERY_CMDS.get(OS_TYPE, "restart the CyEDR service manually")
+        logger.warning(
+            "Tray-authorized STOP — CyEDR protection is now OFFLINE on this host "
+            "until a local admin restarts it. To restart: %s", recovery)
+        try:
+            marker = os.path.join(self._cfg.edr_home, ".tray_stopped")
+            with open(marker, "w") as f:
+                f.write(datetime.utcnow().isoformat())
+        except Exception as e:
+            logger.warning("Could not write stop marker: %s", e)
         time.sleep(0.5)  # let the IPC response reach the tray first
         try:
             if OS_TYPE == "LINUX":
@@ -4656,6 +4677,15 @@ def main():
     cfg = Config(args.config)
     setup_logging(cfg.log_file)
     logger.info("CyEDR Agent v%s starting on %s (%s)", VERSION, cfg.hostname, cfg.os_type)
+
+    # Clear any stale tray-stop marker — this process running at all means an
+    # admin (or the OS) has already authorized this start; the marker's only
+    # job is telling cyedr-watchdog.timer not to auto-revert an intentional
+    # stop, and a fresh startup should re-arm normal crash-recovery behavior.
+    try:
+        os.remove(os.path.join(cfg.edr_home, ".tray_stopped"))
+    except OSError:
+        pass
 
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT,  handle_signal)

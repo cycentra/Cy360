@@ -166,7 +166,7 @@ def run_pystray(client: AgentClient):
     def _prompt_password():
         try:
             import tkinter as tk
-            from tkinter import simpledialog
+            from tkinter import simpledialog, messagebox
         except Exception:
             return None
         root = tk.Tk()
@@ -175,6 +175,19 @@ def run_pystray(client: AgentClient):
             root.attributes("-topmost", True)
         except Exception:
             pass
+        # A stopped agent has no running process left to serve a "start"
+        # command back to this tray — recovery needs local admin access to
+        # this machine. Surfaced here, before the password prompt, so there
+        # are no surprises about what this action actually does.
+        proceed = messagebox.askokcancel(
+            "CyEDR — Stop/Exit",
+            "Stopping CyEDR requires local admin access to this machine to "
+            "restart it afterward — it cannot be undone from this tray.\n\nContinue?",
+            parent=root,
+        )
+        if not proceed:
+            root.destroy()
+            return None
         pwd = simpledialog.askstring(
             "CyEDR — Stop/Exit",
             "Enter the CyEDR admin password (set in Cy360 -> EDR Policies -> Tamper Protection):",
@@ -253,6 +266,18 @@ def run_rumps(client: AgentClient):
 
         @rumps.clicked("Stop/Exit CyEDR...")
         def stop(self, _sender):
+            # A stopped agent has no running process left to serve a "start"
+            # command back to this tray — recovery needs local admin access
+            # to this machine. Surfaced before the password prompt so there
+            # are no surprises about what this action actually does.
+            proceed = rumps.alert(
+                title="CyEDR — Stop/Exit",
+                message=("Stopping CyEDR requires local admin access to this machine "
+                          "to restart it afterward — it cannot be undone from this tray."),
+                ok="Continue", cancel="Cancel",
+            )
+            if proceed != 1:
+                return
             window = rumps.Window(
                 message="Enter the CyEDR admin password (set in Cy360 -> EDR Policies -> Tamper Protection):",
                 title="Stop/Exit CyEDR",

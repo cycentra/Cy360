@@ -591,7 +591,12 @@ ReadWritePaths=$EDR_HOME /var/run /var/log/audit /tmp
 WantedBy=multi-user.target
 SVCFILE
 
-    # Watchdog service — restarts cyedr-agent if it goes down
+    # Watchdog service — restarts cyedr-agent if it goes down, UNLESS the stop
+    # was tray-authorized (marker at $EDR_HOME/.tray_stopped — see
+    # IPCListener._do_stop() in cyedr_agent.py). Without this check, an admin-
+    # password-gated "Stop/Exit CyEDR" from the tray would silently get
+    # reverted within 5 minutes, making that password gate meaningless on
+    # Linux specifically (macOS/Windows have no equivalent watchdog to fight).
     cat > /etc/systemd/system/cyedr-watchdog.service << WDFILE
 [Unit]
 Description=CyEDR Agent Watchdog
@@ -599,7 +604,7 @@ After=cyedr-agent.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'systemctl is-active cyedr-agent || systemctl restart cyedr-agent'
+ExecStart=/bin/bash -c 'systemctl is-active --quiet cyedr-agent || { [ -f $EDR_HOME/.tray_stopped ] && exit 0; systemctl restart cyedr-agent; }'
 WDFILE
 
     cat > /etc/systemd/system/cyedr-watchdog.timer << WDTIMER
