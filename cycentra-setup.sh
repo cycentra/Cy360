@@ -2328,17 +2328,18 @@ STUBEOF
         warn "nginx not responding on port 80 — ACME challenge will likely fail"
     fi
 
-    # Ensure options-ssl-nginx.conf exists AND is non-empty — try download, fall back to
-    # local minimal copy. Checking -s (not just -f) matters: a partial/interrupted write
-    # (e.g. certbot's own nginx plugin run cut short) leaves a 0-byte or truncated file that
-    # `-f` alone would treat as "already there" and skip repairing, breaking `nginx -t`.
-    if [[ ! -s /etc/letsencrypt/options-ssl-nginx.conf ]]; then
-        mkdir -p /etc/letsencrypt
-        curl -s --max-time 15 \
-            https://raw.githubusercontent.com/certbot/certbot/master/certbot-nginx/certbot_nginx/_internal/tls_configs/options-ssl-nginx.conf \
-            -o /etc/letsencrypt/options-ssl-nginx.conf 2>/dev/null || true
-        if [[ ! -s /etc/letsencrypt/options-ssl-nginx.conf ]]; then
-            cat > /etc/letsencrypt/options-ssl-nginx.conf << 'SSLOPTEOF'
+    # Always (re)write options-ssl-nginx.conf with the standard Let's Encrypt /
+    # Certbot recommended TLS config. This used to be fetched from GitHub with a
+    # fallback to this same content if the download was empty — but on a flaky
+    # connection curl's --max-time can expire *mid-download*, leaving a truncated
+    # (non-empty) file on disk with its exit code swallowed by `|| true`. A
+    # non-empty-check alone treats that truncated file as "already fine" and never
+    # repairs it, which breaks `nginx -t` with a cryptic "unexpected end of file"
+    # error. Writing this static content directly removes the network dependency
+    # (and that whole class of partial-download bugs) and is idempotent, so it also
+    # self-heals a file left broken by a prior run.
+    mkdir -p /etc/letsencrypt
+    cat > /etc/letsencrypt/options-ssl-nginx.conf << 'SSLOPTEOF'
 ssl_session_cache shared:le_nginx_SSL:10m;
 ssl_session_timeout 1440m;
 ssl_session_tickets off;
@@ -2346,9 +2347,6 @@ ssl_protocols TLSv1.2 TLSv1.3;
 ssl_prefer_server_ciphers off;
 ssl_ciphers "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384";
 SSLOPTEOF
-            info "options-ssl-nginx.conf: used local fallback (curl unavailable)"
-        fi
-    fi
 
     if [[ ! -f /etc/letsencrypt/ssl-dhparams.pem ]]; then
         info "Generating ssl-dhparams.pem in background (~30s) ..."
