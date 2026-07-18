@@ -1,3 +1,11 @@
+## v1.0.245 -- 2026-07-18
+
+### Bug Fixes
+
+  - ci): migrate build-edr-macos off retired/deprecating runner images
+
+---
+
 ## v1.0.244 -- 2026-07-18
 
 ### Bug Fixes
