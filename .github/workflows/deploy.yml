@@ -73,9 +73,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-13   # Intel — GitHub-hosted, native (no cross-compile)
+          # macos-13 was fully retired by GitHub in Dec 2025 — jobs requesting it
+          # queue forever ("Waiting for a runner to pick up this job..") since the
+          # label no longer maps to any runner. macos-15-intel is GitHub's current
+          # label for Intel/x86_64 GitHub-hosted macOS runners.
+          - runner: macos-15-intel   # Intel — GitHub-hosted, native (no cross-compile)
             arch: intel64
-          - runner: macos-14   # Apple Silicon — GitHub-hosted, native
+          # macos-14 deprecation began 2026-07-06, fully unsupported 2026-11-02
+          # (brownout failures already possible in this window) — moved to
+          # macos-15 (GA, Apple Silicon) ahead of that.
+          - runner: macos-15   # Apple Silicon — GitHub-hosted, native
             arch: arm64
     runs-on: ${{ matrix.runner }}
     continue-on-error: true
