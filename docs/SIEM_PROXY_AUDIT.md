@@ -6,6 +6,33 @@
 > ("Agent Groups", "Response Playbooks") were deleted in full, since Wazuh is no longer used as a
 > sensor. The rows below describing them are kept as historical record of the routes that existed,
 > not as a live keep/retire recommendation.
+>
+> **Update, v1.0.238 (2026-07-18):** sequencing step 1 done — `GET /wazuh-launch` and
+> `GET /internal/auth` retired, not just the routes: the "Launch Wazuh"/"View in Wazuh" buttons on
+> the Active Incidents detail panel (`SiemIncidentsPage.jsx`) and UEBA anomaly cards
+> (`SiemUebaPage.jsx`) were live and unconditionally rendered (the audit below undersold this —
+> it wasn't a dead deep-link), so the UI was removed alongside the backend, along with the
+> now-unused `GET /ueba/integrations` route and its `WAZUH_URL` config var (nothing else read
+> either). Also discovered and fixed in the same pass, unrelated to this audit: the optional
+> per-endpoint "install CySIEM agent alongside CyEDR" co-install feature was retired end-to-end
+> (`--with-cysiem`/`-WithCySIEM` flags removed from `cyedr-install.sh`/`.ps1`, `cysiem-msi`/
+> `cysiem-script` installer routes removed) after finding the Linux/macOS half of it had been
+> silently 500ing since v1.0.215 (dangling import of a template deleted with the Sensor Deployment
+> tab) and the Windows half was about to break too (its `.msi` source came from the same dead
+> `packages.wazuh.com` download step this cleanup removed from `cycentra-setup.sh`).
+>
+> **Step 2 turned out to be mostly already done** by prior, undocumented work: both
+> `/hosts/<id>/inventory` and `/hosts/<id>/vulnerabilities` already had an EDR/ITAM-first path
+> (`_edr_itam_inventory()` / `_edr_itam_vulnerabilities()`) that only falls back to Wazuh when a
+> host has no CyEDR-reported ITAM data yet. The vulnerabilities fallback was already
+> Wazuh-API-free (reads historical `alerts` rows ingested via `cysiem_to_redis`, not a live call)
+> — the Group B classification below is stale for that route. The inventory fallback *did* still
+> make a live Wazuh Manager API call (`/syscollector/*`); per product decision this was removed
+> — hosts without a CyEDR agent now get an empty inventory shape instead of Wazuh syscollector
+> data, confirming CyEDR/ITAM as the only supported inventory source going forward.
+>
+> Next up: step 6 (`/hosts/<id>/sca` — no existing ITAM overlap, genuine rebuild) and step 5
+> (`/hosts`, `/hosts/refresh`, `/hosts/<id>` enroll/remove — highest blast radius, doing last).
 
 **Status: analysis only, no code changed.** This is the Phase 5 "route-by-route inventory" task
 from `docs/CYDATALAKE_MIGRATION_PLAN.md` §9, produced by grepping `siem_proxy.py` for every

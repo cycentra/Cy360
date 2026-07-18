@@ -20,7 +20,6 @@ import json as _json
 import logging
 import time
 import subprocess
-from collections import defaultdict
 
 _logger = logging.getLogger(__name__)
 from datetime import datetime, timezone
@@ -36,11 +35,6 @@ PROXY_TIMEOUT   = int(os.environ.get("SIEM_PROXY_TIMEOUT", "10"))
 WAZUH_API_URL  = os.environ.get("WAZUH_API_URL",      "https://127.0.0.1:55000")
 WAZUH_API_USER = os.environ.get("WAZUH_API_USER",     "wazuh-wui")
 WAZUH_API_PASS = os.environ.get("WAZUH_API_PASSWORD", "")
-
-# Rate-limiter: max 10 wazuh-launch requests per user per 60-second window
-_WAZUH_LAUNCH_WINDOW = 60   # seconds
-_WAZUH_LAUNCH_LIMIT  = 10   # requests per window
-_wazuh_launch_hits: dict = defaultdict(list)  # email -> [timestamp, ...]
 
 siem_bp = Blueprint("siem", __name__, url_prefix="/api/siem")
 
@@ -621,129 +615,6 @@ def siem_ueba_users():
 def siem_ueba_detail(username):
     return _proxy(f"/ueba/{username}")
 
-
-
-@siem_bp.route("/ueba/integrations")
-@require_siem_auth
-def siem_ueba_integrations():
-    """Return public integration URLs for the frontend to construct deep-links."""
-    from core.config import WAZUH_URL
-    return jsonify({
-        "wazuh_url":     WAZUH_URL or None,
-        "wazuh_enabled": bool(WAZUH_URL),
-    })
-
-
-@siem_bp.route("/wazuh-launch", methods=["GET"])
-def siem_wazuh_launch():
-    """Return a Wazuh JWT so the frontend can open an authenticated session.
-
-    RBAC:
-      - No session         → 401
-      - viewer role        → 403 (read-only users do not get raw Wazuh access)
-      - analyst / admin    → 200 with {"launch_url": ..., "token": ...}
-      - Rate limit         → 429 after 10 calls / 60 s per user
-
-    Fallback: if Wazuh API creds are missing or the API is unreachable,
-    returns {"launch_url": <WAZUH_URL>, "token": null} so the frontend
-    still opens the Wazuh dashboard (unauthenticated, current behaviour).
-    """
-    from core.config import WAZUH_URL
-    from core.helpers import auth_event
-    import base64
-
-    email = session.get("user_email")
-    if not email:
-        return jsonify({"error": "Authentication required"}), 401
-
-    role = _get_role()
-    if role not in ("admin", "analyst"):
-        auth_event(
-            event_type="rbac_denied",
-            email=email,
-            client_id="",
-            result="failure",
-            detail="wazuh-launch: viewer role denied",
-            ip=request.remote_addr,
-        )
-        return jsonify({"error": "Analyst or admin role required to launch Wazuh SSO"}), 403
-
-    # ── Rate limiting ──────────────────────────────────────────────────────────
-    now = time.time()
-    hits = _wazuh_launch_hits[email]
-    # Evict timestamps outside the current window
-    hits[:] = [t for t in hits if now - t < _WAZUH_LAUNCH_WINDOW]
-    if len(hits) >= _WAZUH_LAUNCH_LIMIT:
-        return jsonify({"error": "Too many Wazuh launch requests — try again shortly"}), 429
-    hits.append(now)
-
-    # ── Determine Wazuh dashboard URL ─────────────────────────────────────────
-    # Prefer the configured WAZUH_URL; fall back to deriving from request host.
-    launch_url = WAZUH_URL or ""
-    if not launch_url:
-        host = request.host.split(":")[0]
-        wazuh_host = host.replace("cy360.", "cysiem.") if host.startswith("cy360.") else host
-        launch_url = f"https://{wazuh_host}/app/wazuh"
-
-    # ── Obtain Wazuh JWT ───────────────────────────────────────────────────────
-    token = None
-    if WAZUH_API_PASS:
-        try:
-            creds = base64.b64encode(
-                f"{WAZUH_API_USER}:{WAZUH_API_PASS}".encode()
-            ).decode()
-            resp = _req.get(
-                f"{WAZUH_API_URL}/security/user/authenticate",
-                headers={"Authorization": f"Basic {creds}"},
-                timeout=8,
-                verify=False,  # Wazuh uses self-signed cert
-            )
-            resp.raise_for_status()
-            token = resp.json().get("data", {}).get("token")
-        except Exception:
-            # Graceful fallback: return URL without token
-            token = None
-
-    auth_event(
-        event_type="oauth_login",
-        email=email,
-        client_id="wazuh",
-        result="success" if token else "failure",
-        detail=f"wazuh-launch SSO {'token obtained' if token else 'fallback (no token)'}",
-        ip=request.remote_addr,
-    )
-
-    return jsonify({"launch_url": launch_url, "token": token})
-
-
-# ── Wazuh Basic Auth credentials for nginx siem-gate ─────────────────────────
-# Computed once at import time; passwords never appear in logs or responses.
-import base64 as _b64
-_WAZUH_ADMIN_BASIC = "Basic " + _b64.b64encode(b"cy360_sso:CyCentra360!SiemSSO").decode()
-_WAZUH_RO_BASIC    = "Basic " + _b64.b64encode(b"cy360_readonly:CyCentra360!ReadOnly").decode()
-
-
-@siem_bp.route("/internal/auth", methods=["GET"])
-def siem_internal_auth():
-    """nginx auth_request gate for cysiem.DOMAIN — called per browser request.
-
-    Validates the Cy360 session cookie forwarded by nginx, then returns the
-    role-appropriate Wazuh Basic Auth credential via the X-Wazuh-Auth header.
-    nginx picks that value up via auth_request_set and injects it into the
-    proxy_set_header Authorization for the upstream Wazuh Dashboard request.
-
-    Roles:
-      - No session              → 401  (nginx redirects to Cy360 login)
-      - admin / analyst         → cy360_sso    (OpenSearch admin — full Wazuh access)
-      - viewer / anything else  → cy360_readonly (OpenSearch read-only access)
-    """
-    email = session.get("user_email")
-    if not email:
-        return "", 401
-
-    role  = _get_role() or "viewer"
-    basic = _WAZUH_ADMIN_BASIC if role in ("admin", "analyst") else _WAZUH_RO_BASIC
-    return "", 200, {"X-Wazuh-Auth": basic, "X-Auth-Request-User": email}
 
 
 @siem_bp.route("/alerts")
@@ -2399,10 +2270,12 @@ def _edr_itam_inventory(agent_id: str, pkg_limit: int) -> dict | None:
 @siem_bp.route("/hosts/<agent_id>/inventory", methods=["GET"])
 @require_siem_auth
 def siem_host_inventory(agent_id):
-    """System inventory: agent identity, hardware, OS details, and installed packages."""
-    import base64 as _b64i
-    import psycopg2.extras
+    """System inventory: agent identity, hardware, OS details, and installed packages.
 
+    Sourced entirely from CyEDR/ITAM (network_assets + software_inventory) — no
+    Wazuh Manager API dependency. Hosts without a CyEDR agent reporting into
+    ITAM yet will return the empty shape below until CyEDR is deployed on them.
+    """
     pkg_limit_arg = request.args.get("pkg_limit", "100")
     try:
         pkg_limit = min(500, max(5, int(pkg_limit_arg)))
@@ -2413,135 +2286,10 @@ def siem_host_inventory(agent_id):
     if edr_result is not None:
         return jsonify(edr_result)
 
-    def _wz_get(token, path, params=None):
-        try:
-            r = _req.get(
-                f"{WAZUH_API_URL}{path}",
-                headers={"Authorization": f"Bearer {token}"},
-                params=params or {}, timeout=10, verify=False,
-            )
-            return r.json() if r.status_code == 200 else None
-        except Exception:
-            return None
-
-    result = {
+    return jsonify({
         "agent": None, "os": None, "hardware": None,
         "packages": [], "packages_total": 0,
-    }
-
-    # Fallback: pull what we have from the posture cache
-    try:
-        conn = _corr_conn()
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("""
-                SELECT agent_id, agent_name, agent_ip, os_platform, os_version,
-                       wazuh_status, last_keepalive, computed_at
-                FROM host_posture_cache WHERE agent_id = %s
-            """, [agent_id])
-            row = cur.fetchone()
-        conn.close()
-        if row:
-            result["agent"] = {
-                "id": row["agent_id"], "name": row["agent_name"],
-                "ip": row["agent_ip"], "status": row["wazuh_status"],
-                "os_platform": row["os_platform"], "os_version": row["os_version"],
-                "last_keepalive": _iso(row["last_keepalive"]),
-                "date_add": None, "version": None, "hostname": None,
-            }
-    except Exception:
-        pass
-
-    if not WAZUH_API_PASS:
-        return jsonify(result)
-
-    try:
-        creds = _b64i.b64encode(f"{WAZUH_API_USER}:{WAZUH_API_PASS}".encode()).decode()
-        tok_r = _req.get(
-            f"{WAZUH_API_URL}/security/user/authenticate",
-            headers={"Authorization": f"Basic {creds}"},
-            timeout=8, verify=False,
-        )
-        tok_r.raise_for_status()
-        token = tok_r.json()["data"]["token"]
-    except Exception:
-        return jsonify(result)
-
-    # Agent identity — overrides cache values with live Wazuh data
-    agent_data = _wz_get(token, "/agents", {
-        "agents_list": agent_id,
-        "select": "id,name,ip,status,os.platform,os.version,dateAdd,lastKeepAlive,version",
     })
-    if agent_data:
-        items = agent_data.get("data", {}).get("affected_items", [])
-        if items:
-            a = items[0]
-            result["agent"] = {
-                "id": a.get("id"), "name": a.get("name"),
-                "ip": a.get("ip"), "status": a.get("status"),
-                "os_platform": (a.get("os") or {}).get("platform"),
-                "os_version":  (a.get("os") or {}).get("version"),
-                "version": a.get("version"),
-                "date_add": a.get("dateAdd"),
-                "last_keepalive": a.get("lastKeepAlive"),
-                "hostname": None,
-            }
-
-    # OS details (hostname, kernel, architecture)
-    os_data = _wz_get(token, f"/syscollector/{agent_id}/os")
-    if os_data:
-        items = os_data.get("data", {}).get("affected_items", [])
-        if items:
-            o = items[0]
-            result["os"] = {
-                "hostname": o.get("hostname"),
-                "architecture": o.get("architecture"),
-                "kernel_release": o.get("release"),
-                "sysname": o.get("sysname"),
-                "os_name": (o.get("os") or {}).get("name"),
-                "os_codename": (o.get("os") or {}).get("codename"),
-                "os_major": (o.get("os") or {}).get("major"),
-                "os_minor": (o.get("os") or {}).get("minor"),
-                "scan_time": (o.get("scan") or {}).get("time"),
-            }
-            if result["agent"]:
-                result["agent"]["hostname"] = o.get("hostname")
-
-    # Hardware (CPU, RAM)
-    hw_data = _wz_get(token, f"/syscollector/{agent_id}/hardware")
-    if hw_data:
-        items = hw_data.get("data", {}).get("affected_items", [])
-        if items:
-            h = items[0]
-            result["hardware"] = {
-                "cpu_name":  (h.get("cpu") or {}).get("name"),
-                "cpu_cores": (h.get("cpu") or {}).get("cores"),
-                "cpu_mhz":   (h.get("cpu") or {}).get("mhz"),
-                "ram_total": (h.get("ram") or {}).get("total"),
-                "ram_free":  (h.get("ram") or {}).get("free"),
-                "ram_usage": (h.get("ram") or {}).get("usage"),
-            }
-
-    # Installed packages — top 100 by size (largest = most significant)
-    # pkg_limit already computed above (shared with the EDR/ITAM path)
-    pkg_data = _wz_get(token, f"/syscollector/{agent_id}/packages", {
-        "limit": pkg_limit, "sort": "-size",
-    })
-    if pkg_data:
-        items = pkg_data.get("data", {}).get("affected_items", [])
-        result["packages"] = [{
-            "name":         p.get("name"),
-            "version":      p.get("version"),
-            "description":  p.get("description"),
-            "architecture": p.get("architecture"),
-            "size":         p.get("size"),
-            "section":      p.get("section"),
-            "vendor":       p.get("vendor"),
-            "format":       p.get("format"),
-            "install_time": p.get("install_time"),
-        } for p in items]
-        result["packages_total"] = pkg_data.get("data", {}).get("total_affected_items", 0)
-
-    return jsonify(result)
 
 
 def _edr_itam_vulnerabilities(agent_id: str, page: int, per_page: int, severity: str):

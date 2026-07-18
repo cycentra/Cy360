@@ -205,7 +205,7 @@ function AnomalyBadge({ active, total }) {
  * anomalyStatus: { status, audit_log } from parent-managed state
  * onStatusChange(anomalyId, newStatus): callback to update parent
  */
-function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
+function AnomalyCard({ a, anomalyStatus, onStatusChange }) {
   const [expanded,     setExpanded]     = useState(false);
   // Status lifecycle (inline in expanded panel)
   const [txTarget,       setTxTarget]       = useState(null);
@@ -213,7 +213,6 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
   const [txErr,          setTxErr]          = useState("");
   const [txBusy,         setTxBusy]         = useState(false);
   const [autoBusy,       setAutoBusy]       = useState(false);
-  const [wazuhLaunching, setWazuhLaunching] = useState(false);
 
   const color      = ANOMALY_COLORS[a.anomaly_type] || "#888";
   const anomalyId  = makeAnomalyId(a);
@@ -268,34 +267,6 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
       }
     } catch { setTxErr("Network error."); }
     setTxBusy(false);
-  };
-
-  // Wazuh deep-link: opens Wazuh Discover filtered by the first alert_id
-  const wazuhLink = (integrations?.wazuh_url && (a.alert_ids?.[0]))
-    ? `${integrations.wazuh_url}/app/discover#/?_g=(time:(from:now-1d,to:now))&_a=(query:(language:kuery,query:'_id:"${a.alert_ids[0]}"'))`
-    : null;
-
-  const handleWazuhLaunch = async (e) => {
-    e.stopPropagation();
-    if (!wazuhLink) return;
-    setWazuhLaunching(true);
-    try {
-      const res = await fetch("/api/siem/wazuh-launch", { credentials: "include" });
-      if (res.redirected) {
-        window.open(res.url, "_blank", "noopener,noreferrer");
-        return;
-      }
-      const data = await res.json();
-      if (data.token) {
-        sessionStorage.setItem("wazuh_auth_token", data.token);
-      }
-      // Always open the specific Discover deep-link, not the generic launch_url
-      window.open(wazuhLink, "_blank", "noopener,noreferrer");
-    } catch {
-      window.open(wazuhLink, "_blank", "noopener,noreferrer");
-    } finally {
-      setWazuhLaunching(false);
-    }
   };
 
   const hasContext = a.agent_name || a.src_ip || a.rule_id || a.process_name || a.file_path;
@@ -521,31 +492,13 @@ function AnomalyCard({ a, integrations, anomalyStatus, onStatusChange }) {
               )
             )}
           </div>
-
-          {/* Wazuh deep-link — SSO launch */}
-          {wazuhLink && (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <button
-                onClick={handleWazuhLaunch}
-                disabled={wazuhLaunching}
-                title="Opens Wazuh Discover for this alert with your CyCentra session (SSO)"
-                style={{ display: "inline-flex", alignItems: "center", gap: 5,
-                  background: wazuhLaunching ? "rgba(77,158,255,0.03)" : "rgba(77,158,255,0.08)",
-                  border: "1px solid rgba(77,158,255,0.25)",
-                  color: "#4d9eff", fontSize: 11, fontFamily: "monospace",
-                  padding: "5px 12px", borderRadius: 3,
-                  cursor: wazuhLaunching ? "wait" : "pointer" }}>
-                {wazuhLaunching ? "Launching…" : "View in Wazuh"}
-              </button>
-            </div>
-          )}
         </div>
       )}
     </div>
   );
 }
 
-function UserProfile({ username, integrations, anomalyStatuses, onStatusChange }) {
+function UserProfile({ username, anomalyStatuses, onStatusChange }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -659,7 +612,7 @@ function UserProfile({ username, integrations, anomalyStatuses, onStatusChange }
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {anomalies.slice(0, 50).map(a => (
-              <AnomalyCard key={a.id} a={a} integrations={integrations}
+              <AnomalyCard key={a.id} a={a}
                 anomalyStatus={anomalyStatuses?.[makeAnomalyId(a)]}
                 onStatusChange={onStatusChange} />
             ))}
@@ -808,7 +761,6 @@ export function SiemUebaPage() {
   const [search,          setSearch]          = useState("");
   const [selected,        setSelected]        = useState(null);
   const [activeTab,       setActiveTab]       = useState("all");
-  const [integrations,    setIntegrations]    = useState(null);
   const [anomalyStatuses, setAnomalyStatuses] = useState({});
 
   useEffect(() => {
@@ -817,9 +769,6 @@ export function SiemUebaPage() {
         setUsers(Array.isArray(data) ? data : []);
       }
       setLoading(false);
-    });
-    siemFetch(siemApi.getUebaIntegrations()).then(data => {
-      if (data && !data._offline && !data._error) setIntegrations(data);
     });
     // Load persisted UEBA anomaly statuses
     fetch("/api/siem/ueba/anomaly/statuses", { credentials: "include" })
@@ -1049,7 +998,7 @@ export function SiemUebaPage() {
                     </div>
                   );
                 })()}
-                <UserProfile username={selected} integrations={integrations}
+                <UserProfile username={selected}
                   anomalyStatuses={anomalyStatuses}
                   onStatusChange={handleAnomalyStatusChange} />
               </div>

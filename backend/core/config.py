@@ -147,11 +147,6 @@ CYSOAR_IMAGE     = os.environ.get("CYSOAR_IMAGE",     "ghcr.io/cycentra/cysoar:l
 IRIS_URL     = os.environ.get("IRIS_URL", "")
 IRIS_API_KEY = os.environ.get("IRIS_API_KEY", "")
 
-# ── Wazuh Dashboard ───────────────────────────────────────────────────────────
-# Set WAZUH_URL to allow deep-links from UEBA anomaly cards into Wazuh.
-# WAZUH_URL example: https://wazuh.cycentra.com
-WAZUH_URL    = os.environ.get("WAZUH_URL", "")
-
 # ── CyDataLake — Phase 2 Kafka bus ────────────────────────────────────────────
 # Disabled by default. When enabled, cysiemstack/collector_bridge.py and
 # cysiemstack/edr_bridge.py publish to Kafka ADDITIVELY alongside their

@@ -305,7 +305,7 @@ export default function EdrAgentInstallerPage() {
     const firstArch = OS_CFG[os].archs[0];
     setSelectedArch(firstArch);
     const pkgMethod = Object.keys(cmds?.[os]?.[firstArch] || {})
-      .find(k => !k.includes("+siem") && k !== OS_CFG[os].scriptMethod);
+      .find(k => k !== OS_CFG[os].scriptMethod);
     setSelectedCmd(pkgMethod || "");
   };
 
@@ -323,7 +323,7 @@ export default function EdrAgentInstallerPage() {
   const osCfg        = OS_CFG[selectedOs];
   const quickCmd      = cmds?.[selectedOs]?.[osCfg.scriptArch]?.[osCfg.scriptMethod] || "";
   const archCmds       = cmds?.[selectedOs]?.[selectedArch] || {};
-  const pkgMethods     = Object.keys(archCmds).filter(k => !k.includes("+siem") && k !== osCfg.scriptMethod);
+  const pkgMethods     = Object.keys(archCmds).filter(k => k !== osCfg.scriptMethod);
   const displayCmd     = archCmds[selectedCmd] || "";
 
   return (
@@ -441,7 +441,7 @@ export default function EdrAgentInstallerPage() {
                   onChange={arch => {
                     setSelectedArch(arch);
                     const pkgMethod = Object.keys(cmds?.[selectedOs]?.[arch] || {})
-                      .find(k => !k.includes("+siem") && k !== osCfg.scriptMethod);
+                      .find(k => k !== osCfg.scriptMethod);
                     setSelectedCmd(pkgMethod || "");
                   }}
                   color={osCfg.color}

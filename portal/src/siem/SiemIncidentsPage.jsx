@@ -417,7 +417,6 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
   const [auditLog, setAuditLog] = useState([]);
   const [auditVisible, setAuditVisible] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
-  const [wazuhLaunching, setWazuhLaunching] = useState(false);
   const [requestingAi, setRequestingAi]     = useState(false);
   const [aiRequestErr, setAiRequestErr]     = useState("");
   // Phase 5: SOAR approval
@@ -629,33 +628,6 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
     }
   };
 
-  const handleWazuhLaunch = async () => {
-    setWazuhLaunching(true);
-    try {
-      const res = await fetch("/api/siem/wazuh-launch", { credentials: "include" });
-      if (res.redirected) {
-        window.open(res.url, "_blank", "noopener,noreferrer");
-        return;
-      }
-      const data = await res.json();
-      if (data.token) {
-        sessionStorage.setItem("wazuh_auth_token", data.token);
-      }
-      window.open(data.launch_url || wazuhUrl, "_blank", "noopener,noreferrer");
-    } catch {
-      window.open(wazuhUrl, "_blank", "noopener,noreferrer");
-    } finally {
-      setWazuhLaunching(false);
-    }
-  };
-
-  // Derive Wazuh Dashboard URL from current hostname (fallback only)
-  const host = window.location.hostname;
-  const wazuhHost = host.startsWith("cy360.")
-    ? host.replace("cy360.", "cysiem.")
-    : `${host}:5601`;
-  const wazuhUrl = `https://${wazuhHost}/app/wazuh`;
-
   const misp       = inc.misp_enrichment || {};
   const corrRules  = inc.correlated_rules || [];
   const uebaFlags  = inc.ueba_flags || [];
@@ -737,17 +709,6 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0, marginLeft: 12 }}>
-          <button
-            onClick={handleWazuhLaunch}
-            disabled={wazuhLaunching}
-            title="Opens Wazuh dashboard with your CyCentra session (SSO)"
-            style={{ background: wazuhLaunching ? "rgba(77,158,255,0.05)" : "rgba(77,158,255,0.1)",
-              border: "1px solid rgba(77,158,255,0.3)",
-              color: "#4d9eff", padding: "6px 12px", borderRadius: 4,
-              cursor: wazuhLaunching ? "wait" : "pointer",
-              fontSize: 11, fontFamily: "monospace", whiteSpace: "nowrap" }}>
-            {wazuhLaunching ? "Launching…" : "↗ Investigate in CySIEM Dashboard"}
-          </button>
           <button onClick={onClose}
             style={{ background: "none", border: "none", color: "rgba(255,255,255,0.65)",
               cursor: "pointer", fontSize: 20, padding: 4, flexShrink: 0 }}>✕</button>

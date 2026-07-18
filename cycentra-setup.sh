@@ -17,9 +17,6 @@
 #
 # What this script pulls from where:
 #   apt repos          → PostgreSQL 16, Redis, nginx, certbot, python3
-#   packages.wazuh.com → Wazuh agent packages only (for endpoints enrolling into a
-#                         customer's own externally-managed Wazuh Manager — this
-#                         script does not install a Wazuh server)
 #   GitHub Releases    → cycentra-release.tar.gz (portal, SQL, config, manifest)
 #   GitHub Packages    → cycentra-backend wheel (Flask + engine combined)
 #   Let's Encrypt      → SSL certificates via certbot
@@ -891,32 +888,14 @@ mkdir -p /opt/cycentra
 echo "${BUNDLE_VERSION}" > /opt/cycentra/version
 success "Version file written: /opt/cycentra/version → ${BUNDLE_VERSION}"
 
-# ── Early agent-package seed ─────────────────────────────────────────────────
-# Install bundle packages NOW — before the self-copy below overwrites this
-# script.  Bash is still reading the file it originally opened here, so this
-# block is guaranteed to execute on every run regardless of inode behaviour.
-# Step 22b later re-confirms permissions; if files are already present it no-ops.
+# ── Early package dir setup ──────────────────────────────────────────────────
+# Created NOW — before the self-copy below overwrites this script — so the
+# CyEDR asset staging block right after it (which relies on this dir) always
+# has somewhere to write. Bash is still reading the file it originally opened
+# here, so this runs on every run regardless of inode behaviour.
 _EARLY_PKG_DIR="/var/lib/cycentra-agent-packages"
 mkdir -p "$_EARLY_PKG_DIR"
 chmod 755 "$_EARLY_PKG_DIR"; chown www-data:www-data "$_EARLY_PKG_DIR" 2>/dev/null || true
-_early_bundle_pkgs="${BUNDLE_DIR}/agent-packages"
-if [[ -d "$_early_bundle_pkgs" ]]; then
-    _early_ver="${PKG_VER}"   # already resolved from manifest.json (e.g. "1.0.45")
-    for _bpkg in "${_early_bundle_pkgs}"/cy360-agent-*; do
-        [[ -f "$_bpkg" ]] || continue
-        _bn=$(basename "$_bpkg")
-        if [[ "$_bn" =~ ^cy360-agent-[0-9]+\.[0-9]+\.[0-9]+(.*)$ ]]; then
-            _sfx="${BASH_REMATCH[1]}"
-            [[ "$_sfx" =~ ^[._]([^.]+\.[^.]+)$ ]] && _sfx="-${BASH_REMATCH[1]}"
-            _dest="${_EARLY_PKG_DIR}/cy360-agent-${_early_ver}${_sfx}"
-            if [[ ! -f "$_dest" ]]; then
-                cp "$_bpkg" "$_dest"
-                chmod 644 "$_dest"; chown www-data:www-data "$_dest" 2>/dev/null || true
-                success "Agent pkg seeded early: $(basename "$_dest")"
-            fi
-        fi
-    done
-fi
 
 # ── Stage CyEDR installer + agent files (mirrors agent package seeding above) ─
 # Source files live in the repo; this block copies them to the NGINX-served dir
@@ -1613,89 +1592,6 @@ EDR_PKG_NGINX_PY
         [[ -f "$_NGINX_MOD" ]] && success "nginx: /edr-packages/ location already configured"
     fi
 
-    # ── Inject /agent-packages/ nginx location if missing (idempotent) ──────────
-    # Fresh installs already have this block from the heredoc above.
-    # Updates on existing servers need it injected into the live config.
-    if [[ -f "$_NGINX_MOD" ]] && ! grep -q '/agent-packages/' "$_NGINX_MOD" 2>/dev/null; then
-        python3 - "$_NGINX_MOD" << 'AGENT_PKG_NGINX_PY'
-import sys, re
-path = sys.argv[1]
-with open(path) as f:
-    text = f.read()
-
-block = (
-    "    # ── Agent package distribution — served directly by nginx ──\n"
-    "    location /agent-packages/ {\n"
-    "        alias /var/lib/cycentra-agent-packages/;\n"
-    "        autoindex off;\n"
-    "        add_header Content-Disposition \"attachment\" always;\n"
-    "        add_header X-Content-Type-Options \"nosniff\" always;\n"
-    "        add_header Cache-Control \"no-store, must-revalidate\" always;\n"
-    "    }\n"
-)
-
-# Insert before the catch-all "location /" in the cy360 server block
-anchor = "    location /     { try_files"
-if "/agent-packages/" not in text and anchor in text:
-    idx = text.find(anchor)
-    text = text[:idx] + block + text[idx:]
-    with open(path, "w") as f:
-        f.write(text)
-    print("nginx cy360: /agent-packages/ location block injected")
-else:
-    print("nginx cy360: /agent-packages/ already present or anchor not found")
-AGENT_PKG_NGINX_PY
-        nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
-            success "nginx: /agent-packages/ location block added and reloaded" || \
-            warn "nginx reload failed after agent-packages injection — check: nginx -t"
-    else
-        [[ -f "$_NGINX_MOD" ]] && success "nginx: /agent-packages/ location already configured"
-    fi
-
-    # ── Ensure agent-packages location uses correct alias path ──────────────────
-    # Target: alias /var/lib/cycentra-agent-packages/;
-    # Old broken configs: alias /opt/cycentra/agent-packages/ (NGINX can't traverse 700 dir)
-    # Also fixes no-alias configs (symlink approach that also failed for the same reason).
-    if [[ -f "$_NGINX_MOD" ]]; then
-        python3 - "$_NGINX_MOD" << 'ALIAS_FIX_PY'
-import sys, re
-path = sys.argv[1]
-with open(path) as f:
-    text = f.read()
-
-correct_alias = "        alias /var/lib/cycentra-agent-packages/;\n"
-changed = False
-
-# Replace wrong alias (old path)
-new_text = re.sub(
-    r'([ \t]+location /agent-packages/ \{)\n([ \t]+alias [^\n]+;\n)?',
-    lambda m: m.group(1) + "\n" + correct_alias if m.group(2) != correct_alias else m.group(0),
-    text
-)
-if new_text != text:
-    text = new_text
-    changed = True
-
-# Add alias if the block exists but has no alias at all
-def add_alias_if_missing(m):
-    block = m.group(0)
-    if "alias " not in block:
-        return block.replace("location /agent-packages/ {\n", "location /agent-packages/ {\n" + correct_alias, 1)
-    return block
-new_text = re.sub(r'location /agent-packages/ \{[^}]+\}', add_alias_if_missing, text, flags=re.DOTALL)
-if new_text != text:
-    text = new_text
-    changed = True
-
-with open(path, 'w') as f:
-    f.write(text)
-print("nginx: agent-packages alias updated" if changed else "nginx: agent-packages alias already correct")
-ALIAS_FIX_PY
-        nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null && \
-            success "nginx: agent-packages alias verified/fixed and nginx reloaded" || \
-            warn "nginx reload failed — check: nginx -t"
-    fi
-
     # ── Ensure sites-enabled is a symlink to sites-available ─────────────────────
     # On servers where sites-enabled/cycentra-modules is a hardcopy file (not a
     # symlink), all nginx migration edits above are invisible to nginx because it
@@ -2287,17 +2183,6 @@ server {
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     add_header X-Content-Type-Options "nosniff" always;
     root /var/www/cycentra360; index index.html;
-    # ── Agent package distribution — served directly by nginx (no Flask proxy) ──
-    # Packages live at /var/lib/cycentra-agent-packages/ (www-data owned, 755).
-    # This path is outside /opt/cycentra/ (which is root-only 700) so NGINX can
-    # traverse it without permission issues.
-    location /agent-packages/ {
-        alias /var/lib/cycentra-agent-packages/;
-        autoindex off;
-        add_header Content-Disposition "attachment" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header Cache-Control "no-store, must-revalidate" always;
-    }
     location /     { try_files \$uri \$uri/ /index.html; }
     location /assets/  { expires 1y; add_header Cache-Control "public, immutable"; }
     location = /index.html { add_header Cache-Control "no-cache, no-store, must-revalidate"; }
@@ -2369,8 +2254,8 @@ server {
 }
 
 # No cysiem.${BASE_DOMAIN} vhost is written — this script no longer installs a
-# local Wazuh Dashboard to proxy to. Agent/EDR package downloads still work via
-# cy360.${BASE_DOMAIN}/agent-packages/.
+# local Wazuh Dashboard to proxy to. EDR agent binary downloads still work via
+# cy360.${BASE_DOMAIN}/edr-packages/.
 # Module server blocks are added by routes.py when modules are installed via portal
 # cymisp.DOMAIN server block is added by routes.py when CyMISP is installed via portal
 # cymind.DOMAIN server block is added by cymind/install.sh when CyMind is installed
@@ -2636,13 +2521,17 @@ fi  # end SSL block
 CONFIG_SRC="/tmp/cycentra-config"
 
 # ── geoip2 Python library ──────────────────────────────────────────────────
-if ! python3 -c "import geoip2" 2>/dev/null; then
-    info "Installing geoip2 Python library..."
-    PIP_ROOT_USER_ACTION=ignore pip3 install geoip2 ${_PIP_BSP} -q \
-        && success "geoip2 installed" \
-        || warn "geoip2 install failed — GeoIP enrichment will be disabled"
+# geoip2 now ships as a pinned dependency in backend/requirements.txt (installed
+# together with cycentra-backend at STEP 12, in the same pip resolution as the
+# aiohttp==3.13.3 pin) so it no longer needs a separate install here. An
+# unpinned standalone `pip3 install geoip2` here previously grabbed whatever
+# was newest (5.3.0+ raised its aiohttp floor to >=3.14.1) and silently
+# upgraded aiohttp past the version cycentra-backend requires. This block is
+# now just a sanity check that the wheel install actually pulled it in.
+if python3 -c "import geoip2" 2>/dev/null; then
+    success "geoip2 present (installed with cycentra-backend package)"
 else
-    success "geoip2 already installed"
+    warn "geoip2 not importable — GeoIP enrichment will be disabled; check STEP 12 (INSTALLING CYCENTRA-BACKEND PACKAGE) output"
 fi
 
 # ── GeoLite2-City.mmdb download (always refreshed — MaxMind updates monthly) ──
@@ -2784,132 +2673,19 @@ fi
 mkdir -p /var/log/cycentra && touch /var/log/cycentra/auth.log
 chmod 644 /var/log/cycentra/auth.log
 
-# ── Step 22b: Agent Package Repository ───────────────────────────────────────
-# Downloads Wazuh AGENT packages (client software for endpoints) and renames
-# them to the cy360-agent-* scheme, for customers who point WAZUH_API_* at
-# their own externally-managed Wazuh Manager. This script does not install a
-# Wazuh server itself — see Sensor Deployment in Host Intelligence.
-# Runs on both fresh installs and updates. Packages are stored at
+# ── Step 22b: CyEDR Package Repository ───────────────────────────────────────
+# Stages CyEDR agent/tray binaries from the release bundle. Runs on both fresh
+# installs and updates. Packages are stored at
 # /var/lib/cycentra-agent-packages/ — directly accessible by NGINX (www-data, 755).
 # Keeping packages outside /opt/cycentra/ (which is root-only 700) avoids NGINX 403.
 step_header "AGENT PACKAGE REPOSITORY"
 
 _AGENT_PKG_DIR="/var/lib/cycentra-agent-packages"
-# Use brace grouping so tr|sed apply to cat output, not just the fallback echo.
-# The naive  `cat ... || echo | tr | sed`  only processes the echo branch (bash || precedence).
-_CY360_VER="$( { cat /opt/cycentra/version 2>/dev/null || echo "v1.0.0"; } | tr -d '[:space:]' | sed 's/^v//' )"
-_WAZUH_VER="${WAZUH_VERSION:-4.14.5}"
-_WAZUH_REL="${WAZUH_RELEASE:-1}"
-_WAZUH_VR="${_WAZUH_VER}-${_WAZUH_REL}"
-
 mkdir -p "$_AGENT_PKG_DIR"
 chmod 755 "$_AGENT_PKG_DIR"
 chown www-data:www-data "$_AGENT_PKG_DIR" 2>/dev/null || true
 
-# Remove any broken symlink at /var/www/cycentra360/agent-packages (legacy approach)
-[[ -L "/var/www/cycentra360/agent-packages" ]] && rm -f "/var/www/cycentra360/agent-packages" || true
-
-# Migrate packages from old location (/opt/cycentra/agent-packages/) if they exist there.
-# Also strips the v-prefix bug (e.g. cy360-agent-v1.0.37-arm64.pkg → cy360-agent-1.0.37-arm64.pkg).
-if [[ -d "/opt/cycentra/agent-packages" ]]; then
-    for _old_f in /opt/cycentra/agent-packages/cy360-agent-*; do
-        [[ -f "$_old_f" ]] || continue
-        _old_bn=$(basename "$_old_f")
-        _new_bn="${_old_bn/cy360-agent-v/cy360-agent-}"  # strip v prefix if present
-        mv "$_old_f" "${_AGENT_PKG_DIR}/${_new_bn}" 2>/dev/null && \
-            info "Migrated: ${_old_bn} → ${_new_bn}" || true
-    done
-    rmdir /opt/cycentra/agent-packages 2>/dev/null || true
-    success "Old agent-packages migrated to ${_AGENT_PKG_DIR}"
-fi
-
-# Remove any stale v-prefixed packages in the new location (from previous broken runs)
-find "$_AGENT_PKG_DIR" -maxdepth 1 -name "cy360-agent-v*" -type f -delete 2>/dev/null || true
-
-_dl_agent_pkg() {
-    local url="$1" dest="$2"
-    if [[ -f "$dest" ]]; then
-        # Re-apply permissions in case the file was written by root previously
-        chmod 644 "$dest"
-        chown www-data:www-data "$dest" 2>/dev/null || true
-        success "Agent pkg present: $(basename "$dest")"
-        return 0
-    fi
-
-    # Rename an existing same-type package (different cy360 version, same Wazuh binary)
-    # instead of re-downloading hundreds of MB on every cy360 version bump.
-    # Checks three naming variants in order:
-    #   1. Current standard:  cy360-agent-VERSION-arch.ext  (dash separator)
-    #   2. Legacy dot naming: cy360-agent-VERSION.arch.ext  (packages placed pre-standardisation)
-    #   3. Legacy underscore: cy360-agent-VERSION_arch.ext  (original Wazuh DEB convention)
-    local _suffix="${dest#${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}}"
-    local _old_pkg=""
-
-    # 1. Dash naming (current)
-    _old_pkg=$(find "$_AGENT_PKG_DIR" -maxdepth 1 \
-        -name "cy360-agent-*${_suffix}" -type f 2>/dev/null | sort | tail -1 || true)
-
-    # 2. Dot naming (legacy) — "-arm64.pkg" → "*.arm64.pkg"
-    if [[ -z "$_old_pkg" && "${_suffix:0:1}" == "-" ]]; then
-        _old_pkg=$(find "$_AGENT_PKG_DIR" -maxdepth 1 \
-            -name "cy360-agent-*.${_suffix:1}" -type f 2>/dev/null | sort | tail -1 || true)
-    fi
-
-    # 3. Underscore naming (legacy DEB) — "-amd64.deb" → "*_amd64.deb"
-    if [[ -z "$_old_pkg" && "${_suffix:0:1}" == "-" ]]; then
-        _old_pkg=$(find "$_AGENT_PKG_DIR" -maxdepth 1 \
-            -name "cy360-agent-*_${_suffix:1}" -type f 2>/dev/null | sort | tail -1 || true)
-    fi
-
-    if [[ -n "$_old_pkg" ]]; then
-        mv "$_old_pkg" "$dest"
-        chmod 644 "$dest"
-        chown www-data:www-data "$dest" 2>/dev/null || true
-        success "Renamed: $(basename "$_old_pkg") → $(basename "$dest")"
-        return 0
-    fi
-
-    info "Downloading agent package: $(basename "$dest")"
-    if curl -fsSL --retry 3 --retry-delay 5 --connect-timeout 15 --max-time 300 \
-            -o "${dest}.tmp" "$url" 2>/dev/null; then
-        mv "${dest}.tmp" "$dest"
-        chmod 644 "$dest"
-        chown www-data:www-data "$dest" 2>/dev/null || true
-        success "Downloaded: $(basename "$dest")"
-    else
-        warn "Could not download $(basename "$dest") — portal will show missing package"
-        rm -f "${dest}.tmp" || true
-    fi
-}
-
-# ── Seed from release bundle (avoids packages.wazuh.com dependency) ─────────
-# deploy.yml bundles agent-packages/ into cycentra-release.tar.gz; setup.sh
-# extracts to $BUNDLE_DIR.  Copy any bundled packages into the target dir now,
-# renaming to the current cy360 version and normalising separator to dash.
 _bundle_pkgs="${BUNDLE_DIR:-/tmp/cycentra-release}/agent-packages"
-if [[ -d "$_bundle_pkgs" ]]; then
-    _bundled=0
-    for _bpkg in "${_bundle_pkgs}"/cy360-agent-*; do
-        [[ -f "$_bpkg" ]] || continue
-        _bn=$(basename "$_bpkg")
-        if [[ "$_bn" =~ ^cy360-agent-[0-9]+\.[0-9]+\.[0-9]+(.*)$ ]]; then
-            _sfx="${BASH_REMATCH[1]}"
-            # Normalise separator: .arch.ext or _arch.ext → -arch.ext
-            if [[ "$_sfx" =~ ^[._]([^.]+\.[^.]+)$ ]]; then
-                _sfx="-${BASH_REMATCH[1]}"
-            fi
-            _dest="${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}${_sfx}"
-            if [[ ! -f "$_dest" ]]; then
-                cp "$_bpkg" "$_dest"
-                chmod 644 "$_dest"
-                chown www-data:www-data "$_dest" 2>/dev/null || true
-                success "Bundle pkg installed: $_bn → $(basename "$_dest")"
-                _bundled=$((_bundled+1))
-            fi
-        fi
-    done
-    [[ $_bundled -gt 0 ]] && success "Installed $_bundled agent package(s) from release bundle"
-fi
 
 # ── Seed CyEDR agent + tray binaries from release bundle ────────────────────
 # Built automatically by CI (.github/workflows/deploy.yml — build-edr-linux/
@@ -2943,37 +2719,6 @@ if [[ -d "$_bundle_edr" ]]; then
 else
     warn "No agent-packages/edr/ in release bundle — CyEDR binary quick-install unavailable until the next release; run agent-packages/build-edr-packages.sh manually to stage them now"
 fi
-
-_dl_agent_pkg \
-    "https://packages.wazuh.com/4.x/yum/wazuh-agent-${_WAZUH_VR}.x86_64.rpm" \
-    "${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}-x86_64.rpm"
-
-_dl_agent_pkg \
-    "https://packages.wazuh.com/4.x/yum/wazuh-agent-${_WAZUH_VR}.aarch64.rpm" \
-    "${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}-aarch64.rpm"
-
-_dl_agent_pkg \
-    "https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_${_WAZUH_VR}_amd64.deb" \
-    "${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}-amd64.deb"
-
-_dl_agent_pkg \
-    "https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_${_WAZUH_VR}_arm64.deb" \
-    "${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}-aarch64.deb"
-
-_dl_agent_pkg \
-    "https://packages.wazuh.com/4.x/windows/wazuh-agent-${_WAZUH_VR}.msi" \
-    "${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}.msi"
-
-_dl_agent_pkg \
-    "https://packages.wazuh.com/4.x/macos/wazuh-agent-${_WAZUH_VR}.intel64.pkg" \
-    "${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}-intel64.pkg"
-
-_dl_agent_pkg \
-    "https://packages.wazuh.com/4.x/macos/wazuh-agent-${_WAZUH_VR}.arm64.pkg" \
-    "${_AGENT_PKG_DIR}/cy360-agent-${_CY360_VER}-arm64.pkg"
-
-_pkg_count=$(find "$_AGENT_PKG_DIR" -maxdepth 1 -name "cy360-agent-*" | wc -l)
-success "Agent packages ready: ${_pkg_count}/7 at ${_AGENT_PKG_DIR}"
 
 # ── Step 23: Cron jobs ────────────────────────────────────────────────────────
 step_header "CRON JOBS"
@@ -3056,20 +2801,18 @@ if [[ "$MODE" == "full" ]]; then
     chk "Backend" "https://cyasm.${BASE_DOMAIN}/health"
 fi
 
-# ── Agent package distribution validation ─────────────────────────────────────
-echo ""; info "── Agent package distribution ──"
+# ── EDR package distribution validation ───────────────────────────────────────
+echo ""; info "── EDR package distribution ──"
 
-# 1. Verify NGINX config includes the agent-packages location block
 _NGINX_MOD_CHECK="/etc/nginx/sites-available/cycentra-modules"
 if [[ -f "$_NGINX_MOD_CHECK" ]]; then
-    if grep -q '/agent-packages/' "$_NGINX_MOD_CHECK" 2>/dev/null; then
-        success "NGINX: /agent-packages/ location block present"
+    if grep -q '/edr-packages/' "$_NGINX_MOD_CHECK" 2>/dev/null; then
+        success "NGINX: /edr-packages/ location block present"
     else
-        warn "NGINX: /agent-packages/ location block MISSING — run update to inject it"
-        ERRORS+=("NGINX agent-packages block missing")
+        warn "NGINX: /edr-packages/ location block MISSING — run update to inject it"
+        ERRORS+=("NGINX edr-packages block missing")
     fi
 
-    # 2. nginx -t syntax check
     if nginx -t 2>/dev/null; then
         success "NGINX: config syntax OK"
     else
@@ -3078,40 +2821,6 @@ if [[ -f "$_NGINX_MOD_CHECK" ]]; then
     fi
 else
     warn "NGINX config not found at ${_NGINX_MOD_CHECK} — skipping NGINX validation"
-fi
-
-# 3. Verify agent packages directory and count
-_APD="/var/lib/cycentra-agent-packages"
-if [[ -d "$_APD" ]]; then
-    _ap_count=$(find "$_APD" -maxdepth 1 -name "cy360-agent-*" -type f 2>/dev/null | wc -l)
-    if [[ "$_ap_count" -ge 1 ]]; then
-        success "Agent packages: ${_ap_count} package(s) present at ${_APD}"
-    else
-        warn "Agent packages: directory exists but no cy360-agent-* files found — run Step 22b"
-        ERRORS+=("No agent packages found")
-    fi
-else
-    warn "Agent packages directory not found: ${_APD}"
-    ERRORS+=("Agent packages directory missing")
-fi
-
-# 4. Verify download URL reachable via HTTPS (only for full installs with SSL)
-if [[ "$MODE" == "full" ]] && [[ -n "${BASE_DOMAIN:-}" ]]; then
-    _first_pkg=$(find "$_APD" -maxdepth 1 -name "cy360-agent-*.rpm" -type f 2>/dev/null | head -1)
-    if [[ -n "$_first_pkg" ]]; then
-        _pkg_name=$(basename "$_first_pkg")
-        _pkg_url="https://cy360.${BASE_DOMAIN}/agent-packages/${_pkg_name}"
-        _http_code=$(curl -sk --max-time 10 -o /dev/null -w "%{http_code}" "$_pkg_url" 2>/dev/null || echo "000")
-        if [[ "$_http_code" == "200" ]]; then
-            success "Agent package URL reachable: ${_pkg_url} → HTTP 200"
-        else
-            warn "Agent package URL returned HTTP ${_http_code}: ${_pkg_url}"
-            warn "  Check: nginx is running, SSL cert is valid, and /agent-packages/ block is in place"
-            ERRORS+=("Agent package URL not reachable (HTTP ${_http_code})")
-        fi
-    else
-        info "No agent packages present yet — skipping URL reachability check"
-    fi
 fi
 
 # ── Step 25: Cleanup ──────────────────────────────────────────────────────────

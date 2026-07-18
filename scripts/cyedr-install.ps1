@@ -9,7 +9,6 @@
      • YARA for on-demand file scanning
      • PowerShell Script Block Logging
      • CyEDR Python bridge daemon (Windows service via NSSM or sc.exe)
-     • Optional: CySIEM agent
 
 .PARAMETER Token
     Deployment token (required)
@@ -21,14 +20,8 @@
     Asset classification: workstation|server|database|domain_controller|api_gateway|jump_server
     Default: workstation
 
-.PARAMETER WithCySIEM
-    Switch: also install the CySIEM agent without prompting
-
-.PARAMETER NoCySIEM
-    Switch: skip CySIEM installation without prompting
-
 .PARAMETER Silent
-    Non-interactive mode (implies -NoCySIEM unless -WithCySIEM is set)
+    Non-interactive mode
 
 .PARAMETER WithTray
     Switch: install the CyEDR system-tray app even on non-workstation asset types
@@ -40,7 +33,7 @@
     iex ((New-Object Net.WebClient).DownloadString('https://cy360.example.com/api/edr/installer/win'))
 
 .EXAMPLE
-    .\cyedr-install.ps1 -Token "eyJ..." -Platform "https://cy360.example.com" -WithCySIEM
+    .\cyedr-install.ps1 -Token "eyJ..." -Platform "https://cy360.example.com"
 #>
 [CmdletBinding()]
 param(
@@ -53,8 +46,6 @@ param(
     [ValidateSet("workstation","server","database","domain_controller","api_gateway","jump_server")]
     [string]$AssetType = "workstation",
 
-    [switch]$WithCySIEM,
-    [switch]$NoCySIEM,
     [switch]$WithTray,
     [switch]$NoTray,
     [switch]$Silent
@@ -478,44 +469,6 @@ function Set-AntiTamper {
     Write-CyOk "Anti-tamper ACLs applied"
 }
 
-# ── Optional CySIEM installation ─────────────────────────────────────────────
-function Maybe-InstallCySIEM {
-    if ($NoCySIEM -or ($Silent -and -not $WithCySIEM)) {
-        Write-CyInfo "CySIEM installation skipped."
-        return
-    }
-
-    if (-not $WithCySIEM) {
-        Write-Host ""
-        Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Yellow
-        Write-Host " OPTIONAL: CySIEM Agent (log collection)               " -ForegroundColor Yellow
-        Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Yellow
-        Write-Host ""
-        Write-Host "  CySIEM adds: Security event log, Windows Defender, FIM"
-        Write-Host "  CyEDR already covers: Sysmon, behavioral detection, response"
-        Write-Host ""
-        $answer = Read-Host "Install CySIEM agent alongside CyEDR? [y/N]"
-        if ($answer -notmatch "^[Yy]") {
-            Write-CyInfo "CySIEM skipped."
-            return
-        }
-    }
-
-    Write-CyInfo "Downloading CySIEM installer..."
-    $installerPath = "$env:TEMP\cy360-agent.msi"
-    try {
-        Download-File -Url "$Platform/api/edr/installer/cysiem-msi" -Dest $installerPath
-        Write-CyInfo "Installing CySIEM agent — this may take a few minutes..."
-        Start-Process -FilePath "msiexec.exe" `
-            -ArgumentList "/i `"$installerPath`" /qn WAZUH_MANAGER_IP=`"$(([System.Uri]$Platform).Host)`"" `
-            -Wait -NoNewWindow
-        Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
-        Write-CyOk "CySIEM agent installed"
-    } catch {
-        Write-CyWarn "CySIEM installer failed: $_"
-    }
-}
-
 # ── Start service ──────────────────────────────────────────────────────────────
 function Start-CyEDRService {
     Write-CyInfo "Starting CyEDR agent service..."
@@ -576,6 +529,5 @@ Invoke-Enrollment
 Install-WindowsService
 $TrayExePath = Install-TrayBinary -Arch $EdrArch
 if ($TrayExePath) { Install-TrayScheduledTask -TrayExe $TrayExePath }
-Maybe-InstallCySIEM
 Start-CyEDRService
 Show-Summary

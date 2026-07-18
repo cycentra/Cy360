@@ -1704,7 +1704,7 @@ def revoke_token(tok_id):
 def installer_commands():
     """
     Return arch-aware install commands for a deployment token.
-    Response: { os: { arch: { method: cmd, "method+siem": cmd } }, collector_url, token }
+    Response: { os: { arch: { method: cmd } }, collector_url, token }
     """
     token = request.args.get("token", "")
     if not token:
@@ -1713,105 +1713,82 @@ def installer_commands():
     base = f"https://cy360.{BASE_DOMAIN}"
     u    = f"{base}/api/edr"
 
-    def _sh(siem=False):
-        sf = " --with-cysiem" if siem else ""
+    def _sh():
         return (
             f'curl -fsSL {u}/installer/unix | '
-            f'sudo bash -s -- --token "{token}" --platform "{base}"{sf}'
+            f'sudo bash -s -- --token "{token}" --platform "{base}"'
         )
 
-    def _pkg(os_key, arch, ext, siem=False):
+    def _pkg(os_key, arch, ext):
         inst = {
             "deb": f'dpkg -i cyedr-agent.{ext} && systemctl enable --now cyedr-agent',
             "rpm": f'rpm -ivh cyedr-agent.{ext} && systemctl enable --now cyedr-agent',
             "pkg": f'sudo installer -pkg cyedr-agent.{ext} -target /',
         }[ext]
-        siem_tail = (
-            f' && curl -fsSL -H "Authorization: Bearer {token}" '
-            f'{u}/installer/cysiem-script | sudo bash'
-        ) if siem else ""
         return (
             f'curl -fsSL -H "Authorization: Bearer {token}" '
             f'"{u}/installer/agent-bundle?os={os_key}&arch={arch}" '
-            f'-o cyedr-agent.{ext} && {inst}{siem_tail}'
+            f'-o cyedr-agent.{ext} && {inst}'
         )
 
-    def _ps1(arch, siem=False):
+    def _ps1(arch):
         # arch is accepted for call-site symmetry with _msi()/_pkg() but not
         # passed through: cyedr-install.ps1's param() block has no -Arch
         # switch, it self-detects via $env:PROCESSOR_ARCHITECTURE ($EdrArch)
         # the same way cyedr-install.sh self-detects via `uname -m`.
-        sf = " -WithCySIEM" if siem else ""
         return (
             f'[Net.ServicePointManager]::SecurityProtocol="Tls12"; '
             f'$t="{token}"; $p="{base}"; '
             f'iwr "$p/api/edr/installer/win" -UseBasicParsing | '
             f'iex; '
-            f'cyedr-install.ps1 -Token $t -Platform $p{sf}'
+            f'cyedr-install.ps1 -Token $t -Platform $p'
         )
 
-    def _msi(arch, siem=False):
-        sf = " INSTALL_CYSIEM=1" if siem else ""
+    def _msi(arch):
         return (
             f'msiexec /i cyedr-agent-{arch}.msi '
             f'DEPLOYMENT_TOKEN="{token}" '
             f'COLLECTOR_URL="{u}" '
-            f'/qn /l*v cyedr-install.log{sf}'
+            f'/qn /l*v cyedr-install.log'
         )
 
     return jsonify({
         "windows": {
             "x64": {
-                "powershell":      _ps1("x64"),
-                "msiexec":         _msi("x64"),
-                "powershell+siem": _ps1("x64", siem=True),
-                "msiexec+siem":    _msi("x64", siem=True),
+                "powershell": _ps1("x64"),
+                "msiexec":    _msi("x64"),
             },
             "arm64": {
-                "powershell":      _ps1("arm64"),
-                "msiexec":         _msi("arm64"),
-                "powershell+siem": _ps1("arm64", siem=True),
-                "msiexec+siem":    _msi("arm64", siem=True),
+                "powershell": _ps1("arm64"),
+                "msiexec":    _msi("arm64"),
             },
         },
         "linux": {
             "amd64": {
-                "bash":      _sh(),
-                "deb":       _pkg("LINUX", "amd64", "deb"),
-                "bash+siem": _sh(siem=True),
-                "deb+siem":  _pkg("LINUX", "amd64", "deb", siem=True),
+                "bash": _sh(),
+                "deb":  _pkg("LINUX", "amd64", "deb"),
             },
             "arm64": {
-                "bash":      _sh(),
-                "deb":       _pkg("LINUX", "arm64", "deb"),
-                "bash+siem": _sh(siem=True),
-                "deb+siem":  _pkg("LINUX", "arm64", "deb", siem=True),
+                "bash": _sh(),
+                "deb":  _pkg("LINUX", "arm64", "deb"),
             },
             "x86_64-rpm": {
-                "bash":      _sh(),
-                "rpm":       _pkg("LINUX", "x86_64", "rpm"),
-                "bash+siem": _sh(siem=True),
-                "rpm+siem":  _pkg("LINUX", "x86_64", "rpm", siem=True),
+                "bash": _sh(),
+                "rpm":  _pkg("LINUX", "x86_64", "rpm"),
             },
             "aarch64-rpm": {
-                "bash":      _sh(),
-                "rpm":       _pkg("LINUX", "aarch64", "rpm"),
-                "bash+siem": _sh(siem=True),
-                "rpm+siem":  _pkg("LINUX", "aarch64", "rpm", siem=True),
+                "bash": _sh(),
+                "rpm":  _pkg("LINUX", "aarch64", "rpm"),
             },
         },
         "macos": {
             "intel": {
-                "bash":      _sh(),
-                "pkg":       _pkg("MACOS", "intel64", "pkg"),
-                "bash+siem": _sh(siem=True),
-                "pkg+siem":  _pkg("MACOS", "intel64", "pkg", siem=True),
+                "bash": _sh(),
+                "pkg":  _pkg("MACOS", "intel64", "pkg"),
             },
             "apple_silicon": {
-                "bash":      _sh(),
-                "pkg":       _pkg("MACOS", "arm64", "pkg"),
-                "bash+siem": _sh(siem=True),
-                "pkg+siem":  _pkg("MACOS", "arm64", "pkg", siem=True),
+                "bash": _sh(),
+                "pkg":  _pkg("MACOS", "arm64", "pkg"),
             },
         },
         "collector_url": u,
@@ -1878,8 +1855,7 @@ def _require_deploy_token():
 
 for _ap in ("/installer/agent-bundle", "/installer/sysmon-config",
             "/installer/sysmon-exe", "/installer/yara-rules",
-            "/installer/yara-exe", "/installer/cysiem-script",
-            "/installer/cysiem-msi", "/installer/unix", "/installer/win",
+            "/installer/yara-exe", "/installer/unix", "/installer/win",
             "/installer/agent-py", "/installer/agent-script",
             "/installer/agent-binary", "/installer/tray-bundle"):
     edr_bp.add_url_rule(
@@ -2054,47 +2030,6 @@ def installer_yara_exe():
     fpath = os.path.join(_EDR_PKG_DIR, "yara64.exe")
     if not os.path.exists(fpath):
         return jsonify({"error": "yara64.exe not staged"}), 404
-    return send_file(fpath, as_attachment=True, mimetype="application/octet-stream")
-
-
-@edr_bp.route("/installer/cysiem-script", methods=["GET"])
-def installer_cysiem_script():
-    """Serve CySIEM (Wazuh) shell installer for Linux/macOS (dynamically generated)."""
-    err = _require_deploy_token()
-    if err:
-        return err
-    from blueprints.system.routes import _INSTALLER_SH, _read_installed_version
-    base_domain    = os.environ.get("BASE_DOMAIN", "").strip()
-    server_url     = f"https://cy360.{base_domain}" if base_domain else request.host_url.rstrip("/")
-    cysiem_manager = (
-        os.environ.get("CY360_PUBLIC_IP") or
-        os.environ.get("WAZUH_MANAGER_IP") or
-        (f"cysiem.{base_domain}" if base_domain else request.host.split(":")[0])
-    )
-    content = _INSTALLER_SH.format(
-        server_url=server_url,
-        cysiem_manager=cysiem_manager,
-        version=_read_installed_version(),
-    )
-    resp = make_response(content)
-    resp.headers["Content-Type"] = "text/x-shellscript; charset=utf-8"
-    return add_cors_headers(resp)
-
-
-@edr_bp.route("/installer/cysiem-msi", methods=["GET"])
-def installer_cysiem_msi():
-    """Serve Wazuh MSI for Windows CySIEM installation."""
-    err = _require_deploy_token()
-    if err:
-        return err
-    # Serve from the Wazuh agent packages directory
-    from core.config import CY360_VERSION
-    wazuh_dir = "/var/lib/cycentra-agent-packages"
-    arch = request.args.get("arch", "x64")
-    fname = f"cy360-agent-{CY360_VERSION}.msi"
-    fpath = os.path.join(wazuh_dir, fname)
-    if not os.path.exists(fpath):
-        return jsonify({"error": f"CySIEM MSI not found: {fname}"}), 404
     return send_file(fpath, as_attachment=True, mimetype="application/octet-stream")
 
 

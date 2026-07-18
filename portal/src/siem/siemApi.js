@@ -85,9 +85,6 @@ export const siemApi = {
    */
   transitionIncident: (id, body) => _post(`/incidents/${id}/transition`, body),
 
-  /** Returns integration URLs (iris_url, wazuh_url, iris_enabled, wazuh_enabled) */
-  getUebaIntegrations: () => _get("/ueba/integrations"),
-
   /** Recent raw alert list */
   getAlerts: (params = {}) => _get("/alerts", params),
 

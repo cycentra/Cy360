@@ -13,6 +13,11 @@ python-dotenv
 lxml
 aiohttp==3.13.3
 aiohttp_socks==0.11.0
+# geoip2 pinned at 5.2.0 — 5.3.0+ raised its aiohttp floor to >=3.14.1, which
+# conflicts with the aiohttp==3.13.3 pin above. Only geoip2.database.Reader
+# (sync, local .mmdb lookups) is used, in cysiemstack/correlation_engine/normaliser.py —
+# the aiohttp dependency itself is unused dead weight from geoip2's async web-service client.
+geoip2==5.2.0
 beautifulsoup4==4.14.3
 dnspython==2.8.0
 Flask==3.1.3

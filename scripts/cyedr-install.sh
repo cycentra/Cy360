@@ -6,9 +6,6 @@
 #   Linux  — auditd + CyEDR audit rules, YARA, CyEDR Python bridge daemon (systemd)
 #   macOS  — YARA, CyEDR Python bridge daemon (LaunchDaemon), oslog subscription
 #
-# CySIEM is optional. Use --with-cysiem to auto-install, or
-# --no-cysiem to skip the prompt, or answer the interactive question.
-#
 # A system-tray/menu-bar icon (cyedr-tray) is installed by default on
 # workstation asset types — shows CyEDR is running, offers an on-demand scan,
 # and a password-gated Stop/Exit (admin password set in Cy360 -> EDR Policies
@@ -24,11 +21,9 @@
 #     --platform URL         CyCentra 360 platform URL (required)
 #     --asset-type TYPE      Asset type: workstation|server|database|domain_controller|
 #                            api_gateway|jump_server (default: workstation)
-#     --with-cysiem          Also install CySIEM agent
-#     --no-cysiem            Skip CySIEM installation without prompting
 #     --with-tray            Install the system-tray app even on non-workstation asset types
 #     --no-tray              Skip installing the system-tray app
-#     --silent               Non-interactive; --no-cysiem implied unless --with-cysiem set
+#     --silent               Non-interactive
 #     --help                 Show this help
 
 set -euo pipefail
@@ -44,7 +39,6 @@ die()   { echo -e "${RED}[CyEDR ERROR]${NC} $*" >&2; exit 1; }
 DEPLOY_TOKEN=""
 PLATFORM_URL=""
 ASSET_TYPE="workstation"
-WITH_CYSIEM=""          # empty=prompt, "yes"=install, "no"=skip
 WITH_TRAY=""            # empty=default (workstation only), "yes"=force install, "no"=skip
 SILENT=false
 EDR_HOME="/opt/cycentra/edr"
@@ -75,8 +69,6 @@ parse_args() {
             --token)      DEPLOY_TOKEN="$2"; shift 2 ;;
             --platform)   PLATFORM_URL="${2%/}"; shift 2 ;;
             --asset-type) ASSET_TYPE="$2"; shift 2 ;;
-            --with-cysiem) WITH_CYSIEM="yes"; shift ;;
-            --no-cysiem)   WITH_CYSIEM="no"; shift ;;
             --with-tray)   WITH_TRAY="yes"; shift ;;
             --no-tray)     WITH_TRAY="no"; shift ;;
             --silent)      SILENT=true; shift ;;
@@ -89,7 +81,6 @@ parse_args() {
     done
     [[ -z "$DEPLOY_TOKEN" ]] && die "Missing --token <DEPLOY_TOKEN>"
     [[ -z "$PLATFORM_URL" ]] && die "Missing --platform <URL>"
-    if [[ "$SILENT" == "true" ]] && [[ -z "$WITH_CYSIEM" ]]; then WITH_CYSIEM="no"; fi
 }
 
 # ── Platform detection ─────────────────────────────────────────────────────────
@@ -774,53 +765,6 @@ PYINLINE
     ok "Enrolled — Agent ID: $AGENT_ID"
 }
 
-# ── CySIEM optional installation ────────────────────────────────────────────
-maybe_install_cysiem() {
-    if [[ "$WITH_CYSIEM" == "no" ]]; then
-        info "CySIEM installation skipped."
-        return
-    fi
-
-    if [[ "$WITH_CYSIEM" != "yes" ]]; then
-        echo ""
-        echo -e "${YEL}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "${YEL} OPTIONAL: CySIEM Agent (log collection)               ${NC}"
-        echo -e "${YEL}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo ""
-        echo "  CySIEM provides:"
-        echo "   • File Integrity Monitoring (FIM)"
-        echo "   • Auth log collection (syslog / journald)"
-        echo "   • Compliance log aggregation (auditd compliance events)"
-        echo "   • Windows: Security event log, PowerShell logging"
-        echo ""
-        echo "  CyEDR already covers:"
-        echo "   • Behavioral detection (process, network, memory)"
-        echo "   • Automated threat response"
-        echo "   • SIEM telemetry feed"
-        echo ""
-        local CHOICE
-        read -r -t 60 -p "Install CySIEM agent alongside CyEDR? [y/N]: " CHOICE || CHOICE="n"
-        case "$CHOICE" in [Yy]|[Yy][Ee][Ss]) ;; *) info "CySIEM skipped."; return ;; esac
-        WITH_CYSIEM="yes"
-    fi
-
-    info "Installing CySIEM agent..."
-    local INSTALLER_URL="$PLATFORM_URL/api/edr/installer/cysiem-script"
-    local TMP_INSTALLER="/tmp/cy360-agent-install.sh"
-
-    curl -fsSL --max-time 60 \
-        -H "Authorization: Bearer $DEPLOY_TOKEN" \
-        "$INSTALLER_URL" -o "$TMP_INSTALLER" \
-        || die "Failed to download CySIEM installer from $INSTALLER_URL"
-    chmod +x "$TMP_INSTALLER"
-
-    bash "$TMP_INSTALLER" --install || \
-        warn "CySIEM installer returned non-zero exit code — check $TMP_INSTALLER output"
-
-    rm -f "$TMP_INSTALLER"
-    ok "CySIEM agent installed"
-}
-
 # ── Lock down file permissions ─────────────────────────────────────────────────
 harden_permissions() {
     info "Hardening CyEDR file permissions..."
@@ -923,7 +867,6 @@ main() {
 
     harden_permissions
     enroll_agent
-    maybe_install_cysiem
     start_agent
     print_summary
 }
