@@ -29,11 +29,18 @@
 set -euo pipefail
 
 # ── Colours ────────────────────────────────────────────────────────────────────
-RED='\033[0;31m'; YEL='\033[1;33m'; GRN='\033[0;32m'; BLU='\033[0;34m'; NC='\033[0m'
+RED='\033[0;31m'; YEL='\033[1;33m'; GRN='\033[0;32m'; BLU='\033[0;34m'; DIM='\033[2m'; NC='\033[0m'
 info()  { echo -e "${BLU}[CyEDR]${NC} $*"; }
 ok()    { echo -e "${GRN}[CyEDR]${NC} $*"; }
 warn()  { echo -e "${YEL}[CyEDR]${NC} $*"; }
 die()   { echo -e "${RED}[CyEDR ERROR]${NC} $*" >&2; exit 1; }
+
+# Safety net: any command that fails without an explicit `|| true`/`|| warn`
+# guard would otherwise kill the script under `set -e` with zero CyEDR-branded
+# output (e.g. apt-get update failing because unattended-upgrades holds the
+# dpkg lock on a freshly booted host) — that reads as "the installer just
+# silently stopped". This guarantees a visible error with line + command.
+trap 'echo -e "${RED}[CyEDR ERROR]${NC} Installer aborted at line ${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
 DEPLOY_TOKEN=""
@@ -47,6 +54,11 @@ PYTHON_BIN=""
 TRAY_HOME="/opt/cycentra/edr-tray"   # separate from EDR_HOME (root-only 750) — the tray
                                       # binary must be world-executable for any local user
 
+# Kept in sync with agent/cyedr_agent.py's AGENT_VERSION by git-push.sh on every
+# release (same mechanism that already syncs cycentra-setup.sh's header line and
+# backend/pyproject.toml) — never bump this by hand.
+CYEDR_AGENT_VERSION="1.0.230"
+
 banner() {
     echo -e "${BLU}"
     cat << 'EOF'
@@ -58,6 +70,7 @@ banner() {
   ╚═════╝   ╚╝╚══════╝╚══════╝╚═════╝ ╚═╝  ╚═╝
 EOF
     echo -e "${NC}${GRN}  CyCentra 360 — CyEDR Endpoint Defense  |  FROM SIGNALS TO STRENGTH${NC}"
+    echo -e "${DIM}  Agent version: v${CYEDR_AGENT_VERSION}${NC}"
     echo -e "${BLU}  ─────────────────────────────────────────────────────────────────${NC}"
     echo ""
 }
@@ -120,7 +133,10 @@ install_packages_linux() {
     info "Installing system dependencies..."
     if command -v apt-get &>/dev/null; then
         # Debian / Ubuntu / Raspberry Pi OS / Kali (all arches)
-        apt-get update -qq
+        # Non-fatal: a fresh boot's unattended-upgrades often holds the dpkg
+        # lock for the first few minutes, which would otherwise abort the
+        # entire install here under set -e before the agent is even deployed.
+        apt-get update -qq 2>/dev/null || warn "apt-get update failed (dpkg lock or unreachable mirror?) — continuing with existing package lists"
         apt-get install -y -qq auditd audispd-plugins yara curl \
             python3 python3-pip python3-venv \
             python3-requests python3-psutil python3-yaml \

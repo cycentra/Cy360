@@ -37,6 +37,7 @@ Approval workflow:
 import hashlib
 import json
 import logging
+import re
 import secrets
 import time
 import threading
@@ -601,6 +602,29 @@ def sso_callback():
 
 # ── Admin — configure SSO ─────────────────────────────────────────────────────
 
+def _validate_client_id(provider: str, client_id: str) -> str:
+    """Return an error message if client_id is obviously not a real OAuth
+    client ID for the given provider, else "". Catches the common mistake of
+    pasting an email address or app password into the Client ID field —
+    that mistake saves silently today and only surfaces as an opaque
+    'invalid_client' error at the provider's login page."""
+    if "@" in client_id:
+        return "Client ID looks like an email address, not an OAuth Client ID."
+    if provider == "google" and not client_id.endswith(".apps.googleusercontent.com"):
+        return (
+            "Google Client IDs end in '.apps.googleusercontent.com'. "
+            "Get this from console.cloud.google.com → APIs & Services → Credentials."
+        )
+    if provider == "microsoft" and not re.fullmatch(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", client_id
+    ):
+        return (
+            "Microsoft Client IDs are a GUID (e.g. 12345678-1234-1234-1234-123456789012). "
+            "Get this from portal.azure.com → App registrations."
+        )
+    return ""
+
+
 @sso_bp.route("/api/sso/configure", methods=["POST"])
 def sso_configure():
     caller = session.get("user_email")
@@ -638,6 +662,10 @@ def sso_configure():
         return jsonify({"error": "provider and client_id are required"}), 400
     if default_role not in VALID_ROLES:
         return jsonify({"error": f"default_role must be one of {sorted(VALID_ROLES)}"}), 400
+
+    client_id_error = _validate_client_id(provider, client_id)
+    if client_id_error:
+        return jsonify({"error": client_id_error}), 400
 
     # Discovery URL: for google/microsoft ALWAYS use the canonical builtin URL
     # regardless of what the admin submitted (prevents cy360/wrong URL from sticking).

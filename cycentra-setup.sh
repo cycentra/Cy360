@@ -237,7 +237,7 @@ ask_yn() {
 
 # Published version of this script — updated automatically by git-push.sh on each release.
 # Used by --update mode to skip re-installation when the server is already on the latest version.
-_SCRIPT_VERSION="v1.0.409"
+_SCRIPT_VERSION="v1.0.240"
 
 # Mask GIT auth tokens in URLs before printing to output
 _mask_url() { echo "$1" | sed 's|pkg\.github\.com/.*/|pkg.github.com/[TOKEN]/|g'; }
@@ -2367,15 +2367,35 @@ SSLOPTEOF
 
         local live_cert="/etc/letsencrypt/live/${primary_domain}/fullchain.pem"
 
-        # Check cert exists AND has >30 days remaining validity.
+        # A staging (test) cert can have plenty of validity left but is never
+        # browser/Cloudflare-trusted. Without this issuer check, the "already
+        # valid" shortcut below only ever looked at expiry — so a stale staging
+        # cert from an earlier run would silently survive forever, even on a
+        # later run where PROD is selected (CERTBOT_ENV="").
+        local existing_is_staging=false
         if [[ -f "$live_cert" ]] && \
+           openssl x509 -noout -issuer -in "$live_cert" 2>/dev/null | grep -qi "fake\|staging"; then
+            existing_is_staging=true
+        fi
+
+        # Check cert exists, has >30 days remaining validity, AND its issuer
+        # matches what's currently desired (don't treat a staging cert as
+        # "already valid" when PROD was requested this run).
+        if [[ -f "$live_cert" ]] && \
+           [[ "$existing_is_staging" == "false" || "$CERTBOT_ENV" == "--staging" ]] && \
            openssl x509 -checkend 2592000 -noout -in "$live_cert" 2>/dev/null; then
             success "SSL cert for ${primary_domain} already valid — skipping certbot"
             return 0
         fi
 
+        local -a env_flags=(--keep-until-expiring)
+        if [[ "$existing_is_staging" == "true" && "$CERTBOT_ENV" != "--staging" ]]; then
+            warn "Existing cert for ${primary_domain} is a Let's Encrypt STAGING cert — forcing renewal against production"
+            env_flags=(--force-renewal)
+        fi
+
         certbot certonly $CERTBOT_ENV --webroot -w /var/www/html --non-interactive --agree-tos \
-            --preferred-challenges http-01 --keep-until-expiring \
+            --preferred-challenges http-01 "${env_flags[@]}" \
             "${cb_args[@]}" \
             >"$log_file" 2>&1
         local rc=$?
