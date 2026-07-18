@@ -57,7 +57,7 @@ TRAY_HOME="/opt/cycentra/edr-tray"   # separate from EDR_HOME (root-only 750) �
 # Kept in sync with agent/cyedr_agent.py's AGENT_VERSION by git-push.sh on every
 # release (same mechanism that already syncs cycentra-setup.sh's header line and
 # backend/pyproject.toml) — never bump this by hand.
-CYEDR_AGENT_VERSION="1.0.230"
+CYEDR_AGENT_VERSION="1.0.238"
 
 banner() {
     echo -e "${BLU}"
@@ -94,6 +94,14 @@ parse_args() {
     done
     [[ -z "$DEPLOY_TOKEN" ]] && die "Missing --token <DEPLOY_TOKEN>"
     [[ -z "$PLATFORM_URL" ]] && die "Missing --platform <URL>"
+    # `[[ cond ]] && die ...` as the LAST statement in a function is a classic
+    # `set -e` trap: when cond is false (the normal, valid-args case), the `&&`
+    # list's exit status is 1, that becomes parse_args's own return status, and
+    # since main() calls `parse_args "$@"` as a bare statement, `set -e` treats
+    # the whole script as having failed a command and aborts immediately —
+    # silently, because die()/the ERR trap never actually ran. This is exactly
+    # what made the installer print the banner and then exit with no message.
+    return 0
 }
 
 # ── Platform detection ─────────────────────────────────────────────────────────

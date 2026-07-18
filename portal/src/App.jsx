@@ -41,11 +41,7 @@ export default function App() {
   if (!authReady) return (
     <div style={{ height:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#090b10" }}>
       <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:16 }}>
-        <svg width="32" height="32" viewBox="0 0 24 24" style={{ animation:"hexPulse 1.5s ease-in-out infinite" }}>
-          <polygon points="12,2 22,8 22,16 12,22 2,16 2,8" fill="none" stroke="#00e5a0" strokeWidth="1.5"/>
-          <polygon points="12,6 18,10 18,14 12,18 6,14 6,10" fill="rgba(0,229,160,0.12)" stroke="#00e5a0" strokeWidth="0.75"/>
-          <circle cx="12" cy="12" r="2" fill="#00e5a0"/>
-        </svg>
+        <img src="/cycentra-monogram.svg" alt="CyCentra" width="32" height="32" style={{ animation:"hexPulse 1.5s ease-in-out infinite" }}/>
         <div style={{ color:"rgba(255,255,255,0.45)", fontSize:11, fontFamily:"monospace", letterSpacing:"1.5px" }}>LOADING</div>
       </div>
     </div>

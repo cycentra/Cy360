@@ -57,7 +57,14 @@ except ImportError:
 
 # ── Globals ────────────────────────────────────────────────────────────────────
 VERSION       = "1.0.0"
-AGENT_VERSION = "1.0.230"           # bumped with every platform release; drives self-update
+AGENT_VERSION = "1.0.238"           # bumped by hand only when this script itself changes
+                                     # (NOT every platform release — see
+                                     # _get_deployed_agent_version() in blueprints/edr/routes.py
+                                     # for why: syncing this to the platform version caused every
+                                     # agent to "self-update" to a byte-identical script on every
+                                     # unrelated release, in a ~10s restart loop). Last real change
+                                     # here shipped in v1.0.238 (tray Stop/Exit + watchdog fix);
+                                     # this constant was left at 1.0.230 for 7 releases afterward.
 OS_TYPE       = platform.system().upper()   # LINUX, DARWIN, WINDOWS
 _RUNNING      = True
 _STOP_EVENT   = threading.Event()

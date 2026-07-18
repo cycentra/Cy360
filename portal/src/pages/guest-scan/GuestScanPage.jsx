@@ -807,10 +807,7 @@ function GuestDashboard({ data, onRescan }) {
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "0 24px", position: "sticky", top: 0, zIndex: 60 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <svg width="20" height="20" viewBox="0 0 24 24">
-            <polygon points="12,2 22,8 22,16 12,22 2,16 2,8" fill="none" stroke="#00e5a0" strokeWidth="1.5"/>
-            <circle cx="12" cy="12" r="2" fill="#00e5a0"/>
-          </svg>
+          <img src="/cycentra-monogram.svg" alt="CyCentra" width="20" height="20"/>
           <div style={{ color: "white", fontFamily: "'Space Mono',monospace", fontSize: 12, fontWeight: 700, letterSpacing: "2px" }}>
             CY<span style={{ color: "#00e5a0" }}>CENTRA</span>
             <span style={{ color: "#00e5a0", fontSize: 8, letterSpacing: "4px", opacity: 0.6, marginLeft: 4 }}>360°</span>
@@ -1113,10 +1110,7 @@ export function GuestScanPage() {
       {/* Top bar */}
       <div style={{ height: 52, background: "rgba(10,12,18,0.98)", borderBottom: "1px solid rgba(255,255,255,0.06)",
         display: "flex", alignItems: "center", padding: "0 24px", position: "sticky", top: 0, zIndex: 60 }}>
-        <svg width="20" height="20" viewBox="0 0 24 24" style={{ marginRight: 10 }}>
-          <polygon points="12,2 22,8 22,16 12,22 2,16 2,8" fill="none" stroke="#00e5a0" strokeWidth="1.5"/>
-          <circle cx="12" cy="12" r="2" fill="#00e5a0"/>
-        </svg>
+        <img src="/cycentra-monogram.svg" alt="CyCentra" width="20" height="20" style={{ marginRight: 10 }}/>
         <div style={{ color: "white", fontFamily: "'Space Mono',monospace", fontSize: 12, fontWeight: 700, letterSpacing: "2px" }}>
           CY<span style={{ color: "#00e5a0" }}>CENTRA</span>
           <span style={{ color: "#00e5a0", fontSize: 8, letterSpacing: "4px", opacity: 0.6, marginLeft: 4 }}>360°</span>

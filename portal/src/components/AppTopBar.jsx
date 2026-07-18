@@ -13,11 +13,7 @@ export function AppTopBar({ user, data, scanHistory, selectedScanId, onScanSelec
       display:"flex", alignItems:"center", justifyContent:"space-between",
       padding:"0 20px 0 0", position:"sticky", top:0, zIndex:60, backdropFilter:"blur(16px)", flexShrink:0 }}>
       <div style={{ width:220, display:"flex", alignItems:"center", gap:10, padding:"0 20px" }}>
-        <svg width="22" height="22" viewBox="0 0 24 24" style={{ animation:"hexPulse 4s ease-in-out infinite", flexShrink:0 }}>
-          <polygon points="12,2 22,8 22,16 12,22 2,16 2,8" fill="none" stroke="#00e5a0" strokeWidth="1.5"/>
-          <polygon points="12,6 18,10 18,14 12,18 6,14 6,10" fill="rgba(0,229,160,0.12)" stroke="#00e5a0" strokeWidth="0.75"/>
-          <circle cx="12" cy="12" r="2" fill="#00e5a0"/>
-        </svg>
+        <img src="/cycentra-monogram.svg" alt="CyCentra" width="22" height="22" style={{ flexShrink:0 }}/>
         <div>
           <div style={{ color:"white", fontFamily:"'Space Mono',monospace", fontSize:13, fontWeight:700, letterSpacing:"2px", lineHeight:1.1 }}>CY<span style={{ color:"#00e5a0" }}>CENTRA</span></div>
           <div style={{ color:"#00e5a0", fontFamily:"'Space Mono',monospace", fontSize:8, letterSpacing:"4px", opacity:0.6, marginTop:1 }}>360°</div>
