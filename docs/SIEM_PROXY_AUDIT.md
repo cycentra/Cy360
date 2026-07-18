@@ -1,5 +1,35 @@
 # siem_proxy.py Route Audit — Phase 5 Input (CyDataLake Migration)
 
+> **Update, v1.0.239 (2026-07-18): steps 5 and 6 done — Phase 5 is now fully closed out.**
+> `GET /hosts`, `POST /hosts/refresh`, `GET/DELETE /hosts/<id>`, and `GET /hosts/<id>/sca` no
+> longer call the Wazuh Manager API at all. The master host list now comes from `edr_agents` ∪
+> `collector_agents` (CyEDR/CyCollector's own registries — agent enrollment/connection state has
+> no Kafka/data-lake equivalent, it has to come from an agent registry table) plus a 90-day
+> `alerts`-table scan as a fallback for connector-sourced entities with no registry row. SCA now
+> reads `edr_sca_results` (the agent's own `ScaScanner` thread) first, falling back to
+> `_sca_from_alerts_db` — the live `WAZUH_API_URL}/sca/{agent_id}` branch was deleted outright, not
+> just deprioritized, since `_edr_sca()` was already confirmed as the primary path before this
+> change. Vulnerability severity counts (used in the posture-score computation, not the
+> `/hosts/<id>/vulnerabilities` route which was already Wazuh-free per the v1.0.238 note below) now
+> come from ITAM's `software_inventory` CVEs joined via `network_assets.edr_agent_id`. `DELETE
+> /hosts/<id>` soft-deletes (`status='removed'`) the underlying `edr_agents`/`collector_agents` row
+> instead of calling the Wazuh Manager's agent-delete endpoint — a hard DB delete was avoided
+> because `edr_detections` and other tables carry a NOT NULL FK to `edr_agents.agent_id`.
+> `WAZUH_API_URL`/`WAZUH_API_USER`/`WAZUH_API_PASSWORD` are gone from `siem_proxy.py`,
+> `cysiemstack/host_service.py` (the parallel async/hourly-scheduled version of this same refresh
+> logic — rebuilt identically), `blueprints/benchmark/routes.py` (vulnerability/SCA sub-scores now
+> read ITAM/EDR-native data), `blueprints/integrations/health.py` (`check_wazuh()` retired), and
+> `cycentra-setup.sh` (no longer written to `.env`/`cysiemstack.env` at all — previously it was
+> optional plumbing for pointing at an externally-managed Wazuh Manager; that use case is gone).
+> `/agent-groups/*`, `/endpoint-policies/sync`, `/wazuh-launch`, `/internal/auth` were already
+> retired in earlier passes (see the v1.0.229 and v1.0.238 notes below) — this update closes the
+> last two rows in the Group B table. **Not touched, deliberately out of scope:** the O365/GCP/
+> GitHub `ossec.conf`-writing wodle-config routes in `blueprints/system/routes.py` (a different
+> mechanism — direct config-file editing + `systemctl restart wazuh-manager`, no `WAZUH_API_*`
+> credentials involved) and the `wazuh_list_agents`/`wazuh_get_agent_vulnerabilities`/
+> `wazuh_active_response` MCP tool definitions there — those still require a locally-installed
+> Wazuh manager and are a separate, larger piece of work.
+>
 > **Update, v1.0.229 (2026-07-16):** the product decision flagged below for `/agent-groups/*` and
 > `/endpoint-policies/*` has been made — retire, not rebuild. Both route blocks (13 agent-groups
 > routes + the full endpoint-policies block, helpers included) and their Host Intelligence UI tabs
@@ -31,10 +61,12 @@
 > — hosts without a CyEDR agent now get an empty inventory shape instead of Wazuh syscollector
 > data, confirming CyEDR/ITAM as the only supported inventory source going forward.
 >
-> Next up: step 6 (`/hosts/<id>/sca` — no existing ITAM overlap, genuine rebuild) and step 5
-> (`/hosts`, `/hosts/refresh`, `/hosts/<id>` enroll/remove — highest blast radius, doing last).
+> Steps 5 and 6 (`/hosts/<id>/sca` and `/hosts`/`/hosts/refresh`/`/hosts/<id>`) are now done too —
+> see the v1.0.239 note above. `/hosts/<id>/inventory` and `/hosts/<id>/vulnerabilities` remain the
+> only two rows in Group B still pending an ITAM cutover.
 
-**Status: analysis only, no code changed.** This is the Phase 5 "route-by-route inventory" task
+**Status: analysis only, no code changed** (as of the original audit below — see the v1.0.239 note
+at the top for what has since shipped). This is the Phase 5 "route-by-route inventory" task
 from `docs/CYDATALAKE_MIGRATION_PLAN.md` §9, produced by grepping `siem_proxy.py` for every
 `@siem_bp.route` and tracing which handlers actually call the Wazuh Manager API
 (`WAZUH_API_URL`/`_wazuh_auth_token()`) versus which are pure Postgres/correlation-engine logic
@@ -74,10 +106,10 @@ Verified by grep: every handler below calls `_wazuh_auth_token()` and/or referen
 |---|---|---|
 | `GET /wazuh-launch` | SSO deep-link into the Wazuh dashboard (`/security/user/authenticate`) | **Retire candidate.** Cy360 already has native incident/alert views; keep only if a specific customer still wants raw Wazuh dashboard access post-migration. |
 | `GET /internal/auth` | Internal Wazuh SSO auth helper feeding the above | Same fate as `/wazuh-launch` — retire together. |
-| `GET /hosts`, `POST /hosts/refresh`, `GET/DELETE /hosts/<id>` | Agent list/enroll/remove via Wazuh Manager API | **Rebuild, and use this as the opportunity to unify.** Cy360 now has three agent tables (`edr_agents`, `collector_agents`, plus whatever `WazuhConnector` surfaces) — this is the natural place to build one cross-source "hosts" view instead of a Wazuh-only one. Don't rebuild this 1:1; redesign it as source-agnostic. |
+| ~~`GET /hosts`, `POST /hosts/refresh`, `GET/DELETE /hosts/<id>`~~ | ~~Agent list/enroll/remove via Wazuh Manager API~~ | **DONE (v1.0.239).** Rebuilt as source-agnostic: master list is `edr_agents` ∪ `collector_agents`, `DELETE` soft-deletes (`status='removed'`) instead of calling Wazuh. |
 | `GET /hosts/<id>/inventory` | Wazuh syscollector (installed software, open ports, etc.) | **Retire in favor of ITAM.** `blueprints/itam/routes.py`'s deep-scan (`hardware_info`/`services`/`software_inventory` columns) already covers this ground for both agent-based and agentless assets. |
 | `GET /hosts/<id>/vulnerabilities` | Wazuh vulnerability detector | **Retire in favor of ITAM.** `assets_list()`'s `vuln_count`/`highest_cve_severity` already overlaps — confirm feature parity, then drop the Wazuh-specific path. |
-| `GET /hosts/<id>/sca` | Wazuh SCA (CIS benchmark checks) | **Genuine rebuild needed — no existing overlap.** If this capability must survive, the cleanest fit is folding it into a `WazuhConnector`-style per-tenant pull rather than a single global `WAZUH_API_URL`, since Phase 3 already established "one Wazuh cluster is one configured connector," not a singleton. Note the existing alerts-DB SCA fallback (`_sca_from_alerts_db`) already gives partial vendor-independence for stale/re-enrolled agents — study that path first. |
+| ~~`GET /hosts/<id>/sca`~~ | ~~Wazuh SCA (CIS benchmark checks)~~ | **DONE (v1.0.239).** `_edr_sca()` (EDR-native, `edr_sca_results`) is now the only live path; falls back to `_sca_from_alerts_db`. The live `WAZUH_API_URL}/sca/{agent_id}` branch was deleted, not just deprioritized. |
 | `GET/POST/DELETE /agent-groups`, `GET/PUT /agent-groups/<name>/config`, `GET/POST/DELETE /agent-groups/<name>/agents`, `GET /agent-groups/available-agents` | Wazuh agent groups + `ossec.conf` push | **Rebuild or retire — needs a product decision.** Every one of these 8 routes calls `_wazuh_auth_token()`. If "agent groups" as a concept is Wazuh-specific plumbing rather than something customers directly value, consider retiring it in favor of whatever grouping CyEDR/CyCollector end up with natively, rather than rebuilding Wazuh group semantics against a different backend. |
 | `POST /endpoint-policies/sync` (`ep_sync`) | Reads policies from Postgres, writes `<active-response>` blocks to `ossec.conf`, restarts `wazuh-manager` | **Retire the Wazuh-writing mechanics specifically.** This heavily overlaps with CyEDR's `APPLY_POLICY` (`agent/cyedr_agent.py` `ResponseExecutor._apply_policy()`), which already does device/app/network/exclusions/isolation control without touching Wazuh at all. The rest of `/endpoint-policies/*` (`ep_list`/`ep_create`/`ep_get`/`ep_update`/`ep_delete`/`ep_actions`/`ep_apply`/`ep_executions`) is generic Postgres-backed runbook CRUD — **keep those, they're not Wazuh-specific**, only `ep_sync`'s write-to-ossec.conf step is. |
 
@@ -101,8 +133,6 @@ Wazuh. Same caveat for the four `_wazuh_auth_token()` call sites inside the host
    effort rebuilding it.
 4. `/endpoint-policies/sync` — separate the generic runbook CRUD (keep) from the Wazuh-writing step
    (retire/replace with CyEDR's `APPLY_POLICY` path).
-5. `/hosts`, `/hosts/refresh`, `/hosts/<id>` (enroll/remove) — do this **last**. It's the highest
-   blast radius (real endpoint enroll/remove/isolate) and benefits most from the other four steps
-   already having simplified what "a host" even means across Wazuh/EDR/Collector sources.
-6. `/hosts/<id>/sca` — only rebuild if a product decision confirms SCA/CIS-benchmark checking is
-   still a required capability; this is the one item with no existing overlap to lean on.
+5. ~~`/hosts`, `/hosts/refresh`, `/hosts/<id>` (enroll/remove)~~ — **DONE (v1.0.239).**
+6. ~~`/hosts/<id>/sca`~~ — **DONE (v1.0.239).** `edr_sca_results` (CyEDR's own `ScaScanner`) turned
+   out to already be the required overlap — no rebuild-vs-retire product call was actually needed.

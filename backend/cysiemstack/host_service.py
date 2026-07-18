@@ -4,13 +4,17 @@ cysiemstack/host_service.py
 Host inventory aggregation and per-host security posture scoring.
 
 Data sources per host:
-  - Wazuh REST API  : agent list, OS info, SCA findings, vulnerability CVEs
-  - correlation DB  : alerts (FIM/malware/SCA counts), incidents, risk_scores
+  - edr_agents / collector_agents : agent list, OS info (CyEDR/CyCollector's
+    own registries — no Wazuh Manager API call, see docs/SIEM_PROXY_AUDIT.md)
+  - edr_sca_results                : SCA findings (the agent's ScaScanner thread)
+  - network_assets / software_inventory : per-CVE vulnerability severity
+  - correlation DB                 : alerts (FIM/malware/SCA counts), incidents,
+                                      risk_scores
 
 Posture score formula (0–100):
   Component              Weight  Source
-  SCA pass rate           30%   Wazuh SCA API (passed / total checks)
-  Vulnerability severity  25%   Wazuh vuln API (inverse of CVE severity score)
+  SCA pass rate           30%   edr_sca_results (passed / total checks)
+  Vulnerability severity  25%   software_inventory CVEs (inverse severity score)
   SIEM risk (inverted)    25%   risk_scores table  (100 - entity_risk)
   FIM + Malware impact    10%   alert count, severity-weighted, last 30 days
   Compliance gap rate     10%   SCA failures mapped to framework controls
@@ -19,68 +23,40 @@ Grades: A+(≥90) A(≥80) B(≥70) C(≥55) D(≥35) F(<35)
 
 The refresh_all_hosts() coroutine is called by the scheduler every hour and
 writes results to the host_posture_cache table.  Flask routes in siem_proxy.py
-read from that cache so responses are instant (no per-request Wazuh fan-out).
+read from that cache so responses are instant (no per-request fan-out).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
+import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-import requests as _req
-import base64 as _b64
 from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger("cysiemstack.host_service")
 
-# ── Wazuh API config (same env vars used by siem_proxy and benchmark) ─────────
-_WAZUH_API_URL  = os.environ.get("WAZUH_API_URL",      "https://127.0.0.1:55000")
-_WAZUH_API_USER = os.environ.get("WAZUH_API_USER",     "wazuh-wui")
-_WAZUH_API_PASS = os.environ.get("WAZUH_API_PASSWORD", "")
-_WAZUH_TIMEOUT  = 10
-
 # Cache TTL: posture re-computed if older than this many seconds
 CACHE_TTL_SECONDS = 3600  # 1 hour
 
+_STALE_AFTER = timedelta(minutes=5)
+_HOSTNAME_STEM_RE = re.compile(
+    r"\.(lan|local|home|internal|localdomain|corp|office|intranet|priv)$", re.I
+)
 
-# ── Wazuh API helpers ─────────────────────────────────────────────────────────
 
-def _wazuh_token() -> Optional[str]:
-    if not _WAZUH_API_PASS:
-        return None
+def _liveness(last_seen) -> str:
+    if not last_seen:
+        return "never_connected"
     try:
-        creds = _b64.b64encode(f"{_WAZUH_API_USER}:{_WAZUH_API_PASS}".encode()).decode()
-        r = _req.get(
-            f"{_WAZUH_API_URL}/security/user/authenticate",
-            headers={"Authorization": f"Basic {creds}"},
-            timeout=_WAZUH_TIMEOUT,
-            verify=False,
-        )
-        r.raise_for_status()
-        return r.json()["data"]["token"]
-    except Exception as exc:
-        log.debug("[host_service] Wazuh token error: %s", exc)
-        return None
-
-
-def _wazuh_get(path: str, token: str, params: Optional[dict] = None) -> Optional[dict]:
-    try:
-        r = _req.get(
-            f"{_WAZUH_API_URL}{path}",
-            headers={"Authorization": f"Bearer {token}"},
-            params=params or {},
-            timeout=_WAZUH_TIMEOUT,
-            verify=False,
-        )
-        if r.status_code == 200:
-            return r.json()
-    except Exception as exc:
-        log.debug("[host_service] Wazuh GET %s error: %s", path, exc)
-    return None
+        now = datetime.now(timezone.utc)
+        ls = last_seen if last_seen.tzinfo else last_seen.replace(tzinfo=timezone.utc)
+        return "active" if (now - ls) < _STALE_AFTER else "disconnected"
+    except Exception:
+        return "unknown"
 
 
 # ── Grade mapping ─────────────────────────────────────────────────────────────
@@ -98,25 +74,27 @@ def _score_to_grade(score: float) -> str:
 
 async def _compute_host_posture(
     agent_id: str,
-    token: Optional[str],
     session: AsyncSession,
 ) -> dict:
     """Compute the 5-component posture score for a single host."""
 
-    # ── Component 1: SCA pass rate (weight 30%) ───────────────────────────────
-    sca_passed = sca_failed = sca_total = 0
-    sca_score = None
-    if token:
-        sca_data = _wazuh_get(f"/sca/{agent_id}", token, {"limit": 50})
-        if sca_data:
-            for policy in sca_data.get("data", {}).get("affected_items", []):
-                sca_passed += int(policy.get("pass",  0))
-                sca_failed += int(policy.get("fail",  0))
-                sca_total  += int(policy.get("pass",  0)) + int(policy.get("fail", 0)) + int(policy.get("error", 0))
-    if sca_total > 0:
-        sca_score = round((sca_passed / sca_total) * 100, 1)
-    else:
-        # Fall back to counting SCA alerts in the DB
+    # ── Component 1: SCA pass rate (weight 30%), EDR-native first ────────────
+    sca_row = await session.execute(
+        text("""
+            SELECT COUNT(*) FILTER (WHERE result = 'passed') AS passed,
+                   COUNT(*) FILTER (WHERE result = 'failed') AS failed
+            FROM edr_sca_results WHERE agent_id = :aid
+        """),
+        {"aid": agent_id},
+    )
+    row = sca_row.fetchone()
+    sca_passed = int(row.passed or 0) if row else 0
+    sca_failed = int(row.failed or 0) if row else 0
+    sca_total  = sca_passed + sca_failed
+    sca_score  = round((sca_passed / sca_total) * 100, 1) if sca_total else None
+
+    if sca_total == 0:
+        # Fall back to historical SCA alerts (older connector-sourced events).
         sca_row = await session.execute(
             text("""
                 SELECT
@@ -136,22 +114,28 @@ async def _compute_host_posture(
             sca_total  = row.passed + row.failed
             sca_score  = round((sca_passed / sca_total) * 100, 1)
 
-    # ── Component 2: Vulnerability severity score (weight 25%) ───────────────
+    # ── Component 2: Vulnerability severity score (weight 25%), ITAM-native ──
     vuln_critical = vuln_high = vuln_medium = vuln_low = 0
     vuln_score = None
-    if token:
-        vuln_data = _wazuh_get(
-            f"/vulnerability/{agent_id}", token,
-            {"limit": 500, "select": "severity", "status": "Active"},
-        )
-        if vuln_data:
-            for v in vuln_data.get("data", {}).get("affected_items", []):
-                sev = v.get("severity", "")
-                if sev == "Critical": vuln_critical += 1
-                elif sev == "High":   vuln_high     += 1
-                elif sev == "Medium": vuln_medium   += 1
-                elif sev == "Low":    vuln_low      += 1
-    if token is not None or vuln_critical + vuln_high + vuln_medium > 0:
+    vuln_row = await session.execute(
+        text("""
+            SELECT elem->>'severity' AS severity, COUNT(*) AS cnt
+            FROM network_assets na
+            JOIN software_inventory si ON si.asset_id = na.id
+            CROSS JOIN LATERAL jsonb_array_elements(si.cves) elem
+            WHERE na.edr_agent_id = :aid
+            GROUP BY elem->>'severity'
+        """),
+        {"aid": agent_id},
+    )
+    for r in vuln_row.fetchall():
+        sev = (r.severity or "").lower()
+        n = int(r.cnt)
+        if sev == "critical":   vuln_critical = n
+        elif sev == "high":     vuln_high     = n
+        elif sev == "medium":   vuln_medium   = n
+        elif sev == "low":      vuln_low      = n
+    if vuln_critical + vuln_high + vuln_medium + vuln_low > 0:
         raw = 100.0
         raw -= min(60, vuln_critical * 12)
         raw -= min(36, vuln_high     *  6)
@@ -299,22 +283,34 @@ async def _compute_host_posture(
 
 # ── Agent list fetch ──────────────────────────────────────────────────────────
 
-def _fetch_wazuh_agents(token: Optional[str]) -> list[dict]:
-    """Return list of agent dicts from Wazuh API."""
-    if not token:
-        return []
-    data = _wazuh_get("/agents", token, {
-        "status":  "active,disconnected,never_connected",
-        "limit":   500,
-        "select":  "id,name,ip,status,os.platform,os.version,lastKeepAlive,version",
-    })
-    if not data:
-        return []
-    return data.get("data", {}).get("affected_items", [])
+async def _fetch_registry_agents(session: AsyncSession) -> list[dict]:
+    """Return agent dicts from CyEDR/CyCollector's own registries — no Wazuh
+    Manager API call. Agent enrollment/connection state is Manager-side state
+    with no Kafka/data-lake equivalent, so it has to come from an agent
+    registry table (see docs/SIEM_PROXY_AUDIT.md)."""
+    rows = await session.execute(
+        text("""
+            SELECT agent_id, hostname, agent_ip, os_type, last_seen
+            FROM edr_agents WHERE status <> 'removed'
+            UNION ALL
+            SELECT agent_id, hostname, agent_ip, os_type, last_seen
+            FROM collector_agents WHERE status <> 'removed'
+        """)
+    )
+    return [
+        {
+            "id": r.agent_id, "name": r.hostname or r.agent_id, "ip": r.agent_ip,
+            "status": _liveness(r.last_seen), "os_platform": r.os_type,
+            "os_version": None,
+            "last_keepalive": r.last_seen.isoformat() if r.last_seen else None,
+        }
+        for r in rows.fetchall()
+    ]
 
 
 async def _db_agent_ids(session: AsyncSession) -> list[dict]:
-    """Agent IDs known from the alerts table (catches agents no longer in Wazuh)."""
+    """Agent IDs known from the alerts table (catches connector-sourced
+    entities with no registry row of their own)."""
     rows = await session.execute(
         text("""
             SELECT DISTINCT agent_id, agent_name, agent_ip
@@ -331,13 +327,10 @@ async def refresh_all_hosts(session: AsyncSession) -> int:
     """Refresh host_posture_cache for all known agents. Returns count refreshed."""
     from cysiemstack.correlation_engine.models import HostPostureCache
 
-    token = _wazuh_token()
+    # Merge CyEDR/CyCollector registry agents with alerts-table-only stragglers
+    registry_agents = {a["id"]: a for a in await _fetch_registry_agents(session)}
+    db_agents        = await _db_agent_ids(session)
 
-    # Merge Wazuh agent list with DB-known agents
-    wazuh_agents = {a["id"]: a for a in _fetch_wazuh_agents(token)}
-    db_agents    = await _db_agent_ids(session)
-
-    # Build unified agent map: Wazuh data takes precedence
     all_agents: dict[str, dict] = {}
     for a in db_agents:
         all_agents[a["id"]] = {
@@ -349,38 +342,38 @@ async def refresh_all_hosts(session: AsyncSession) -> int:
             "os_version":   None,
             "last_keepalive": None,
         }
-    for aid, a in wazuh_agents.items():
-        all_agents[aid] = {
-            "id":            aid,
-            "name":          a.get("name", aid),
-            "ip":            a.get("ip"),
-            "status":        a.get("status", "unknown"),
-            "os_platform":   (a.get("os") or {}).get("platform"),
-            "os_version":    (a.get("os") or {}).get("version"),
-            "last_keepalive": a.get("lastKeepAlive"),
-        }
+    for aid, a in registry_agents.items():
+        all_agents[aid] = a
 
-    # Deduplicate by agent name: keep the Wazuh-registered id over DB-only stale entries
-    _seen_names: dict[str, str] = {}
-    _deduped: dict[str, dict] = {}
+    # Hostname-stem dedup: same physical host re-enrolled under a new name
+    # (roaming laptops, hostname changes across networks). CyEDR/CyCollector
+    # already dedupe by hardware_uuid at enrollment time, so this only remains
+    # a safety net for alerts-table-only ghost entries with no registry row.
+    _stem_seen: dict[str, str] = {}
+    _stem_deduped: dict[str, dict] = {}
     for _aid, _info in all_agents.items():
-        _nk = (_info["name"] or _aid).lower()
-        if _nk not in _seen_names:
-            _seen_names[_nk] = _aid
-            _deduped[_aid] = _info
+        _plat = (_info.get("os_platform") or "").lower()
+        _stem = _HOSTNAME_STEM_RE.sub("", (_info.get("name") or _aid).lower()).strip()
+        _sk   = f"{_stem}|{_plat}"
+        if not _plat:
+            _stem_deduped[_aid] = _info
+            continue
+        if _sk not in _stem_seen:
+            _stem_seen[_sk] = _aid
+            _stem_deduped[_aid] = _info
         else:
-            _prev = _seen_names[_nk]
-            if _aid in wazuh_agents and _prev not in wazuh_agents:
-                del _deduped[_prev]
-                _seen_names[_nk] = _aid
-                _deduped[_aid] = _info
-    all_agents = _deduped
+            _prev_aid = _stem_seen[_sk]
+            if (_info.get("last_keepalive") or "") > (all_agents[_prev_aid].get("last_keepalive") or ""):
+                del _stem_deduped[_prev_aid]
+                _stem_seen[_sk] = _aid
+                _stem_deduped[_aid] = _info
+    all_agents = _stem_deduped
 
     refreshed = 0
     for agent_id, agent_info in all_agents.items():
         try:
             async with session.begin_nested():
-                posture = await _compute_host_posture(agent_id, token, session)
+                posture = await _compute_host_posture(agent_id, session)
 
                 # Upsert into host_posture_cache
                 existing = await session.get(HostPostureCache, agent_id)

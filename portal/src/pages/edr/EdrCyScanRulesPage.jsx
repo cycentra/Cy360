@@ -432,7 +432,7 @@ export function CyScanRulesContent() {
             <Badge label="CYSCAN RULES" color={T.accent} />
           </div>
           <div style={{ color: T.muted, fontSize: 12 }}>
-            Upload analyst-authored CyScan (YARA) rules for zero-day hunting. Rules deploy to all CyEDR agents
+            Upload analyst-authored CyScan rules for zero-day hunting. Rules deploy to all CyEDR agents
             automatically every hour or instantly via Fleet Scan.
           </div>
           <div style={{
@@ -441,7 +441,7 @@ export function CyScanRulesContent() {
             borderRadius: 4, fontSize: 11, color: "rgba(255,255,255,0.5)", lineHeight: 1.6,
           }}>
             <strong style={{ color: T.accent }}>This is the rule authoring tool.</strong>{" "}
-            Write a YARA rule here when a new zero-day drops, push it to endpoints via Fleet Scan, and matches
+            Write a CyScan rule here when a new zero-day drops, push it to endpoints via Fleet Scan, and matches
             will automatically surface as incidents under{" "}
             <strong style={{ color: "rgba(255,255,255,0.75)" }}>Internal Exposure → Threat Hunting</strong> via hunt rules HT-013 and HT-014.
           </div>

@@ -14,7 +14,6 @@ Routes
 from __future__ import annotations
 
 import asyncio
-import base64
 import glob
 import json
 import logging
@@ -46,12 +45,6 @@ _AUTO_UPDATE  = os.environ.get("BENCHMARK_AUTO_UPDATE", "false").lower() == "tru
 
 _SIEM_ENGINE      = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100")
 _SIEM_TIMEOUT     = int(os.environ.get("SIEM_PROXY_TIMEOUT", "5"))
-
-# Wazuh API — same settings used by the correlation engine
-_WAZUH_API_URL    = os.environ.get("WAZUH_API_URL",      "https://127.0.0.1:55000")
-_WAZUH_API_USER   = os.environ.get("WAZUH_API_USER",     "wazuh-wui")
-_WAZUH_API_PASS   = os.environ.get("WAZUH_API_PASSWORD", "")
-_WAZUH_TIMEOUT    = 8
 
 # CyCases / Correlation DB (PostgreSQL)
 # The Incident model is in cysiemstack; we query it directly via psycopg2
@@ -635,146 +628,88 @@ def _collect_compliance_score(frameworks: list = None) -> dict:
 
 # ── 4. Vulnerability Management (enterprise-grade) ────────────────────────────
 
-def _wazuh_token() -> Optional[str]:
+def _collect_itam_vuln_subscore() -> tuple[Optional[float], str]:
     """
-    Obtain a Wazuh API JWT using Basic auth. Returns None on failure.
-    Credentials are read from /opt/cycentra/.env (EnvironmentFile for Flask).
-    setup.sh propagates WAZUH_API_PASSWORD from cysiemstack.env into .env at
-    install and update time, so .env is always the single source of truth.
-    """
-    wazuh_pass = _WAZUH_API_PASS
-    wazuh_user = _WAZUH_API_USER
+    Sub-score from ITAM's software_inventory (0-100) — per-CVE severity counts
+    across every scanned asset (agent-based or agentless). No Wazuh Manager API
+    dependency; see docs/SIEM_PROXY_AUDIT.md.
 
-    if not wazuh_pass:
-        log.debug("[benchmark] WAZUH_API_PASSWORD not set in /opt/cycentra/.env")
-        return None
-    try:
-        creds = base64.b64encode(
-            f"{wazuh_user}:{wazuh_pass}".encode()
-        ).decode()
-        r = _req.get(
-            f"{_WAZUH_API_URL}/security/user/authenticate",
-            headers={"Authorization": f"Basic {creds}"},
-            timeout=_WAZUH_TIMEOUT,
-            verify=False,  # Wazuh self-signed cert
-        )
-        r.raise_for_status()
-        return r.json()["data"]["token"]
-    except Exception as exc:
-        log.debug("[benchmark] Wazuh token error: %s", exc)
-        return None
-
-
-def _wazuh_get(path: str, token: str, params: Optional[dict] = None) -> Optional[dict]:
-    """Authenticated GET against the Wazuh API. Returns None on failure."""
-    try:
-        r = _req.get(
-            f"{_WAZUH_API_URL}{path}",
-            headers={"Authorization": f"Bearer {token}"},
-            params=params or {},
-            timeout=_WAZUH_TIMEOUT,
-            verify=False,
-        )
-        if r.status_code == 200:
-            return r.json()
-    except Exception as exc:
-        log.debug("[benchmark] Wazuh GET %s error: %s", path, exc)
-    return None
-
-
-def _collect_wazuh_vuln_subscore(token: str) -> tuple[Optional[float], str]:
-    """
-    Sub-score from Wazuh vulnerability detector (0-100).
-
-    Fetches all active agents, then collects vulnerability severity counts
-    across all agents.  Score formula:
+    Score formula:
         start = 100
         deduct 12 per critical CVE (cap -60)
         deduct  6 per high CVE    (cap -36)
         deduct  2 per medium CVE  (cap -20)
     """
-    agents_data = _wazuh_get("/agents", token, {"status": "active", "limit": 500,
-                                                  "select": "id,name"})
-    if not agents_data:
-        return None, "Wazuh agent list unavailable"
+    try:
+        import psycopg2
+        conn = psycopg2.connect(_CORR_DB_URL)
+        cur  = conn.cursor()
+        cur.execute("""
+            SELECT elem->>'severity' AS severity, COUNT(*) AS cnt
+            FROM software_inventory si, jsonb_array_elements(si.cves) elem
+            WHERE si.cve_count > 0
+            GROUP BY elem->>'severity'
+        """)
+        rows = cur.fetchall()
+        cur.execute("SELECT COUNT(DISTINCT asset_id) FROM software_inventory WHERE cve_count > 0")
+        assets_affected = (cur.fetchone() or [0])[0] or 0
+        conn.close()
+    except Exception as exc:
+        log.debug("[benchmark] ITAM vuln query failed: %s", exc)
+        return None, "ITAM software inventory unavailable"
 
-    agents = agents_data.get("data", {}).get("affected_items", [])
-    if not agents:
-        return None, "No active Wazuh agents"
+    if not rows:
+        return None, "No CVE data in ITAM software inventory"
 
-    totals = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
-    agents_checked = 0
-
-    for agent in agents[:50]:  # cap at 50 agents to keep response time under 10 s
-        agent_id = agent.get("id")
-        if not agent_id:
-            continue
-        # status=Active filters out already-patched CVEs (Solved/Inactive).
-        # Wazuh vulnerability detector status values: Active | Solved | Inactive.
-        vuln_data = _wazuh_get(f"/vulnerability/{agent_id}", token,
-                               {"limit": 500, "select": "severity", "status": "Active"})
-        if not vuln_data:
-            continue
-        for vuln in vuln_data.get("data", {}).get("affected_items", []):
-            sev = vuln.get("severity", "")
-            if sev in totals:
-                totals[sev] += 1
-        agents_checked += 1
-
-    if agents_checked == 0:
-        return None, "Wazuh vuln detector returned no data"
+    totals = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for sev, cnt in rows:
+        sev = (sev or "").lower()
+        if sev in totals:
+            totals[sev] += int(cnt)
 
     score = 100.0
-    score -= min(60, totals["Critical"] * 12)
-    score -= min(36, totals["High"]     *  6)
-    score -= min(20, totals["Medium"]   *  2)
+    score -= min(60, totals["critical"] * 12)
+    score -= min(36, totals["high"]     *  6)
+    score -= min(20, totals["medium"]   *  2)
     score  = max(0, min(100, round(score)))
-    detail = (f"Wazuh vuln detector: {totals['Critical']} critical, "
-              f"{totals['High']} high, {totals['Medium']} medium "
-              f"across {agents_checked} agents")
+    detail = (f"ITAM vuln inventory: {totals['critical']} critical, "
+              f"{totals['high']} high, {totals['medium']} medium "
+              f"across {assets_affected} assets")
     return float(score), detail
 
 
-def _collect_wazuh_sca_subscore(token: str) -> tuple[Optional[float], str]:
+def _collect_edr_sca_subscore() -> tuple[Optional[float], str]:
     """
-    Sub-score from Wazuh SCA (Security Configuration Assessment) pass rate (0-100).
-
-    Formula: (passed_checks / total_checks) * 100
-    Averaged across all active agents.
+    Sub-score from CyEDR's own SCA scanner (0-100) — fleet-wide pass rate from
+    edr_sca_results. Only used when the host posture cache is unavailable
+    (the cache already blends this in as its primary SCA component). No Wazuh
+    Manager API dependency.
     """
-    agents_data = _wazuh_get("/agents", token, {"status": "active", "limit": 500,
-                                                  "select": "id,name"})
-    if not agents_data:
-        return None, "Wazuh agent list unavailable"
+    try:
+        import psycopg2
+        conn = psycopg2.connect(_CORR_DB_URL)
+        cur  = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*) FILTER (WHERE result = 'passed') AS passed,
+                   COUNT(*) FILTER (WHERE result = 'failed') AS failed,
+                   COUNT(DISTINCT agent_id) AS agents
+            FROM edr_sca_results
+        """)
+        row = cur.fetchone()
+        conn.close()
+    except Exception as exc:
+        log.debug("[benchmark] EDR SCA query failed: %s", exc)
+        return None, "EDR SCA results unavailable"
 
-    agents = agents_data.get("data", {}).get("affected_items", [])
-    if not agents:
-        return None, "No active agents"
-
-    total_pass  = 0
-    total_fail  = 0
-    total_error = 0
-    agents_checked = 0
-
-    for agent in agents[:30]:  # SCA results are larger — cap at 30
-        agent_id = agent.get("id")
-        if not agent_id:
-            continue
-        sca_data = _wazuh_get(f"/sca/{agent_id}", token, {"limit": 1})
-        if not sca_data:
-            continue
-        for policy in sca_data.get("data", {}).get("affected_items", []):
-            total_pass  += int(policy.get("pass",  0))
-            total_fail  += int(policy.get("fail",  0))
-            total_error += int(policy.get("error", 0))
-        agents_checked += 1
-
-    total_checks = total_pass + total_fail + total_error
+    if not row:
+        return None, "No SCA checks found"
+    passed, failed, agents_checked = int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)
+    total_checks = passed + failed
     if total_checks == 0:
         return None, "No SCA checks found"
 
-    score  = round((total_pass / total_checks) * 100)
-    detail = (f"SCA: {total_pass}/{total_checks} checks passed "
+    score  = round((passed / total_checks) * 100)
+    detail = (f"SCA: {passed}/{total_checks} checks passed "
               f"across {agents_checked} agents")
     return float(score), detail
 
@@ -950,16 +885,15 @@ def _collect_vuln_score() -> dict:
 
     Primary:  reads from host_posture_cache (5-component posture model)
               which covers SCA, vulnerability CVEs, FIM, malware, compliance.
-    Fallback: direct Wazuh API calls (original 3-component model).
+    Fallback: direct ITAM/EDR-native queries (no Wazuh Manager API dependency
+              anywhere in this function — see docs/SIEM_PROXY_AUDIT.md).
     Blended with CyCases MTTR.
 
     Sub-score weights (primary path):
       50% — Internal host posture (SCA + CVE + FIM/malware + compliance)
-      25% — Wazuh vulnerability detector (CVE severity counts)
+      25% — ITAM vulnerability inventory (CVE severity counts)
       25% — CyCases mean time to remediate by severity
     """
-    token = _wazuh_token()
-
     sub_scores   = {}
     sub_details  = {}
 
@@ -968,20 +902,16 @@ def _collect_vuln_score() -> dict:
     sub_scores["host_posture"]  = posture_score
     sub_details["host_posture"] = posture_detail
 
-    # ── Wazuh vulnerability detector (direct, per-CVE) ────────────────────────
-    if token:
-        score, detail = _collect_wazuh_vuln_subscore(token)
-        sub_scores["wazuh_vuln"]  = score
-        sub_details["wazuh_vuln"] = detail
-    else:
-        sub_scores["wazuh_vuln"]  = None
-        sub_details["wazuh_vuln"] = "Wazuh API credentials not configured"
+    # ── ITAM vulnerability inventory (direct, per-CVE) ────────────────────────
+    score, detail = _collect_itam_vuln_subscore()
+    sub_scores["itam_vuln"]  = score
+    sub_details["itam_vuln"] = detail
 
-    # ── Wazuh SCA (direct) — only used when host posture cache is unavailable ─
-    if posture_score is None and token:
-        score, detail = _collect_wazuh_sca_subscore(token)
-        sub_scores["wazuh_sca"]  = score
-        sub_details["wazuh_sca"] = detail
+    # ── EDR-native SCA (direct) — only used when host posture cache is unavailable ─
+    if posture_score is None:
+        score, detail = _collect_edr_sca_subscore()
+        sub_scores["edr_sca"]  = score
+        sub_details["edr_sca"] = detail
 
     # ── CyCases MTTR ───────────────────────────────────────────────────────────
     score, detail = _collect_cases_mttr_subscore()
@@ -990,9 +920,9 @@ def _collect_vuln_score() -> dict:
 
     # ── Blend weights — prefer host_posture when available ────────────────────
     if posture_score is not None:
-        sub_weights = {"host_posture": 0.50, "wazuh_vuln": 0.25, "iris_mttr": 0.25}
+        sub_weights = {"host_posture": 0.50, "itam_vuln": 0.25, "iris_mttr": 0.25}
     else:
-        sub_weights = {"wazuh_vuln": 0.40, "wazuh_sca": 0.35, "iris_mttr": 0.25}
+        sub_weights = {"itam_vuln": 0.40, "edr_sca": 0.35, "iris_mttr": 0.25}
 
     weighted_sum = 0.0
     weight_sum   = 0.0
@@ -1006,8 +936,8 @@ def _collect_vuln_score() -> dict:
         return {
             "score":      None,
             "stale":      False,
-            "detail":     "Wazuh API unavailable — ensure WAZUH_API_PASSWORD is set in "
-                          "/opt/cycentra/cysiemstack.env and the Wazuh service is running.",
+            "detail":     "No vulnerability data available yet — run an ITAM scan or wait "
+                          "for CyEDR agents to complete their first SCA/inventory cycle.",
             "sub_scores": sub_scores,
         }
 

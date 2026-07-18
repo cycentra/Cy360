@@ -8,7 +8,6 @@ When an integration is down or stops ingesting it auto-creates a synthetic
 incident and opens a CyCase.  When it recovers the incident is resolved.
 
 Integrations monitored
-  - wazuh          : Wazuh manager API reachability + active-agent count
   - siem_engine    : CySIEM correlation engine /health
   - cymind         : CyMind AI /api/v1/health (only if enabled)
   - cysoar         : CySOAR Node-RED (only if module installed)
@@ -89,6 +88,26 @@ def ensure_health_tables():
         conn.close()
     except Exception as exc:
         log.error("ensure_health_tables failed: %s", exc)
+        return
+
+    # One-time cleanup: check_wazuh() was retired (Wazuh Manager API removed
+    # platform-wide — see docs/SIEM_PROXY_AUDIT.md). A pre-existing 'wazuh' row
+    # would otherwise linger forever on the Integration Health page, since GET
+    # reads straight from this table and never re-runs retired checks.
+    try:
+        conn = _db()
+        cur  = conn.cursor()
+        cur.execute("SELECT 1 FROM integration_health_status WHERE integration_name = 'wazuh'")
+        if cur.fetchone():
+            conn.close()
+            _resolve_integration_incident("wazuh", "Wazuh SIEM")
+            conn = _db()
+            cur  = conn.cursor()
+            cur.execute("DELETE FROM integration_health_status WHERE integration_name = 'wazuh'")
+            conn.commit()
+        conn.close()
+    except Exception as exc:
+        log.debug("stale wazuh health row cleanup skipped: %s", exc)
 
 
 def _upsert_status(name: str, display_name: str, status: str,
@@ -259,51 +278,6 @@ def _last_alert_age_minutes(rule_groups_filter: Optional[list] = None) -> Option
 
 
 # ── Per-integration check functions ──────────────────────────────────────────
-
-def check_wazuh() -> dict:
-    """Check Wazuh manager API + alert ingest gap (only if an external Wazuh
-    Manager has been configured — cycentra-setup.sh no longer installs Wazuh
-    itself, it's a BYO-external connector, same as CyMind/CySOAR being optional)."""
-    wazuh_api   = os.environ.get("WAZUH_API_URL", "https://127.0.0.1:55000")
-    wazuh_user  = os.environ.get("WAZUH_API_USER", "wazuh-wui")
-    wazuh_pass  = os.environ.get("WAZUH_API_PASSWORD", "")
-    name        = "wazuh"
-    display     = "Wazuh SIEM"
-
-    # cycentra-setup.sh always writes a non-empty CHANGE_ME_* placeholder into
-    # WAZUH_API_PASSWORD when no external Wazuh Manager is configured (it never
-    # installs Wazuh itself) — so an empty-string check alone doesn't catch the
-    # common case; treat any unfilled placeholder the same as "not configured".
-    if not wazuh_pass or wazuh_pass.startswith("CHANGE_ME"):
-        return {"name": name, "display": display, "status": "skipped",
-                "error": "Wazuh Manager is not configured (WAZUH_API_PASSWORD unset)",
-                "ingest_gap": None}
-
-    # Step 1: API reachability
-    try:
-        token_resp = requests.post(
-            f"{wazuh_api}/security/user/authenticate",
-            auth=(wazuh_user, wazuh_pass),
-            verify=False, timeout=_REQUEST_TIMEOUT,
-        )
-        if token_resp.status_code not in (200, 201):
-            return {"name": name, "display": display,
-                    "status": "down",
-                    "error": f"Wazuh auth returned HTTP {token_resp.status_code}",
-                    "ingest_gap": None}
-    except requests.exceptions.RequestException as exc:
-        return {"name": name, "display": display, "status": "down",
-                "error": str(exc), "ingest_gap": None}
-
-    # Step 2: Alert ingest gap
-    gap = _last_alert_age_minutes()
-    if gap is not None and gap > _INGEST_WINDOW_MIN:
-        return {"name": name, "display": display, "status": "degraded",
-                "error": f"No alerts ingested for {gap} min", "ingest_gap": gap}
-
-    return {"name": name, "display": display, "status": "ok",
-            "error": None, "ingest_gap": gap}
-
 
 def check_siem_engine() -> dict:
     """Check CySIEM correlation engine /health."""
@@ -529,7 +503,6 @@ def run_all_checks() -> list:
 
     checks = [
         check_siem_engine(),
-        check_wazuh(),
         check_cymind(),
         check_cysoar(),
     ]

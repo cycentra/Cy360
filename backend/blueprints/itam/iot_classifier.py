@@ -20,8 +20,10 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import os
 import socket
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
@@ -307,6 +309,14 @@ _OUI_CSV_CANDIDATES = [
     Path(__file__).resolve().parent / "data" / "oui_vendors.csv",  # installed wheel path
 ]
 
+# IEEE's public MA-L (large block) assignment registry — the standard source
+# every OUI vendor-lookup tool (Wireshark's manuf, nmap, etc.) pulls from.
+OUI_UPSTREAM_URL = os.environ.get("OUI_UPSTREAM_URL", "https://standards-oui.ieee.org/oui/oui.csv")
+# Below this fraction of the CURRENT vendor count, treat the fetch as suspect
+# (network blip, IEEE serving an HTML error/maintenance page, truncated
+# download) rather than a genuine shrink — the registry only grows over time.
+OUI_MIN_RATIO = 0.90
+
 
 def _parse_oui_csv(text: str) -> dict[str, str]:
     result: dict[str, str] = {}
@@ -344,6 +354,74 @@ def reload_oui_db(content: str) -> int:
             _oui_db.update(db)
         _log.info("IEEE OUI DB hot-reloaded: %d entries", len(db))
     return len(db)
+
+
+def refresh_oui_corpus() -> dict:
+    """Fetch the latest IEEE MA-L OUI registry, validate it looks sane against
+    the currently-loaded DB, and only then hot-swap both the in-memory DB and
+    the on-disk CSV (_OUI_CSV_CANDIDATES[0]). Returns a status dict; never
+    raises — callers (the weekly scheduler job, the manual-refresh API route)
+    both just want a result to log or show, not an exception to handle.
+
+    Safety model (same principle as cysiemstack/detection/rule_corpus_refresh.py's
+    Sigma/YARA refreshers): fetch into memory, validate there, and only replace
+    the live CSV/in-memory DB if validation passes. A bad/partial IEEE fetch
+    (network blip, IEEE serving an HTML error/maintenance page, truncated
+    download) leaves the previous vendor DB running untouched — it never
+    silently degrades every hardware-vendor lookup platform-wide.
+    """
+    import httpx
+
+    deployed_path = _OUI_CSV_CANDIDATES[0]
+    with _OUI_LOCK:
+        before_count = len(_oui_db)
+    if not before_count and deployed_path.exists():
+        before_count = len(_parse_oui_csv(deployed_path.read_text(encoding="utf-8", errors="replace")))
+
+    try:
+        resp = httpx.get(OUI_UPSTREAM_URL, timeout=60, follow_redirects=True)
+        resp.raise_for_status()
+        content = resp.text
+    except Exception as exc:
+        return _oui_refresh_fail(f"download failed: {exc}", before_count)
+
+    first_line = content.splitlines()[0] if content else ""
+    if "Registry" not in first_line or "Assignment" not in first_line:
+        return _oui_refresh_fail(
+            "fetched content does not look like the IEEE OUI CSV (missing expected header) — "
+            "IEEE may be serving an error/maintenance page", before_count,
+        )
+
+    staged_db = _parse_oui_csv(content)
+    staged_count = len(staged_db)
+
+    if staged_count == 0:
+        return _oui_refresh_fail("fetch produced zero parseable entries — not activating", before_count)
+    if before_count and staged_count < before_count * OUI_MIN_RATIO:
+        return _oui_refresh_fail(
+            f"fetched only {staged_count} entries vs current {before_count} "
+            f"(below {OUI_MIN_RATIO:.0%} threshold) — suspected bad/partial fetch, not activating",
+            before_count,
+        )
+
+    try:
+        deployed_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = deployed_path.with_suffix(".csv.new")
+        tmp_path.write_text(content, encoding="utf-8")
+        tmp_path.replace(deployed_path)  # atomic rename on the same filesystem
+    except Exception as exc:
+        return _oui_refresh_fail(f"failed to write refreshed CSV to {deployed_path}: {exc}", before_count)
+
+    reload_oui_db(content)
+    _log.info("oui_refresh: refreshed — %d entries (was %d)", staged_count, before_count)
+    return {"ok": True, "kind": "oui", "entries": staged_count, "previous_count": before_count,
+            "refreshed_at": datetime.now(timezone.utc).isoformat()}
+
+
+def _oui_refresh_fail(reason: str, previous_count: int) -> dict:
+    _log.error("oui_refresh: NOT applied — %s (previous vendor DB left running)", reason)
+    return {"ok": False, "kind": "oui", "error": reason, "previous_count": previous_count,
+            "refreshed_at": datetime.now(timezone.utc).isoformat()}
 
 
 _try_load_csv()

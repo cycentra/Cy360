@@ -46,8 +46,11 @@ Legend: ✅ Done/shipped-and-verified · ⚠️ Shipped, not verified against re
 | 4 | Cross-source dedup | `dedup.py` | ⚠️ Shipped, never seen real duplicate traffic | v1.0.210 | Validate against a real Wazuh dual-path or multi-vendor duplicate case |
 | 4 | ClickHouse hot store | `clickhouse_store.py` | ⚠️ Shipped, no server provisioned | v1.0.210 | Provision ClickHouse (row 2b); verify `query_arrow()` cold-export path |
 | 4 | Standalone ingest worker | `ingest_worker.py` (own systemd unit) | ⚠️ Shipped, never run against real data | v1.0.210 | Deploy + observe against real Kafka/ClickHouse traffic |
-| 5 | Wazuh-Manager-API route audit | `docs/SIEM_PROXY_AUDIT.md` | ✅ Audit complete (analysis only) | v1.0.210 | Turn findings into PRs, ingestion-adjacent routes first (§9) |
-| 5 | `siem_proxy.py` rewrite itself | `backend/siem_proxy.py` | 🚫 Deliberately not attempted | — | Highest blast radius — needs a live Wazuh Manager to test against first |
+| 5 | Wazuh-Manager-API route audit | `docs/SIEM_PROXY_AUDIT.md` | ✅ Audit complete (analysis only) | v1.0.210 | — |
+| 5 | `siem_proxy.py` rewrite — hosts + SCA | `backend/siem_proxy.py`, `backend/cysiemstack/host_service.py` | ✅ Done — no live Wazuh Manager call remains anywhere in either file | v1.0.239 | Watch `host_posture_cache` fill rate against real CyEDR/CyCollector fleets |
+| 5 | `/hosts/<id>/inventory`, `/hosts/<id>/vulnerabilities` ITAM cutover | `backend/siem_proxy.py` | ✅ Already done (undocumented prior work, confirmed v1.0.238) | v1.0.238 | — |
+| 5 | `/agent-groups/*`, `/wazuh-launch`, `/internal/auth`, `endpoint-policies/sync` Wazuh step | `backend/siem_proxy.py` | ✅ Retired | v1.0.229 / v1.0.238 | — |
+| 5 | `WAZUH_API_*` removed from every non-siem_proxy consumer | `blueprints/benchmark/routes.py`, `blueprints/integrations/health.py`, `blueprints/system/routes.py`, `core/kv_secrets.py`, `cycentra-setup.sh` | ✅ Done | v1.0.239 | O365/GCP/GitHub `ossec.conf` wodle-config routes intentionally untouched — separate mechanism, needs its own pass |
 | 6 | Phased cutover | — | ⛔ Not started | — | Cannot start until Phases 2-5 are proven with real traffic (§10) |
 | — | Storage-centralization question (GRC/EDR/ITAM → data lake) | Postgres `correlation` DB vs. ClickHouse | ✅ Answered (recommend against wholesale move) | advisory only, no code | Revisit only if cross-module BI/reporting becomes a real requirement |
 
@@ -128,7 +131,7 @@ new correlation-engine work.
 | Ingestion into Cy360 (push path) | `backend/cysiemstack/cysiem_to_redis.py` tails `/var/ossec/logs/alerts/alerts.json` → RPUSH into Redis `cysiemstack:alerts:raw`. Exists because Filebeat 7.x crashes with a seccomp SIGABRT on kernel 6.x — a real production scar. | Still running, unmodified |
 | Ingestion into Cy360 (pull path, NEW) | `WazuhConnector` (`cysiemstack/connectors/wazuh_connector.py`) polls the Wazuh **indexer** (OpenSearch) `wazuh-alerts-*` index directly — a different mechanism from the file-tail above. | Shipped Phase 3, unverified against a live cluster; see §6 for the dedup caveat |
 | Correlation/UEBA | `backend/cysiemstack/correlation_engine/{ingestor,normaliser,grouper,correlator}.py` → Postgres `alerts`/`incidents`. Already vendor-agnostic. | No change needed — reuse as-is |
-| Fleet/host management | `backend/siem_proxy.py` — ~50 routes hitting the **Wazuh Manager API** directly: agent enroll/remove, syscollector inventory, SCA, vulnerability detection, agent groups, active-response, dashboard SSO launch. | Untouched — still Wazuh-specific; see Phase 5 |
+| Fleet/host management | `backend/siem_proxy.py` — host list/enroll/remove and SCA now source from `edr_agents`/`collector_agents`/`edr_sca_results`/ITAM (v1.0.239); syscollector inventory and vulnerability detection already ITAM-sourced (v1.0.238); agent groups/active-response/dashboard SSO launch already retired (v1.0.229/v1.0.238). No live Wazuh Manager API call remains in this file. | ✅ Done — see Phase 5 |
 
 ### v1.0.212 — Wazuh/CySIEM is now optional at install time
 
@@ -439,7 +442,21 @@ See `docs/CYDATALAKE_OPS_RUNBOOK.md` §2-3 for the exact provisioning + systemd 
 service consuming real Kafka traffic; a synthetic duplicate test case demonstrably collapsed by
 `dedup.py`; a cold-storage export cycle observed to Parquet-export and purge aged rows correctly.
 
-## 9. Phase 5 — Rebuild Wazuh-Manager-API-dependent fleet features — ✅ AUDIT COMPLETE, NO CODE REWRITTEN (BY DESIGN)
+## 9. Phase 5 — Rebuild Wazuh-Manager-API-dependent fleet features — ✅ DONE (v1.0.239)
+
+**Update, v1.0.239:** the rewrite this section originally deferred has shipped. `siem_proxy.py` and
+`cysiemstack/host_service.py` (the parallel hourly-scheduled version of the same host-posture
+refresh — rebuilt identically) no longer call the Wazuh Manager API anywhere. Host identity now
+comes from `edr_agents` ∪ `collector_agents` (CyEDR/CyCollector's own registries), SCA from
+`edr_sca_results`, vulnerability severity from ITAM's `software_inventory`. `WAZUH_API_URL`/
+`WAZUH_API_USER`/`WAZUH_API_PASSWORD` are gone from `cycentra-setup.sh` and every backend consumer
+(`siem_proxy.py`, `host_service.py`, `blueprints/benchmark/routes.py`, `blueprints/integrations/
+health.py`, `blueprints/system/routes.py`'s secret-key list, `core/kv_secrets.py`). Full detail in
+`docs/SIEM_PROXY_AUDIT.md`'s v1.0.239 update note. What was **not** touched, deliberately: the
+O365/GCP/GitHub `ossec.conf`-writing wodle-config routes in `blueprints/system/routes.py` — a
+different, unrelated mechanism (direct config-file editing + `systemctl restart wazuh-manager`, no
+`WAZUH_API_*` credentials involved) that still requires a locally-installed Wazuh manager. The
+paragraphs below describe the original audit-only pass as historical record.
 
 **Full route-by-route audit done — see `docs/SIEM_PROXY_AUDIT.md`.** Every one of `siem_proxy.py`'s
 ~80 routes was grepped and traced for actual `WAZUH_API_URL`/`_wazuh_auth_token()` usage (not
@@ -573,7 +590,7 @@ Severity mapping reminder (`grouper._score_to_severity()`): level 15→critical,
 | Cross-source dedup (Phase 4) | `backend/cysiemstack/dedup.py` |
 | ClickHouse hot store (Phase 4) | `backend/cysiemstack/clickhouse_store.py` |
 | Standalone ingest worker (Phase 4, separate systemd service) | `backend/cysiemstack/ingest_worker.py` |
-| Fleet/host management audit (Phase 5) | `docs/SIEM_PROXY_AUDIT.md` — analysis only, `backend/siem_proxy.py` itself unchanged |
+| Fleet/host management audit + rewrite (Phase 5) | `docs/SIEM_PROXY_AUDIT.md` — audit + v1.0.239 rewrite note; `backend/siem_proxy.py` and `backend/cysiemstack/host_service.py` now Wazuh-Manager-API-free |
 | ITAM overlap candidates (Phase 5 dedup audit) | `backend/blueprints/itam/routes.py` |
 | Wazuh custom rule IDs (check before allocating new synthetic IDs) | `CYSIEM-Config/rules/cy_cust_rules.xml` |
 | Wazuh-optional installer step | `cycentra-setup.sh` — search `_INSTALL_CYSIEM` |

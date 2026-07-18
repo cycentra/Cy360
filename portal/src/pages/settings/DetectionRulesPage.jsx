@@ -169,15 +169,15 @@ detection:
       });
       const d = await r.json();
       if (!r.ok) { setErr(d.error || "Save failed"); setSaving(false); return; }
-      notify(`Sigma rule saved and active immediately.`);
+      notify(`CyLogic rule saved and active immediately.`);
       onSaved();
     } catch (e) { setErr("Network error"); setSaving(false); }
   }
 
   return (
-    <Modal title={initial ? "EDIT CUSTOM SIGMA RULE" : "+ NEW CUSTOM SIGMA RULE"} accent={T.accent} onClose={onClose} width={680}>
+    <Modal title={initial ? "EDIT CUSTOM CYLOGIC RULE" : "+ NEW CUSTOM CYLOGIC RULE"} accent={T.accent} onClose={onClose} width={680}>
       <div style={{ color: T.muted, fontSize: 11, marginBottom: 10 }}>
-        Standard Sigma YAML — <code style={{ color: T.accent }}>title</code>, <code style={{ color: T.accent }}>level</code>,{" "}
+        Standard CyLogic rule syntax (YAML) — <code style={{ color: T.accent }}>title</code>, <code style={{ color: T.accent }}>level</code>,{" "}
         <code style={{ color: T.accent }}>logsource</code>, <code style={{ color: T.accent }}>detection</code> (selection + condition).
       </div>
       <textarea value={yamlText} onChange={e => setYamlText(e.target.value)}
@@ -226,7 +226,7 @@ function SigmaTab({ notify }) {
       const r = await fetch(`${API}/sigma/refresh-corpus`, { method: "POST", credentials: "include" });
       const d = await r.json().catch(() => ({}));
       if (r.ok && d.ok) {
-        notify(`Sigma corpus refreshed — ${d.rule_count} rules (was ${d.previous_count}). Active immediately.`);
+        notify(`CyLogic corpus refreshed — ${d.rule_count} rules (was ${d.previous_count}). Active immediately.`);
         load();
       } else {
         notify(`Refresh not applied: ${d.error || `HTTP ${r.status}`} — previous corpus is still running.`, false);
@@ -261,7 +261,7 @@ function SigmaTab({ notify }) {
       {loadError && (
         <div style={{ background: "rgba(255,59,59,0.06)", border: `1px solid ${T.red}40`, borderRadius: 4,
                       padding: "10px 14px", marginBottom: 14, color: T.red, fontSize: 11, fontFamily: T.mono }}>
-          Failed to load Sigma rules — this is a request failure, not "zero rules": {loadError}
+          Failed to load CyLogic rules — this is a request failure, not "zero rules": {loadError}
         </div>
       )}
       <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center" }}>
@@ -270,7 +270,7 @@ function SigmaTab({ notify }) {
         <select value={source} onChange={e => { setOffset(0); setSource(e.target.value); }} style={{ ...inputStyle, maxWidth: 160 }}>
           <option value="">All sources</option>
           <option value="bundled">Bundled (starter)</option>
-          <option value="imported">Imported (SigmaHQ)</option>
+          <option value="imported">Imported (Community)</option>
           <option value="custom">Custom</option>
         </select>
         <div style={{ flex: 1 }} />
@@ -280,7 +280,7 @@ function SigmaTab({ notify }) {
         <Btn onClick={() => setShowNew(true)} accent={T.accent}>+ New Custom Rule</Btn>
       </div>
 
-      <Panel title="Sigma Rules" accent={T.accent} badge={total}>
+      <Panel title="CyLogic Rules" accent={T.accent} badge={total}>
         {loading ? (
           <div style={{ color: T.muted, fontSize: 12, textAlign: "center", padding: 20 }}>Loading…</div>
         ) : (
@@ -672,7 +672,7 @@ function BundledYaraPanel({ notify }) {
       const r = await fetch(`${API}/yara/refresh-corpus`, { method: "POST", credentials: "include" });
       const d = await r.json().catch(() => ({}));
       if (r.ok && d.ok) {
-        notify(`YARA corpus refreshed — ${d.rule_count} rules (was ${d.previous_count}). Deployed immediately; agents pick it up on next hourly sync or Fleet Scan.`);
+        notify(`CyScan corpus refreshed — ${d.rule_count} rules (was ${d.previous_count}). Deployed immediately; agents pick it up on next hourly sync or Fleet Scan.`);
         load();
       } else {
         notify(`Refresh not applied: ${d.error || `HTTP ${r.status}`} — previous ruleset is still deployed.`, false);
@@ -688,7 +688,7 @@ function BundledYaraPanel({ notify }) {
       {loadError && (
         <div style={{ background: "rgba(255,59,59,0.06)", border: `1px solid ${T.red}40`, borderRadius: 4,
                       padding: "10px 14px", marginBottom: 14, color: T.red, fontSize: 11, fontFamily: T.mono }}>
-          Failed to load bundled YARA rules: {loadError}
+          Failed to load bundled CyScan rules: {loadError}
         </div>
       )}
       {!staged && !loadError && (
@@ -705,7 +705,7 @@ function BundledYaraPanel({ notify }) {
           {refreshing ? "Refreshing… (may take a minute)" : "⟳ Refresh Corpus Now"}
         </Btn>
       </div>
-      <Panel title="Bundled YARA Rules (cycentra.yar — static file, not editable here)" accent={T.blue} badge={total}>
+      <Panel title="Bundled CyScan Rules (cycentra.yar — static file, not editable here)" accent={T.blue} badge={total}>
         {loading ? (
           <div style={{ color: T.muted, fontSize: 12, textAlign: "center", padding: 20 }}>Loading…</div>
         ) : (
@@ -749,8 +749,8 @@ function BundledYaraPanel({ notify }) {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 const TABS = [
-  { id: "sigma",       label: "Sigma" },
-  { id: "yara",        label: "YARA / CyScan" },
+  { id: "sigma",       label: "CyLogic" },
+  { id: "yara",        label: "CyScan" },
   { id: "correlation", label: "Correlation" },
   { id: "ueba",        label: "UEBA" },
 ];

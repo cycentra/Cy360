@@ -183,7 +183,6 @@ FLASK_KV_MAP: dict[str, str] = {
 #
 # Only company-wide credentials here.  Install-specific values are excluded:
 #   CORRELATION_DB_URL — per-install PostgreSQL connection string
-#   WAZUH_API_*        — auto-detected by setup.sh from local Wazuh config
 #   CYTIM_URL / CYTIM_API_KEY — per-install (CyTIM runs locally; set in cysiemstack.env)
 ENGINE_KV_MAP: dict[str, str] = {
     "CYMIND_API_URL": "CYMIND-API-URL",

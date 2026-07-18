@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 
 from cy_comp.models import db
 from cy_comp.services.enrichment import (
+    CATEGORY_TO_CONTROLS,
     COMPLIANCE_MIN_LEVEL,
     CRITICAL_LEVEL,
     HIGH_LEVEL,
@@ -49,8 +50,14 @@ def _severity_from_level(level: int) -> str:
     return "low"
 
 
-def _compute_controls(mitre_id: str, rule_id: int) -> dict:
-    """Return compliance_controls JSONB dict by mapping MITRE + rule ID."""
+def _compute_controls(mitre_id: str, rule_id: int, category: str = "") -> dict:
+    """Return compliance_controls JSONB dict by mapping MITRE + rule ID + category.
+
+    `category` is a source-agnostic fallback (CATEGORY_TO_CONTROLS) for alerts
+    that match neither a MITRE technique nor a Wazuh-numbered rule_id — the
+    common case for CyEDR/CyLogic/connector-sourced alerts, which always carry
+    a normaliser.py category regardless of vendor.
+    """
     controls: dict[str, list[str]] = {}
 
     if mitre_id:
@@ -67,6 +74,13 @@ def _compute_controls(mitre_id: str, rule_id: int) -> dict:
             controls.setdefault(fw, [])
             if c not in controls[fw]:
                 controls[fw].append(c)
+
+    if category:
+        for fw, ctrl_list in CATEGORY_TO_CONTROLS.get(category, {}).items():
+            for c in ctrl_list:
+                controls.setdefault(fw, [])
+                if c not in controls[fw]:
+                    controls[fw].append(c)
 
     return controls
 
@@ -116,7 +130,7 @@ def enrich_alerts_pass(batch_size: int = BATCH_SIZE) -> dict:
             for (aid, rule_id, rule_level, mitre_id, rule_desc, category) in rows:
                 try:
                     rule_level = int(rule_level or 0)
-                    controls   = _compute_controls(mitre_id or "", rule_id)
+                    controls   = _compute_controls(mitre_id or "", rule_id, category or "")
                     frameworks = list(controls.keys()) if controls else []
 
                     # An alert is compliance-relevant if it meets the level threshold

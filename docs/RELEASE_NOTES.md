@@ -1,3 +1,12 @@
+## v1.0.239 -- 2026-07-18
+
+### Improvements
+
+  - Removed the live Wazuh Manager API dependency platform-wide (Phase 5 of the CyDataLake migration, closing out the two remaining items from `docs/SIEM_PROXY_AUDIT.md`): host list/enroll/remove and SCA now source from CyEDR/CyCollector's own agent registries, `edr_sca_results`, and ITAM's `software_inventory` instead of a live `WAZUH_API_URL` call. Same rebuild applied in parallel to `siem_proxy.py` (on-demand refresh) and `cysiemstack/host_service.py` (hourly scheduled refresh), plus the benchmark engine's vulnerability/SCA sub-scores. `WAZUH_API_URL`/`WAZUH_API_USER`/`WAZUH_API_PASSWORD` removed from `cycentra-setup.sh` and every backend consumer; the Wazuh integration-health check retired.
+  - Fixed `cycentra-setup.sh`'s `options-ssl-nginx.conf` provisioning: it only checked the file existed (`-f`), not that it was non-empty (`-s`), so a truncated/interrupted write from an earlier run was never repaired on subsequent runs and broke `nginx -t`.
+
+---
+
 ## v1.0.238 -- 2026-07-18
 
 ### Bug Fixes

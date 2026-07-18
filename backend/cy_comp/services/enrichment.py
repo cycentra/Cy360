@@ -360,6 +360,55 @@ _SCA_CONTROLS: Dict[str, List[str]] = {
     "tsc":      ["CC7.1", "CC8.1"],
 }
 
+# ── Category → Framework Controls (source-agnostic fallback) ────────────────
+# Used when an alert has neither a MITRE technique nor a matching Wazuh rule_id
+# — the common case for CyEDR/CyLogic/connector-sourced alerts, which always
+# carry a normaliser.py `category` regardless of vendor but don't carry a
+# Wazuh-numbered rule_id. Citations are reused verbatim from the closest
+# matching WAZUH_RULE_TO_CONTROLS entry for the same domain (fim: rules
+# 550/554, vulnerability: rules 23504/23505, authentication: rules 5710/5763,
+# malware: rule 510) rather than authored fresh, to stay consistent with
+# mappings already reviewed for those domains.
+CATEGORY_TO_CONTROLS: Dict[str, Dict[str, List[str]]] = {
+    "sca": _SCA_CONTROLS,
+    "fim": {
+        "nis2":     ["NIS2-Art21-2e"],
+        "dora":     ["DORA-Art9"],
+        "gdpr":     ["GDPR-Art32", "GDPR-Art5-1f"],
+        "iso27001": ["ISO-A8.15"],
+        "soc2":     ["CC7.2"],
+        "nist_csf": ["DE.CM-03", "PR.DS-01"],
+        "pci_dss":  ["Req 10.3", "Req 11.5"],
+    },
+    "malware": {
+        "nis2":     ["NIS2-Art21-2a", "NIS2-Art21-2b"],
+        "dora":     ["DORA-Art10", "DORA-Art11"],
+        "gdpr":     ["GDPR-Art32", "GDPR-Art33"],
+        "iso27001": ["ISO-A8.7"],
+        "soc2":     ["CC6.8", "CC7.2"],
+        "nist_csf": ["DE.CM-04", "DE.AE-02"],
+        "pci_dss":  ["Req 5.2", "Req 11.4"],
+    },
+    "vulnerability": {
+        "nis2":     ["NIS2-Art21-2e"],
+        "dora":     ["DORA-Art6"],
+        "gdpr":     ["GDPR-Art25", "GDPR-Art32"],
+        "iso27001": ["ISO-A8.8"],
+        "soc2":     ["CC7.1"],
+        "nist_csf": ["ID.RA-01", "DE.CM-04"],
+        "pci_dss":  ["Req 6.3", "Req 11.3"],
+    },
+    "authentication": {
+        "nis2":     ["NIS2-Art21-2i", "NIS2-Art21-2j"],
+        "dora":     ["DORA-Art9", "DORA-Art10"],
+        "gdpr":     ["GDPR-Art32"],
+        "iso27001": ["ISO-A8.5"],
+        "soc2":     ["CC6.1", "CC6.7"],
+        "nist_csf": ["PR.AA-01", "DE.CM-01"],
+        "pci_dss":  ["Req 8.3", "Req 10.2"],
+    },
+}
+
 # ── Framework tag from Wazuh rule groups ─────────────────────────────────────
 _GROUP_TO_FRAMEWORK: Dict[str, str] = {
     "pci_dss":     "pci_dss",

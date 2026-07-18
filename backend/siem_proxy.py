@@ -22,7 +22,7 @@ import time
 import subprocess
 
 _logger = logging.getLogger(__name__)
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from functools import wraps
 
 import requests as _req
@@ -30,11 +30,6 @@ from flask import Blueprint, request, Response, jsonify, session, make_response
 
 SIEM_ENGINE_URL = os.environ.get("SIEM_ENGINE_URL", "http://127.0.0.1:8100")
 PROXY_TIMEOUT   = int(os.environ.get("SIEM_PROXY_TIMEOUT", "10"))
-
-# Wazuh API credentials — same env vars used by benchmark/routes.py
-WAZUH_API_URL  = os.environ.get("WAZUH_API_URL",      "https://127.0.0.1:55000")
-WAZUH_API_USER = os.environ.get("WAZUH_API_USER",     "wazuh-wui")
-WAZUH_API_PASS = os.environ.get("WAZUH_API_PASSWORD", "")
 
 siem_bp = Blueprint("siem", __name__, url_prefix="/api/siem")
 
@@ -1497,12 +1492,21 @@ _host_refresh_in_flight = False
 def _refresh_host_cache_sync():
     """Pure psycopg2 host posture refresh — works without the correlation engine.
 
-    Fetches agents from Wazuh (if credentials available) plus the alerts table,
-    computes the 5-component posture score for each agent, and upserts the
-    results directly into host_posture_cache via psycopg2.
+    Builds the host list from edr_agents + collector_agents (CyEDR/CyCollector's
+    own agent registries) plus a 90-day alerts-table scan as a fallback for any
+    agent_id neither table knows about (e.g. a connector-sourced entity), then
+    computes the 5-component posture score for each and upserts the results
+    directly into host_posture_cache via psycopg2.
+
+    No live Wazuh Manager API call anywhere in this function (CyDataLake
+    migration): SCA comes from edr_sca_results (the agent's own ScaScanner
+    thread), vulnerabilities from ITAM's software_inventory (per-CVE severity
+    via network_assets), and the master host list from CyEDR/CyCollector's own
+    registries — agent enrollment/connection state is Wazuh Manager-side state
+    with no Kafka/data-lake equivalent, so it has to come from an agent
+    registry table, not an alert stream. See docs/SIEM_PROXY_AUDIT.md.
     """
     import psycopg2.extras
-    import base64 as _b64
 
     # ── Ensure table + all required columns exist ─────────────────────────────
     conn = _corr_conn()
@@ -1554,52 +1558,35 @@ def _refresh_host_cache_sync():
     finally:
         conn.close()
 
-    # ── Wazuh token ───────────────────────────────────────────────────────────
-    token = None
-    if WAZUH_API_PASS:
-        try:
-            creds = _b64.b64encode(
-                f"{WAZUH_API_USER}:{WAZUH_API_PASS}".encode()
-            ).decode()
-            r = _req.get(
-                f"{WAZUH_API_URL}/security/user/authenticate",
-                headers={"Authorization": f"Basic {creds}"},
-                timeout=10, verify=False,
-            )
-            if r.status_code == 200:
-                token = r.json()["data"]["token"]
-        except Exception as exc:
-            _logger.debug("[host-refresh] Wazuh token error: %s", exc)
+    # ── Build unified agent list: CyEDR + CyCollector registries first (their
+    # own hardware_uuid dedup already ran at enrollment time), then a 90-day
+    # alerts-table scan as a fallback for any agent_id neither table knows
+    # about (e.g. a connector-sourced entity with no agent registry of its own).
+    _STALE_AFTER = timedelta(minutes=5)
 
-    def _wazuh(path, params=None):
-        if not token:
-            return None
+    def _liveness(last_seen):
+        if not last_seen:
+            return "never_connected"
         try:
-            r = _req.get(
-                f"{WAZUH_API_URL}{path}",
-                headers={"Authorization": f"Bearer {token}"},
-                params=params or {},
-                timeout=10, verify=False,
-            )
-            return r.json() if r.status_code == 200 else None
+            now = datetime.now(timezone.utc)
+            ls = last_seen if last_seen.tzinfo else last_seen.replace(tzinfo=timezone.utc)
+            return "active" if (now - ls) < _STALE_AFTER else "disconnected"
         except Exception:
-            return None
-
-    # ── Build unified agent list ──────────────────────────────────────────────
-    wazuh_agents = {}
-    if token:
-        data = _wazuh("/agents", {
-            "status": "active,disconnected,never_connected",
-            "limit": 500,
-            "select": "id,name,ip,status,os.platform,os.version,lastKeepAlive,version",
-        })
-        if data:
-            for a in data.get("data", {}).get("affected_items", []):
-                wazuh_agents[a["id"]] = a
+            return "unknown"
 
     conn = _corr_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT agent_id, hostname, agent_ip, os_type, version, last_seen
+                FROM edr_agents WHERE status <> 'removed'
+            """)
+            edr_rows = cur.fetchall()
+            cur.execute("""
+                SELECT agent_id, hostname, agent_ip, os_type, version, last_seen
+                FROM collector_agents WHERE status <> 'removed'
+            """)
+            collector_rows = cur.fetchall()
             cur.execute("""
                 SELECT DISTINCT agent_id, agent_name, agent_ip FROM alerts
                 WHERE timestamp > NOW() - INTERVAL '90 days'
@@ -1615,138 +1602,27 @@ def _refresh_host_cache_sync():
             "ip": a["agent_ip"], "status": "unknown",
             "os_platform": None, "os_version": None, "last_keepalive": None,
         }
-    for aid, a in wazuh_agents.items():
-        all_agents[aid] = {
-            "id": aid, "name": a.get("name", aid), "ip": a.get("ip"),
-            "status": a.get("status", "unknown"),
-            "os_platform": (a.get("os") or {}).get("platform"),
-            "os_version":  (a.get("os") or {}).get("version"),
-            "last_keepalive": a.get("lastKeepAlive"),
+    for a in list(edr_rows) + list(collector_rows):
+        all_agents[a["agent_id"]] = {
+            "id": a["agent_id"], "name": a["hostname"] or a["agent_id"],
+            "ip": a["agent_ip"], "status": _liveness(a["last_seen"]),
+            "os_platform": a["os_type"], "os_version": None,
+            "last_keepalive": a["last_seen"].isoformat() if a["last_seen"] else None,
         }
 
-    # Deduplicate by agent name: a host re-enrolled in Wazuh keeps the same name
-    # but gets a new agent_id; the old id lingers in alerts for up to 90 days.
-    # Keep the Wazuh-registered id over the DB-only stale one.
-    _seen_names: dict = {}
-    _deduped: dict = {}
-    for _aid, _info in all_agents.items():
-        _nk = (_info["name"] or _aid).lower()
-        if _nk not in _seen_names:
-            _seen_names[_nk] = _aid
-            _deduped[_aid] = _info
-        else:
-            _prev = _seen_names[_nk]
-            if _aid in wazuh_agents and _prev not in wazuh_agents:
-                del _deduped[_prev]
-                _seen_names[_nk] = _aid
-                _deduped[_aid] = _info
-    all_agents = _deduped
-
-    # ── IP-based dedup: same physical machine re-enrolled under a new hostname ──
-    # Wazuh creates a new agent_id when the OS hostname changes (e.g. mac.home →
-    # Deepaks-MacBook-Air.local on a different network). Detect groups that share
-    # an IP address and keep only the one with the most recent lastKeepAlive;
-    # delete the stale entry from Wazuh so it doesn't re-appear on the next sync.
-    def _ka(aid):
-        raw = all_agents[aid].get("last_keepalive") or ""
-        return raw if raw else ""
-
-    _ip_groups: dict[str, list] = {}
-    for _aid, _info in all_agents.items():
-        _ip = (_info.get("ip") or "").strip()
-        if not _ip or _ip in ("127.0.0.1", "any", ""):
-            continue
-        _ip_groups.setdefault(_ip, []).append(_aid)
-
-    for _ip, _aids in _ip_groups.items():
-        if len(_aids) < 2:
-            continue
-        _aids_sorted = sorted(_aids, key=_ka, reverse=True)
-        _winner = _aids_sorted[0]
-        for _stale in _aids_sorted[1:]:
-            _logger.info(
-                "[host-refresh] IP dedup: removing stale agent %s (%s) superseded by %s (%s) on IP %s",
-                _stale, all_agents[_stale].get("name"), _winner, all_agents[_winner].get("name"), _ip,
-            )
-            del all_agents[_stale]
-            # Remove from Wazuh so it doesn't re-register automatically
-            if token and _stale in wazuh_agents and _stale != "000":
-                try:
-                    _req.delete(
-                        f"{WAZUH_API_URL}/agents",
-                        headers={"Authorization": f"Bearer {token}"},
-                        params={"agents_list": _stale, "status": "all", "older_than": "0s"},
-                        timeout=10, verify=False,
-                    )
-                except Exception as _exc:
-                    _logger.warning("[host-refresh] could not delete stale agent %s from Wazuh: %s", _stale, _exc)
-
-    # ── MAC-address dedup: same host re-enrolled with new hostname + new IP ──
-    # Fetch primary NIC MAC from Wazuh syscollector for each live Wazuh agent.
-    # Roaming laptops (e.g. mac.lan → mac.home → Deepaks-MacBook-Air.local) produce
-    # a new agent_id on every network change because the OS hostname changes.
-    # Grouping by MAC collapses them into a single row (most-recent keepalive wins).
-    _VIRTUAL_PREFIXES = ("lo", "veth", "docker", "br-", "virbr", "tun", "tap", "utun", "awdl", "llw")
-    _agent_macs: dict[str, str] = {}  # agent_id → primary MAC
-
-    if token:
-        for _mac_aid in list(all_agents.keys()):
-            if _mac_aid not in wazuh_agents:
-                continue  # DB-only ghost: no live netiface data
-            try:
-                _nif = _wazuh(f"/syscollector/{_mac_aid}/netiface", {"limit": 20})
-                if not _nif:
-                    continue
-                for _ifc in _nif.get("data", {}).get("affected_items", []):
-                    _name = (_ifc.get("name") or "").lower()
-                    _mac  = (_ifc.get("mac")  or "").strip().lower()
-                    if not _mac or _mac in ("00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"):
-                        continue
-                    if any(_name.startswith(p) for p in _VIRTUAL_PREFIXES):
-                        continue
-                    _agent_macs[_mac_aid] = _mac
-                    break
-            except Exception:
-                pass
-
-    _mac_groups: dict[str, list] = {}
-    for _mac_aid, _mac in _agent_macs.items():
-        _mac_groups.setdefault(_mac, []).append(_mac_aid)
-
-    for _grp_mac, _grp_aids in _mac_groups.items():
-        if len(_grp_aids) < 2:
-            continue
-        _grp_sorted = sorted(_grp_aids, key=_ka, reverse=True)
-        _mac_winner = _grp_sorted[0]
-        for _mac_stale in _grp_sorted[1:]:
-            if _mac_stale not in all_agents:
-                continue
-            _logger.info(
-                "[host-refresh] MAC dedup: removing stale agent %s (%s) superseded by %s (%s) on MAC %s",
-                _mac_stale, all_agents[_mac_stale].get("name"),
-                _mac_winner, all_agents[_mac_winner].get("name"), _grp_mac,
-            )
-            del all_agents[_mac_stale]
-            if token and _mac_stale in wazuh_agents and _mac_stale != "000":
-                try:
-                    _req.delete(
-                        f"{WAZUH_API_URL}/agents",
-                        headers={"Authorization": f"Bearer {token}"},
-                        params={"agents_list": _mac_stale, "status": "all", "older_than": "0s"},
-                        timeout=10, verify=False,
-                    )
-                except Exception as _exc:
-                    _logger.warning("[host-refresh] could not delete stale MAC agent %s: %s", _mac_stale, _exc)
-
-    # ── Hostname-stem dedup: fallback for agents where netiface was unavailable ──
-    # Strip common mDNS/DHCP domain suffixes, then group by (stem, os_platform).
-    # Catches roaming devices whose netiface data could not be fetched from Wazuh.
+    # ── Hostname-stem dedup: same physical host re-enrolled under a new name ──
+    # (roaming laptops, hostname changes across networks). CyEDR/CyCollector
+    # already dedupe by hardware_uuid at enrollment time, so this only remains
+    # a safety net for alerts-table-only ghost entries with no registry row.
     _STEM_RE = re.compile(
         r"\.(lan|local|home|internal|localdomain|corp|office|intranet|priv)$", re.I
     )
 
     def _hostname_stem(name: str) -> str:
         return _STEM_RE.sub("", name.lower()).strip()
+
+    def _ka(aid):
+        return all_agents[aid].get("last_keepalive") or ""
 
     _stem_seen: dict[str, str] = {}  # (stem|platform) → winning agent_id
     _stem_deduped: dict = {}
@@ -1775,8 +1651,8 @@ def _refresh_host_cache_sync():
     all_agents = _stem_deduped
 
     if not all_agents:
-        _logger.warning("[host-refresh] no agents found (wazuh=%d, db=%d)",
-                        len(wazuh_agents), len(db_agents))
+        _logger.warning("[host-refresh] no agents found (edr=%d, collector=%d, db=%d)",
+                        len(edr_rows), len(collector_rows), len(db_agents))
         return 0
 
     # ── Per-agent posture compute + upsert ────────────────────────────────────
@@ -1787,21 +1663,22 @@ def _refresh_host_cache_sync():
             try:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
 
-                    # Component 1 — SCA pass rate (30%)
-                    sca_passed = sca_failed = sca_total = 0
-                    sca_score = None
-                    if token:
-                        sca_data = _wazuh(f"/sca/{agent_id}", {"limit": 50})
-                        if sca_data:
-                            for pol in sca_data.get("data", {}).get("affected_items", []):
-                                sca_passed += int(pol.get("pass",  0))
-                                sca_failed += int(pol.get("fail",  0))
-                                sca_total  += (int(pol.get("pass", 0))
-                                               + int(pol.get("fail",  0))
-                                               + int(pol.get("error", 0)))
-                    if sca_total > 0:
-                        sca_score = round(sca_passed / sca_total * 100, 1)
-                    else:
+                    # Component 1 — SCA pass rate (30%), EDR-native first
+                    # (the agent's own ScaScanner thread — see edr_sca_results)
+                    cur.execute("""
+                        SELECT COUNT(*) FILTER (WHERE result = 'passed') AS passed,
+                               COUNT(*) FILTER (WHERE result = 'failed') AS failed
+                        FROM edr_sca_results WHERE agent_id = %s
+                    """, [agent_id])
+                    row = cur.fetchone()
+                    sca_passed = int(row["passed"] or 0) if row else 0
+                    sca_failed = int(row["failed"] or 0) if row else 0
+                    sca_total  = sca_passed + sca_failed
+                    sca_score  = round(sca_passed / sca_total * 100, 1) if sca_total else None
+
+                    if sca_total == 0:
+                        # Fall back to historical SCA alerts (older
+                        # Wazuh-connector-sourced events retained in `alerts`).
                         cur.execute("""
                             SELECT
                               COUNT(*) FILTER (WHERE full_alert->'data'->'sca'->'check'->>'result' = 'passed') AS passed,
@@ -1816,20 +1693,27 @@ def _refresh_host_cache_sync():
                             sca_total = sca_passed + sca_failed
                             sca_score = round(sca_passed / sca_total * 100, 1)
 
-                    # Component 2 — Vulnerability severity (25%)
+                    # Component 2 — Vulnerability severity (25%), ITAM-native
+                    # (software_inventory's per-CVE severity, joined via the
+                    # network_assets row CyEDR's InventoryReporter maintains)
                     vuln_critical = vuln_high = vuln_medium = vuln_low = 0
                     vuln_score = None
-                    if token:
-                        vuln_data = _wazuh(f"/vulnerability/{agent_id}", {
-                            "limit": 500, "select": "severity", "status": "Active",
-                        })
-                        if vuln_data:
-                            for v in vuln_data.get("data", {}).get("affected_items", []):
-                                sev = v.get("severity", "")
-                                if sev == "Critical":   vuln_critical += 1
-                                elif sev == "High":     vuln_high     += 1
-                                elif sev == "Medium":   vuln_medium   += 1
-                                elif sev == "Low":      vuln_low      += 1
+                    cur.execute("""
+                        SELECT elem->>'severity' AS severity, COUNT(*) AS cnt
+                        FROM network_assets na
+                        JOIN software_inventory si ON si.asset_id = na.id
+                        CROSS JOIN LATERAL jsonb_array_elements(si.cves) elem
+                        WHERE na.edr_agent_id = %s
+                        GROUP BY elem->>'severity'
+                    """, [agent_id])
+                    for r in cur.fetchall():
+                        sev = (r["severity"] or "").lower()
+                        n = int(r["cnt"])
+                        if sev == "critical":   vuln_critical = n
+                        elif sev == "high":     vuln_high     = n
+                        elif sev == "medium":   vuln_medium   = n
+                        elif sev == "low":      vuln_low      = n
+                    if vuln_critical + vuln_high + vuln_medium + vuln_low > 0:
                         raw = (100.0
                                - min(60, vuln_critical * 12)
                                - min(36, vuln_high     *  6)
@@ -1910,8 +1794,10 @@ def _refresh_host_cache_sync():
                         except Exception:
                             pass
 
-                    # Upsert
-                    _primary_mac = _agent_macs.get(agent_id)
+                    # Upsert — primary_mac is no longer collected (no live
+                    # syscollector data); COALESCE below preserves any value a
+                    # prior run already had rather than clobbering it with NULL.
+                    _primary_mac = None
                     cur.execute("""
                         INSERT INTO host_posture_cache (
                             agent_id, agent_name, agent_ip, os_platform, os_version,
@@ -2020,45 +1906,6 @@ def _run_host_refresh_background():
     t.start()
 
 
-# ── Wazuh auth helper ─────────────────────────────────────────────────────────
-
-def _wazuh_auth_token():
-    """Return a short-lived Wazuh JWT, or None if credentials are missing/wrong."""
-    if not WAZUH_API_PASS:
-        return None
-    import base64 as _b64
-    try:
-        creds = _b64.b64encode(f"{WAZUH_API_USER}:{WAZUH_API_PASS}".encode()).decode()
-        r = _req.get(
-            f"{WAZUH_API_URL}/security/user/authenticate",
-            headers={"Authorization": f"Basic {creds}"},
-            timeout=8, verify=False,
-        )
-        r.raise_for_status()
-        return r.json()["data"]["token"]
-    except Exception as exc:
-        _logger.warning("[wazuh-auth] token fetch failed: %s", exc)
-        return None
-
-
-def _wz(token, method, path, params=None, json_body=None, raw_body=None, extra_headers=None):
-    """Single Wazuh API call; returns (response_object | None)."""
-    headers = {"Authorization": f"Bearer {token}"}
-    if extra_headers:
-        headers.update(extra_headers)
-    try:
-        r = _req.request(
-            method, f"{WAZUH_API_URL}{path}",
-            headers=headers, params=params or {},
-            json=json_body, data=raw_body,
-            timeout=12, verify=False,
-        )
-        return r
-    except Exception as exc:
-        _logger.warning("[wazuh] %s %s failed: %s", method, path, exc)
-        return None
-
-
 # ── Flask routes ──────────────────────────────────────────────────────────────
 
 @siem_bp.route("/hosts", methods=["GET"])
@@ -2104,34 +1951,37 @@ def siem_host_options(agent_id):
 @require_siem_admin
 def siem_host_delete(agent_id):
     """
-    Remove a Wazuh agent from the manager and purge it from host_posture_cache.
-    Refuses to delete agent 000 (the manager itself).
-    Admin-only — this is a permanent destructive operation.
+    Remove a host: soft-deletes the underlying CyEDR/CyCollector agent record
+    (status='removed', so it drops out of the next _refresh_host_cache_sync()
+    build and won't reappear) and purges its host_posture_cache row.
+
+    No Wazuh Manager call — hosts are sourced from edr_agents/collector_agents
+    now, not a Wazuh agent registry (see docs/SIEM_PROXY_AUDIT.md). A hard
+    DELETE on the agent row is deliberately avoided: edr_detections and other
+    tables carry a NOT NULL FK to edr_agents.agent_id, so removal is a status
+    flag, not a row delete.
+
+    Refuses to delete agent 000 (reserved id). Admin-only — permanent action.
     """
     if agent_id == "000":
-        return jsonify({"error": "Cannot delete the Wazuh manager node"}), 400
+        return jsonify({"error": "Cannot delete reserved agent id 000"}), 400
 
-    token = _wazuh_auth_token()
     errors = []
-
-    # Delete from Wazuh
-    if token:
-        r = _wz(token, "DELETE", "/agents",
-                 params={"agents_list": agent_id, "status": "all", "older_than": "0s"})
-        if r is None or r.status_code not in (200, 404):
-            errors.append(f"Wazuh delete returned {r.status_code if r else 'no response'}")
-    else:
-        errors.append("Wazuh auth unavailable — agent not removed from Wazuh")
-
-    # Always purge from posture cache regardless of Wazuh result
     try:
         conn = _corr_conn()
         with conn.cursor() as cur:
+            cur.execute("UPDATE edr_agents SET status = 'removed' WHERE agent_id = %s", [agent_id])
+            edr_hit = cur.rowcount
+            cur.execute("UPDATE collector_agents SET status = 'removed' WHERE agent_id = %s", [agent_id])
+            collector_hit = cur.rowcount
             cur.execute("DELETE FROM host_posture_cache WHERE agent_id = %s", [agent_id])
+            cache_hit = cur.rowcount
         conn.commit()
         conn.close()
+        if not (edr_hit or collector_hit or cache_hit):
+            return jsonify({"error": "Host not found"}), 404
     except Exception as exc:
-        errors.append(f"Cache purge failed: {exc}")
+        errors.append(f"Removal failed: {exc}")
 
     if errors:
         return jsonify({"status": "partial", "errors": errors, "agent_id": agent_id}), 207
@@ -2651,7 +2501,6 @@ def _edr_sca(edr_agent_id: str, result_filter: str, page: int, per_page: int, of
 @siem_bp.route("/hosts/<agent_id>/sca", methods=["GET"])
 @require_siem_auth
 def siem_host_sca(agent_id):
-    import base64 as _b64i
     import psycopg2.extras
     policy_id     = request.args.get("policy_id", "")
     result_filter = request.args.get("result", "")
@@ -2674,53 +2523,11 @@ def siem_host_sca(agent_id):
     except Exception as exc:
         _logger.debug("EDR-native SCA lookup failed for %s: %s", agent_id, exc)
 
-    if not WAZUH_API_PASS:
-        # No Wazuh configured and no EDR-native SCA data either — fall back to
-        # the alerts_db-shaped path rather than a hard 503 (this previously
-        # 503'd outright even though _sca_from_alerts_db exists precisely for
-        # agents without live Wazuh access).
-        return _sca_from_alerts_db(agent_id, result_filter, page, per_page, offset)
-    try:
-        creds = _b64i.b64encode(f"{WAZUH_API_USER}:{WAZUH_API_PASS}".encode()).decode()
-        token_resp = _req.get(
-            f"{WAZUH_API_URL}/security/user/authenticate",
-            headers={"Authorization": f"Basic {creds}"},
-            timeout=8, verify=False,
-        )
-        token_resp.raise_for_status()
-        token = token_resp.json()["data"]["token"]
-        policies_resp = _req.get(
-            f"{WAZUH_API_URL}/sca/{agent_id}",
-            headers={"Authorization": f"Bearer {token}"},
-            params={"limit": 50}, timeout=10, verify=False,
-        )
-        policies_resp.raise_for_status()
-        policies = policies_resp.json().get("data", {}).get("affected_items", [])
-        target_policy = policy_id or (policies[0]["policy_id"] if policies else None)
-        if not target_policy:
-            # Wazuh has no SCA policies for this agent_id — fall back to alerts DB.
-            # This happens for stale/re-enrolled agents whose active scans run under
-            # a newer agent_id. The alerts table retains 90 days of SCA events.
-            return _sca_from_alerts_db(agent_id, result_filter, page, per_page, offset)
-        check_params = {"limit": per_page, "offset": offset}
-        if result_filter:
-            check_params["result"] = result_filter
-        checks_resp = _req.get(
-            f"{WAZUH_API_URL}/sca/{agent_id}/checks/{target_policy}",
-            headers={"Authorization": f"Bearer {token}"},
-            params=check_params, timeout=10, verify=False,
-        )
-        checks_resp.raise_for_status()
-        checks_data = checks_resp.json().get("data", {})
-        return jsonify({
-            "policies": policies, "policy_id": target_policy,
-            "checks":   checks_data.get("affected_items", []),
-            "total":    checks_data.get("total_affected_items", 0),
-            "page": page, "per_page": per_page,
-            "source": "wazuh",
-        })
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+    # No EDR-native SCA data (agent hasn't completed a scan cycle yet, or is a
+    # historical connector-sourced entity) — fall back to whatever SCA-shaped
+    # events already landed in the alerts table. No live Wazuh Manager call —
+    # see docs/SIEM_PROXY_AUDIT.md.
+    return _sca_from_alerts_db(agent_id, result_filter, page, per_page, offset)
 
 
 @siem_bp.route("/hosts/<agent_id>/alerts", methods=["GET"])

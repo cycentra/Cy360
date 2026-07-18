@@ -466,19 +466,14 @@ def oui_refresh():
 
 
 def _do_oui_refresh():
-    """Re-read OUI CSV from the installed package path and hot-reload in-memory DB."""
-    from .iot_classifier import reload_oui_db, _OUI_CSV_CANDIDATES
-    for csv_path in _OUI_CSV_CANDIDATES:
-        if csv_path.exists():
-            try:
-                content = csv_path.read_text(encoding="utf-8", errors="replace")
-                count = reload_oui_db(content)
-                _log.info("OUI DB refreshed from %s: %d entries", csv_path, count)
-                return jsonify({"ok": True, "entries": count, "source": str(csv_path)})
-            except Exception as exc:
-                _log.error("OUI refresh failed (%s): %s", csv_path, exc)
-                return jsonify({"error": str(exc)}), 500
-    return jsonify({"error": "oui_vendors.csv not found — run cycentra-setup.sh --update"}), 404
+    """Fetch the latest IEEE MA-L OUI registry and hot-swap the in-memory DB +
+    on-disk CSV (validate-before-activate — see iot_classifier.refresh_oui_corpus).
+    A failed/suspect fetch leaves the previous vendor DB running untouched."""
+    from .iot_classifier import refresh_oui_corpus
+    result = refresh_oui_corpus()
+    if result.get("ok"):
+        return jsonify(result)
+    return jsonify(result), 502
 
 
 # ── Coverage ──────────────────────────────────────────────────────────────────

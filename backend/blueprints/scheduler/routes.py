@@ -454,18 +454,21 @@ def _register_itam_phase3_jobs(sched) -> None:
                           replace_existing=True, misfire_grace_time=600)
             log.info("scheduler: ITAM cloud sync registered (every 4h)")
 
-        # IEEE OUI vendor DB refresh — re-reads installed CSV file weekly on Sunday 03:30 UTC
+        # IEEE OUI vendor DB refresh — fetches the latest MA-L registry from IEEE
+        # weekly on Sunday 03:30 UTC (validate-before-activate, see
+        # iot_classifier.refresh_oui_corpus — same safety model as the Sigma/YARA
+        # corpus refreshers in cysiemstack/detection/rule_corpus_refresh.py).
         def _oui_refresh_job():
             try:
-                from blueprints.itam.iot_classifier import reload_oui_db, _OUI_CSV_CANDIDATES
-                for csv_path in _OUI_CSV_CANDIDATES:
-                    if csv_path.exists():
-                        count = reload_oui_db(csv_path.read_text(encoding="utf-8", errors="replace"))
-                        log.info("scheduler: OUI DB reloaded — %d entries from %s", count, csv_path)
-                        return
-                log.warning("scheduler: OUI CSV not found — skipping reload")
+                from blueprints.itam.iot_classifier import refresh_oui_corpus
+                result = refresh_oui_corpus()
+                if result.get("ok"):
+                    log.info("scheduler: OUI DB refreshed — %d entries (was %d)",
+                              result["entries"], result["previous_count"])
+                else:
+                    log.warning("scheduler: OUI DB refresh not applied — %s", result.get("error"))
             except Exception as exc:
-                log.error("scheduler: OUI DB reload failed: %s", exc)
+                log.error("scheduler: OUI DB refresh failed: %s", exc)
 
         sched.add_job(_oui_refresh_job, CronTrigger(day_of_week="sun", hour=3, minute=30),
                       id="itam_oui_refresh", name="IEEE OUI Vendor DB Refresh (Weekly)",
