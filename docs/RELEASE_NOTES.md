@@ -1,3 +1,11 @@
+## v1.0.244 -- 2026-07-18
+
+### Bug Fixes
+
+  - ci): route macOS/Windows EDR binary hand-off through Release assets, not Actions Artifacts
+
+---
+
 ## v1.0.243 -- 2026-07-18
 
 ### Improvements
