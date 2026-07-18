@@ -4,7 +4,9 @@
  * Flat organisational policy document store — not organised by framework.
  * Accessible only via the GRC Posture "Getting Started" workflow widget.
  *
- * Documents are stored in a single "org-policies" RAG collection in CyMind.
+ * Documents are saved locally on the Cy360 server (/opt/cycentra/policy-docs/)
+ * as the durable copy, and a copy is also indexed in CyMind's "org-policies"
+ * RAG collection so "Analyze Framework" auto-scoring keeps working.
  * Framework reference docs (ISO 27001, NIS2, DORA, etc.) are managed separately
  * under System Settings → Security Compliance → Framework Documents.
  */
@@ -913,7 +915,15 @@ export function PolicyDocumentsPage() {
                       <div style={{ fontSize: 9, marginTop: 1, opacity: 0.7 }}>{d.uploaded_by}</div>
                     )}
                   </td>
-                  <td style={{ padding: "11px 16px" }}>
+                  <td style={{ padding: "11px 16px", display: "flex", gap: 6 }}>
+                    {d.has_local_copy && (
+                      <button onClick={() => window.open(`${API_BASE}/api/comp/policy-docs/documents/${d.id}/download`, "_blank")}
+                        style={{ background: "rgba(77,158,255,0.1)", border: `1px solid ${C.blue}30`,
+                          color: C.blue, padding: "4px 10px", borderRadius: 3, fontFamily: "monospace",
+                          fontSize: 9, cursor: "pointer", fontWeight: 700 }}>
+                        Download
+                      </button>
+                    )}
                     <button onClick={() => handleDelete(d.id)}
                       disabled={deleting === d.id}
                       style={{ background: "rgba(255,59,59,0.1)", border: `1px solid ${C.red}30`,

@@ -402,16 +402,18 @@ function CyMindSection() {
 
   const handleSaveChatKey = async () => {
     const trimmed = chatKeyInput.trim();
-    if (!trimmed.startsWith("pak_")) { setMsg({ ok: false, text: "Key must start with 'pak_'" }); return; }
-    setSaving(true); setMsg(null);
+    if (!trimmed.startsWith("CyM_") && !trimmed.startsWith("pak_")) {
+      setMsg({ ok: false, text: "Key must start with 'CyM_' (or legacy 'pak_')" }); return;
+    }
+    setSaving(true); setMsg({ ok: null, text: "Saving API key and wiring up ASM/enrichment/GRC…" });
     try {
       const r = await fetch(`${API_BASE}/api/system/cymind`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chatApiKey: trimmed }),
+        body: JSON.stringify({ cymindUrl: cymindUrlInput.trim() || "http://172.16.0.2:8080", chatApiKey: trimmed, enabled: true }),
       });
       const d = await r.json();
-      if (d.ok) { setChatKeyInput(""); setMsg({ ok: true, text: "Chat key saved." }); fetchCfg(); }
+      if (d.ok) { setChatKeyInput(""); setMsg({ ok: true, text: "Connected via API key. ASM, incident enrichment, GRC and cases will all use this key." }); fetchCfg(); }
       else { setMsg({ ok: false, text: d.error || "Save failed" }); }
     } catch (e) { setMsg({ ok: false, text: String(e) }); }
     finally { setSaving(false); }
@@ -451,6 +453,23 @@ function CyMindSection() {
         {cfg.hasChatKey && <span style={{ color: "rgba(0,229,160,0.6)" }}>✓ Chat key</span>}
       </div>
 
+      {/* When to use which — read before choosing a connection method */}
+      <div style={{ background: "rgba(77,158,255,0.05)", border: "1px solid rgba(77,158,255,0.15)", borderRadius: 5, padding: "12px 16px", marginBottom: 16, color: "rgba(255,255,255,0.5)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.7 }}>
+        Two ways to connect to CyMind — pick <strong style={{ color: "rgba(255,255,255,0.75)" }}>one</strong>.
+        Both wire up ASM enrichment, SIEM/incident enrichment, GRC/policy RAG and case analysis identically —
+        the only difference is how CyCentra obtains the key.
+        <div style={{ marginTop: 6 }}>
+          <strong style={{ color: "#4d9eff" }}>Login</strong> — simplest, but CyMind only remembers <em>one</em> connected
+          install at a time. Use it only when this CyMind instance serves this single CyCentra install and no others.
+        </div>
+        <div style={{ marginTop: 4 }}>
+          <strong style={{ color: "#00e5a0" }}>API Key</strong> — use this whenever the same CyMind instance serves
+          <strong> more than one</strong> CyCentra install. Have your CyMind admin create a dedicated user for this
+          install and generate its key (Users → New User → API Keys → Generate), then paste it below. Connecting a
+          second install via Login would silently disconnect this one; API Key mode never has that risk.
+        </div>
+      </div>
+
       {/* MCP bridge status */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
         <span style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace" }}>MCP Bridge:</span>
@@ -468,87 +487,106 @@ function CyMindSection() {
         )}
       </div>
 
-      {/* Enable form */}
-      <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 5, padding: "18px 20px", marginBottom: 16 }}>
-        <div style={LABEL}>{isEnabled ? "Reconfigure Integration" : "Enable CyMind Integration"}</div>
-        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.7, marginBottom: 14 }}>
-          Enter your CyMind <strong style={{ color: "rgba(255,255,255,0.5)" }}>admin</strong> credentials.
-          CyCentra will automatically configure both sides — no manual steps in CyMind needed.
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 14 }}>
-          <div>
-            <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyMind Server URL</div>
-            <input type="url" value={cymindUrlInput} onChange={e => setCymindUrlInput(e.target.value)} placeholder="http://172.16.0.2:8080" style={{ ...INPUT, boxSizing: "border-box" }} />
+      {/* Shared CyMind Server URL — used by both connection methods below */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyMind Server URL</div>
+        <input type="url" value={cymindUrlInput} onChange={e => setCymindUrlInput(e.target.value)} placeholder="http://172.16.0.2:8080" style={{ ...INPUT, boxSizing: "border-box", maxWidth: 420 }} />
+      </div>
+
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
+        {/* Option A: Connect via Login */}
+        <div style={{ flex: "1 1 320px", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 5, padding: "18px 20px" }}>
+          <div style={LABEL}>Connect via Login</div>
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.7, marginBottom: 14 }}>
+            Enter an existing CyMind <strong style={{ color: "rgba(255,255,255,0.5)" }}>admin</strong> login.
+            CyCentra signs in, provisions its own service account in CyMind, and configures everything automatically.
           </div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, minWidth: 180 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 14 }}>
+            <div>
               <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyMind Admin Email</div>
               <input type="email" value={adminEmail} onChange={e => setAdminEmail(e.target.value)} placeholder="admin@cymind.local" style={{ ...INPUT, boxSizing: "border-box" }} />
             </div>
-            <div style={{ flex: 1, minWidth: 180 }}>
+            <div>
               <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyMind Admin Password</div>
               <input type="password" value={adminPw} onChange={e => setAdminPw(e.target.value)} placeholder="••••••••" style={{ ...INPUT, boxSizing: "border-box" }} onKeyDown={e => e.key === "Enter" && handleEnable()} />
             </div>
           </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button onClick={handleEnable} disabled={saving} style={{ ...BTN(), opacity: saving ? 0.5 : 1 }}>
+              {saving ? "Connecting…" : isEnabled ? "Re-connect via Login" : "Connect via Login"}
+            </button>
+            {isEnabled && (
+              <button onClick={handleDisable} disabled={saving} style={{ ...BTN("#ff6b6b"), opacity: saving ? 0.5 : 1 }}>Disable</button>
+            )}
+          </div>
         </div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button onClick={handleEnable} disabled={saving} style={{ ...BTN(), opacity: saving ? 0.5 : 1 }}>
-            {saving ? "Enabling…" : isEnabled ? "Re-connect" : "Enable Integration"}
+
+        {/* Option B: Connect via API Key */}
+        <div style={{ flex: "1 1 320px", background: "rgba(0,229,160,0.03)", border: "1px solid rgba(0,229,160,0.15)", borderRadius: 5, padding: "18px 20px" }}>
+          <div style={LABEL}>Connect via API Key <span style={{ color: "rgba(255,255,255,0.35)", fontWeight: 400 }}>(recommended for multi-install setups)</span></div>
+          <div style={{ color: "rgba(255,255,255,0.3)", fontSize: 11, fontFamily: "monospace", lineHeight: 1.7, marginBottom: 14 }}>
+            Paste the <strong style={{ color: "rgba(255,255,255,0.5)" }}>CyM_…</strong> API key generated in CyMind for the
+            user created specifically for this install. No login credentials ever touch CyCentra.
+            {cfg.hasChatKey && <span style={{ color: "#00e5a0", marginLeft: 6 }}>✓ key set</span>}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 14 }}>
+            <div>
+              <div style={{ ...LABEL, marginBottom: 4, fontSize: 10 }}>CyMind API Key</div>
+              <input type="password" value={chatKeyInput} onChange={e => setChatKeyInput(e.target.value)} placeholder="CyM_…" style={{ ...INPUT, boxSizing: "border-box" }} onKeyDown={e => e.key === "Enter" && handleSaveChatKey()} />
+            </div>
+          </div>
+          <button onClick={handleSaveChatKey} disabled={saving || !chatKeyInput.trim()} style={{ ...BTN("#00e5a0"), opacity: (saving || !chatKeyInput.trim()) ? 0.4 : 1 }}>
+            {saving ? "Connecting…" : "Connect via API Key"}
           </button>
-          {isEnabled && (
-            <button onClick={handleDisable} disabled={saving} style={{ ...BTN("#ff6b6b"), opacity: saving ? 0.5 : 1 }}>Disable</button>
-          )}
-          <button onClick={handleTestConn} disabled={saving} style={{ ...BTN("#4d9eff"), opacity: saving ? 0.5 : 1 }}>Test Connection</button>
         </div>
-        {testResults && (
-          <div style={{ marginTop: 12, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
-            {Object.entries(testResults).map(([key, val]) => (
-              <div key={key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ color: val.ok ? "#00e5a0" : "#ff6b6b", fontSize: 12 }}>{val.ok ? "✓" : "✗"}</span>
-                <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", minWidth: 80 }}>
-                  {key === "cymind" ? "CyMind" : key === "mcp_engine" ? "MCP Engine" : "Chat Key"}
-                </span>
-                <span style={{ color: val.ok ? "rgba(255,255,255,0.5)" : "#ff6b6b", fontSize: 11, fontFamily: "monospace" }}>{val.msg}</span>
-              </div>
-            ))}
-          </div>
-        )}
-        {msg && (
-          <div style={{ color: msg.ok === true ? "#00e5a0" : msg.ok === false ? "#ff3b3b" : "#ffd93d", fontSize: 12, fontFamily: "monospace", marginTop: 12 }}>
-            {msg.ok === true ? "✓" : msg.ok === false ? "✗" : "⋯"} {msg.text}
-          </div>
-        )}
       </div>
 
-      {/* Advanced section */}
+      {/* Shared test/status — works regardless of which method above was used */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={handleTestConn} disabled={saving} style={{ ...BTN("#4d9eff"), opacity: saving ? 0.5 : 1 }}>Test Connection</button>
+      </div>
+      {testResults && (
+        <div style={{ marginBottom: 16, background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+          {Object.entries(testResults).map(([key, val]) => (
+            <div key={key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ color: val.ok ? "#00e5a0" : "#ff6b6b", fontSize: 12 }}>{val.ok ? "✓" : "✗"}</span>
+              <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 10, fontFamily: "monospace", minWidth: 80 }}>
+                {key === "cymind" ? "CyMind" : key === "mcp_engine" ? "MCP Engine" : "Chat Key"}
+              </span>
+              <span style={{ color: val.ok ? "rgba(255,255,255,0.5)" : "#ff6b6b", fontSize: 11, fontFamily: "monospace" }}>{val.msg}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {msg && (
+        <div style={{ color: msg.ok === true ? "#00e5a0" : msg.ok === false ? "#ff3b3b" : "#ffd93d", fontSize: 12, fontFamily: "monospace", marginBottom: 16 }}>
+          {msg.ok === true ? "✓" : msg.ok === false ? "✗" : "⋯"} {msg.text}
+        </div>
+      )}
+
+      {/* Advanced section — reverse direction: lets CyMind call back into CyCentra */}
       <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 5, padding: "14px 18px", marginBottom: 16 }}>
         <button onClick={() => setShowAdvanced(v => !v)}
           style={{ background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 8, color: "rgba(255,255,255,0.45)", fontSize: 11, fontFamily: "monospace", padding: 0 }}>
           <span style={{ fontSize: 10 }}>{showAdvanced ? "▼" : "▶"}</span>
-          Advanced / Manual Key Management
+          Advanced — Reverse Connection Key (CyMind → CyCentra)
         </button>
         {showAdvanced && (
-          <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 18 }}>
-            <div>
-              <div style={{ ...LABEL, marginBottom: 6 }}>Rotate M2M Key <span style={{ color: "rgba(255,255,255,0.35)", fontWeight: 400 }}>(cymk_… — CyMind reads SIEM via MCP)</span></div>
-              <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace", marginBottom: 8 }}>After rotating: update <code style={{ color: "rgba(0,229,160,0.6)" }}>CYCENTRA_API_KEY</code> in CyMind .env.</div>
-              <button onClick={handleGenKey} disabled={saving} style={{ ...BTN("#4d9eff"), opacity: saving ? 0.5 : 1 }}>
-                {cfg.hasKey ? "Rotate M2M Key" : "Generate M2M Key"}
-              </button>
-              {newKey && (
-                <div style={{ marginTop: 10, background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.2)", borderRadius: 4, padding: "10px 12px" }}>
-                  <div style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace", marginBottom: 4 }}>New M2M key — copy now (shown once)</div>
-                  <code style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace", userSelect: "all", wordBreak: "break-all" }}>{newKey}</code>
-                </div>
-              )}
+          <div style={{ marginTop: 16 }}>
+            <div style={{ ...LABEL, marginBottom: 6 }}>MCP Access Key <span style={{ color: "rgba(255,255,255,0.35)", fontWeight: 400 }}>(cymk_… — lets CyMind pull live SIEM context via MCP)</span></div>
+            <div style={{ color: "rgba(255,255,255,0.35)", fontSize: 10, fontFamily: "monospace", marginBottom: 8 }}>
+              Unrelated to the two options above — this is the credential CyMind presents when it calls <em>into</em> CyCentra
+              (not CyCentra calling CyMind). After rotating: update <code style={{ color: "rgba(0,229,160,0.6)" }}>CYCENTRA_API_KEY</code> in CyMind's config.
             </div>
-            <div>
-              <div style={{ ...LABEL, marginBottom: 6 }}>Manual Chat Key <span style={{ color: "rgba(255,255,255,0.35)", fontWeight: 400 }}>(pak_… — if auto-enable fails)</span>{cfg.hasChatKey && <span style={{ color: "#00e5a0", fontSize: 10, marginLeft: 8 }}>✓ set</span>}</div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <input type="password" value={chatKeyInput} onChange={e => setChatKeyInput(e.target.value)} placeholder="pak_…" style={{ ...INPUT, flex: 1 }} />
-                <button onClick={handleSaveChatKey} disabled={saving || !chatKeyInput.trim()} style={{ ...BTN("#4d9eff"), opacity: (saving || !chatKeyInput.trim()) ? 0.4 : 1 }}>Save</button>
+            <button onClick={handleGenKey} disabled={saving} style={{ ...BTN("#4d9eff"), opacity: saving ? 0.5 : 1 }}>
+              {cfg.hasKey ? "Rotate MCP Access Key" : "Generate MCP Access Key"}
+            </button>
+            {newKey && (
+              <div style={{ marginTop: 10, background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.2)", borderRadius: 4, padding: "10px 12px" }}>
+                <div style={{ color: "#00e5a0", fontSize: 10, fontFamily: "monospace", marginBottom: 4 }}>New MCP access key — copy now (shown once)</div>
+                <code style={{ color: "#00e5a0", fontSize: 11, fontFamily: "monospace", userSelect: "all", wordBreak: "break-all" }}>{newKey}</code>
               </div>
-            </div>
+            )}
           </div>
         )}
       </div>

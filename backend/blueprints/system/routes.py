@@ -1234,6 +1234,40 @@ def _write_cymind_config(cfg: dict) -> None:
         pass
 
 
+def _sync_cymind_ai_provider(cymind_url: str, chat_key: str) -> None:
+    """
+    Point the generic AI-provider block at CyMind using the given URL/chat key.
+
+    This is the ONLY thing that makes ASM enrichment (cy_asm/cycentra_scan.py's
+    _get_cymind_config()/_get_cymind_memory_config(), which read provider/
+    fields.apiKey/fields.baseUrl/cymind_memory.* — NOT cymind_integration.
+    chatApiKey) and the correlation engine's incident AI enrichment
+    (cysiemstack/correlation_engine/ai_router.py's call_llm(), same fields)
+    actually use CyMind. cymind_integration.chatApiKey alone only powers the
+    GRC/policy-doc RAG calls and threat-hunting analysis (policy_rag.py's
+    get_cymind_api_key()) — those two other consumers have no fallback to it.
+
+    Called from BOTH connection methods (login-based cymind_enable() and the
+    manual API-key path in cymind_post()) so ASM/enrichment/GRC/cases all work
+    identically regardless of which one the admin used — this used to only be
+    called from cymind_enable(), which meant the manual-key path silently left
+    ASM/incident enrichment on local Ollama even after "connecting" to CyMind.
+    """
+    try:
+        _ai = {}
+        if AI_SETTINGS_FILE.exists():
+            _ai = json.loads(AI_SETTINGS_FILE.read_text())
+        _ai["provider"] = "cymind"
+        _ai.setdefault("fields", {})["baseUrl"] = cymind_url
+        _ai.setdefault("fields", {})["apiKey"]  = chat_key
+        _ai.setdefault("cymind_memory", {})["baseUrl"] = cymind_url
+        _ai.setdefault("cymind_memory", {})["apiKey"]  = chat_key
+        AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        AI_SETTINGS_FILE.write_text(json.dumps(_ai, indent=2))
+    except Exception as _e:
+        current_app.logger.warning("_sync_cymind_ai_provider: failed to configure AI provider: %s", _e)
+
+
 @system_bp.route("/api/system/cymind", methods=["OPTIONS"])
 def cymind_options():
     return add_cors_headers(make_response('', 204))
@@ -1268,12 +1302,24 @@ def cymind_get():
 def cymind_post():
     """Save CyMind integration settings. Admin only.
 
+    This is the "Connect via API Key" path — the alternative to cymind_enable()'s
+    login-based flow. Use this when the CyMind user/key was already provisioned
+    manually in CyMind (POST /api/v1/admin/users + POST /api/v1/apikeys for that
+    user) rather than having CyCentra log in and self-provision via
+    /activate-cycentra. This is the required method whenever more than one
+    CyCentra install shares a single CyMind instance, since /activate-cycentra
+    always resolves to one fixed shared service account regardless of which
+    admin logs in — see docs/CYMIND_INTEGRATION.md.
+
     Body (all optional):
       cymindUrl   — base URL of CyMind instance (e.g. https://cymind.corp.example.com)
       generateKey — true → generate and store a new cymk_... M2M API key
-      chatApiKey  — CyM_... (or legacy pak_...) API key for the portal service account;
-                    generated in CyMind (Users → service account with analyst role →
-                    API Keys → Generate) and pasted here.  Pass "" to clear.
+      chatApiKey  — CyM_... (or legacy pak_...) API key for the dedicated CyMind
+                    user created for this install (CyMind admin: Users → create
+                    user → API Keys → Generate for that user) and pasted here.
+                    Setting this also wires ASM enrichment and correlation-engine
+                    incident enrichment to CyMind (same effect as cymind_enable()'s
+                    auto-configure step) — not just GRC/RAG calls. Pass "" to clear.
       clearChatKey — true → remove the stored chat API key
       enabled     — bool, enable/disable the integration
     """
@@ -1311,6 +1357,12 @@ def cymind_post():
         cfg["chatApiKey"] = ""
 
     _write_cymind_config(cfg)
+
+    # Manual API-key connection path: wire ASM/incident enrichment to CyMind
+    # too (same effect as cymind_enable()'s Step 5), not just the GRC/RAG
+    # calls that read cymind_integration.chatApiKey directly.
+    if cfg.get("chatApiKey") and cfg.get("cymindUrl"):
+        _sync_cymind_ai_provider(cfg["cymindUrl"], cfg["chatApiKey"])
 
     # When disabling the integration, revert AI provider to local so enrichment
     # falls back to the on-prem Ollama engine automatically.
@@ -1445,20 +1497,10 @@ def cymind_enable():
     _write_cymind_config(cfg)
 
     # ── Step 5: Auto-configure AI provider to use CyMind ─────────────────────
-    # All AI/LLM config is handled automatically — no manual input needed in UI
-    try:
-        _ai = {}
-        if AI_SETTINGS_FILE.exists():
-            _ai = json.loads(AI_SETTINGS_FILE.read_text())
-        _ai["provider"] = "cymind"
-        _ai.setdefault("fields", {})["baseUrl"] = cymind_url
-        _ai.setdefault("fields", {})["apiKey"]  = chat_key
-        _ai.setdefault("cymind_memory", {})["baseUrl"] = cymind_url
-        _ai.setdefault("cymind_memory", {})["apiKey"]  = chat_key
-        AI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        AI_SETTINGS_FILE.write_text(json.dumps(_ai, indent=2))
-    except Exception as _e:
-        current_app.logger.warning("cymind_enable: failed to auto-configure AI provider: %s", _e)
+    # All AI/LLM config is handled automatically — no manual input needed in UI.
+    # Shared with the manual API-key path (cymind_post()) so ASM/incident
+    # enrichment work identically regardless of which connection method was used.
+    _sync_cymind_ai_provider(cymind_url, chat_key)
 
     # ── Step 6: Trigger CyMind self-update using the admin JWT ────────────────
     # We already hold the admin JWT from Step 2, so we piggyback on it to pull

@@ -23,13 +23,49 @@ from pathlib import Path
 from typing import Optional
 
 import requests
+from werkzeug.utils import secure_filename
 
 from cy_comp.models import db
-from core.config import AI_SETTINGS_FILE
+from core.config import AI_SETTINGS_FILE, POLICY_DOCS_DIR
 
 log = logging.getLogger("cycentra.cy_comp.policy_rag")
 
 _CYMIND_DEFAULT_URL = "http://127.0.0.1:8200"
+
+
+def _save_local_copy(doc_id: str, filename: str, file_bytes: bytes) -> Optional[str]:
+    """
+    Persist a durable copy of a policy document on the Cy360 server itself,
+    independent of CyMind availability. Returns the on-disk path, or None if
+    the write failed (upload should still succeed — CyMind indexing is the
+    fallback source of truth for that document until this is retried).
+    """
+    try:
+        POLICY_DOCS_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        safe_name = secure_filename(filename) or "document"
+        path = POLICY_DOCS_DIR / f"{doc_id}_{safe_name}"
+        path.write_bytes(file_bytes)
+        return str(path)
+    except Exception as exc:
+        log.error("_save_local_copy(%s): %s", filename, exc)
+        return None
+
+
+def get_document_file_path(doc_id: str) -> Optional[tuple[str, str]]:
+    """Return (file_path, name) for a policy document, or None if not found / not stored locally."""
+    try:
+        with db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT file_path, name FROM cy_comp_policy_docs WHERE id = %s;",
+                (doc_id,)
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                return (row[0], row[1])
+    except Exception as exc:
+        log.error("get_document_file_path(%s): %s", doc_id, exc)
+    return None
 
 
 def _load_cymind_settings() -> dict:
@@ -196,11 +232,15 @@ def upload_document(collection_id: str, file_storage, metadata: dict, uploaded_b
     # Resolve logical names (e.g. "org-policies") to CyMind IDs ("policy-orgpolicies")
     cymind_id = _cymind_collection_id(collection_id)
 
+    file_bytes = file_storage.read()
+    file_size  = len(file_bytes)
+    file_storage.seek(0)
+
+    # Durable copy on the Cy360 server itself — independent of CyMind.
+    file_path = _save_local_copy(doc_id, filename, file_bytes)
+
     cymind_doc_id = None
     try:
-        file_bytes = file_storage.read()
-        file_size  = len(file_bytes)
-        file_storage.seek(0)
         files = {
             "file": (filename, file_bytes, file_storage.content_type or "application/octet-stream")
         }
@@ -226,12 +266,12 @@ def upload_document(collection_id: str, file_storage, metadata: dict, uploaded_b
             cur.execute(
                 """
                 INSERT INTO cy_comp_policy_docs
-                    (id, name, file_type, collection_id, cymind_doc_id,
+                    (id, name, file_path, file_type, collection_id, cymind_doc_id,
                      framework, indexed, uploaded_by, doc_type, tag, file_size, created_at, updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'policy',%s,%s,NOW(),NOW());
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'policy',%s,%s,NOW(),NOW());
                 """,
                 (
-                    doc_id, filename,
+                    doc_id, filename, file_path,
                     filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin",
                     collection_id, cymind_doc_id, fw,
                     bool(cymind_doc_id),
@@ -244,6 +284,7 @@ def upload_document(collection_id: str, file_storage, metadata: dict, uploaded_b
     return {
         "id":            doc_id,
         "name":          filename,
+        "file_path":     file_path,
         "collection_id": collection_id,
         "cymind_doc_id": cymind_doc_id,
         "framework":     fw,
@@ -269,6 +310,9 @@ def save_text_as_document(collection_id: str, text: str, filename: str,
     cymind_id  = _cymind_collection_id(collection_id)
     cymind_doc_id = None
 
+    # Durable copy on the Cy360 server itself — independent of CyMind.
+    file_path = _save_local_copy(doc_id, filename, file_bytes)
+
     try:
         resp = requests.post(
             _rag_url(f"collections/{cymind_id}/upload"),
@@ -292,12 +336,12 @@ def save_text_as_document(collection_id: str, text: str, filename: str,
             cur.execute(
                 """
                 INSERT INTO cy_comp_policy_docs
-                    (id, name, file_type, collection_id, cymind_doc_id,
+                    (id, name, file_path, file_type, collection_id, cymind_doc_id,
                      framework, indexed, uploaded_by, doc_type, tag, file_size, created_at, updated_at)
-                VALUES (%s,%s,'txt',%s,%s,%s,%s,%s,'policy',%s,%s,NOW(),NOW());
+                VALUES (%s,%s,%s,'txt',%s,%s,%s,%s,%s,'policy',%s,%s,NOW(),NOW());
                 """,
                 (
-                    doc_id, filename, collection_id, cymind_doc_id, fw,
+                    doc_id, filename, file_path, collection_id, cymind_doc_id, fw,
                     bool(cymind_doc_id), uploaded_by, tag, file_size,
                 )
             )
@@ -307,6 +351,7 @@ def save_text_as_document(collection_id: str, text: str, filename: str,
     return {
         "id":            doc_id,
         "name":          filename,
+        "file_path":     file_path,
         "collection_id": collection_id,
         "cymind_doc_id": cymind_doc_id,
         "framework":     fw,
@@ -328,7 +373,7 @@ def list_documents(collection_id: str) -> list[dict]:
             cur.execute(
                 """
                 SELECT id, name, file_type, collection_id, cymind_doc_id,
-                       framework, indexed, uploaded_by, tag, file_size, created_at
+                       framework, indexed, uploaded_by, tag, file_size, created_at, file_path
                 FROM cy_comp_policy_docs
                 WHERE collection_id = ANY(%s::text[])
                   AND COALESCE(doc_type, 'policy') = 'policy'
@@ -349,6 +394,7 @@ def list_documents(collection_id: str) -> list[dict]:
                     "tag":           r[8],
                     "file_size":     r[9],
                     "created_at":    r[10].isoformat() if r[10] else None,
+                    "has_local_copy": bool(r[11]),
                 })
     except Exception as exc:
         log.error("list_documents(%s): %s", collection_id, exc)
@@ -357,16 +403,17 @@ def list_documents(collection_id: str) -> list[dict]:
 
 def delete_document(doc_id: str) -> bool:
     cymind_doc_id = None
+    file_path = None
     try:
         with db() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT cymind_doc_id FROM cy_comp_policy_docs WHERE id = %s;",
+                "SELECT cymind_doc_id, file_path FROM cy_comp_policy_docs WHERE id = %s;",
                 (doc_id,)
             )
             row = cur.fetchone()
             if row:
-                cymind_doc_id = row[0]
+                cymind_doc_id, file_path = row
     except Exception as exc:
         log.error("delete_document lookup: %s", exc)
 
@@ -379,6 +426,15 @@ def delete_document(doc_id: str) -> bool:
             )
         except Exception as exc:
             log.warning("delete_document CyMind: %s", exc)
+
+    if file_path:
+        try:
+            local_file = Path(file_path).resolve()
+            # Defence in depth — only unlink if it actually resolves inside POLICY_DOCS_DIR.
+            local_file.relative_to(POLICY_DOCS_DIR.resolve())
+            local_file.unlink(missing_ok=True)
+        except Exception as exc:
+            log.warning("delete_document local file (%s): %s", file_path, exc)
 
     try:
         with db() as conn:
@@ -747,11 +803,15 @@ def upload_document_multi_framework(
     # All org-policy documents go into the shared collection
     collection_id = "policy-orgpolicies"
 
+    file_bytes = file_storage.read()
+    file_size  = len(file_bytes)
+    file_storage.seek(0)
+
+    # Durable copy on the Cy360 server itself — independent of CyMind.
+    file_path = _save_local_copy(doc_id, filename, file_bytes)
+
     cymind_doc_id = None
     try:
-        file_bytes = file_storage.read()
-        file_size  = len(file_bytes)
-        file_storage.seek(0)
         files = {
             "file": (filename, file_bytes, file_storage.content_type or "application/octet-stream")
         }
@@ -786,13 +846,13 @@ def upload_document_multi_framework(
             cur.execute(
                 """
                 INSERT INTO cy_comp_policy_docs
-                    (id, name, file_type, collection_id, cymind_doc_id,
+                    (id, name, file_path, file_type, collection_id, cymind_doc_id,
                      framework, mapped_frameworks, indexed,
                      uploaded_by, doc_type, tag, file_size, created_at, updated_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'policy',%s,%s,NOW(),NOW());
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'policy',%s,%s,NOW(),NOW());
                 """,
                 (
-                    doc_id, filename,
+                    doc_id, filename, file_path,
                     filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin",
                     collection_id, cymind_doc_id,
                     primary_fw, detected_frameworks,
@@ -806,6 +866,7 @@ def upload_document_multi_framework(
     return {
         "id":                 doc_id,
         "name":               filename,
+        "file_path":          file_path,
         "collection_id":      collection_id,
         "cymind_doc_id":      cymind_doc_id,
         "framework":          primary_fw,

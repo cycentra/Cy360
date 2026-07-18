@@ -918,6 +918,31 @@ def delete_document(doc_id):
     return jsonify({"status": "deleted", "id": doc_id})
 
 
+@comp_bp.route("/policy-docs/documents/<doc_id>/download", methods=["GET"])
+@require_viewer
+def download_policy_document(doc_id):
+    """Serve the local Cy360-server copy of a policy document."""
+    from core.config import POLICY_DOCS_DIR
+    from cy_comp.services.policy_rag import get_document_file_path
+
+    result = get_document_file_path(doc_id)
+    if not result:
+        return jsonify({"error": "Document not stored locally on this server"}), 404
+    file_path, name = result
+
+    candidate = Path(file_path)
+    try:
+        candidate = candidate.resolve()
+        candidate.relative_to(POLICY_DOCS_DIR.resolve())
+    except (ValueError, OSError):
+        return jsonify({"error": "Invalid document path"}), 400
+
+    if not candidate.is_file():
+        return jsonify({"error": "Document file missing on disk"}), 404
+
+    return send_file(str(candidate), as_attachment=True, download_name=name)
+
+
 @comp_bp.route("/policy-docs/collections/<collection_id>/reindex", methods=["POST"])
 @require_admin
 def reindex_collection(collection_id):

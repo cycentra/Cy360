@@ -124,6 +124,7 @@ ASM_REPORTS_DIR  = Path("/var/log/cycentra/cy-asm/reports")
 GUEST_SCANS_DIR   = Path("/var/log/cycentra/cy-asm-guest/scans")
 GUEST_REPORTS_DIR = Path("/var/log/cycentra/cy-asm-guest/reports")
 AI_SETTINGS_FILE = Path("/opt/cycentra/ai_settings.json")
+POLICY_DOCS_DIR  = Path("/opt/cycentra/policy-docs")
 
 # ── User management DB ────────────────────────────────────────────────────────
 # Reuses the existing correlation PostgreSQL 16 cluster (port 5433, corruser).
