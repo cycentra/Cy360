@@ -13,20 +13,62 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ── Pre-create a draft release so macOS/Windows can upload binaries to it
+  # directly as Release assets instead of Actions Artifacts. GitHub Releases
+  # storage is a separate quota from Actions Artifacts — the latter got
+  # wedged org-wide on 2026-07-18 (a different repo, CyIRIS, accumulated
+  # ~41GB of un-expired artifacts and blocked "CreateArtifact" for every repo
+  # in the org, Cy360 included, even though Cy360 itself had zero artifacts).
+  # Routing the macOS/Windows hand-off through Releases instead removes this
+  # whole failure class permanently, not just until the artifact quota clears.
+  # Fast ubuntu-latest job — safe to `needs:` without reintroducing the
+  # runner-queue hang risk described below (that risk is specific to
+  # macos-13/windows-latest runner allocation, not this job).
+  create-release-draft:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      is_release: ${{ steps.version.outputs.is_release }}
+    steps:
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "tag=${TAG}"      >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "tag="             >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create draft release (upload target for EDR binaries)
+        if: steps.version.outputs.is_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          gh release view "$TAG" --repo cycentra/Cy360 >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo cycentra/Cy360 --draft \
+              --title "CyCentra 360 ${TAG} (building...)" \
+              --notes "Release in progress — populated by build-and-publish."
+
   # ── CyEDR agent + system-tray binaries (macOS / Windows) ────────────────────
-  # Built here — separate runner OS, so they genuinely need the artifact
-  # upload/download hand-off into build-and-publish below. Linux does NOT use
-  # this pattern (see the inline build step in build-and-publish) specifically
-  # because that hand-off goes through GitHub's Actions artifact storage,
-  # which has a repo-wide quota that (as of 2026-07-17) is wedged for hours
-  # after this repo accumulated ~11GB of dead per-tag pip caches — see
-  # git history around here for the cleanup. `timeout-minutes` below is the
-  # safety net: if these ever get artifact-store-quota-blocked or stuck
-  # queued again, build-and-publish is only delayed by the timeout, not
+  # Built here — separate runner OS, so they genuinely need a hand-off into
+  # build-and-publish below. That hand-off uploads straight to the draft
+  # release above as Release assets (see create-release-draft) — NOT Actions
+  # Artifacts, which is what wedged org-wide on 2026-07-18 (see that job's
+  # comment). Linux does NOT need this hand-off at all (built inline in
+  # build-and-publish). `timeout-minutes` below is a safety net: if these
+  # ever get stuck queued (GitHub not allocating a runner — happened for 18h
+  # on v1.0.233), build-and-publish is only delayed by the timeout, not
   # blocked indefinitely — Linux still ships every time regardless of these.
   # continue-on-error means a failure here never fails the overall release;
   # cycentra-setup.sh's staging step already tolerates missing platforms.
   build-edr-macos:
+    needs: create-release-draft
     strategy:
       fail-fast: false
       matrix:
@@ -38,6 +80,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     continue-on-error: true
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -61,17 +105,27 @@ jobs:
           pyinstaller --onefile --windowed --name cyedr-tray agent/cyedr_tray.py
           cp dist/cyedr-tray "out/cyedr-tray-macos-${{ matrix.arch }}"
           chmod +x out/*
-      - uses: actions/upload-artifact@v4
-        with:
-          name: edr-bin-macos-${{ matrix.arch }}
-          path: out/*
-          retention-days: 5
-          if-no-files-found: warn
+      - name: Publish binaries to release assets (bypasses Actions artifact storage quota)
+        if: needs.create-release-draft.outputs.is_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          files=(out/*)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "::warning::No binaries found in out/ — skipping release asset upload"
+          else
+            gh release upload "${{ needs.create-release-draft.outputs.tag }}" "${files[@]}" \
+              --repo cycentra/Cy360 --clobber
+          fi
 
   build-edr-windows:
+    needs: create-release-draft
     runs-on: windows-latest
     continue-on-error: true
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -95,12 +149,20 @@ jobs:
             --hidden-import win32pipe --hidden-import win32file --hidden-import pywintypes `
             agent/cyedr_tray.py
           Copy-Item dist/cyedr-tray.exe out/cyedr-tray-windows-x64.exe
-      - uses: actions/upload-artifact@v4
-        with:
-          name: edr-bin-windows
-          path: out/*
-          retention-days: 5
-          if-no-files-found: warn
+      - name: Publish binaries to release assets (bypasses Actions artifact storage quota)
+        if: needs.create-release-draft.outputs.is_release == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          files=(out/*)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "::warning::No binaries found in out/ — skipping release asset upload"
+          else
+            gh release upload "${{ needs.create-release-draft.outputs.tag }}" "${files[@]}" \
+              --repo cycentra/Cy360 --clobber
+          fi
 
   build-and-publish:
     # Deliberately NOT `needs: [build-edr-macos, build-edr-windows]`.
@@ -109,13 +171,15 @@ jobs:
     # starts the timeout clock at all. That's exactly how v1.0.233's release
     # hung for 18 hours (macos-13 queued, never scheduled, needs: waited
     # forever). Linux EDR binaries are built inline below (same job, no
-    # artifact hand-off, immune to both the runner-queue and Actions-storage-
-    # quota failure modes) so the release never depends on macOS/Windows
-    # completing at all. The download-artifact step further down is
+    # cross-job hand-off at all) so the release never depends on macOS/Windows
+    # completing at all. The release-asset download step further down is
     # best-effort (continue-on-error, tolerates zero files found): if
     # macOS/Windows happen to finish before this job reaches that step,
     # their binaries get bundled too; if not, this release just ships
     # without them and the next one picks them up — never blocks either way.
+    # (Also deliberately not `needs: create-release-draft` for the same
+    # reason — this job resolves its own version/tag independently below and
+    # doesn't require that job to have finished first.)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -205,13 +269,26 @@ jobs:
             [[ -f "edr-bin/$f" ]] && echo "OK: $f" || echo "::warning::Linux EDR binary missing: $f"
           done
 
-      - name: Download CyEDR agent + tray binaries (macOS / Windows)
-        uses: actions/download-artifact@v4
-        continue-on-error: true   # a platform build failing must never block the whole release
-        with:
-          pattern: edr-bin-*
-          path: edr-bin
-          merge-multiple: true
+      - name: Download CyEDR agent + tray binaries (macOS / Windows) from release assets
+        # Pulled from the draft release's Release assets (see create-release-draft),
+        # not Actions Artifacts — sidesteps the Actions artifact storage quota
+        # entirely. Best-effort: if macOS/Windows haven't uploaded yet, or their
+        # job failed/never got a runner, this release just ships without them and
+        # the next one picks them up — never blocks the Linux release.
+        if: steps.version.outputs.is_release == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p edr-bin
+          gh release download "${{ steps.version.outputs.tag }}" \
+            --repo cycentra/Cy360 --dir edr-bin \
+            --pattern 'cyedr-agent-macos-*' \
+            --pattern 'cyedr-tray-macos-*' \
+            --pattern 'cyedr-agent-windows-x64.exe' \
+            --pattern 'cyedr-tray-windows-x64.exe' \
+            --clobber \
+            || echo "::warning::No macOS/Windows EDR release assets available yet"
 
       - name: Build customer release bundle
         run: |
@@ -331,6 +408,11 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: "CyCentra 360 ${{ steps.version.outputs.tag }}"
+          # Explicit false — create-release-draft above creates this release as a
+          # draft so macOS/Windows have somewhere to upload assets early. This step
+          # must un-draft it on every run, or the release (and its assets) never
+          # becomes visible to customers.
+          draft: false
           body: |
             ## CyCentra 360 Release ${{ steps.version.outputs.tag }}
             
