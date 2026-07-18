@@ -1,3 +1,11 @@
+## v1.0.238 -- 2026-07-18
+
+### Bug Fixes
+
+  - Make tray Stop/Exit recovery explicit; fix Linux watchdog undermining it
+
+---
+
 ## v1.0.237 -- 2026-07-17
 
 ### Improvements
