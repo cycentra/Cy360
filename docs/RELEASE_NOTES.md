@@ -1,3 +1,12 @@
+## v1.0.255 -- 2026-07-19
+
+### Improvements
+
+  - Revert "chore: pre-release commit (auto-staged by git-push.sh)"
+  - Revert "Release v1.0.254 at 2026-07-19T19:06:03Z"
+
+---
+
 ## v1.0.253 -- 2026-07-19
 
 ### Improvements
