@@ -261,7 +261,23 @@ jobs:
       - name: Build CyEDR agent + tray (Linux x86_64, aarch64)
         run: |
           mkdir -p edr-bin
-          sudo SKIP_WIN=1 SKIP_DEB_RPM=1 \
+          # NOT sudo. DEST_DIR here is the workspace-local edr-bin/, not the
+          # real production path (/var/lib/cycentra-agent-packages/edr, which
+          # DOES need root and is what the script's own usage banner assumes) —
+          # GH-hosted runners already have passwordless Docker access as the
+          # `runner` user, so root was never actually needed here. Running this
+          # under sudo made build-edr-packages.sh's own end-of-script
+          # `chown -R www-data:www-data "$DEST_DIR"` actually take effect (it
+          # silently no-ops without root), which reassigned edr-bin/ away from
+          # the `runner` user. Every later step in this job — the macOS/Windows
+          # release-asset download below, and the "cp edr-bin/*" bundling step
+          # further down — runs as `runner` with no sudo, so writes into
+          # edr-bin/ failed silently from that point on. This was invisible for
+          # months because the download step used to lose its timing race
+          # against build-edr-macos/windows almost every run anyway (see that
+          # step's comment) — fixing the race is what exposed this as the next
+          # blocker instead.
+          SKIP_WIN=1 SKIP_DEB_RPM=1 \
             DEST_DIR="$(pwd)/edr-bin" \
             AGENT_SRC="$(pwd)/agent/cyedr_agent.py" \
             TRAY_SRC="$(pwd)/agent/cyedr_tray.py" \

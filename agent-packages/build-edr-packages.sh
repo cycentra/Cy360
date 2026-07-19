@@ -544,7 +544,16 @@ chmod 755 "$DEST_DIR" "$DEST_DIR"/*.rpm "$DEST_DIR"/*.deb 2>/dev/null || true
 find "$DEST_DIR" -name "cyedr-agent-linux-*" -exec chmod 755 {} \; 2>/dev/null || true
 find "$DEST_DIR" -name "cyedr-agent-macos-*" -exec chmod 755 {} \; 2>/dev/null || true
 find "$DEST_DIR" -name "cyedr-tray-*" -exec chmod 755 {} \; 2>/dev/null || true
-chown -R www-data:www-data "$DEST_DIR" 2>/dev/null || true
+# Only reassign ownership when DEST_DIR is the real production staging path
+# (nginx/Flask read these directly as www-data there). Skip it for any other
+# DEST_DIR (CI scratch directories, manual local builds, etc.) — chowning
+# away from whoever is currently running this script silently breaks every
+# later step/process that needs to read or overwrite files here afterward
+# without root, e.g. re-running this script, or (in CI) the workflow step
+# right after this one that needs to write more files into the same dir.
+if [[ "$DEST_DIR" == "/var/lib/cycentra-agent-packages/edr" ]]; then
+    chown -R www-data:www-data "$DEST_DIR" 2>/dev/null || true
+fi
 
 # ── Cleanup ────────────────────────────────────────────────────────────────────
 rm -rf "$BUILD_DIR"
