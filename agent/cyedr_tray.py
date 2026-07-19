@@ -267,10 +267,9 @@ def _disable_app_nap():
     NSProcessInfo only honors the exemption while a reference to it exists;
     letting it get garbage-collected re-enables App Nap immediately."""
     try:
-        from Foundation import NSProcessInfo
-        opts = (1 << 20) | (1 << 0)  # NSActivityUserInitiated | NSActivityIdleSystemSleepDisabled
+        from Foundation import NSProcessInfo, NSActivityUserInitiated
         return NSProcessInfo.processInfo().beginActivityWithOptions_reason_(
-            opts, "CyEDR tray polls agent status every 10s in the background"
+            NSActivityUserInitiated, "CyEDR tray polls agent status every 10s in the background"
         )
     except Exception:
         return None

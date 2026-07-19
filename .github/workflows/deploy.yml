@@ -109,7 +109,8 @@ jobs:
           # launched directly as a raw binary (not a .app bundle) via the
           # LaunchAgent this repo installs, it does not show a Dock icon.
           pip install -q rumps Pillow
-          pyinstaller --onefile --windowed --name cyedr-tray agent/cyedr_tray.py
+          pyinstaller --onefile --windowed --name cyedr-tray \
+            --hidden-import AppKit --hidden-import Foundation agent/cyedr_tray.py
           cp dist/cyedr-tray "out/cyedr-tray-macos-${{ matrix.arch }}"
           chmod +x out/*
       - name: Publish binaries to release assets (bypasses Actions artifact storage quota)
