@@ -859,10 +859,20 @@ print_summary() {
         echo ""
         echo "  Status:     systemctl status cyedr-agent"
         echo "  Logs:       journalctl -u cyedr-agent -f"
+        echo "  Restart if stopped (tray Stop/Exit, or a crash):"
+        echo "              sudo systemctl start cyedr-agent"
     else
         echo ""
-        echo "  Status:     launchctl list com.cycentra.edr"
+        echo "  Status:     sudo launchctl list com.cycentra.edr"
         echo "  Logs:       tail -f $EDR_HOME/logs/cyedr_agent.log"
+        # Printed here permanently, not only inside the tray's Stop/Exit
+        # dialog — by the time someone needs this, the tray may be showing
+        # the unreachable/red state and this may be the only place it's
+        # written down (the agent's own log stops updating once it's stopped).
+        echo "  Restart if stopped (tray Stop/Exit, or a crash):"
+        echo "              sudo launchctl bootstrap system /Library/LaunchDaemons/com.cycentra.edr.plist"
+        echo "              (if that errors 'already bootstrapped', use instead:"
+        echo "               sudo launchctl kickstart -k system/com.cycentra.edr)"
     fi
     if [[ -x "$TRAY_HOME/cyedr-tray" ]]; then
         echo ""

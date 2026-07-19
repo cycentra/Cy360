@@ -234,8 +234,51 @@ def run_pystray(client: AgentClient):
 
 
 # ── macOS (rumps) ─────────────────────────────────────────────────────────────
+def _activate_app():
+    """Bring this process to the front so its next window/alert can actually
+    receive keystrokes. rumps runs the app under NSApplicationActivationPolicy
+    Accessory (menu-bar app, no Dock icon, no Info.plist since this ships as a
+    bare PyInstaller binary, not a .app bundle) — accessory apps are not
+    automatically made key/frontmost when they open a window, so without this
+    call rumps.Window's text field renders but silently never receives
+    keyboard input (keystrokes keep going to whatever app was frontmost
+    before the click). Must be called right before every rumps.alert/
+    rumps.Window call, not just once at startup — activation is not sticky."""
+    try:
+        from AppKit import NSApplication
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+    except Exception:
+        pass
+
+
+def _disable_app_nap():
+    """Exempt this process from macOS App Nap.
+
+    This is a background, no-Dock-icon "accessory" app that's never the
+    frontmost window and has no visible UI most of the time — exactly the
+    profile App Nap targets for throttling. Left unexempted, the rumps.Timer
+    driving poll() below can get silently throttled or paused by the OS after
+    the process has sat backgrounded for a while: the process stays alive
+    (matches what was observed — low but nonzero CPU, no crash) but the menu
+    bar icon stops refreshing and shows a stale status (in this case stuck on
+    the "unreachable" red the agent last actually reported before macOS
+    throttled the timer) until something external touches the process again.
+    The returned activity token MUST be kept alive for the process lifetime —
+    NSProcessInfo only honors the exemption while a reference to it exists;
+    letting it get garbage-collected re-enables App Nap immediately."""
+    try:
+        from Foundation import NSProcessInfo
+        opts = (1 << 20) | (1 << 0)  # NSActivityUserInitiated | NSActivityIdleSystemSleepDisabled
+        return NSProcessInfo.processInfo().beginActivityWithOptions_reason_(
+            opts, "CyEDR tray polls agent status every 10s in the background"
+        )
+    except Exception:
+        return None
+
+
 def run_rumps(client: AgentClient):
     import rumps
+    _app_nap_activity = _disable_app_nap()  # noqa: F841 — keep-alive reference, see docstring
 
     class CyEDRTrayApp(rumps.App):
         def __init__(self):
@@ -269,15 +312,21 @@ def run_rumps(client: AgentClient):
             # A stopped agent has no running process left to serve a "start"
             # command back to this tray — recovery needs local admin access
             # to this machine. Surfaced before the password prompt so there
-            # are no surprises about what this action actually does.
+            # are no surprises about what this action actually does. The
+            # actual recovery command is spelled out here (not just logged to
+            # a file nobody will think to check once the process has exited).
+            _activate_app()
             proceed = rumps.alert(
                 title="CyEDR — Stop/Exit",
                 message=("Stopping CyEDR requires local admin access to this machine "
-                          "to restart it afterward — it cannot be undone from this tray."),
+                          "to restart it afterward — it cannot be undone from this tray.\n\n"
+                          "To restart later, run in Terminal:\n"
+                          "sudo launchctl bootstrap system /Library/LaunchDaemons/com.cycentra.edr.plist"),
                 ok="Continue", cancel="Cancel",
             )
             if proceed != 1:
                 return
+            _activate_app()
             window = rumps.Window(
                 message="Enter the CyEDR admin password (set in Cy360 -> EDR Policies -> Tamper Protection):",
                 title="Stop/Exit CyEDR",
