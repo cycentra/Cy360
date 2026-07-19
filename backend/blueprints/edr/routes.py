@@ -1449,7 +1449,7 @@ def list_triggers():
 
 from .policy_engine import (
     create_policy, list_policies, get_policy, update_policy, delete_policy,
-    assign_policy, get_agent_effective_policies,
+    assign_policy, get_agent_effective_policies, get_policy_assignments,
     create_deployment_token, list_deployment_tokens, revoke_deployment_token,
     create_group, list_groups, add_agents_to_group, delete_group,
     POLICY_TYPES, POLICY_DEFAULTS,
@@ -1511,6 +1511,7 @@ def init_edr(app):
 
 # ── Policy OPTIONS ────────────────────────────────────────────────────────────
 for _pp in ("/policies", "/policies/<pol_id>", "/policies/<pol_id>/assign",
+            "/policies/<pol_id>/assignments",
             "/agents/<agent_id>/policies", "/groups", "/groups/<grp_id>", "/groups/<grp_id>/members"):
     edr_bp.add_url_rule(
         _pp,
@@ -1568,7 +1569,7 @@ def put_policy(pol_id):
             return jsonify({"error": "Policy not found"}), 404
         body["config"] = _reconcile_tamper_password(existing.get("config") or {}, body["config"])
     try:
-        pol = update_policy(CYCENTRA_DB_URL, pol_id, body)
+        pol = update_policy(CYCENTRA_DB_URL, pol_id, body, session.get("user_email", "system"))
         auth_event(session.get("user_email", ""), "edr_policy_update", f"Updated policy {pol_id}")
         return jsonify(_mask_tamper_secrets(pol))
     except ValueError as e:
@@ -1599,6 +1600,12 @@ def assign_policy_route(pol_id):
         return jsonify({"assigned": count})
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+
+
+@edr_bp.route("/policies/<pol_id>/assignments", methods=["GET"])
+@require_viewer
+def policy_assignments_route(pol_id):
+    return jsonify(get_policy_assignments(CYCENTRA_DB_URL, pol_id))
 
 
 @edr_bp.route("/agents/<agent_id>/policies", methods=["GET"])

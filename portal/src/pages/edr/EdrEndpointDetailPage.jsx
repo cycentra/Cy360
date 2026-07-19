@@ -151,7 +151,9 @@ function CommandList({ commands }) {
 }
 
 // ── Applied policies list ─────────────────────────────────────────────────────
-function AppliedPolicies({ agentId }) {
+// Exported so the Fleet page's AgentDetailModal (index.jsx) can show the same
+// list inline, without requiring a "View Full Detail" navigation first.
+export function AppliedPolicies({ agentId }) {
   const [policies, setPolicies] = useState([]);
   const [loading,  setLoading]  = useState(true);
 

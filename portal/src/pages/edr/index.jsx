@@ -8,6 +8,7 @@
  */
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { AppleLogo, WindowsLogo, LinuxLogo } from "../../components/OsLogo.jsx";
+import { AppliedPolicies } from "./EdrEndpointDetailPage.jsx";
 
 const CARD_BG     = "rgba(255,255,255,0.03)";
 const CARD_BORDER = "1px solid rgba(255,255,255,0.07)";
@@ -547,6 +548,13 @@ function AgentDetailModal({ agent, onClose, onAction }) {
                     <div style={{ fontSize: 13, color: "#b0b8c8", fontWeight: 600 }}>{String(value)}</div>
                   </div>
                 ))}
+              </div>
+
+              <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 16, marginBottom: 16 }}>
+                <div style={{ fontSize: 11, color: "#555", marginBottom: 10, fontWeight: 600 }}>
+                  APPLIED POLICIES
+                </div>
+                <AppliedPolicies agentId={agent.agent_id} />
               </div>
 
               <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: 16 }}>

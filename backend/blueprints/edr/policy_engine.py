@@ -331,7 +331,7 @@ def get_policy(db_url: str, policy_id: str) -> dict | None:
     return r
 
 
-def update_policy(db_url: str, policy_id: str, updates: dict) -> dict:
+def update_policy(db_url: str, policy_id: str, updates: dict, updated_by: str = "system") -> dict:
     allowed_fields = {"name", "description", "config", "enabled", "policy_types"}
     sets, vals = [], []
     if "policy_types" in updates:
@@ -354,6 +354,13 @@ def update_policy(db_url: str, policy_id: str, updates: dict) -> dict:
         with conn.cursor() as cur:
             cur.execute(f"UPDATE edr_policies SET {','.join(sets)} WHERE id=%s RETURNING *", vals)
             row = dict(cur.fetchone())
+            # Editing a policy's config (e.g. setting the tamper-protection
+            # admin password) must reach every agent that already has this
+            # policy assigned — otherwise it only takes effect the next time
+            # someone happens to hit Assign again. See _queue_apply_policy_commands.
+            if "config" in updates:
+                agent_ids = _assigned_agent_ids(cur, policy_id)
+                _queue_apply_policy_commands(cur, policy_id, agent_ids, updated_by)
         conn.commit()
     finally:
         conn.close()
@@ -368,6 +375,65 @@ def delete_policy(db_url: str, policy_id: str) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def _queue_apply_policy_commands(cur, policy_id: str, agent_ids: list[str], issued_by: str) -> None:
+    """Queue one APPLY_POLICY command per (agent, policy_type) pair, reading
+    the policy's CURRENT config fresh from the DB. Shared by assign_policy()
+    (new assignment) and update_policy() (editing an already-assigned
+    policy) — both cases mean "this agent's local policy_state.json should
+    now match the DB", and the agent-side _apply_policy() handler is
+    idempotent (see cyedr_agent.py), so re-sending an unchanged config is
+    harmless. This is what makes edits (e.g. setting the tamper-protection
+    password) take effect without an admin having to manually re-run Assign."""
+    if not agent_ids:
+        return
+    cur.execute("SELECT * FROM edr_policies WHERE id=%s", [policy_id])
+    policy_row = cur.fetchone()
+    if not policy_row:
+        return
+    pr = dict(policy_row)
+    types = pr.get("policy_types") or [pr["policy_type"]]
+    cfg_map = pr.get("config") or {}
+    # One APPLY_POLICY command per type per agent — the agent's
+    # _apply_policy() only ever understands a single scalar
+    # policy_type + flat config, so this keeps it untouched.
+    for aid in agent_ids:
+        for ptype in types:
+            cur.execute(
+                """
+                INSERT INTO edr_response_commands
+                  (id, agent_id, action, parameters, issued_by, auto_triggered)
+                VALUES (%s,%s,'APPLY_POLICY',%s,%s,FALSE)
+                """,
+                [
+                    str(uuid.uuid4()), aid,
+                    json.dumps({
+                        "policy_id":   policy_id,
+                        "policy_type": ptype,
+                        "config":      cfg_map.get(ptype, {}),
+                    }),
+                    issued_by,
+                ],
+            )
+
+
+def _assigned_agent_ids(cur, policy_id: str) -> list[str]:
+    """Every agent currently in scope for a policy — directly assigned, or a
+    member of a group the policy is assigned to."""
+    cur.execute(
+        "SELECT target_type, target_id FROM edr_policy_assignments WHERE policy_id=%s",
+        [policy_id],
+    )
+    rows = cur.fetchall()
+    agent_ids = [r["target_id"] for r in rows if r["target_type"] == "agent"]
+    group_ids = [r["target_id"] for r in rows if r["target_type"] == "group"]
+    if group_ids:
+        cur.execute(
+            "SELECT agent_id FROM edr_group_members WHERE group_id=ANY(%s)", [group_ids]
+        )
+        agent_ids += [r["agent_id"] for r in cur.fetchall()]
+    return list(dict.fromkeys(agent_ids))  # de-dupe, preserve order
 
 
 def assign_policy(db_url: str, policy_id: str, target_type: str,
@@ -390,7 +456,10 @@ def assign_policy(db_url: str, policy_id: str, target_type: str,
                     [str(uuid.uuid4()), policy_id, target_type, tid, assigned_by],
                 )
                 count += cur.rowcount
-            # Queue APPLY_POLICY command for each affected agent
+            # Queue APPLY_POLICY command for each affected agent — done for
+            # every requested target_id, not just newly-inserted ones, since
+            # re-selecting an already-assigned agent in the Assign modal is
+            # also how admins currently force a resync.
             if target_type == "agent":
                 agent_ids = target_ids
             else:
@@ -398,40 +467,31 @@ def assign_policy(db_url: str, policy_id: str, target_type: str,
                     "SELECT agent_id FROM edr_group_members WHERE group_id=ANY(%s)", [target_ids]
                 )
                 agent_ids = [r["agent_id"] for r in cur.fetchall()]
-
-            policy_row = None
-            cur.execute("SELECT * FROM edr_policies WHERE id=%s", [policy_id])
-            policy_row = cur.fetchone()
-
-            if policy_row:
-                pr = dict(policy_row)
-                types = pr.get("policy_types") or [pr["policy_type"]]
-                cfg_map = pr.get("config") or {}
-                # One APPLY_POLICY command per type per agent — the agent's
-                # _apply_policy() only ever understands a single scalar
-                # policy_type + flat config, so this keeps it untouched.
-                for aid in agent_ids:
-                    for ptype in types:
-                        cur.execute(
-                            """
-                            INSERT INTO edr_response_commands
-                              (id, agent_id, action, parameters, issued_by, auto_triggered)
-                            VALUES (%s,%s,'APPLY_POLICY',%s,%s,FALSE)
-                            """,
-                            [
-                                str(uuid.uuid4()), aid,
-                                json.dumps({
-                                    "policy_id":   policy_id,
-                                    "policy_type": ptype,
-                                    "config":      cfg_map.get(ptype, {}),
-                                }),
-                                assigned_by,
-                            ],
-                        )
+            _queue_apply_policy_commands(cur, policy_id, agent_ids, assigned_by)
         conn.commit()
     finally:
         conn.close()
     return count
+
+
+def get_policy_assignments(db_url: str, policy_id: str) -> dict:
+    """Current assignment targets for a policy, for the Assign modal to mark
+    'already applied' agents/groups instead of showing every target as if
+    none of them had it yet."""
+    conn = _db(db_url)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT target_type, target_id FROM edr_policy_assignments WHERE policy_id=%s",
+                [policy_id],
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return {
+        "agent_ids": [r["target_id"] for r in rows if r["target_type"] == "agent"],
+        "group_ids": [r["target_id"] for r in rows if r["target_type"] == "group"],
+    }
 
 
 def get_agent_effective_policies(db_url: str, agent_id: str) -> list[dict]:

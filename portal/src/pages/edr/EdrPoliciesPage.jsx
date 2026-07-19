@@ -535,10 +535,19 @@ function AssignModal({ policy, agents, groups, onClose, onAssigned }) {
   const [selected,   setSelected]   = useState([]);
   const [busy,       setBusy]       = useState(false);
   const [err,        setErr]        = useState("");
+  const [applied,    setApplied]    = useState({ agent_ids: [], group_ids: [] });
+
+  useEffect(() => {
+    fetch(`/api/edr/policies/${policy.id}/assignments`)
+      .then(r => r.ok ? r.json() : { agent_ids: [], group_ids: [] })
+      .then(setApplied)
+      .catch(() => {});
+  }, [policy.id]);
 
   const items = targetType === "agent" ? agents : groups;
   const idKey = targetType === "agent" ? "agent_id" : "id";
   const nameKey = targetType === "agent" ? "hostname" : "name";
+  const appliedIds = targetType === "agent" ? applied.agent_ids : applied.group_ids;
 
   const toggle = (id) => setSelected(s => s.includes(id) ? s.filter(x=>x!==id) : [...s, id]);
 
@@ -575,25 +584,36 @@ function AssignModal({ policy, agents, groups, onClose, onAssigned }) {
           ))}
         </div>
         <div style={{ flex:1, overflowY:"auto", display:"flex", flexDirection:"column", gap:6 }}>
-          {items.map(item => (
-            <div key={item[idKey]} onClick={()=>toggle(item[idKey])} style={{
-              display:"flex", alignItems:"center", gap:10, padding:"8px 12px",
-              background:selected.includes(item[idKey])?`${ACCENT}11`:CARD_BG,
-              border:`1px solid ${selected.includes(item[idKey])?ACCENT+"44":"rgba(255,255,255,0.07)"}`,
-              borderRadius:7, cursor:"pointer",
-            }}>
-              <div style={{
-                width:16, height:16, borderRadius:3, flexShrink:0,
-                border:`2px solid ${selected.includes(item[idKey])?ACCENT:"#444"}`,
-                background:selected.includes(item[idKey])?ACCENT:"transparent",
-              }}/>
-              <div>
-                <div style={{ fontSize:12, color:"#e8eaf0" }}>{item[nameKey]}</div>
-                {targetType==="agent" && <div style={{ fontSize:10, color:"#555" }}>{item.os_type} · {item.asset_type}</div>}
-                {targetType==="group" && <div style={{ fontSize:10, color:"#555" }}>{item.member_count||0} agents</div>}
+          {items.map(item => {
+            const isApplied = appliedIds.includes(item[idKey]);
+            return (
+              <div key={item[idKey]} onClick={()=>toggle(item[idKey])} style={{
+                display:"flex", alignItems:"center", gap:10, padding:"8px 12px",
+                background:selected.includes(item[idKey])?`${ACCENT}11`:CARD_BG,
+                border:`1px solid ${selected.includes(item[idKey])?ACCENT+"44":"rgba(255,255,255,0.07)"}`,
+                borderRadius:7, cursor:"pointer",
+              }}>
+                <div style={{
+                  width:16, height:16, borderRadius:3, flexShrink:0,
+                  border:`2px solid ${selected.includes(item[idKey])?ACCENT:"#444"}`,
+                  background:selected.includes(item[idKey])?ACCENT:"transparent",
+                }}/>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:12, color:"#e8eaf0" }}>{item[nameKey]}</div>
+                  {targetType==="agent" && <div style={{ fontSize:10, color:"#555" }}>{item.os_type} · {item.asset_type}</div>}
+                  {targetType==="group" && <div style={{ fontSize:10, color:"#555" }}>{item.member_count||0} agents</div>}
+                </div>
+                {isApplied && (
+                  <div style={{
+                    fontSize:10, fontWeight:700, color:ACCENT, background:`${ACCENT}18`,
+                    border:`1px solid ${ACCENT}44`, borderRadius:4, padding:"2px 6px", flexShrink:0,
+                  }} title="This policy is already assigned here — re-selecting and clicking Assign resyncs the latest config to it">
+                    ✓ Already Applied
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
           {items.length === 0 && <div style={{ color:"#555", fontSize:12, padding:12 }}>No {targetType}s found.</div>}
         </div>
         {err && <div style={{ color:"#ff7070", fontSize:12, marginTop:10 }}>{err}</div>}
