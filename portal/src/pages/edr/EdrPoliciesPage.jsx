@@ -30,7 +30,6 @@ const POLICY_TYPE_CFG = {
   isolation_exceptions:{ label:"Isolation Exceptions", color:"#888",    icon:"🔓",  desc:"IPs and ports reachable when an endpoint is isolated" },
   network_probe:       { label:"Network Probe",        color:"#00d4ff", icon:"📡",  desc:"Designate this agent as a local network scanner — enables IoT, SNMP, and deep scan behind NAT/firewall" },
   tamper_protection:   { label:"Tamper Protection",    color:"#ff5555", icon:"🔒",  desc:"Admin password gating the system-tray app's Stop/Exit CyEDR action" },
-  ai_traffic_routing:  { label:"AI Traffic Routing",   color:"#a970ff", icon:"🧠",  desc:"Redirect OpenAI/Anthropic-compatible AI tool traffic through the CyMind Gateway" },
 };
 
 const AI_SENSITIVITY_LABELS = {
@@ -518,51 +517,6 @@ function TamperProtectionEditor({ config, onChange }) {
   );
 }
 
-function AiTrafficRoutingEditor({ config, onChange }) {
-  const s = (k, v) => onChange({ ...config, [k]: v });
-
-  return (
-    <div>
-      <div style={{ background:"rgba(169,112,255,0.06)", border:"1px solid rgba(169,112,255,0.2)", borderRadius:8, padding:"10px 14px", marginBottom:16, fontSize:12, color:"#c9a8ff" }}>
-        Phase 1 — simple on/off. When enabled, the agent points OpenAI/Anthropic
-        SDK-compatible AI tools (Cursor, CLI/SDK-based coding agents, etc.) at the
-        CyMind Gateway by setting the standard <code style={{ color:"#c9a8ff" }}>OPENAI_BASE_URL</code> /
-        <code style={{ color:"#c9a8ff" }}> ANTHROPIC_BASE_URL</code> env vars those tools already honor —
-        no TLS interception. Tools with no such override (e.g. GitHub Copilot, the
-        built-in JetBrains AI Assistant) aren't reachable this way yet.
-      </div>
-
-      <div style={{ fontSize:12, color:"#555", marginBottom:14, fontWeight:600, letterSpacing:1 }}>ROUTING</div>
-      <Toggle
-        value={config.enabled}
-        onChange={v => s("enabled", v)}
-        label="Force AI traffic through CyMind Gateway"
-        sublabel="Redirects OpenAI/Anthropic-compatible tool traffic on this agent; reverts on disable"
-      />
-      <div style={{ marginTop:14 }}>
-        <div style={{ fontSize:11, color:"#555", marginBottom:5 }}>CyMind Gateway URL</div>
-        <input
-          value={config.gateway_url || ""}
-          onChange={e => s("gateway_url", e.target.value)}
-          placeholder="https://cymind.example.com/api/v1/gateway"
-          style={{
-            width:"100%", background:"rgba(255,255,255,0.05)", border:BORDER, borderRadius:6,
-            color:"#e8eaf0", padding:"7px 12px", fontSize:12, boxSizing:"border-box",
-          }}
-        />
-      </div>
-
-      <div style={{ marginTop:20, padding:"10px 14px", background:"rgba(255,255,255,0.03)", borderRadius:8, fontSize:11, color:"#555", lineHeight:1.6 }}>
-        <strong style={{ color:"#888" }}>How it works:</strong> the agent fetches an hourly-refreshed,
-        short-lived signed token from Cy360 and writes it as the tool's API key — CyMind's gateway
-        accepts that token as proof the request came from an enrolled Cy360 agent. No license
-        gating in this phase. GUI apps already running when the policy applies need a restart to
-        pick up the new endpoint.
-      </div>
-    </div>
-  );
-}
-
 const EDITORS = {
   threat_prevention:    ThreatPreventionEditor,
   device_control:       DeviceControlEditor,
@@ -573,7 +527,6 @@ const EDITORS = {
   isolation_exceptions: IsolationExceptionsEditor,
   network_probe:        NetworkProbeEditor,
   tamper_protection:    TamperProtectionEditor,
-  ai_traffic_routing:   AiTrafficRoutingEditor,
 };
 
 // ── Assign modal ──────────────────────────────────────────────────────────────

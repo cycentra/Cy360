@@ -245,10 +245,6 @@ EDR_CASES_THRESHOLD     = float(os.environ.get("EDR_CASES_THRESHOLD", "80"))
 EDR_AUTO_ISOLATE_SCORE  = float(os.environ.get("EDR_AUTO_ISOLATE_SCORE", "90"))
 # gRPC collector listen address (for future native agent transport).
 EDR_GRPC_LISTEN         = os.environ.get("EDR_GRPC_LISTEN", "0.0.0.0:50051")
-# Shared HS256 signing secret for the AI Gateway agent token (GET /api/edr/ai-gateway-token).
-# Must be identical in CyMind's env — that's the only trust link between the two platforms
-# for this feature. Empty by default = route refuses to mint tokens (fail closed).
-AI_GATEWAY_SHARED_SECRET = os.environ.get("AI_GATEWAY_SHARED_SECRET", "")
 
 # ── CyTIM — Threat Intelligence Module ────────────────────────────────────────
 # URL and API key are UI-managed (Platform Configuration → Extensions → CyTIM).

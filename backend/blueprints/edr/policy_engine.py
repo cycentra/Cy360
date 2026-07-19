@@ -41,7 +41,6 @@ POLICY_TYPES = {
     "isolation_exceptions",
     "network_probe",
     "tamper_protection",
-    "ai_traffic_routing",
 }
 
 # ── Default policy templates ──────────────────────────────────────────────────
@@ -154,18 +153,6 @@ POLICY_DEFAULTS: dict[str, dict] = {
         "protect_uninstall":       True,    # require password to run the uninstaller
         "lockout_attempts":        5,       # failed attempts before temporary lockout
         "lockout_minutes":         15,
-    },
-    "ai_traffic_routing": {
-        # Phase 1 (simple start, no license enforcement yet — see
-        # docs/AI_TRAFFIC_GATEWAY_PLAN.md). When enabled, the agent points
-        # OpenAI/Anthropic-compatible AI tool traffic (Cursor, CLI/SDK-based
-        # coding agents, etc.) at the CyMind Gateway by setting
-        # OPENAI_BASE_URL/ANTHROPIC_BASE_URL + matching API-key env vars,
-        # where the "API key" is a short-lived token this Cy360 instance
-        # mints and CyMind validates as proof the request came from an
-        # enrolled agent. No app-level allowlist yet — on/off only.
-        "enabled":                 False,
-        "gateway_url":             "",   # e.g. https://cymind.example.com/api/v1/gateway
     },
 }
 
