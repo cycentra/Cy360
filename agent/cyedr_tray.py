@@ -157,6 +157,112 @@ def _tooltip(status_resp: dict) -> str:
     return f"CyEDR — running on {hostname} (no admin password set)"
 
 
+# ── Linux/Windows: locate the agent invocation + elevate a Start ────────────
+def _linux_agent_invocation():
+    """Reconstruct the interpreter+script (Python-mode) or binary (binary-mode)
+    invocation from the actual installed systemd unit, plus WorkingDirectory
+    (=EDR_HOME) — mirrors _macos_agent_invocation's reasoning: read it from
+    what's really installed rather than assume a path. Returns
+    (argv_prefix, edr_home) or None."""
+    try:
+        exec_start = None
+        working_dir = None
+        with open("/etc/systemd/system/cyedr-agent.service") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("ExecStart="):
+                    exec_start = line[len("ExecStart="):]
+                elif line.startswith("WorkingDirectory="):
+                    working_dir = line[len("WorkingDirectory="):]
+        if not exec_start or not working_dir:
+            return None
+        argv = shlex.split(exec_start)
+        if "--config" in argv:
+            argv = argv[:argv.index("--config")]
+        return argv, working_dir
+    except Exception:
+        return None
+
+
+def _linux_start_elevated(argv, edr_home: str, password: str) -> dict:
+    """Elevate one call to `<agent> --verify-and-start` via pkexec (PolicyKit)
+    — the standard desktop-Linux equivalent of macOS's `osascript ...
+    administrator privileges` / Windows UAC: a native GUI prompt asking the
+    logged-in user to authenticate as an administrator for exactly this one
+    command. Requires polkit (pkexec), present by default on GNOME/KDE
+    desktops — the same class of machine the tray is installed on at all."""
+    import shutil
+    if not shutil.which("pkexec"):
+        return {"ok": False, "detail": "pkexec (PolicyKit) not found — cannot elevate to start CyEDR"}
+    pw_fd, pw_path = tempfile.mkstemp(prefix="cyedr-start-")
+    try:
+        with os.fdopen(pw_fd, "w") as f:
+            f.write(password)
+        cmd = ["pkexec", *argv, "--verify-and-start", edr_home, "--password-file", pw_path]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    finally:
+        try:
+            os.remove(pw_path)
+        except OSError:
+            pass
+    # pkexec itself returns 126 if the user dismisses/fails the auth dialog,
+    # 127 if the target command couldn't even be found/executed.
+    if proc.returncode in (126, 127):
+        return {"ok": False, "detail": "Start cancelled, or administrator authentication failed."}
+    try:
+        return json.loads(proc.stdout.strip().splitlines()[-1])
+    except Exception:
+        return {"ok": False, "detail": proc.stdout.strip() or proc.stderr.strip() or "unknown error"}
+
+
+def _windows_start_elevated(edr_home: str, agent_exe: str, password: str) -> dict:
+    """Elevate one call to cyedr-agent.exe --verify-and-start via UAC (the
+    "runas" verb on ShellExecuteW) — the Windows equivalent of macOS's
+    osascript/administrator-privileges and Linux's pkexec: a native consent
+    prompt for exactly this one command, no persistent elevated helper.
+    ShellExecuteW's "runas" doesn't hand back a waitable process handle the
+    simple way pywin32-free ctypes can use, so the result comes back via a
+    file (--result-file) that this process polls for instead of a stdout
+    pipe (which "runas" also doesn't give us cleanly)."""
+    import ctypes
+    if not os.path.exists(agent_exe):
+        return {"ok": False, "detail": "CyEDR agent executable not found — is it installed?"}
+
+    pw_fd, pw_path = tempfile.mkstemp(prefix="cyedr-start-")
+    result_fd, result_path = tempfile.mkstemp(prefix="cyedr-start-result-")
+    os.close(result_fd)
+    os.remove(result_path)  # elevated process creates it fresh; existence == done
+    try:
+        with os.fdopen(pw_fd, "w") as f:
+            f.write(password)
+        params = (f'--verify-and-start "{edr_home}" '
+                  f'--password-file "{pw_path}" --result-file "{result_path}"')
+        SW_HIDE = 0
+        # Return value > 32 means success per the ShellExecuteW contract;
+        # this is what actually raises the UAC consent dialog.
+        rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", agent_exe, params, None, SW_HIDE)
+        if rc <= 32:
+            return {"ok": False, "detail": "UAC prompt was cancelled or elevation failed"}
+
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            if os.path.exists(result_path):
+                try:
+                    with open(result_path) as f:
+                        return json.load(f)
+                except Exception:
+                    break
+            time.sleep(0.5)
+        return {"ok": False, "detail": "Timed out waiting for elevated Start to finish "
+                                        "(the UAC prompt may still be open)"}
+    finally:
+        for p in (pw_path, result_path):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
 # ── Windows / Linux (pystray) ────────────────────────────────────────────────
 def run_pystray(client: AgentClient):
     import pystray
@@ -176,7 +282,8 @@ def run_pystray(client: AgentClient):
         except Exception:
             pass
 
-    def _prompt_password():
+    def _prompt(confirm_title, confirm_message, pwd_title, pwd_message):
+        """Shared confirm-then-password-entry flow for both Stop and Start."""
         try:
             import tkinter as tk
             from tkinter import simpledialog, messagebox
@@ -188,24 +295,11 @@ def run_pystray(client: AgentClient):
             root.attributes("-topmost", True)
         except Exception:
             pass
-        # A stopped agent has no running process left to serve a "start"
-        # command back to this tray — recovery needs local admin access to
-        # this machine. Surfaced here, before the password prompt, so there
-        # are no surprises about what this action actually does.
-        proceed = messagebox.askokcancel(
-            "CyEDR — Stop/Exit",
-            "Stopping CyEDR requires local admin access to this machine to "
-            "restart it afterward — it cannot be undone from this tray.\n\nContinue?",
-            parent=root,
-        )
+        proceed = messagebox.askokcancel(confirm_title, confirm_message, parent=root)
         if not proceed:
             root.destroy()
             return None
-        pwd = simpledialog.askstring(
-            "CyEDR — Stop/Exit",
-            "Enter the CyEDR admin password (set in Cy360 -> EDR Policies -> Tamper Protection):",
-            show="*", parent=root,
-        )
+        pwd = simpledialog.askstring(pwd_title, pwd_message, show="*", parent=root)
         root.destroy()
         return pwd
 
@@ -216,7 +310,17 @@ def run_pystray(client: AgentClient):
                 if resp.get("ok") else f"Scan request failed: {resp.get('error', 'unknown error')}")
 
     def on_stop(icon_, _item):
-        pwd = _prompt_password()
+        # A stopped agent has no running process left to serve a "start"
+        # command back to this tray — recovery needs local admin access to
+        # this machine. Surfaced here, before the password prompt, so there
+        # are no surprises about what this action actually does.
+        pwd = _prompt(
+            "CyEDR — Stop/Exit",
+            "Stopping CyEDR requires local admin access to this machine to "
+            "restart it afterward — it cannot be undone from this tray.\n\nContinue?",
+            "CyEDR — Stop/Exit",
+            "Enter the CyEDR admin password (set in Cy360 -> EDR Policies -> Tamper Protection):",
+        )
         if pwd is None:
             return
         resp = client.stop(pwd)
@@ -224,6 +328,46 @@ def run_pystray(client: AgentClient):
             _notify(icon_, "CyEDR", "Stopping CyEDR...")
         else:
             _notify(icon_, "CyEDR", f"Stop denied: {resp.get('error', 'incorrect password')}")
+
+    def on_start(icon_, _item):
+        # There's no running agent to ask over IPC — that's the whole problem
+        # this solves. The CyEDR password below is verified by an elevated
+        # one-shot cyedr_agent.py --verify-and-start; getting that elevation
+        # (pkexec on Linux, UAC on Windows) is a SEPARATE, unavoidable OS-level
+        # admin-authentication step on top of it — starting a privileged
+        # system service always needs that, regardless of the CyEDR password.
+        if OS_TYPE == "WINDOWS":
+            agent_exe = r"C:\Program Files\CyCentra\edr\cyedr-agent.exe"
+            edr_home  = r"C:\Program Files\CyCentra\edr"
+            elevated_note = "Windows will separately show a UAC prompt asking you to confirm as an administrator"
+        else:
+            invocation = _linux_agent_invocation()
+            if not invocation:
+                _notify(icon_, "CyEDR", "Could not find the CyEDR systemd service — is it installed?")
+                return
+            elevated_note = "you'll separately be asked to authenticate as an administrator (PolicyKit)"
+
+        pwd = _prompt(
+            "CyEDR — Start",
+            f"Starting CyEDR needs the CyEDR admin password, and {elevated_note} — "
+            "that second prompt is the OS's own requirement for starting a system "
+            "service, not something CyEDR can skip.\n\nContinue?",
+            "CyEDR — Start",
+            "Enter the CyEDR admin password (set in Cy360 -> EDR Policies -> Tamper Protection):",
+        )
+        if pwd is None:
+            return
+
+        if OS_TYPE == "WINDOWS":
+            result = _windows_start_elevated(edr_home, agent_exe, pwd)
+        else:
+            argv, edr_home = invocation
+            result = _linux_start_elevated(argv, edr_home, pwd)
+
+        if result.get("ok"):
+            _notify(icon_, "CyEDR", "CyEDR is starting...")
+        else:
+            _notify(icon_, "CyEDR", f"Start denied: {result.get('detail', 'unknown error')}")
 
     def poll_loop(icon_):
         while True:
@@ -237,6 +381,7 @@ def run_pystray(client: AgentClient):
         pystray.Menu.SEPARATOR,
         Item("Run Scan Now", on_scan),
         Item("Stop/Exit CyEDR...", on_stop),
+        Item("Start CyEDR...", on_start),
         pystray.Menu.SEPARATOR,
         Item("About CyCentra 360",
              lambda icon_, _i: _notify(icon_, "CyCentra 360", "CyEDR Endpoint Protection")),

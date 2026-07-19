@@ -499,6 +499,13 @@ function Show-Summary {
     if (Test-Path "$TrayHome\cyedr-tray.exe") {
         Write-Host ""
         Write-Host "  Tray:       $TrayHome\cyedr-tray.exe (starts automatically at next logon, any user)" -ForegroundColor Cyan
+        # Printed here permanently, not only inside the tray's dialogs — by the
+        # time someone needs this, the tray may be showing the unreachable/red
+        # state and this may be the only place it's written down.
+        Write-Host "  Restart if stopped: use `"Start CyEDR...`" in the tray menu" -ForegroundColor Cyan
+        Write-Host "              (asks for the CyEDR admin password, then a Windows UAC prompt)" -ForegroundColor Cyan
+        Write-Host "              or from an elevated/Administrator PowerShell:" -ForegroundColor Cyan
+        Write-Host "              sc start CyEDRAgent" -ForegroundColor Cyan
     }
     Write-Host "  Next: View endpoint in CyCentra 360 > Endpoint Fleet" -ForegroundColor Yellow
     Write-Host ""

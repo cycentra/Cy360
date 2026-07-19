@@ -210,17 +210,20 @@ def _verify_tamper_password_standalone(edr_home: str, password: str) -> tuple[bo
     return False, f"incorrect password (attempt {attempts}/{max_attempts})"
 
 
-def _cli_verify_and_start(edr_home: str, password_file: str | None) -> None:
+def _cli_verify_and_start(edr_home: str, password_file: str | None,
+                           result_file: str | None = None) -> None:
     """One-shot mode (--verify-and-start): no daemon startup, just verify the
     tamper password and, if allowed, start the underlying OS service. There
     is no running agent to ask over IPC — this offline path exists so the
-    tray's "Start CyEDR" action has something to invoke. On macOS the tray
-    calls this via `osascript ... with administrator privileges`, so this
-    process is already running as root by the time it gets here — which is
-    also what lets it read policy_state.json (root-only) and issue the
-    launchctl/systemctl/sc start command. Always prints exactly one JSON line
-    to stdout ({"ok": bool, "detail": str}) so the caller can parse the
-    result; never raises.
+    tray's "Start CyEDR" action has something to invoke. This process runs
+    already-elevated by the time it gets here — root via macOS's `osascript
+    ... administrator privileges` or Linux's `pkexec`, Administrator via
+    Windows UAC's "runas" verb — which is what lets it read policy_state.json
+    (root-only) and issue the launchctl/systemctl/sc start command. Always
+    prints exactly one JSON line to stdout ({"ok": bool, "detail": str});
+    also writes it to --result-file if given, since a UAC-elevated ("runas")
+    process on Windows doesn't hand its stdout back to the caller the way
+    osascript/pkexec do — the tray polls for that file instead. Never raises.
     """
     password = ""
     if password_file:
@@ -252,11 +255,22 @@ def _cli_verify_and_start(edr_home: str, password_file: str | None) -> None:
                 if r.returncode != 0 and "already bootstrapped" not in (r.stderr or "").lower():
                     result = {"ok": False, "detail": f"launchctl bootstrap failed: {r.stderr.strip()}"}
             elif OS_TYPE == "WINDOWS":
-                subprocess.run(["sc", "start", "CyEDRAgent"], check=True, timeout=15)
+                r = subprocess.run(["sc", "start", "CyEDRAgent"],
+                                    capture_output=True, text=True, timeout=15)
+                # Error 1056 = service already running — same "end state
+                # already holds" case as launchd's "already bootstrapped".
+                if r.returncode != 0 and "1056" not in (r.stdout or ""):
+                    result = {"ok": False, "detail": f"sc start failed: {r.stdout.strip()}"}
         except Exception as e:
             result = {"ok": False, "detail": f"start command failed: {e}"}
 
     print(json.dumps(result))
+    if result_file:
+        try:
+            with open(result_file, "w") as f:
+                json.dump(result, f)
+        except Exception:
+            pass
 
 
 def _ensure_ipc_token(cfg: "Config") -> str:
@@ -4760,10 +4774,14 @@ def main():
     parser.add_argument("--password-file",
                          help="Path to a file holding the tamper password, used with "
                               "--verify-and-start; the file is deleted after being read.")
+    parser.add_argument("--result-file",
+                         help="Path to write the JSON {ok, detail} result to, used with "
+                              "--verify-and-start — needed on Windows, where a UAC-elevated "
+                              "('runas') process doesn't hand its stdout back to the caller.")
     args = parser.parse_args()
 
     if args.verify_and_start:
-        _cli_verify_and_start(args.verify_and_start, args.password_file)
+        _cli_verify_and_start(args.verify_and_start, args.password_file, args.result_file)
         return
 
     if not args.config:
