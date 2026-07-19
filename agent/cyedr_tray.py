@@ -8,12 +8,15 @@ offers:
   - Run Scan Now       — triggers an on-demand YARA scan (low risk, no password)
   - Stop/Exit CyEDR...  — requires the admin password set in Cy360 -> EDR
                           Policies -> Tamper Protection, if one has been set
-  - Start CyEDR...      — macOS only (see run_rumps.start()). Same admin
-                          password as Stop, PLUS macOS's own admin
-                          authentication (Touch ID / Mac login password) —
-                          unavoidable, since starting a root-owned system
+  - Start CyEDR...      — same admin password as Stop, PLUS the OS's own
+                          admin authentication (macOS: Touch ID / Mac login
+                          password via osascript; Linux: PolicyKit via
+                          pkexec; Windows: UAC via ShellExecuteW "runas") —
+                          unavoidable, since starting a root/SYSTEM-owned
                           service always requires that regardless of what
-                          CyEDR's own password gate says.
+                          CyEDR's own password gate says. See run_rumps.
+                          start() (macOS) / run_pystray.on_start() (Linux,
+                          Windows).
 
 This process never talks to the Cy360 platform directly, holds no enrollment
 token, and has no network access requirement. For status/scan/stop it only
@@ -22,10 +25,10 @@ channel — a Unix domain socket on Linux/macOS, a named pipe on Windows —
 using the low-value shared ipc_token dropped by the agent. Start is
 different: there is no running agent to ask (that's the whole problem it
 solves), so it invokes cyedr_agent.py's own --verify-and-start one-shot mode
-directly via `osascript ... with administrator privileges`, elevated. Either
-way, the admin password itself is typed by the local user into a tray
-dialog and verified locally (bcrypt) by cyedr_agent.py; this process never
-stores or sees the hash.
+directly via an elevated call (see above, per-OS). Either way, the admin
+password itself is typed by the local user into a tray dialog and verified
+locally (bcrypt) by cyedr_agent.py; this process never stores or sees the
+hash.
 
 Built as a separate PyInstaller binary from cyedr_agent.py on purpose — see
 agent-packages/build-edr-packages.sh. The agent runs as a privileged headless
