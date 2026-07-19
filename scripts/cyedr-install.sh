@@ -865,11 +865,13 @@ print_summary() {
         echo ""
         echo "  Status:     sudo launchctl list com.cycentra.edr"
         echo "  Logs:       tail -f $EDR_HOME/logs/cyedr_agent.log"
-        # Printed here permanently, not only inside the tray's Stop/Exit
-        # dialog — by the time someone needs this, the tray may be showing
-        # the unreachable/red state and this may be the only place it's
-        # written down (the agent's own log stops updating once it's stopped).
-        echo "  Restart if stopped (tray Stop/Exit, or a crash):"
+        # Printed here permanently, not only inside the tray's dialogs — by
+        # the time someone needs this, the tray may be showing the
+        # unreachable/red state and this may be the only place it's written
+        # down (the agent's own log stops updating once it's stopped).
+        echo "  Restart if stopped: use \"Start CyEDR...\" in the tray menu"
+        echo "              (asks for the CyEDR admin password, then macOS's own"
+        echo "               admin authentication) — or from Terminal:"
         echo "              sudo launchctl bootstrap system /Library/LaunchDaemons/com.cycentra.edr.plist"
         echo "              (if that errors 'already bootstrapped', use instead:"
         echo "               sudo launchctl kickstart -k system/com.cycentra.edr)"

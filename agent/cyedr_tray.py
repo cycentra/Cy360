@@ -4,18 +4,28 @@ CyCentra 360 — CyEDR System Tray
 
 Per-user, unprivileged companion to cyedr_agent.py. Shows a menu-bar/tray
 icon indicating whether CyEDR is running and protecting this endpoint, and
-offers two actions:
+offers:
   - Run Scan Now       — triggers an on-demand YARA scan (low risk, no password)
   - Stop/Exit CyEDR...  — requires the admin password set in Cy360 -> EDR
                           Policies -> Tamper Protection, if one has been set
+  - Start CyEDR...      — macOS only (see run_rumps.start()). Same admin
+                          password as Stop, PLUS macOS's own admin
+                          authentication (Touch ID / Mac login password) —
+                          unavoidable, since starting a root-owned system
+                          service always requires that regardless of what
+                          CyEDR's own password gate says.
 
 This process never talks to the Cy360 platform directly, holds no enrollment
-token, and has no network access requirement. It only ever reaches the
-locally-running cyedr_agent.py service over a local IPC channel — a Unix
-domain socket on Linux/macOS, a named pipe on Windows — using the low-value
-shared ipc_token dropped by the agent. The admin password itself is typed by
-the local user into the Stop dialog and handed to the agent, which verifies
-it locally against a bcrypt hash; this process never stores or sees the hash.
+token, and has no network access requirement. For status/scan/stop it only
+ever reaches the locally-running cyedr_agent.py service over a local IPC
+channel — a Unix domain socket on Linux/macOS, a named pipe on Windows —
+using the low-value shared ipc_token dropped by the agent. Start is
+different: there is no running agent to ask (that's the whole problem it
+solves), so it invokes cyedr_agent.py's own --verify-and-start one-shot mode
+directly via `osascript ... with administrator privileges`, elevated. Either
+way, the admin password itself is typed by the local user into a tray
+dialog and verified locally (bcrypt) by cyedr_agent.py; this process never
+stores or sees the hash.
 
 Built as a separate PyInstaller binary from cyedr_agent.py on purpose — see
 agent-packages/build-edr-packages.sh. The agent runs as a privileged headless
@@ -25,7 +35,10 @@ runs per-user, unprivileged, autostarted at login.
 import json
 import os
 import platform
+import shlex
 import socket
+import subprocess
+import tempfile
 import threading
 import time
 
@@ -275,6 +288,35 @@ def _disable_app_nap():
         return None
 
 
+def _macos_agent_invocation():
+    """Reconstruct the exact interpreter+script (Python-mode installs) or
+    compiled-binary (binary-mode installs) invocation the LaunchDaemon itself
+    uses, plus EDR_HOME — both read straight from the installed plist rather
+    than assumed, so Start works the same regardless of which install mode
+    this endpoint used and without hardcoding a path that might not match a
+    future installer default. Returns (argv_prefix, edr_home) or None."""
+    try:
+        import plistlib
+        with open("/Library/LaunchDaemons/com.cycentra.edr.plist", "rb") as f:
+            plist = plistlib.load(f)
+        args = list(plist.get("ProgramArguments", []))
+        if "--config" in args:
+            args = args[:args.index("--config")]
+        edr_home = plist.get("WorkingDirectory", "")
+        if not args or not edr_home:
+            return None
+        return args, edr_home
+    except Exception:
+        return None
+
+
+def _osa_quote(s: str) -> str:
+    """Escape a string for embedding as an AppleScript double-quoted string
+    literal (backslash and double-quote are the only two characters that
+    need it) — used to hand the inner shell command to `do shell script`."""
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def run_rumps(client: AgentClient):
     import rumps
     _app_nap_activity = _disable_app_nap()  # noqa: F841 — keep-alive reference, see docstring
@@ -282,7 +324,8 @@ def run_rumps(client: AgentClient):
     class CyEDRTrayApp(rumps.App):
         def __init__(self):
             super().__init__("CyEDR", title="\U0001F534 CyEDR", quit_button=None)
-            self.menu = ["Run Scan Now", "Stop/Exit CyEDR...", None, "About CyCentra 360"]
+            self.menu = ["Run Scan Now", "Stop/Exit CyEDR...", "Start CyEDR...",
+                         None, "About CyCentra 360"]
             self._resp = {}
             rumps.Timer(self.poll, _POLL_SECONDS).start()
             self.poll(None)
@@ -340,6 +383,88 @@ def run_rumps(client: AgentClient):
                 rumps.notification("CyEDR", "", "Stopping CyEDR...")
             else:
                 rumps.notification("CyEDR", "", f"Stop denied: {resp.get('error', 'incorrect password')}")
+
+        @rumps.clicked("Start CyEDR...")
+        def start(self, _sender):
+            # There's no running agent to ask over IPC — that's the whole
+            # problem this solves — so unlike Stop, this can't verify the
+            # password itself. It hands off to cyedr_agent.py's own
+            # --verify-and-start one-shot mode via `osascript ... with
+            # administrator privileges`, which runs it as root: that's what
+            # lets it read policy_state.json (root-only) to check the SAME
+            # password Stop uses, and what lets it call `launchctl bootstrap`
+            # on a system LaunchDaemon. macOS's own admin prompt (Touch ID /
+            # Mac login password) is a separate, unavoidable requirement on
+            # top of the CyEDR password — starting a root-owned service
+            # always needs it, no matter what CyEDR's own gate says.
+            _activate_app()
+            proceed = rumps.alert(
+                title="CyEDR — Start",
+                message=("Starting CyEDR needs the CyEDR admin password below, and then "
+                          "macOS will separately ask you to authenticate as an administrator "
+                          "(Touch ID or your Mac login password) — that second prompt is "
+                          "macOS's own requirement for starting a system service, not something "
+                          "CyEDR can skip."),
+                ok="Continue", cancel="Cancel",
+            )
+            if proceed != 1:
+                return
+            _activate_app()
+            window = rumps.Window(
+                message="Enter the CyEDR admin password (set in Cy360 -> EDR Policies -> Tamper Protection):",
+                title="Start CyEDR",
+                default_text="", ok="Start", cancel="Cancel",
+                secure=True, dimensions=(280, 20),
+            )
+            result = window.run()
+            if not result.clicked:
+                return
+
+            invocation = _macos_agent_invocation()
+            if not invocation:
+                rumps.notification("CyEDR", "",
+                                    "Could not find the CyEDR LaunchDaemon config — is it installed?")
+                return
+            argv, edr_home = invocation
+
+            # Password goes to a 0600 temp file the elevated process reads
+            # and deletes, never as a command-line argument — argv is visible
+            # to any local user via `ps`, a temp file readable only by the
+            # owner (and root, which is what reads it here) is not.
+            pw_fd, pw_path = tempfile.mkstemp(prefix="cyedr-start-")
+            try:
+                with os.fdopen(pw_fd, "w") as f:
+                    f.write(result.text)
+                shell_cmd = " ".join(shlex.quote(a) for a in argv) + \
+                    f" --verify-and-start {shlex.quote(edr_home)} --password-file {shlex.quote(pw_path)}"
+                osa_script = f"do shell script {_osa_quote(shell_cmd)} with administrator privileges"
+                proc = subprocess.run(["osascript", "-e", osa_script],
+                                       capture_output=True, text=True, timeout=60)
+            finally:
+                try:
+                    os.remove(pw_path)
+                except OSError:
+                    pass
+
+            if proc.returncode != 0:
+                # Covers both "user cancelled the macOS admin prompt" and
+                # "wrong Mac admin password/Touch ID failed" — osascript
+                # doesn't distinguish these in a way worth surfacing
+                # differently, both just mean nothing happened.
+                rumps.notification("CyEDR", "",
+                                    "Start cancelled, or macOS admin authentication failed.")
+                return
+            try:
+                start_result = json.loads(proc.stdout.strip().splitlines()[-1])
+            except Exception:
+                start_result = {"ok": False,
+                                 "detail": proc.stdout.strip() or proc.stderr.strip() or "unknown error"}
+
+            if start_result.get("ok"):
+                rumps.notification("CyEDR", "", "CyEDR is starting...")
+            else:
+                rumps.notification("CyEDR", "",
+                                    f"Start denied: {start_result.get('detail', 'unknown error')}")
 
         @rumps.clicked("About CyCentra 360")
         def about(self, _sender):

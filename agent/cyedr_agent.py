@@ -137,6 +137,128 @@ _RECOVERY_CMDS = {
 }
 
 
+def _verify_tamper_password_standalone(edr_home: str, password: str) -> tuple[bool, str]:
+    """Same verification + lockout semantics as ResponseExecutor._verify_
+    tamper_password, factored out so it can also run with no live agent
+    process at all — see _cli_verify_and_start(), used by the tray's "Start
+    CyEDR" action. Reads policy_state.json / tamper_lockout.json directly
+    from disk instead of a live Config/ResponseExecutor object graph (there
+    is nothing running yet to hold one). ResponseExecutor._verify_tamper_
+    password delegates to this so the two call sites (live Stop over IPC,
+    offline Start via elevated CLI) can never drift out of sync."""
+    policy_state_path   = os.path.join(edr_home, "policy_state.json")
+    tamper_lockout_path = os.path.join(edr_home, "tamper_lockout.json")
+
+    policy_state = {}
+    try:
+        if os.path.exists(policy_state_path):
+            with open(policy_state_path) as f:
+                policy_state = json.load(f)
+    except Exception:
+        pass
+    tp = policy_state.get("tamper_protection", {})
+
+    if not tp.get("password_set") or not tp.get("protect_stop", True):
+        return True, "no admin password configured"
+    if bcrypt is None:
+        return False, "bcrypt unavailable on this build — action blocked for safety"
+
+    def _load_lockout() -> dict:
+        try:
+            if os.path.exists(tamper_lockout_path):
+                with open(tamper_lockout_path) as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {"failed_attempts": 0, "locked_until": ""}
+
+    def _save_lockout(state: dict):
+        try:
+            with open(tamper_lockout_path, "w") as f:
+                json.dump(state, f)
+        except Exception:
+            pass
+
+    lockout = _load_lockout()
+    locked_until = lockout.get("locked_until", "")
+    if locked_until:
+        try:
+            if datetime.fromisoformat(locked_until) > datetime.utcnow():
+                return False, f"locked out until {locked_until} (too many failed attempts)"
+        except Exception:
+            pass
+
+    stored_hash = tp.get("password_hash", "")
+    ok = False
+    if stored_hash and password:
+        try:
+            ok = bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8"))
+        except Exception:
+            ok = False
+
+    if ok:
+        _save_lockout({"failed_attempts": 0, "locked_until": ""})
+        return True, "password verified"
+
+    max_attempts    = tp.get("lockout_attempts", 5)
+    lockout_minutes = tp.get("lockout_minutes", 15)
+    attempts = lockout.get("failed_attempts", 0) + 1
+    new_state = {"failed_attempts": attempts, "locked_until": ""}
+    if attempts >= max_attempts:
+        new_state["locked_until"] = (datetime.utcnow() + timedelta(minutes=lockout_minutes)).isoformat()
+    _save_lockout(new_state)
+    return False, f"incorrect password (attempt {attempts}/{max_attempts})"
+
+
+def _cli_verify_and_start(edr_home: str, password_file: str | None) -> None:
+    """One-shot mode (--verify-and-start): no daemon startup, just verify the
+    tamper password and, if allowed, start the underlying OS service. There
+    is no running agent to ask over IPC — this offline path exists so the
+    tray's "Start CyEDR" action has something to invoke. On macOS the tray
+    calls this via `osascript ... with administrator privileges`, so this
+    process is already running as root by the time it gets here — which is
+    also what lets it read policy_state.json (root-only) and issue the
+    launchctl/systemctl/sc start command. Always prints exactly one JSON line
+    to stdout ({"ok": bool, "detail": str}) so the caller can parse the
+    result; never raises.
+    """
+    password = ""
+    if password_file:
+        try:
+            with open(password_file) as f:
+                password = f.read()
+        finally:
+            try:
+                os.remove(password_file)
+            except OSError:
+                pass
+
+    allowed, detail = _verify_tamper_password_standalone(edr_home, password)
+    result = {"ok": allowed, "detail": detail}
+
+    if allowed:
+        try:
+            if OS_TYPE == "LINUX":
+                subprocess.run(["systemctl", "start", "cyedr-agent"], check=True, timeout=15)
+            elif OS_TYPE == "DARWIN":
+                r = subprocess.run(
+                    ["launchctl", "bootstrap", "system",
+                     "/Library/LaunchDaemons/com.cycentra.edr.plist"],
+                    capture_output=True, text=True, timeout=15,
+                )
+                # "already bootstrapped" means the end state the user asked
+                # for (service loaded) already holds — treat as success, not
+                # an error, rather than surfacing launchd's own wording.
+                if r.returncode != 0 and "already bootstrapped" not in (r.stderr or "").lower():
+                    result = {"ok": False, "detail": f"launchctl bootstrap failed: {r.stderr.strip()}"}
+            elif OS_TYPE == "WINDOWS":
+                subprocess.run(["sc", "start", "CyEDRAgent"], check=True, timeout=15)
+        except Exception as e:
+            result = {"ok": False, "detail": f"start command failed: {e}"}
+
+    print(json.dumps(result))
+
+
 def _ensure_ipc_token(cfg: "Config") -> str:
     """Low-value shared secret so the IPC socket isn't wide open to literally
     any local process — NOT the real security boundary (that's the admin
@@ -1866,7 +1988,6 @@ class ResponseExecutor:
         self._cfg  = cfg
         self._http = http
         self._policy_state_path  = os.path.join(cfg.edr_home, "policy_state.json")
-        self._tamper_lockout_path = os.path.join(cfg.edr_home, "tamper_lockout.json")
         os.makedirs(cfg.quarantine_dir, exist_ok=True)
         self._probe_poller: "NetworkProbePoller | None" = None
         self._load_policy_state()
@@ -3029,61 +3150,14 @@ class ResponseExecutor:
         protect_stop = cfg.get("protect_stop", True)
         return f"tamper_protection stored: password_set={password_set}, protect_stop={protect_stop}"
 
-    def _load_tamper_lockout(self) -> dict:
-        try:
-            if os.path.exists(self._tamper_lockout_path):
-                with open(self._tamper_lockout_path) as f:
-                    return json.load(f)
-        except Exception:
-            pass
-        return {"failed_attempts": 0, "locked_until": ""}
-
-    def _save_tamper_lockout(self, state: dict):
-        try:
-            with open(self._tamper_lockout_path, "w") as f:
-                json.dump(state, f)
-        except Exception as e:
-            logger.warning("Tamper lockout state save failed: %s", e)
-
     def _verify_tamper_password(self, password: str) -> tuple[bool, str]:
-        """Kept separate from tamper_lockout state so a fresh APPLY_POLICY
-        push (which overwrites cfg.policy_state['tamper_protection'] wholesale)
-        never resets an in-progress lockout."""
-        tp = self._cfg.policy_state.get("tamper_protection", {})
-        if not tp.get("password_set") or not tp.get("protect_stop", True):
-            return True, "no admin password configured"
-        if bcrypt is None:
-            return False, "bcrypt unavailable on this build — stop blocked for safety"
-
-        lockout = self._load_tamper_lockout()
-        locked_until = lockout.get("locked_until", "")
-        if locked_until:
-            try:
-                if datetime.fromisoformat(locked_until) > datetime.utcnow():
-                    return False, f"locked out until {locked_until} (too many failed attempts)"
-            except Exception:
-                pass
-
-        stored_hash = tp.get("password_hash", "")
-        ok = False
-        if stored_hash and password:
-            try:
-                ok = bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8"))
-            except Exception:
-                ok = False
-
-        if ok:
-            self._save_tamper_lockout({"failed_attempts": 0, "locked_until": ""})
-            return True, "password verified"
-
-        max_attempts     = tp.get("lockout_attempts", 5)
-        lockout_minutes  = tp.get("lockout_minutes", 15)
-        attempts = lockout.get("failed_attempts", 0) + 1
-        new_state = {"failed_attempts": attempts, "locked_until": ""}
-        if attempts >= max_attempts:
-            new_state["locked_until"] = (datetime.utcnow() + timedelta(minutes=lockout_minutes)).isoformat()
-        self._save_tamper_lockout(new_state)
-        return False, f"incorrect password (attempt {attempts}/{max_attempts})"
+        """Delegates to the module-level standalone version so the live
+        (Stop, over IPC) and offline (Start, via elevated CLI — see
+        _cli_verify_and_start) verification paths share one implementation.
+        Reads policy_state.json fresh from disk rather than self._cfg.
+        policy_state — APPLY_POLICY already persists every in-memory update
+        to that same file, so this is equivalent, not stale."""
+        return _verify_tamper_password_standalone(self._cfg.edr_home, password)
 
 
 # ── System-tray IPC listener ────────────────────────────────────────────────────
@@ -4678,8 +4752,22 @@ def handle_signal(signum, frame):
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="CyCentra 360 CyEDR Agent")
-    parser.add_argument("--config", required=True, help="Path to config.json")
+    parser.add_argument("--config", help="Path to config.json")
+    parser.add_argument("--verify-and-start", metavar="EDR_HOME",
+                         help="One-shot mode: verify the tamper password and start the "
+                              "service, no long-running agent. Used by the tray's Start "
+                              "action (see _cli_verify_and_start); run elevated.")
+    parser.add_argument("--password-file",
+                         help="Path to a file holding the tamper password, used with "
+                              "--verify-and-start; the file is deleted after being read.")
     args = parser.parse_args()
+
+    if args.verify_and_start:
+        _cli_verify_and_start(args.verify_and_start, args.password_file)
+        return
+
+    if not args.config:
+        parser.error("--config is required unless --verify-and-start is given")
 
     cfg = Config(args.config)
     setup_logging(cfg.log_file)
