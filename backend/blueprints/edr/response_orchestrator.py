@@ -221,6 +221,11 @@ def ensure_tables(db_url: str) -> None:
         # Stable hardware UUID — deduplicates agents across reinstalls / hostname changes
         "ALTER TABLE edr_agents ADD COLUMN IF NOT EXISTS hardware_uuid TEXT",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_edr_agents_hw_uuid ON edr_agents(hardware_uuid) WHERE hardware_uuid IS NOT NULL",
+        # The agent script's own AGENT_VERSION as self-reported on each heartbeat
+        # (distinct from `version`, a static protocol-format constant that never
+        # changes). Previously sent on every heartbeat but never persisted, so
+        # the fleet UI's "CyEDR Agent Build" field always rendered blank.
+        "ALTER TABLE edr_agents ADD COLUMN IF NOT EXISTS agent_version TEXT",
     ]
     try:
         conn = _get_db(db_url)

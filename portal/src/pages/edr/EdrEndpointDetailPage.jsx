@@ -351,7 +351,7 @@ export default function EdrEndpointDetailPage({ agentId }) {
         <Stat label="High" value={highCount} color={highCount>0?"#ff8c00":undefined}/>
         <Stat label="Open" value={openCount} color={openCount>0?"#f5c518":undefined}/>
         <Stat label="Commands Issued" value={commands.length}/>
-        <Stat label="EDR Version" value={a.agent_version||"—"}
+        <Stat label="CyEDR Agent Build" value={a.agent_version||"—"}
           title="Agent module version — bumped only when the agent/tray code itself changes, independent of the platform release version shown in Settings"/>
       </div>
 
@@ -366,7 +366,7 @@ export default function EdrEndpointDetailPage({ agentId }) {
             ["OS Version", a.os_version],
             ["Asset Type", a.asset_type],
             ["Domain", a.domain||"—"],
-            ["Agent Version", a.agent_version||"—",
+            ["CyEDR Agent Build", a.agent_version||"—",
               "Agent module version — bumped only when the agent/tray code itself changes, independent of the platform release version shown in Settings"],
             ["Isolation State", a.isolation_state?.replace("_"," ")],
             ["Status", a.status],

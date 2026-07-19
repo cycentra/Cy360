@@ -533,7 +533,7 @@ function AgentDetailModal({ agent, onClose, onAction }) {
                   ["Asset Type",      agent.asset_type?.replace(/_/g, " ").toUpperCase() || "—"],
                   ["IP Address",      agent.agent_ip || "—"],
                   ["OS",              agent.os_type || "—"],
-                  ["Version",         agent.version || "—",
+                  ["CyEDR Agent Build", agent.agent_version || "—",
                     "Agent module version — bumped only when the agent/tray code itself changes, independent of the platform release version shown in Settings"],
                   ["Open Detections", agent.open_detections ?? 0],
                   ["Pending Commands", agent.pending_commands ?? 0],

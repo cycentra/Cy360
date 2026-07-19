@@ -279,23 +279,53 @@ jobs:
       - name: Download CyEDR agent + tray binaries (macOS / Windows) from release assets
         # Pulled from the draft release's Release assets (see create-release-draft),
         # not Actions Artifacts — sidesteps the Actions artifact storage quota
-        # entirely. Best-effort: if macOS/Windows haven't uploaded yet, or their
-        # job failed/never got a runner, this release just ships without them and
-        # the next one picks them up — never blocks the Linux release.
+        # entirely. Best-effort: if macOS/Windows genuinely never finish (stuck
+        # queued — the v1.0.233 incident), this release still ships without them
+        # and the next one picks them up — never blocks indefinitely.
+        #
+        # BUT a single immediate check here (the old behavior) always lost the
+        # race against build-edr-macos/build-edr-windows in the common case —
+        # this job reaches this step (after npm build, wheel build, SHC compile,
+        # and the QEMU-emulated Linux EDR cross-build above) well before a macOS
+        # runner even finishes allocating, let alone building+uploading. That
+        # made "ships without macOS binaries" the default outcome, not the rare
+        # fallback it was designed to be — this is why endpoints kept getting
+        # `Tray binary not available for MACOS/arm64`. Poll instead of checking
+        # once: bounded at 8 minutes (under both jobs' 10-minute timeout, so a
+        # genuinely-stuck runner still falls through to the warning below and
+        # never re-creates the 18-hour hang), retrying every 20s so a normally-
+        # timed macOS/Windows build actually gets caught.
         if: steps.version.outputs.is_release == 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p edr-bin
-          gh release download "${{ steps.version.outputs.tag }}" \
-            --repo cycentra/Cy360 --dir edr-bin \
-            --pattern 'cyedr-agent-macos-*' \
-            --pattern 'cyedr-tray-macos-*' \
-            --pattern 'cyedr-agent-windows-x64.exe' \
-            --pattern 'cyedr-tray-windows-x64.exe' \
-            --clobber \
-            || echo "::warning::No macOS/Windows EDR release assets available yet"
+          TAG="${{ steps.version.outputs.tag }}"
+          DEADLINE=$(( $(date +%s) + 8*60 ))
+          while true; do
+            gh release download "$TAG" \
+              --repo cycentra/Cy360 --dir edr-bin \
+              --pattern 'cyedr-agent-macos-*' \
+              --pattern 'cyedr-tray-macos-*' \
+              --pattern 'cyedr-agent-windows-x64.exe' \
+              --pattern 'cyedr-tray-windows-x64.exe' \
+              --clobber 2>/dev/null || true
+
+            _got_macos=$(ls edr-bin/cyedr-agent-macos-* edr-bin/cyedr-tray-macos-* 2>/dev/null | wc -l)
+            _got_win=$(ls edr-bin/cyedr-agent-windows-x64.exe edr-bin/cyedr-tray-windows-x64.exe 2>/dev/null | wc -l)
+            # 4 = both macOS arches × agent+tray; 2 = windows agent+tray
+            if [[ "$_got_macos" -ge 4 && "$_got_win" -ge 2 ]]; then
+              echo "All macOS + Windows EDR assets present."
+              break
+            fi
+            if [[ $(date +%s) -ge $DEADLINE ]]; then
+              echo "::warning::Timed out waiting for macOS/Windows EDR release assets (macos=${_got_macos}/4, windows=${_got_win}/2) — shipping with what's available; next release picks up the rest."
+              break
+            fi
+            echo "macOS/Windows EDR assets not all present yet (macos=${_got_macos}/4, windows=${_got_win}/2) — retrying in 20s..."
+            sleep 20
+          done
 
       - name: Build customer release bundle
         run: |

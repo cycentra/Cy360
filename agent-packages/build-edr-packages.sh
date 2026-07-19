@@ -42,10 +42,25 @@ die()   { echo -e "${RED}  ✗ ${NC}$*" >&2; exit 1; }
 [[ ! -f "$AGENT_SRC" ]] && die "cyedr_agent.py not found at $AGENT_SRC"
 mkdir -p "$DEST_DIR" "$BUILD_DIR"
 
+# macOS agent/tray binaries cannot be produced by Docker cross-compilation
+# (PyInstaller bundles native Mach-O + the target OS's own Python — there is
+# no cross-compiler for that). They can only be built by running this script
+# ON a Mac. When that's the case, HOST_MAC_ARCH_LABEL builds just the host's
+# own arch natively below; the other mac arch still needs its own Mac host.
+HOST_OS="$(uname -s)"
+HOST_MAC_ARCH_LABEL=""
+if [[ "$HOST_OS" == "Darwin" ]]; then
+    case "$(uname -m)" in
+        arm64)  HOST_MAC_ARCH_LABEL="arm64" ;;
+        x86_64) HOST_MAC_ARCH_LABEL="intel64" ;;
+    esac
+fi
+
 info "CyCentra 360 — CyEDR Package Builder"
 info "Version   : ${CY360_VERSION}"
 info "Agent src : ${AGENT_SRC}"
 info "Output    : ${DEST_DIR}"
+[[ -n "$HOST_MAC_ARCH_LABEL" ]] && info "Host      : macOS/${HOST_MAC_ARCH_LABEL} — will build native macOS agent+tray binaries for this arch"
 echo
 
 # ── Requirements spec for PyInstaller ─────────────────────────────────────────
@@ -149,15 +164,32 @@ build_in_docker \
     "linux/arm64" \
     "cyedr-agent-linux-aarch64"
 
-# ── macOS: note — true macOS builds require macOS host (no Docker cross-compile)
-# Using GitHub Actions / macOS runner is recommended for PKG builds.
-# This section creates placeholder stubs so the build report is complete.
+# ── macOS: no Docker cross-compile is possible (PyInstaller bundles a native
+# Mach-O binary + the host's own Python) — this only produces a real binary
+# when the script itself is run on a Mac, and only for that Mac's own arch.
+# GitHub Actions macOS runners would be the other option; none exist in this
+# repo's CI today (removed).
+if [[ -n "$HOST_MAC_ARCH_LABEL" ]]; then
+    out="cyedr-agent-macos-${HOST_MAC_ARCH_LABEL}"
+    info "Building $out  (native macOS build)..."
+    (
+        cd "$BUILD_DIR"
+        python3 -m venv .venv-agent-macos
+        source .venv-agent-macos/bin/activate
+        pip install -q --upgrade pip
+        pip install -q -r requirements.txt
+        pyinstaller cyedr_agent.spec --clean --noconfirm -y \
+            --distpath "$BUILD_DIR/dist-agent-macos" --workpath "$BUILD_DIR/work-agent-macos"
+        deactivate
+    ) && mv "$BUILD_DIR/dist-agent-macos/cyedr-agent" "$BUILD_DIR/$out" \
+      && ok "$out built" || { warn "$out failed — see PyInstaller output above"; ERRORS=$((ERRORS+1)); }
+fi
 for macos_arch in "intel64" "arm64"; do
     out="cyedr-agent-macos-${macos_arch}"
     if [[ -f "$BUILD_DIR/$out" ]]; then
-        ok "$out (pre-built, copying)"
+        ok "$out (built, copying)"
     else
-        warn "$out skipped — macOS PKG requires macOS build host (use GitHub Actions macOS runner)"
+        warn "$out skipped — macOS binaries require running this script on an actual macOS/${macos_arch} host (no Docker cross-compile for native Mach-O). Build it there, then copy the resulting file into ${DEST_DIR}/ on the platform server."
         ERRORS=$((ERRORS+1))
     fi
 done
@@ -178,6 +210,51 @@ pyinstaller>=6.0
 pystray>=0.19
 Pillow>=10.0
 EOF
+
+    # macOS uses rumps (cyedr_tray.py's run_rumps(), see OS_TYPE=="DARWIN"
+    # branch), NOT pystray — pystray has no usable macOS menu-bar backend.
+    # This requirements/spec pair was previously missing entirely: even
+    # running this script by hand on a Mac per the old warning's own advice
+    # would have failed, since nothing here ever declared or bundled rumps.
+    cat > "$BUILD_DIR/requirements-tray-macos.txt" << 'EOF'
+pyinstaller>=6.0
+rumps>=0.4.0
+EOF
+
+    cat > "$BUILD_DIR/cyedr_tray_macos.spec" << 'SPEC'
+# -*- mode: python ; coding: utf-8 -*-
+a = Analysis(
+    ['cyedr_tray.py'],
+    pathex=[],
+    binaries=[],
+    datas=[],
+    hiddenimports=['rumps'],
+    hookspath=[],
+    runtime_hooks=[],
+    excludes=['pystray', 'PIL', 'matplotlib', 'numpy', 'scipy', 'test'],
+    noarchive=False,
+)
+pyz = PYZ(a.pure)
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name='cyedr-tray',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=True,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+SPEC
 
     cat > "$BUILD_DIR/cyedr_tray.spec" << 'SPEC'
 # -*- mode: python ; coding: utf-8 -*-
@@ -256,15 +333,29 @@ SPEC
     build_tray_in_docker "linux/amd64" "cyedr-tray-linux-x86_64"
     build_tray_in_docker "linux/arm64" "cyedr-tray-linux-aarch64"
 
-    # macOS tray (rumps) and Windows tray (pystray) both require native build
-    # hosts, same limitation as the agent binary above — no Docker cross-compile
-    # for a GUI toolkit. Use GitHub Actions macOS/Windows runners.
+    # macOS tray (rumps) requires a native macOS build host, same limitation
+    # as the agent binary above — no Docker cross-compile for a GUI toolkit.
+    if [[ -n "$HOST_MAC_ARCH_LABEL" ]]; then
+        out="cyedr-tray-macos-${HOST_MAC_ARCH_LABEL}"
+        info "Building $out  (native macOS build, rumps)..."
+        (
+            cd "$BUILD_DIR"
+            python3 -m venv .venv-tray-macos
+            source .venv-tray-macos/bin/activate
+            pip install -q --upgrade pip
+            pip install -q -r requirements-tray-macos.txt
+            pyinstaller cyedr_tray_macos.spec --clean --noconfirm -y \
+                --distpath "$BUILD_DIR/dist-tray-macos" --workpath "$BUILD_DIR/work-tray-macos"
+            deactivate
+        ) && mv "$BUILD_DIR/dist-tray-macos/cyedr-tray" "$BUILD_DIR/$out" \
+          && ok "$out built" || { warn "$out failed — see PyInstaller output above"; ERRORS=$((ERRORS+1)); }
+    fi
     for macos_arch in "intel64" "arm64"; do
         out="cyedr-tray-macos-${macos_arch}"
         if [[ -f "$BUILD_DIR/$out" ]]; then
-            ok "$out (pre-built, copying)"
+            ok "$out (built, copying)"
         else
-            warn "$out skipped — macOS tray requires macOS build host + rumps (use GitHub Actions macOS runner)"
+            warn "$out skipped — macOS/${macos_arch} tray binary requires running this script on an actual macOS/${macos_arch} host (needs rumps, no Docker cross-compile). Build it there, then copy the resulting file into ${DEST_DIR}/ on the platform server."
             ERRORS=$((ERRORS+1))
         fi
     done
@@ -435,9 +526,15 @@ docker run --rm --platform linux/amd64 \
 fi   # SKIP_DEB_RPM
 
 # ── Copy binaries to output ────────────────────────────────────────────────────
+# NOTE: macOS agent binaries used to never exist (placeholder-only build
+# above), so their absence here was invisible. Now that a native macOS host
+# actually produces cyedr-agent-macos-<arch>, it must be copied out too, or
+# a real build silently never reaches DEST_DIR/the installer.
 for bin in \
     "cyedr-agent-linux-x86_64" \
-    "cyedr-agent-linux-aarch64"; do
+    "cyedr-agent-linux-aarch64" \
+    "cyedr-agent-macos-intel64" \
+    "cyedr-agent-macos-arm64"; do
     [[ -f "$BUILD_DIR/$bin" ]] && cp "$BUILD_DIR/$bin" "$DEST_DIR/$bin" && ok "Binary: $bin"
 done
 
@@ -445,6 +542,7 @@ done
 chmod -R 644 "$DEST_DIR"/* 2>/dev/null || true
 chmod 755 "$DEST_DIR" "$DEST_DIR"/*.rpm "$DEST_DIR"/*.deb 2>/dev/null || true
 find "$DEST_DIR" -name "cyedr-agent-linux-*" -exec chmod 755 {} \; 2>/dev/null || true
+find "$DEST_DIR" -name "cyedr-agent-macos-*" -exec chmod 755 {} \; 2>/dev/null || true
 find "$DEST_DIR" -name "cyedr-tray-*" -exec chmod 755 {} \; 2>/dev/null || true
 chown -R www-data:www-data "$DEST_DIR" 2>/dev/null || true
 

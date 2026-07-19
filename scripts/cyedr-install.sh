@@ -70,7 +70,14 @@ banner() {
   ╚═════╝   ╚╝╚══════╝╚══════╝╚═════╝ ╚═╝  ╚═╝
 EOF
     echo -e "${NC}${GRN}  CyCentra 360 — CyEDR Endpoint Defense  |  FROM SIGNALS TO STRENGTH${NC}"
-    echo -e "${DIM}  Agent version: v${CYEDR_AGENT_VERSION}${NC}"
+    # CyEDR Agent Build != platform release version by design — the agent
+    # script's own version only bumps when agent/tray code changes, not on
+    # every platform release (syncing the two caused a self-update restart
+    # loop in the past, see AGENT_VERSION comment in agent/cyedr_agent.py).
+    # Platform version is echoed separately in print_summary() once
+    # PLATFORM_URL is known, so the two numbers are never shown looking like
+    # a single "version" that should match.
+    echo -e "${DIM}  CyEDR Agent Build: v${CYEDR_AGENT_VERSION}${NC}"
     echo -e "${BLU}  ─────────────────────────────────────────────────────────────────${NC}"
     echo ""
 }
@@ -837,6 +844,15 @@ print_summary() {
     echo -e "${GRN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     echo "  Platform:   $PLATFORM_URL"
+    # Best-effort — shown side by side, clearly labeled, so nobody mistakes
+    # the agent build number for a platform-version mismatch (they're
+    # intentionally different counters, see banner()/AGENT_VERSION comment
+    # in agent/cyedr_agent.py). Never fails the install if unreachable.
+    _PLATFORM_VER=$(curl -fsSL --max-time 10 "$PLATFORM_URL/api/system/version" 2>/dev/null \
+        | grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+        | sed -E 's/.*"([^"]+)"$/\1/')
+    echo "  Platform version:   ${_PLATFORM_VER:-unknown}"
+    echo "  CyEDR Agent Build:  v${CYEDR_AGENT_VERSION}  (independent counter — only bumps when agent/tray code changes)"
     echo "  Agent home: $EDR_HOME"
     echo "  Logs:       $EDR_HOME/logs/cyedr_agent.log"
     if [[ "$OS_KEY" == "LINUX" ]]; then

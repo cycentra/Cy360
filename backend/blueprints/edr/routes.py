@@ -378,6 +378,7 @@ def agent_heartbeat(agent_id):
 
     body          = request.get_json(force=True, silent=True) or {}
     version       = body.get("version", "")
+    reported_agent_version = body.get("agent_version", "")
     ip            = body.get("agent_ip", "")
     gateway_macs  = body.get("gateway_macs", [])
     neighbors     = body.get("arp_neighbors", [])
@@ -414,6 +415,7 @@ def agent_heartbeat(agent_id):
                 """
                 UPDATE edr_agents
                 SET last_seen=NOW(), version=%s,
+                    agent_version=COALESCE(NULLIF(%s,''), agent_version),
                     agent_ip=COALESCE(NULLIF(%s,''), agent_ip),
                     arp_enabled=%s,
                     current_network_zone=%s,
@@ -424,7 +426,7 @@ def agent_heartbeat(agent_id):
                 WHERE agent_id=%s
                 """,
                 [
-                    version, ip, arp_enabled, network_zone,
+                    version, reported_agent_version, ip, arp_enabled, network_zone,
                     gateway_macs[0].get("mac") if gateway_macs else None,
                     arp_enabled_until or None,
                     probe_active,
