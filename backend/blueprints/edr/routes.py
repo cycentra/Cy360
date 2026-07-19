@@ -24,7 +24,7 @@ import re
 import uuid
 import secrets
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 import bcrypt
@@ -34,7 +34,13 @@ from flask import Blueprint, jsonify, request, session, make_response, send_file
 
 from blueprints.rbac.manager import get_user_role
 from core.helpers import add_cors_headers, auth_event
-from core.config import CYCENTRA_DB_URL
+from core.config import CYCENTRA_DB_URL, AI_GATEWAY_SHARED_SECRET
+
+try:
+    import jwt as pyjwt
+    _JWT_AVAILABLE = True
+except ImportError:
+    _JWT_AVAILABLE = False
 
 from .normalizer import normalise_telemetry
 from .response_orchestrator import (
@@ -2380,6 +2386,85 @@ def edr_ioc_feed():
         "ips":          ips,
         "domains":      [],
         "generated_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AI GATEWAY TOKEN — Phase 1 (see docs/AI_TRAFFIC_GATEWAY_PLAN.md)
+# Agents with an enabled ai_traffic_routing policy poll this hourly to get a
+# short-lived signed token proving to CyMind's Gateway that a request came
+# from a real, enrolled Cy360 agent. No license/feature gate in this phase —
+# provenance only, not entitlement. CyMind validates the token locally
+# against the same AI_GATEWAY_SHARED_SECRET; no callback to Cy360 is made,
+# so redirection keeps working even if Cy360 is briefly unreachable.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+AI_GATEWAY_TOKEN_TTL_SECONDS = 3600  # 1h; AIGatewayTokenRefresher on the agent refreshes hourly
+
+
+@edr_bp.route("/ai-gateway-token", methods=["OPTIONS"])
+def edr_ai_gateway_token_options():
+    return add_cors_headers(make_response("", 204))
+
+
+@edr_bp.route("/ai-gateway-token", methods=["GET"])
+def edr_ai_gateway_token():
+    """
+    Agent-facing: mint a short-lived HS256 token this agent can present to
+    the CyMind Gateway as proof it's a real, enrolled Cy360 agent.
+    Auth: Bearer <enrollment_token> — any active agent token is accepted.
+    Only mints a token if this agent has an *enabled* ai_traffic_routing
+    policy — no point issuing one otherwise, and it keeps issuance scoped
+    to agents actually meant to use the gateway.
+    """
+    if not _JWT_AVAILABLE:
+        return jsonify({"error": "Server missing PyJWT dependency"}), 500
+    if not AI_GATEWAY_SHARED_SECRET:
+        return jsonify({"error": "AI Gateway not configured on this server"}), 503
+
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return jsonify({"error": "Bearer token required"}), 401
+    token = auth[7:]
+
+    agent_id = _lookup_agent_id_by_token(token)
+    if not agent_id:
+        return jsonify({"error": "Invalid or expired enrollment token"}), 401
+
+    from .policy_engine import get_agent_effective_policies
+    try:
+        policies = get_agent_effective_policies(CYCENTRA_DB_URL, agent_id)
+    except psycopg2.Error as exc:
+        _log.warning("ai_gateway_token: policy lookup failed: %s", exc)
+        policies = []
+
+    # A single edr_policies row may bundle several policy_types together — the
+    # config column is keyed by type (see policy_engine.create_policy's
+    # `merged[t] = {...}` shape) — so scan every assigned policy's config for
+    # an ai_traffic_routing entry rather than filtering on policy_type/
+    # policy_types, which only reflects the row's *first* type.
+    routing_cfg = None
+    for p in policies:
+        cfg = (p.get("config") or {}).get("ai_traffic_routing")
+        if cfg and cfg.get("enabled"):
+            routing_cfg = cfg
+            break
+
+    if not routing_cfg:
+        return jsonify({"error": "No enabled ai_traffic_routing policy for this agent"}), 403
+
+    now = datetime.now(timezone.utc)
+    claims = {
+        "agent_id": agent_id,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=AI_GATEWAY_TOKEN_TTL_SECONDS)).timestamp()),
+    }
+    gw_token = pyjwt.encode(claims, AI_GATEWAY_SHARED_SECRET, algorithm="HS256")
+
+    return jsonify({
+        "token":       gw_token,
+        "expires_in":  AI_GATEWAY_TOKEN_TTL_SECONDS,
+        "gateway_url": routing_cfg.get("gateway_url", ""),
     })
 
 

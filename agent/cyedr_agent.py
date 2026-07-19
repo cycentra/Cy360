@@ -119,6 +119,97 @@ _CRON_DEEPSCAN   = "/etc/cron.d/cyedr-deepscan"
 _CRON_UPDATE     = "/etc/cron.d/cyedr-update"
 _PF_ANCHOR       = "/etc/pf.anchors/cyedr_policy"
 
+# ── AI Traffic Routing (ai_traffic_routing policy) ─────────────────────────────
+# Phase 1 (see docs/AI_TRAFFIC_GATEWAY_PLAN.md): redirect OpenAI/Anthropic
+# SDK-compatible tools to the CyMind Gateway via the env vars their client
+# libraries already honor (OPENAI_BASE_URL/OPENAI_API_KEY, ANTHROPIC_BASE_URL/
+# ANTHROPIC_API_KEY) — no TLS interception, no per-app config-file parsing.
+# The "API key" written IS the Cy360-minted gateway token; CyMind validates it
+# straight off the tool's own Authorization header. Deliberately scoped to
+# apps that read these SDK-standard env vars — tools with no such override
+# (e.g. GitHub Copilot, the built-in JetBrains AI Assistant) aren't reachable
+# this way and are out of scope for this phase.
+_AI_GATEWAY_ENV_KEYS  = ["OPENAI_BASE_URL", "OPENAI_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY"]
+_AI_GATEWAY_LINUX_ENV_FILE = "/etc/profile.d/99-cycentra-ai-gateway.sh"
+_AI_GATEWAY_ENV_BEGIN = "# BEGIN CyEDR-AI-GATEWAY (managed — do not edit)"
+_AI_GATEWAY_ENV_END   = "# END CyEDR-AI-GATEWAY"
+
+
+def _macos_console_uid() -> int | None:
+    """UID of the currently logged-in GUI (Aqua) session, or None if headless."""
+    try:
+        out = subprocess.run(["stat", "-f", "%u", "/dev/console"],
+                              capture_output=True, text=True, timeout=5)
+        if out.returncode == 0 and out.stdout.strip().isdigit():
+            return int(out.stdout.strip())
+    except Exception:
+        pass
+    return None
+
+
+def _broadcast_windows_env_change():
+    """Tell already-running Explorer/apps a machine env var changed (WM_SETTINGCHANGE).
+    New processes pick up the new value regardless; this just avoids requiring a reboot."""
+    try:
+        import ctypes
+        result = ctypes.c_long()
+        ctypes.windll.user32.SendMessageTimeoutW(
+            0xFFFF, 0x1A, 0, "Environment", 0x0002, 5000, ctypes.byref(result))
+    except Exception:
+        pass
+
+
+def _set_system_env_vars(env_map: dict):
+    """Best-effort persistent env var write, per platform. GUI apps already
+    running before this call need to be restarted to see the new value —
+    true of any env-var-based redirect mechanism, not specific to this one."""
+    try:
+        if OS_TYPE == "LINUX":
+            lines = [_AI_GATEWAY_ENV_BEGIN] + [f'export {k}="{v}"' for k, v in env_map.items()] + [_AI_GATEWAY_ENV_END]
+            with open(_AI_GATEWAY_LINUX_ENV_FILE, "w") as f:
+                f.write("\n".join(lines) + "\n")
+            os.chmod(_AI_GATEWAY_LINUX_ENV_FILE, 0o644)
+        elif OS_TYPE == "DARWIN":
+            uid = _macos_console_uid()
+            if uid is not None:
+                for k, v in env_map.items():
+                    subprocess.run(["launchctl", "asuser", str(uid), "launchctl", "setenv", k, v],
+                                    capture_output=True, timeout=5)
+        else:  # WINDOWS
+            for k, v in env_map.items():
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                     f'[Environment]::SetEnvironmentVariable("{k}", "{v}", "Machine")'],
+                    capture_output=True, timeout=15,
+                )
+            _broadcast_windows_env_change()
+    except Exception as exc:
+        logger.warning("_set_system_env_vars failed: %s", exc)
+
+
+def _clear_system_env_vars():
+    """Revert whatever _set_system_env_vars wrote — called on policy disable."""
+    try:
+        if OS_TYPE == "LINUX":
+            if os.path.exists(_AI_GATEWAY_LINUX_ENV_FILE):
+                os.remove(_AI_GATEWAY_LINUX_ENV_FILE)
+        elif OS_TYPE == "DARWIN":
+            uid = _macos_console_uid()
+            if uid is not None:
+                for k in _AI_GATEWAY_ENV_KEYS:
+                    subprocess.run(["launchctl", "asuser", str(uid), "launchctl", "unsetenv", k],
+                                    capture_output=True, timeout=5)
+        else:  # WINDOWS
+            for k in _AI_GATEWAY_ENV_KEYS:
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                     f'[Environment]::SetEnvironmentVariable("{k}", $null, "Machine")'],
+                    capture_output=True, timeout=15,
+                )
+            _broadcast_windows_env_change()
+    except Exception as exc:
+        logger.warning("_clear_system_env_vars failed: %s", exc)
+
 # ── System-tray local IPC ───────────────────────────────────────────────────────
 # The agent runs as a privileged headless service (root LaunchDaemon / SYSTEM
 # service) with no GUI session of its own. cyedr_tray.py is a separate,
@@ -2004,11 +2095,16 @@ class ResponseExecutor:
         self._policy_state_path  = os.path.join(cfg.edr_home, "policy_state.json")
         os.makedirs(cfg.quarantine_dir, exist_ok=True)
         self._probe_poller: "NetworkProbePoller | None" = None
+        self._ai_gateway_refresher: "AIGatewayTokenRefresher | None" = None
         self._load_policy_state()
         # Re-activate probe poller if policy was active before this restart
         probe_cfg = self._cfg.policy_state.get("network_probe", {})
         if probe_cfg.get("enabled") and self._http:
             self._start_probe_poller(probe_cfg)
+        # Re-activate AI gateway redirection if policy was active before this restart
+        ai_gw_cfg = self._cfg.policy_state.get("ai_traffic_routing", {})
+        if ai_gw_cfg.get("enabled") and ai_gw_cfg.get("gateway_url") and self._http:
+            self._start_ai_gateway_refresher(ai_gw_cfg["gateway_url"].rstrip("/"))
 
     def execute(self, cmd: dict) -> dict:
         # DB/API returns field "action"; "command_type" was a legacy alias that no longer exists
@@ -2385,6 +2481,7 @@ class ResponseExecutor:
             "isolation_exceptions": self._apply_isolation_exceptions,
             "network_probe":        self._apply_network_probe_policy,
             "tamper_protection":    self._apply_tamper_protection,
+            "ai_traffic_routing":   self._apply_ai_traffic_routing,
         }
 
         fn = _dispatch.get(policy_type)
@@ -3151,6 +3248,36 @@ class ResponseExecutor:
             self._probe_poller.join(timeout=5)
             logger.info("NetworkProbePoller stopped")
         self._probe_poller = None
+
+    # ── ai_traffic_routing ────────────────────────────────────────────────────
+
+    def _apply_ai_traffic_routing(self, cfg: dict) -> str:
+        enabled     = cfg.get("enabled", False)
+        gateway_url = (cfg.get("gateway_url") or "").rstrip("/")
+        if enabled:
+            if not gateway_url:
+                return "ai_traffic_routing: cannot start — gateway_url not set"
+            if not self._http:
+                return "ai_traffic_routing: cannot start — HTTP session not available (upgrade agent)"
+            self._start_ai_gateway_refresher(gateway_url)
+            return f"ai_traffic_routing: started (gateway={gateway_url})"
+        else:
+            self._stop_ai_gateway_refresher()
+            return "ai_traffic_routing: stopped"
+
+    def _start_ai_gateway_refresher(self, gateway_url: str):
+        self._stop_ai_gateway_refresher()
+        self._ai_gateway_refresher = AIGatewayTokenRefresher(self._http, self._cfg, gateway_url)
+        self._ai_gateway_refresher.start()
+        logger.info("AIGatewayTokenRefresher started for gateway_url=%s", gateway_url)
+
+    def _stop_ai_gateway_refresher(self):
+        if self._ai_gateway_refresher and self._ai_gateway_refresher.is_alive():
+            self._ai_gateway_refresher.stop()
+            self._ai_gateway_refresher.join(timeout=5)
+            logger.info("AIGatewayTokenRefresher stopped")
+        self._ai_gateway_refresher = None
+        _clear_system_env_vars()
 
     # ── tamper_protection ─────────────────────────────────────────────────────
     # Gates the system-tray app's Stop/Exit CyEDR action. Only password_hash
@@ -4161,6 +4288,71 @@ class ScaScanner(threading.Thread):
 
 
 # ── Network Probe Poller ───────────────────────────────────────────────────────
+class AIGatewayTokenRefresher(threading.Thread):
+    """
+    Activated only when the 'ai_traffic_routing' policy is enabled for this
+    agent (see docs/AI_TRAFFIC_GATEWAY_PLAN.md). Fetches a short-lived signed
+    token from GET /api/edr/ai-gateway-token and points OpenAI/Anthropic
+    SDK-compatible tools at the CyMind Gateway via OPENAI_BASE_URL/
+    OPENAI_API_KEY + ANTHROPIC_BASE_URL/ANTHROPIC_API_KEY. The "API key" IS
+    the Cy360-minted token — CyMind's gateway validates it straight off the
+    tool's own Authorization header, no separate side channel needed.
+
+    Refreshes 5 minutes before expiry so tools never see a stale/expired
+    token. The last-written env values keep working right up until the
+    token's own exp claim cuts them off, even if Cy360 is briefly
+    unreachable — this is what makes redirection offline-tolerant.
+    """
+
+    MIN_REFRESH_INTERVAL = 60    # never hammer the endpoint faster than this
+    REFRESH_MARGIN        = 300  # refresh 5 min before the token expires
+
+    def __init__(self, http: "requests.Session", cfg: Config, gateway_url: str):
+        super().__init__(daemon=True, name="AIGatewayTokenRefresher")
+        self._http        = http
+        self._cfg         = cfg
+        self._gateway_url = gateway_url
+        self._stop         = threading.Event()
+
+    def stop(self):
+        self._stop.set()
+
+    def run(self):
+        logger.info("AIGatewayTokenRefresher running (gateway=%s)", self._gateway_url)
+        while not self._stop.is_set():
+            interval = self.MIN_REFRESH_INTERVAL
+            try:
+                interval = self._refresh()
+            except Exception as exc:
+                logger.warning("AIGatewayTokenRefresher error: %s", exc)
+            self._stop.wait(max(self.MIN_REFRESH_INTERVAL, interval))
+
+    def _refresh(self) -> int:
+        resp = self._http.get(
+            f"{self._cfg.platform_url}/api/edr/ai-gateway-token",
+            timeout=30,
+        )
+        if not resp.ok:
+            logger.debug("ai-gateway-token fetch returned %s", resp.status_code)
+            return self.MIN_REFRESH_INTERVAL
+
+        data        = resp.json()
+        token       = data.get("token", "")
+        expires_in  = int(data.get("expires_in", 3600))
+        gateway_url = (data.get("gateway_url") or self._gateway_url).rstrip("/")
+        if not token or not gateway_url:
+            return self.MIN_REFRESH_INTERVAL
+
+        _set_system_env_vars({
+            "OPENAI_BASE_URL":    gateway_url,
+            "OPENAI_API_KEY":     token,
+            "ANTHROPIC_BASE_URL": gateway_url,
+            "ANTHROPIC_API_KEY":  token,
+        })
+        logger.info("AI Gateway token refreshed, expires in %ds", expires_in)
+        return max(self.MIN_REFRESH_INTERVAL, expires_in - self.REFRESH_MARGIN)
+
+
 class NetworkProbePoller(threading.Thread):
     """
     Activated only when the 'network_probe' policy is deployed to this agent.
