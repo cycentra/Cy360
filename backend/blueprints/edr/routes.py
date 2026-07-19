@@ -1796,6 +1796,36 @@ def installer_commands():
     })
 
 
+@edr_bp.route("/installer/uninstall-commands", methods=["GET"])
+@require_admin
+def installer_uninstall_commands():
+    """
+    Return copy-paste force-uninstall commands per platform. No deployment
+    token needed — uninstall is purely local cleanup, it never enrolls or
+    talks to the platform, so unlike /installer/commands there is no
+    per-token/per-arch variation to generate.
+    """
+    from core.config import BASE_DOMAIN
+    base = f"https://cy360.{BASE_DOMAIN}"
+    u    = f"{base}/api/edr"
+
+    bash_cmd = f'curl -fsSL {u}/installer/uninstall-unix | sudo bash -s -- --force'
+    # iwr|iex can't reliably bind a script's own param() switches (there is no
+    # argument-passing channel through a plain Invoke-Expression pipe), so —
+    # unlike the install one-liner — this downloads to a temp file first and
+    # invokes it directly with -Force, which always binds correctly.
+    ps1_cmd = (
+        f'$u="{u}/installer/uninstall-win"; $f="$env:TEMP\\cyedr-uninstall.ps1"; '
+        f'Invoke-WebRequest -Uri $u -OutFile $f -UseBasicParsing; & $f -Force'
+    )
+
+    return jsonify({
+        "windows": {"powershell": ps1_cmd},
+        "linux":   {"bash": bash_cmd},
+        "macos":   {"bash": bash_cmd},
+    })
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # INSTALLER ASSET ENDPOINTS
 # Serve pre-built binaries and config files to installer scripts.
@@ -1856,6 +1886,7 @@ def _require_deploy_token():
 for _ap in ("/installer/agent-bundle", "/installer/sysmon-config",
             "/installer/sysmon-exe", "/installer/yara-rules",
             "/installer/yara-exe", "/installer/unix", "/installer/win",
+            "/installer/uninstall-unix", "/installer/uninstall-win",
             "/installer/agent-py", "/installer/agent-script",
             "/installer/agent-binary", "/installer/tray-bundle"):
     edr_bp.add_url_rule(
@@ -2048,6 +2079,26 @@ def installer_win_script():
     fpath = os.path.join(_EDR_PKG_DIR, "cyedr-install.ps1")
     if not os.path.exists(fpath):
         return jsonify({"error": "Windows installer not found on platform"}), 404
+    return send_file(fpath, mimetype="text/plain")
+
+
+@edr_bp.route("/installer/uninstall-unix", methods=["GET"])
+def installer_uninstall_unix_script():
+    """Serve the CyEDR Unix force-uninstaller shell script (no auth — public endpoint,
+    same as /installer/unix — it's a static script with no embedded secrets)."""
+    fpath = os.path.join(_EDR_PKG_DIR, "cyedr-uninstall.sh")
+    if not os.path.exists(fpath):
+        return jsonify({"error": "Unix uninstaller not found on platform"}), 404
+    return send_file(fpath, mimetype="text/x-shellscript")
+
+
+@edr_bp.route("/installer/uninstall-win", methods=["GET"])
+def installer_uninstall_win_script():
+    """Serve the CyEDR Windows force-uninstaller PowerShell script (no auth —
+    public endpoint, same as /installer/win)."""
+    fpath = os.path.join(_EDR_PKG_DIR, "cyedr-uninstall.ps1")
+    if not os.path.exists(fpath):
+        return jsonify({"error": "Windows uninstaller not found on platform"}), 404
     return send_file(fpath, mimetype="text/plain")
 
 

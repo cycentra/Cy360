@@ -330,8 +330,10 @@ jobs:
           cp agent/cyedr_agent.py cycentra-release/agent/
           cp agent/cyedr_tray.py  cycentra-release/agent/
           mkdir -p cycentra-release/scripts
-          cp scripts/cyedr-install.sh  cycentra-release/scripts/
-          cp scripts/cyedr-install.ps1 cycentra-release/scripts/
+          cp scripts/cyedr-install.sh      cycentra-release/scripts/
+          cp scripts/cyedr-install.ps1     cycentra-release/scripts/
+          cp scripts/cyedr-uninstall.sh    cycentra-release/scripts/
+          cp scripts/cyedr-uninstall.ps1   cycentra-release/scripts/
 
           # Include agent packages so servers never depend on packages.wazuh.com being reachable.
           # setup.sh copies these to /var/lib/cycentra-agent-packages/ during install/update.

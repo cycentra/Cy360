@@ -533,16 +533,17 @@ function AgentDetailModal({ agent, onClose, onAction }) {
                   ["Asset Type",      agent.asset_type?.replace(/_/g, " ").toUpperCase() || "—"],
                   ["IP Address",      agent.agent_ip || "—"],
                   ["OS",              agent.os_type || "—"],
-                  ["Version",         agent.version || "—"],
+                  ["Version",         agent.version || "—",
+                    "Agent module version — bumped only when the agent/tray code itself changes, independent of the platform release version shown in Settings"],
                   ["Open Detections", agent.open_detections ?? 0],
                   ["Pending Commands", agent.pending_commands ?? 0],
                   ["Network Zone",    agent.current_network_zone || "Unknown / Roaming"],
                   ["ARP Discovery",   agent.arp_enabled ? "ACTIVE" : "BLOCKED"],
                   ["Last Seen",       agent.last_seen ? new Date(agent.last_seen).toLocaleString() : "Never"],
                   ["Isolation State", agent.isolation_state || "normal"],
-                ].map(([label, value]) => (
+                ].map(([label, value, hint]) => (
                   <div key={label}>
-                    <div style={{ fontSize: 10, color: "#555", marginBottom: 3 }}>{label}</div>
+                    <div style={{ fontSize: 10, color: "#555", marginBottom: 3 }} title={hint}>{label}{hint && " ⓘ"}</div>
                     <div style={{ fontSize: 13, color: "#b0b8c8", fontWeight: 600 }}>{String(value)}</div>
                   </div>
                 ))}

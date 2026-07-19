@@ -801,7 +801,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
               return (
                 <div key={i} style={{ display:"flex", gap:8, alignItems:"center" }}>
                   <span style={{ width:6, height:6, borderRadius:"50%", background:cfg.color, flexShrink:0 }}/>
-                  <span style={{ color:"rgba(255,255,255,0.5)", fontSize:11, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{v.vulnerability}</span>
+                  <span style={{ color:"rgba(255,255,255,0.5)", fontSize:11, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{typeof v.vulnerability === "string" ? v.vulnerability : String(v.vulnerability || "—")}</span>
                   {v.cvss && <span style={{ color:"rgba(255,140,0,0.5)", fontSize:9, fontFamily:"monospace", flexShrink:0 }}>CVSS {v.cvss}</span>}
                   {v.epss != null && v.epss > 0 && <span style={{ color:"rgba(255,100,100,0.6)", fontSize:9, fontFamily:"monospace", flexShrink:0 }}>EPSS {(v.epss*100).toFixed(1)}%</span>}
                 </div>
@@ -1079,7 +1079,7 @@ export function DashboardPage({ assets, data, stats, installedModules, setActive
                     border:`1px solid ${cfg.color}12`, borderLeft:`3px solid ${cfg.color}`, cursor:"pointer" }}>
                   <Badge risk={v.severity?.toLowerCase()}/>
                   <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ color:"white", fontSize:12, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{v.vulnerability}</div>
+                    <div style={{ color:"white", fontSize:12, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{typeof v.vulnerability === "string" ? v.vulnerability : String(v.vulnerability || "—")}</div>
                     <div style={{ color:"rgba(255,255,255,0.35)", fontSize:11, marginTop:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{v.description}</div>
                   </div>
                   <div style={{ flexShrink:0, textAlign:"right" }}>

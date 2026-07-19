@@ -33,11 +33,11 @@ function Badge({ label, color }) {
   );
 }
 
-function Stat({ label, value, color }) {
+function Stat({ label, value, color, title }) {
   return (
     <div style={{ textAlign:"center" }}>
       <div style={{ fontSize:22, fontWeight:800, color:color||"#e8eaf0" }}>{value}</div>
-      <div style={{ fontSize:10, color:"#555", marginTop:2 }}>{label}</div>
+      <div style={{ fontSize:10, color:"#555", marginTop:2 }} title={title}>{label}{title && " ⓘ"}</div>
     </div>
   );
 }
@@ -351,7 +351,8 @@ export default function EdrEndpointDetailPage({ agentId }) {
         <Stat label="High" value={highCount} color={highCount>0?"#ff8c00":undefined}/>
         <Stat label="Open" value={openCount} color={openCount>0?"#f5c518":undefined}/>
         <Stat label="Commands Issued" value={commands.length}/>
-        <Stat label="EDR Version" value={a.agent_version||"—"}/>
+        <Stat label="EDR Version" value={a.agent_version||"—"}
+          title="Agent module version — bumped only when the agent/tray code itself changes, independent of the platform release version shown in Settings"/>
       </div>
 
       {/* ── Metadata card ── */}
@@ -365,13 +366,14 @@ export default function EdrEndpointDetailPage({ agentId }) {
             ["OS Version", a.os_version],
             ["Asset Type", a.asset_type],
             ["Domain", a.domain||"—"],
-            ["Agent Version", a.agent_version||"—"],
+            ["Agent Version", a.agent_version||"—",
+              "Agent module version — bumped only when the agent/tray code itself changes, independent of the platform release version shown in Settings"],
             ["Isolation State", a.isolation_state?.replace("_"," ")],
             ["Status", a.status],
             ["Enrollment Token", a.enrollment_token ? `${a.enrollment_token.slice(0,8)}…` : "—"],
-          ].map(([label, val]) => (
+          ].map(([label, val, hint]) => (
             <div key={label}>
-              <div style={{ fontSize:10, color:"#555", marginBottom:3 }}>{label}</div>
+              <div style={{ fontSize:10, color:"#555", marginBottom:3 }} title={hint}>{label}{hint && " ⓘ"}</div>
               <div style={{ fontSize:12, color:"#e8eaf0", fontWeight:600 }}>{val||"—"}</div>
             </div>
           ))}

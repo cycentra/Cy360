@@ -491,7 +491,7 @@ function WebSecurityWidget({ asset }) {
                   background: cfg.color, flexShrink: 0 }}/>
                 <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 11,
                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {v.vulnerability}
+                  {typeof v.vulnerability === "string" ? v.vulnerability : String(v.vulnerability || "—")}
                 </span>
                 {v.cvss && (
                   <span style={{ color: "rgba(255,140,0,0.5)", fontSize: 9,

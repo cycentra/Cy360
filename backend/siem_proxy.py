@@ -1650,6 +1650,49 @@ def _refresh_host_cache_sync():
             # else: existing entry is newer; discard this one silently
     all_agents = _stem_deduped
 
+    # ── IP dedup: same current IP, different agent_id ─────────────────────────
+    # Catches the case stem dedup above can't: an alerts-table-only ghost entry
+    # (no os_platform, so stem dedup deliberately leaves it alone) left behind
+    # after a host re-enrolled under a new EDR agent_id. Without this, the ghost
+    # never merges/evicts, _resolve_edr_agent_id() can't link the URL's agent_id
+    # to the live edr_agents row, and every EDR-native overlay (SCA, FIM/malware
+    # detections, vuln counts, compliance score) is stuck on the legacy
+    # alerts-table fallback forever — "trigger a host refresh" was a no-op for
+    # this case since this pass didn't exist. Prefers whichever side has a real
+    # agent registry entry (os_platform set) over an alerts-only ghost; if both
+    # or neither do, prefers the fresher keepalive — same tie-break as stem dedup.
+    _ip_seen: dict[str, str] = {}
+    _ip_deduped: dict = {}
+    for _aid, _info in all_agents.items():
+        _ip = (_info.get("ip") or "").strip()
+        if not _ip or _ip in ("127.0.0.1", "::1"):
+            _ip_deduped[_aid] = _info
+            continue
+        if _ip not in _ip_seen:
+            _ip_seen[_ip] = _aid
+            _ip_deduped[_aid] = _info
+        else:
+            _prev_aid  = _ip_seen[_ip]
+            _prev_info = all_agents[_prev_aid]
+            _cur_has_registry  = bool(_info.get("os_platform"))
+            _prev_has_registry = bool(_prev_info.get("os_platform"))
+            if _cur_has_registry and not _prev_has_registry:
+                _winner, _loser = _aid, _prev_aid
+            elif _prev_has_registry and not _cur_has_registry:
+                _winner, _loser = _prev_aid, _aid
+            elif _ka(_aid) > _ka(_prev_aid):
+                _winner, _loser = _aid, _prev_aid
+            else:
+                _winner, _loser = _prev_aid, _aid
+            _logger.info(
+                "[host-refresh] IP dedup: %s (%s) supersedes %s (%s) — shared IP %s",
+                _winner, all_agents[_winner].get("name"), _loser, all_agents[_loser].get("name"), _ip,
+            )
+            _ip_deduped.pop(_loser, None)
+            _ip_seen[_ip] = _winner
+            _ip_deduped[_winner] = all_agents[_winner]
+    all_agents = _ip_deduped
+
     if not all_agents:
         _logger.warning("[host-refresh] no agents found (edr=%d, collector=%d, db=%d)",
                         len(edr_rows), len(collector_rows), len(db_agents))

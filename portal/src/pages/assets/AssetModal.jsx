@@ -660,7 +660,7 @@ function VulnList({ vulns, expanded = false }) {
         return (
           <div key={i} style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${vc.color}20`, borderLeft: `2px solid ${vc.color}`, padding: "8px 12px", borderRadius: 2 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-              <span style={{ color: "white", fontSize: 12, fontWeight: 600, flex: 1, marginRight: 8 }}>{v.vulnerability}</span>
+              <span style={{ color: "white", fontSize: 12, fontWeight: 600, flex: 1, marginRight: 8 }}>{typeof v.vulnerability === "string" ? v.vulnerability : String(v.vulnerability || "—")}</span>
               <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
                 {v.cvss && <span style={{ color: "rgba(255,140,0,0.7)", fontSize: 9, fontFamily: "monospace" }}>CVSS {v.cvss}</span>}
                 <span style={{ background: vc.bg, color: vc.color, border: `1px solid ${vc.color}35`, fontSize: "9px", fontWeight: 700, fontFamily: "monospace", padding: "1px 5px", borderRadius: "2px" }}>{v.severity}</span>

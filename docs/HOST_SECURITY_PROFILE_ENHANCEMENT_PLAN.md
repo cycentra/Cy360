@@ -4,6 +4,8 @@
 against a live agent or a live Postgres — see §9 for exact deploy + verification steps). Every
 Host Security Profile tab (Inventory, SCA, Vulnerabilities, FIM, Malware, MITRE, Compliance) now
 has a real EDR/ITAM-native data path with graceful fallback to the legacy Wazuh path.
+**Re-verified 2026-07-18** (still code-only, not yet live-tested) — see §14 for a scope
+clarification on what "Compliance" means in two different parts of this codebase.
 
 **Owner:** g-cyra-360
 **Trigger:** Host Intelligence → Hosts & Posture → host detail panel renders Inventory / SCA /
@@ -423,3 +425,41 @@ someone else's silent-failure pipeline wasn't in scope for "make these 7 tabs wo
   no extra work was needed here.
 - **Live verification** — nothing in Phases 0-6 has been exercised against a real Postgres DB or a
   real enrolled agent; all verification so far is `python3 -m py_compile`/AST-level. See §12.
+
+---
+
+## 14. Independent re-verification (2026-07-18) + GRC/Compliance scope clarification
+
+Re-audited "does CyEDR capture Inventory/FIM/SCA/Vuln/MITRE/Compliance" directly against the
+code (not this doc) in response to a product question. All Phase 0-6 claims above still hold as
+of this date — confirmed via `grep`/read of `agent/cyedr_agent.py`, `blueprints/edr/routes.py`,
+`blueprints/edr/confidence_matrix.py`, `blueprints/edr/normalizer.py`, `blueprints/itam/routes.py`,
+and `cy_comp/services/auto_findings.py`. One scope distinction from that audit is worth pinning
+down explicitly, because "Compliance" is used for two different things in this codebase:
+
+**1. The Host Security Profile "Compliance" tab (per-host) is not a real compliance-framework
+score — it's the SCA pass/fail score relabeled.** `backend/siem_proxy.py:1015`:
+`overlay["compliance_score"] = overlay["sca"]["score"]`. There is no ISO27001/NIS2/DORA/SOC2/
+NIST-CSF/PCI-DSS mapping anywhere in this code path. This was true by design per §8/§9 above
+(SCA is CIS-style pass/fail, and the per-host tab was always meant to surface that) — noting it
+here only because "Compliance" as a tab label invites the wrong assumption.
+
+**2. The org-level GRC/Compliance module (`cy_comp/`) is separate and does do real framework
+mapping — and EDR alerts reach it, but only incidentally.** `cy_comp/services/auto_findings.py`
+runs `SELECT ... FROM alerts GROUP BY fw, mitre_id, rule_desc, category, compliance_controls` —
+this is source-agnostic; it doesn't filter by origin engine. EDR-sourced alerts (rule_id range
+100300-100399, tagged with `mitre_id`/`mitre_tactic` by `normalizer.py` at ingest, per §8 above)
+land in the same shared `alerts` table as Wazuh/Sigma/correlation-engine alerts, so they get
+picked up by this query and mapped to compliance controls exactly like any other alert with a
+MITRE ID. **There is no EDR-specific route into `cy_comp`** — no code in `cy_comp/` references
+`edr_detections`, `edr_agents`, `edr_sca_results`, or `edr_fim_events` directly. If a future
+requirement needs FIM/SCA findings themselves (not just EDR *detections*) to drive compliance
+findings — e.g. "CIS benchmark failure on host X → NIST CSF control gap" — that mapping doesn't
+exist yet and would be new work in `auto_findings.py`, not something already covered by the
+`alerts`-table query above (SCA/FIM rows don't write to `alerts`, only to their own tables).
+
+**3. Vulnerability data for EDR-covered hosts is genuinely ITAM's, not CyEDR's own** — reconfirms
+§7: CyEDR has no CVE scanner of its own: it self-reports installed software, and ITAM's existing
+NVD/KEV-backed `enrich_asset_cves()` does the matching. Framed as a capability-ownership question
+rather than a data-flow one: "vulnerability management" as a product capability belongs to ITAM;
+CyEDR is one of its inventory sources (agentless SSH/WinRM scans of *other* hosts being the other).

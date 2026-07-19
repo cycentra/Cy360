@@ -258,8 +258,105 @@ function ArchSelector({ archs, archLabels, selected, onChange, color }) {
   );
 }
 
+// ── Uninstall tab ────────────────────────────────────────────────────────
+// Force-uninstall doesn't need a deployment token or per-arch commands — the
+// uninstall scripts are architecture-transparent and never enroll/talk to
+// the platform, they only clean up local endpoint state.
+function UninstallTab() {
+  const [selectedOs, setSelectedOs] = useState("linux");
+  const [cmds,        setCmds]      = useState(null);
+  const [error,       setError]     = useState("");
+  const [loading,     setLoading]   = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/edr/installer/uninstall-commands");
+        if (!res.ok) throw new Error(res.status);
+        setCmds(await res.json());
+      } catch (e) {
+        setError(e.message);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const osCfg = OS_CFG[selectedOs];
+  const method = osCfg.scriptMethod;
+  const cmd    = cmds?.[selectedOs]?.[method] || "";
+
+  return (
+    <div style={{ background:CARD_BG, border:BORDER, borderRadius:12, padding:"20px 24px", marginBottom:28 }}>
+      <div style={{ fontSize:13, fontWeight:700, color:"#e8eaf0", marginBottom:8 }}>Force Uninstall</div>
+      <div style={{
+        background:"#ff3b3b12", border:"1px solid #ff3b3b44", borderRadius:8,
+        padding:"12px 16px", marginBottom:18, fontSize:12, color:"#ff9090", lineHeight:1.6,
+      }}>
+        <strong>Destructive and irreversible on the target endpoint.</strong> This stops and
+        removes the CyEDR agent service, system tray, watchdog, auditd rules (Linux),
+        Sysmon + PowerShell logging policy (Windows), and every file/directory CyEDR
+        created — so the host is fully clean before a new install. Local logs and
+        quarantined files are deleted. Past detections/alerts already stored on the
+        platform are not affected. Run this only on the endpoint you intend to clean,
+        immediately followed by a fresh install if you're re-enrolling it.
+      </div>
+
+      {error && (
+        <div style={{ background:"#ff3b3b22", border:"1px solid #ff3b3b44", borderRadius:8, padding:"12px 16px", color:"#ff7070", fontSize:13, marginBottom:16 }}>{error}</div>
+      )}
+
+      <div style={{ marginBottom:16 }}>
+        <div style={{ fontSize:10, color:"#555", marginBottom:8, letterSpacing:1 }}>TARGET PLATFORM</div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          {Object.entries(OS_CFG).map(([os, cfg]) => {
+            const { Logo } = cfg;
+            const active = selectedOs === os;
+            return (
+              <button
+                key={os}
+                onClick={() => setSelectedOs(os)}
+                style={{
+                  border: `1px solid ${active ? cfg.color : "rgba(255,255,255,0.08)"}`,
+                  borderRadius: 8,
+                  background: active ? `${cfg.color}18` : "transparent",
+                  color: active ? cfg.color : "#555",
+                  padding: "8px 18px",
+                  fontSize: 12, fontWeight: 600, cursor: "pointer",
+                  display: "flex", alignItems: "center", gap: 8,
+                  transition: "all 0.15s",
+                  boxShadow: active ? `0 0 0 1px ${cfg.color}44` : "none",
+                }}
+              >
+                <Logo />
+                {cfg.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ fontSize:12, color:"#444", padding:"12px 0" }}>Loading uninstall command…</div>
+      ) : cmd ? (
+        <>
+          <div style={{ fontSize:10, color:"#555", marginBottom:8, letterSpacing:1 }}>
+            UNINSTALL COMMAND — <span style={{ color: osCfg.color }}>{osCfg.label}</span>, run on the endpoint as admin/root
+          </div>
+          <CopyBox value={cmd} label={`${osCfg.label} — ${method} (force)`} />
+        </>
+      ) : (
+        <div style={{ fontSize:12, color:"#444", padding:"12px 0" }}>
+          Uninstall command unavailable — the uninstaller script may not be staged on this platform server yet.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────
 export default function EdrAgentInstallerPage() {
+  const [mode,         setMode]         = useState("install"); // "install" | "uninstall"
   const [tokens,       setTokens]       = useState([]);
   const [loading,      setLoading]      = useState(true);
   const [showCreate,   setShowCreate]   = useState(false);
@@ -348,16 +445,38 @@ export default function EdrAgentInstallerPage() {
             </div>
           </div>
         </div>
-        <button onClick={() => setShowCreate(true)} style={{
-          border:"none", borderRadius:7, background:ACCENT, color:"#0a0e1a",
-          fontWeight:700, padding:"9px 20px", cursor:"pointer", fontSize:13,
-        }}>+ New Deployment Token</button>
+        {mode === "install" && (
+          <button onClick={() => setShowCreate(true)} style={{
+            border:"none", borderRadius:7, background:ACCENT, color:"#0a0e1a",
+            fontWeight:700, padding:"9px 20px", cursor:"pointer", fontSize:13,
+          }}>+ New Deployment Token</button>
+        )}
+      </div>
+
+      {/* ── Install / Uninstall tabs ── */}
+      <div style={{ display:"flex", gap:0, marginBottom:24, borderBottom:BORDER }}>
+        {[
+          { id:"install",   label:"Install" },
+          { id:"uninstall", label:"Uninstall" },
+        ].map(t => (
+          <button key={t.id} onClick={() => setMode(t.id)} style={{
+            border:"none", background:"transparent", cursor:"pointer",
+            padding:"10px 22px", fontSize:13, fontWeight:700,
+            color: mode === t.id ? (t.id === "uninstall" ? "#ff3b3b" : ACCENT) : "#555",
+            borderBottom: mode === t.id ? `2px solid ${t.id === "uninstall" ? "#ff3b3b" : ACCENT}` : "2px solid transparent",
+            marginBottom:-1,
+          }}>{t.label}</button>
+        ))}
       </div>
 
       {error && (
         <div style={{ background:"#ff3b3b22", border:"1px solid #ff3b3b44", borderRadius:8, padding:"12px 16px", color:"#ff7070", fontSize:13, marginBottom:16 }}>{error}</div>
       )}
 
+      {mode === "uninstall" ? (
+        <UninstallTab />
+      ) : (
+      <>
       {/* ── Quick Deploy ── */}
       <div style={{ background:CARD_BG, border:BORDER, borderRadius:12, padding:"20px 24px", marginBottom:28 }}>
         <div style={{ fontSize:13, fontWeight:700, color:"#e8eaf0", marginBottom:16 }}>Quick Deploy</div>
@@ -552,6 +671,8 @@ export default function EdrAgentInstallerPage() {
   -H "Content-Type: application/json" \\
   -d '{"hostname":"WIN-DC01","os_type":"WINDOWS","asset_type":"domain_controller"}'`} />
       </div>
+      </>
+      )}
     </div>
   );
 }

@@ -907,6 +907,8 @@ chmod 755 "$_EDR_PKG_DEST"; chown www-data:www-data "$_EDR_PKG_DEST" 2>/dev/null
 for _edr_src_dest in \
     "${BUNDLE_DIR}/scripts/cyedr-install.sh:cyedr-install.sh" \
     "${BUNDLE_DIR}/scripts/cyedr-install.ps1:cyedr-install.ps1" \
+    "${BUNDLE_DIR}/scripts/cyedr-uninstall.sh:cyedr-uninstall.sh" \
+    "${BUNDLE_DIR}/scripts/cyedr-uninstall.ps1:cyedr-uninstall.ps1" \
     "${BUNDLE_DIR}/agent/cyedr_agent.py:cyedr_agent.py" \
     "${BUNDLE_DIR}/CYSIEM-Config/yara/cycentra.yar:cycentra.yar"; do
     _src="${_edr_src_dest%%:*}"
