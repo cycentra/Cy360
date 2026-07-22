@@ -700,22 +700,35 @@ def _incident_to_dict(i: Incident) -> dict:
 
 
 def _alert_to_dict(a: Alert) -> dict:
+    full_alert = a.full_alert or {}
     return {
         "id":           a.id,
         "timestamp":    a.timestamp.isoformat() if a.timestamp else None,
         "agent_id":     a.agent_id,
         "agent_name":   a.agent_name,
+        "agent_ip":     a.agent_ip,
         "rule_id":      a.rule_id,
         "rule_desc":    a.rule_desc,
         "rule_level":   a.rule_level,
         "base_score":   float(a.base_score or 0),
         "category":     a.category,
         "mitre_id":     a.mitre_id,
+        "mitre_tactic": a.mitre_tactic,
         "src_ip":       str(a.src_ip) if a.src_ip else None,
+        "dst_ip":       str(a.dst_ip) if a.dst_ip else None,
         "username":     a.username,
+        "process_name": a.process_name,
         "file_path":    a.file_path,
+        "raw_log":      a.raw_log,
         "misp_ioc_match": a.misp_ioc_match,
         "incident_id":  a.incident_id,
+        # Investigation detail — process/parent process, command line, network
+        # payload, and originating triggers for EDR-sourced alerts (full_alert.edr
+        # == True); empty dict for non-EDR alert sources.
+        "process":      full_alert.get("process") or {},
+        "parent_process": full_alert.get("parent_process") or {},
+        "triggers":     full_alert.get("triggers") or [],
+        "payload":      full_alert.get("payload") or {},
     }
 
 

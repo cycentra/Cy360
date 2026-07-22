@@ -50,10 +50,12 @@ function ScoreBar({ score }) {
 
 function DetectionRow({ det, onStatusChange, onResponseAction }) {
   const [expanded, setExpanded] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
   const sevCfg = SEV_CFG[det.severity] || SEV_CFG.low;
   const stCfg  = STATUS_CFG[det.status] || { color: "#888", label: det.status };
 
   const triggers = Array.isArray(det.triggers) ? det.triggers : [];
+  const parentProcess = det.raw_envelope?.parent_process || {};
 
   return (
     <div style={{
@@ -100,6 +102,10 @@ function DetectionRow({ det, onStatusChange, onResponseAction }) {
             <Detail label="Src IP"       value={det.src_ip || "—"} />
             <Detail label="Dst IP"       value={det.dst_ip || "—"} />
             <Detail label="Username"     value={det.username || "—"} />
+            <Detail label="Process Path" value={det.process_path || "—"} mono />
+            <Detail label="Command Line" value={det.command_line || "—"} mono />
+            <Detail label="Parent Process" value={parentProcess.executable_path || "—"} mono />
+            <Detail label="Parent Cmd"   value={parentProcess.command_line || "—"} mono />
             <Detail label="File Path"    value={det.file_path || "—"} mono />
             <Detail label="TI Match"     value={det.ti_match ? "YES" : "No"}
               color={det.ti_match ? "#ff3b3b" : "#555"} />
@@ -116,6 +122,23 @@ function DetectionRow({ det, onStatusChange, onResponseAction }) {
                   }}>{t.replace(/_/g, " ")}</span>
                 ))}
               </div>
+            </div>
+          )}
+
+          {det.raw_envelope && (
+            <div style={{ marginBottom: 12 }}>
+              <button onClick={(e) => { e.stopPropagation(); setShowRaw(v => !v); }}
+                style={{ background: "none", border: "none", color: "#4d9eff", fontSize: 11,
+                  fontFamily: "monospace", cursor: "pointer", padding: 0 }}>
+                {showRaw ? "▲ hide raw event" : "▼ view raw event"}
+              </button>
+              {showRaw && (
+                <pre style={{
+                  marginTop: 8, padding: 10, background: "#0a0e1a", borderRadius: 6,
+                  border: "1px solid rgba(255,255,255,0.07)", fontSize: 10, color: "#9aa0b0",
+                  maxHeight: 300, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all",
+                }}>{JSON.stringify(det.raw_envelope, null, 2)}</pre>
+              )}
             </div>
           )}
 

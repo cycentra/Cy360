@@ -47,6 +47,94 @@ function LiveDot({ connected }) {
   );
 }
 
+// ── Alert row with expand-to-detail (process, cmdline, parent, raw payload) ────
+function AlertRow({ a }) {
+  const [open, setOpen] = useState(false);
+  const lvlColor = a.rule_level >= 12 ? "#ff3b3b" : a.rule_level >= 8 ? "#ff8c00" : "#f5c518";
+  const proc = a.process || {};
+  const parent = a.parent_process || {};
+  const hasDetail = proc.executable_path || proc.command_line || parent.executable_path
+    || a.payload?.file_path || (a.triggers || []).length > 0;
+
+  return (
+    <>
+      <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", cursor: hasDetail ? "pointer" : "default" }}
+        onClick={() => hasDetail && setOpen(v => !v)}
+        onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.025)"}
+        onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+        <td style={{ padding: "6px 10px", color: "rgba(255,255,255,0.62)", whiteSpace: "nowrap" }}>
+          {a.timestamp ? new Date(a.timestamp).toLocaleTimeString() : "—"}
+        </td>
+        <td style={{ padding: "6px 10px", color: "#4d9eff" }}>{a.rule_id}</td>
+        <td style={{ padding: "6px 10px", color: lvlColor, fontWeight: 700 }}>{a.rule_level}</td>
+        <td style={{ padding: "6px 10px", color: "rgba(255,255,255,0.65)",
+          maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {a.rule_desc || "—"}
+        </td>
+        <td style={{ padding: "6px 10px", color: "rgba(255,255,255,0.55)", whiteSpace: "nowrap" }}>
+          {a.agent_name || "—"}
+        </td>
+        <td style={{ padding: "6px 10px", color: "rgba(255,255,255,0.65)",
+          maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {a.process_name || "—"}
+        </td>
+        <td style={{ padding: "6px 10px", color: "#ff8c00" }}>{a.src_ip || "—"}</td>
+        <td style={{ padding: "6px 10px", color: "#f5c518" }}>{a.username || "—"}</td>
+        <td style={{ padding: "6px 10px", color: "#4d9eff", fontSize: 10 }}>
+          {hasDetail ? (open ? "▲" : "▼ detail") : ""}
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={9} style={{ padding: "10px 16px 14px", background: "rgba(255,255,255,0.02)",
+            borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 16, fontSize: 11, fontFamily: "monospace" }}>
+              <AlertDetail label="Process Path"   value={proc.executable_path} mono />
+              <AlertDetail label="Command Line"   value={proc.command_line} mono />
+              <AlertDetail label="Parent Process" value={parent.executable_path} mono />
+              <AlertDetail label="Parent Cmd"     value={parent.command_line} mono />
+              <AlertDetail label="File Path"      value={a.file_path || a.payload?.file_path} mono />
+              <AlertDetail label="Dst IP"         value={a.dst_ip} />
+              <AlertDetail label="MITRE"          value={a.mitre_id ? `${a.mitre_id} (${a.mitre_tactic || ""})` : ""} />
+              <AlertDetail label="Agent ID"        value={a.agent_id} mono />
+              {(a.triggers || []).length > 0 && (
+                <div>
+                  <div style={{ color: "rgba(255,255,255,0.35)", marginBottom: 4 }}>Triggers</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                    {a.triggers.map(t => (
+                      <span key={t} style={{ border: "1px solid rgba(255,140,0,0.3)", borderRadius: 3,
+                        padding: "1px 6px", color: "#ff8c00", fontSize: 10 }}>{t.replace(/_/g, " ")}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {a.raw_log && (
+                <div style={{ width: "100%" }}>
+                  <div style={{ color: "rgba(255,255,255,0.35)", marginBottom: 4 }}>Raw Log</div>
+                  <div style={{ color: "rgba(255,255,255,0.5)", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                    {a.raw_log}
+                  </div>
+                </div>
+              )}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function AlertDetail({ label, value, mono }) {
+  if (!value) return null;
+  return (
+    <div style={{ minWidth: 140 }}>
+      <div style={{ color: "rgba(255,255,255,0.35)", marginBottom: 3 }}>{label}</div>
+      <div style={{ color: "rgba(255,255,255,0.75)", fontFamily: mono ? "monospace" : "inherit",
+        maxWidth: 320, overflowWrap: "break-word" }}>{value}</div>
+    </div>
+  );
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 function fmtTs(iso) {
   if (!iso) return "—";
@@ -1565,7 +1653,7 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
                   fontFamily: "monospace" }}>
                   <thead>
                     <tr style={{ background: "rgba(255,255,255,0.04)" }}>
-                      {["Time", "Rule ID", "Level", "Description", "Src IP", "User"].map(h => (
+                      {["Time", "Rule ID", "Level", "Description", "Host", "Process", "Src IP", "User", ""].map(h => (
                         <th key={h} style={{ padding: "7px 10px", textAlign: "left",
                           color: "rgba(255,255,255,0.3)", fontWeight: 600,
                           borderBottom: "1px solid rgba(255,255,255,0.07)", whiteSpace: "nowrap" }}>{h}</th>
@@ -1573,26 +1661,9 @@ function IncidentDrawer({ incident: initialIncident, onClose, onPatched, onOpenC
                     </tr>
                   </thead>
                   <tbody>
-                    {alerts.map((a, i) => {
-                      const lvlColor = a.rule_level >= 12 ? "#ff3b3b" : a.rule_level >= 8 ? "#ff8c00" : "#f5c518";
-                      return (
-                        <tr key={a.id || i} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
-                          onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.025)"}
-                          onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                          <td style={{ padding: "6px 10px", color: "rgba(255,255,255,0.62)", whiteSpace: "nowrap" }}>
-                            {a.timestamp ? new Date(a.timestamp).toLocaleTimeString() : "—"}
-                          </td>
-                          <td style={{ padding: "6px 10px", color: "#4d9eff" }}>{a.rule_id}</td>
-                          <td style={{ padding: "6px 10px", color: lvlColor, fontWeight: 700 }}>{a.rule_level}</td>
-                          <td style={{ padding: "6px 10px", color: "rgba(255,255,255,0.65)",
-                            maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {a.rule_desc || "—"}
-                          </td>
-                          <td style={{ padding: "6px 10px", color: "#ff8c00" }}>{a.src_ip || "—"}</td>
-                          <td style={{ padding: "6px 10px", color: "#f5c518" }}>{a.username || "—"}</td>
-                        </tr>
-                      );
-                    })}
+                    {alerts.map((a, i) => (
+                      <AlertRow key={a.id || i} a={a} />
+                    ))}
                   </tbody>
                 </table>
               </div>

@@ -497,7 +497,14 @@ PATTERN_MAP = [
     (r"(?i)(Auto_Open|Document_Open|winword.*cmd|excel.*powershell)",     "macro_execution"),
     (r"(?i)(cobalt.?strike|cs.?beacon|metasploit|sliver|havoc.*beacon|brute.?ratel)", "c2_pattern"),
     (r"(?i)(xmrig|stratum\+tcp|cryptonight|coinhive|minexmr)",           "c2_pattern"),
-    (r"(?i)\/(etc\/cron|systemd\/system|rc\.local|LaunchDaemons|LaunchAgents)", "startup_persistence"),
+    # NOTE: deliberately NOT a bare path substring match (e.g. "/LaunchDaemons/") —
+    # that matched the processImagePath of every normal launchd-spawned system
+    # service on macOS and, before the auditd rule fix below, every routine
+    # cron/systemd *read* of its own config dir on Linux. Scoped instead to the
+    # auditd key (write/attribute-change only, see scripts/cyedr-install.sh
+    # cy360_edr_persist) and actual persistence-install commands/API calls.
+    (r"key=\"cy360_edr_persist\"",                                          "startup_persistence"),
+    (r"(?i)(launchctl\s+(load|bootstrap|enable)|crontab\s+-[el]|systemctl\s+(enable|daemon-reload)|New-Item.*\\(Startup|Run)\b|reg(?:\.exe)?\s+add.*\\Run\b)", "startup_persistence"),
     (r"(?i)(vssadmin.*delete|wmic.*shadowcopy.*delete|bcdedit.*recoveryenabled)", "process_hollowing"),
     (r"(?i)(cmd\.exe|powershell|wscript|cscript).*(chrome|firefox|winword|excel)\.exe", "script_from_browser"),
     (r"(?i)(sc\.exe.*(create|config)|PSEXESVC|PsExec.*\\\\)",            "new_service"),
@@ -1711,6 +1718,47 @@ def build_envelope(cfg: Config, event_category: str, raw_event: dict,
     }
 
 
+# Sysmon's rendered event message is a series of "FieldName: value" lines —
+# stable across event types/schema versions, unlike StringInserts' positional
+# array. Server-side blueprints/edr/normalizer.py reads top-level
+# process/parent_process/event_payload, so this maps the labelled fields onto
+# that contract in-place on the envelope.
+def _apply_sysmon_fields(env: dict, message_text: str) -> None:
+    fields: dict[str, str] = {}
+    for line in message_text.splitlines():
+        m = re.match(r"^\s*([A-Za-z][A-Za-z0-9]*)\s*:\s*(.*)$", line)
+        if m:
+            fields[m.group(1)] = m.group(2).strip()
+
+    if fields.get("Image") or fields.get("CommandLine") or fields.get("User"):
+        env["process"] = {
+            "executable_path": fields.get("Image", ""),
+            "command_line":    fields.get("CommandLine", ""),
+            "user_sid_or_uid": fields.get("User", ""),
+            "pid":             fields.get("ProcessId", ""),
+            "file_hash_sha256": next(
+                (h.split("=", 1)[1] for h in fields.get("Hashes", "").split(",") if h.startswith("SHA256=")),
+                "",
+            ),
+        }
+    if fields.get("ParentImage") or fields.get("ParentCommandLine"):
+        env["parent_process"] = {
+            "executable_path": fields.get("ParentImage", ""),
+            "command_line":    fields.get("ParentCommandLine", ""),
+            "user_sid_or_uid": fields.get("ParentUser", ""),
+            "pid":             fields.get("ParentProcessId", ""),
+        }
+    payload = {}
+    if fields.get("TargetFilename") or fields.get("TargetObject"):
+        payload["file_path"] = fields.get("TargetFilename") or fields.get("TargetObject")
+    if fields.get("DestinationIp"):
+        payload["dst_ip"] = fields["DestinationIp"]
+    if fields.get("SourceIp"):
+        payload["src_ip"] = fields["SourceIp"]
+    if payload:
+        env["event_payload"] = payload
+
+
 # ── Linux: auditd reader ───────────────────────────────────────────────────────
 class AuditdReader(threading.Thread):
     """
@@ -1791,6 +1839,21 @@ class AuditdReader(threading.Thread):
         env["raw"]["syscall"]   = event.get("syscall", "")
         env["raw"]["exe"]       = event.get("exe", "")
         env["raw"]["uid"]       = event.get("uid", "")
+        # Top-level "process" — this is the shape blueprints/edr/normalizer.py
+        # actually reads (envelope.get("process")); the flat "raw" dict above is
+        # for forensic storage only and is never parsed by the server.
+        # NOTE: auditd SYSCALL records don't carry the target file path for -w
+        # watch events (that's on a separate PATH record on its own log line,
+        # correlated by audit event ID — not reconstructed here), so file_path
+        # stays unset for cy360_edr_persist/credentials/tamper watch hits; it is
+        # populated for exec/net/inject events via "exe" below.
+        env["process"] = {
+            "executable_path":  event.get("exe", ""),
+            "pid":              event.get("pid", ""),
+            "ppid":             event.get("ppid", ""),
+            "user_sid_or_uid":  event.get("auid") or event.get("uid", ""),
+            "command_line":     event.get("comm", ""),
+        }
         self._q.put(env)
 
     @staticmethod
@@ -1868,6 +1931,14 @@ class MacOSLogReader(threading.Thread):
             "pid":        entry.get("processID", 0),
             "subsystem":  entry.get("subsystem", ""),
         }, score, triggers)
+        # Top-level "process" — the shape blueprints/edr/normalizer.py actually
+        # reads; oslog gives no separate command-line/user field, so the event
+        # message (often includes invocation args) is the best available stand-in.
+        env["process"] = {
+            "executable_path": entry.get("processImagePath", ""),
+            "pid":              entry.get("processID", 0),
+            "command_line":     entry.get("eventMessage", ""),
+        }
         self._q.put(env)
 
 
@@ -1912,16 +1983,31 @@ class WindowsSysmonReader(threading.Thread):
             time.sleep(1)
 
     def _process_win32_event(self, ev):
-        strings = ev.StringInserts or []
-        text = " ".join(str(s) for s in strings if s)
+        # Sysmon's StringInserts is a positional array whose layout differs per
+        # EventID and has shifted across Sysmon schema versions — indexing into
+        # it blind is a correctness trap. SafeFormatMessage renders the same
+        # "FieldName: value" labelled text Event Viewer / Get-WinEvent show,
+        # which _parse_sysmon_fields() below can extract reliably regardless of
+        # event type or schema version.
+        text = ""
+        try:
+            import win32evtlogutil
+            text = win32evtlogutil.SafeFormatMessage(ev, "Microsoft-Windows-Sysmon") or ""
+        except Exception:
+            pass
+        if not text:
+            strings = ev.StringInserts or []
+            text = " ".join(str(s) for s in strings if s)
+
         score, triggers = score_event(text, self._ioc, self._cfg.asset_type)
         if score < 15:
             return
         env = build_envelope(self._cfg, "PROCESS", {
             "event_id":  ev.EventID,
             "time":      str(ev.TimeGenerated),
-            "fields":    list(strings),
+            "message":   text,
         }, score, triggers)
+        _apply_sysmon_fields(env, text)
         self._q.put(env)
 
     def _read_via_powershell(self):
@@ -1949,6 +2035,7 @@ class WindowsSysmonReader(threading.Thread):
                         if score >= 15:
                             env = build_envelope(self._cfg, "PROCESS",
                                                  {"raw_message": text}, score, triggers)
+                            _apply_sysmon_fields(env, text)
                             self._q.put(env)
             except Exception as e:
                 logger.debug("Get-WinEvent poll error: %s", e)

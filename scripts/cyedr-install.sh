@@ -541,10 +541,12 @@ configure_auditd_linux() {
 -w /etc/sudoers -p rwa -k cy360_edr_credentials
 -w /root/.ssh -p rwa -k cy360_edr_credentials
 
-# Persistence paths
--w /etc/cron.d -p rwxa -k cy360_edr_persist
--w /etc/systemd/system -p rwxa -k cy360_edr_persist
--w /etc/rc.local -p rwxa -k cy360_edr_persist
+# Persistence paths — write/attribute-change only (rwxa also caught routine reads:
+# cron re-reads /etc/cron.d every minute and systemd re-reads /etc/systemd/system on
+# nearly every unit lookup, so "r" and "x" flooded this key on completely benign hosts).
+-w /etc/cron.d -p wa -k cy360_edr_persist
+-w /etc/systemd/system -p wa -k cy360_edr_persist
+-w /etc/rc.local -p wa -k cy360_edr_persist
 
 # Anti-tamper: CyEDR agent self-defence (new key; Wazuh still watches cy360_wazuh_tamper)
 -w /opt/cycentra/edr -p wa -k cy360_edr_tamper

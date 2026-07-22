@@ -2103,8 +2103,19 @@ def _edr_itam_inventory(agent_id: str, pkg_limit: int) -> dict | None:
         _logger.debug("EDR/ITAM inventory lookup failed for %s: %s", agent_id, exc)
         return None
 
-    os_info = na["os_info"] or {}
-    hw      = na["hardware_info"] or {}
+    # network_assets.os_info is a TEXT column (json.dumps'd on write, not JSONB —
+    # see blueprints/itam/routes.py's _ingest_deep_scan_result), so it comes back
+    # here as a raw JSON string rather than an auto-decoded dict. hardware_info
+    # IS a real JSONB column and decodes fine via psycopg2.
+    os_info_raw = na["os_info"]
+    if isinstance(os_info_raw, str):
+        try:
+            os_info = json.loads(os_info_raw) if os_info_raw else {}
+        except (TypeError, ValueError):
+            os_info = {}
+    else:
+        os_info = os_info_raw or {}
+    hw = na["hardware_info"] or {}
 
     return {
         "agent": {
